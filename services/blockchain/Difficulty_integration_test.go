@@ -34,7 +34,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 	params := &chaincfg.MainNetParams
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, params)
-	t.Logf("difficulty: %v", d.nBits.String())
+	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
 	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
@@ -45,7 +45,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 		HashPrevBlock:  hashGenesisBlock,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
-		Bits:           *d.nBits,
+		Bits:           *d.powLimitnBits,
 		Timestamp:      uint32(currentTime),
 	}
 
@@ -69,7 +69,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 		header := &model.BlockHeader{
 			Version:        1,
 			Timestamp:      uint32(currentTime),
-			Bits:           *d.nBits,
+			Bits:           *d.powLimitnBits,
 			Nonce:          1,
 			HashPrevBlock:  prevBlockHash,
 			HashMerkleRoot: &chainhash.Hash{},
@@ -94,7 +94,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 	t.Logf("newBits: %v", newBits.String())
 
 	// Assert that difficulty has changed
-	assert.Equal(t, d.nBits, newBits)
+	assert.Equal(t, d.powLimitnBits, newBits)
 }
 
 // nolint: gosec
@@ -116,7 +116,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	params := &chaincfg.MainNetParams
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, params)
-	t.Logf("difficulty: %v", d.nBits.String())
+	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
 	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
@@ -125,7 +125,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 		HashPrevBlock:  hashGenesisBlock,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
-		Bits:           *d.nBits,
+		Bits:           *d.powLimitnBits,
 		Timestamp:      uint32(currentTime),
 	}
 	block := &model.Block{
@@ -146,7 +146,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 		header := &model.BlockHeader{
 			Version:        1,
 			Timestamp:      uint32(currentTime),
-			Bits:           *d.nBits,
+			Bits:           *d.powLimitnBits,
 			Nonce:          1,
 			HashPrevBlock:  prevBlockHash,
 			HashMerkleRoot: &chainhash.Hash{},
@@ -173,5 +173,5 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	t.Logf("newBits: %v", newBits.String())
 
 	// Assert that difficulty has changed
-	assert.NotEqual(t, d.nBits, newBits)
+	assert.NotEqual(t, d.powLimitnBits, newBits)
 }

@@ -4,18 +4,16 @@ import (
 	"context"
 	"encoding/binary"
 	"math/big"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"golang.org/x/exp/rand"
-
-	"time"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/exp/rand"
 )
 
 const DifficultyAdjustmentWindow = 144
@@ -33,11 +31,13 @@ var (
 
 type Difficulty struct {
 	difficultyAdjustment bool
-	nBits                *model.NBit
-	lastSlowBlockHash    *chainhash.Hash
-	logger               ulogger.Logger
-	store                blockchain_store.Store
-	chainParams          *chaincfg.Params
+	powLimitnBits        *model.NBit
+	// lastSlowBlockHash    *chainhash.Hash
+	logger            ulogger.Logger
+	store             blockchain_store.Store
+	chainParams       *chaincfg.Params
+	bestBlockHash     *chainhash.Hash
+	lastComputednBits *model.NBit
 }
 
 func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *chaincfg.Params) (*Difficulty, error) {
@@ -47,21 +47,23 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *
 
 	bytesLittleEndian := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytesLittleEndian, params.PowLimitBits)
-	d.nBits, _ = model.NewNBitFromSlice(bytesLittleEndian)
+	d.powLimitnBits, _ = model.NewNBitFromSlice(bytesLittleEndian)
 
 	d.logger = logger
 	d.store = store
+
 	return d, nil
 }
 
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
 
+	//nolint:gosec // Ignore G115: integer overflow conversion
 	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
 		// set to start difficulty
 		d.logger.Debugf("mining initial blocks")
 
-		return d.nBits, nil
+		return d.powLimitnBits, nil
 	}
 
 	// If regest or simnet we don't adjust the difficulty
@@ -69,12 +71,22 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		return &bestBlockHeader.Bits, nil
 	}
 
+	// if bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), we don't need to recalculate the difficulty,
+	// just send the one we have if it's set
+	if d.bestBlockHash != nil && d.bestBlockHash.IsEqual(bestBlockHeader.Hash()) {
+		d.logger.Debugf("bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), returning last computed difficulty")
+
+		if d.lastComputednBits != nil {
+			return d.lastComputednBits, nil
+		}
+	}
+
 	if bestBlockHeight < uint32(DifficultyAdjustmentWindow)+4 {
 		d.logger.Debugf("not enough blocks to calculate difficulty adjustment")
 		// not enough blocks to calculate difficulty adjustment
 		// set to start difficulty
 
-		return d.nBits, nil
+		return d.powLimitnBits, nil
 	}
 
 	now := time.Now()
@@ -98,6 +110,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 			bytesLittleEndian := make([]byte, 4)
 			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
 			nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+
 			return nBits, nil
 		}
 	}
@@ -111,25 +124,30 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	if lastSuitableBlock == nil {
 		return nil, errors.NewProcessingError("lastSuitableBlock is nil", nil)
 	}
+
 	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, bestBlockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
 		// could be that we don't have a long enough chain to get the ancestor
 		d.logger.Debugf("error getting ancestor block: %v", err)
+
 		ancestorHash = bestBlockHeader.Hash()
 	}
+
 	firstSuitableBlock, err := d.store.GetSuitableBlock(ctx, ancestorHash)
 	if err != nil {
 		return nil, errors.NewStorageError("error getting suitable block", err)
 	}
 
 	if firstSuitableBlock == nil {
-		return d.nBits, nil
+		return d.powLimitnBits, nil
 	}
 
 	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock)
 	if err != nil {
 		return nil, errors.NewProcessingError("error calculating next required difficulty", err)
 	}
+
+	d.lastComputednBits = nBits
 
 	return nBits, nil
 }
@@ -156,8 +174,9 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		reductionTime := int64(d.chainParams.MinDiffReductionTime /
 			time.Second)
 		allowMinTime := int64(suitableLastBlock.Time) + reductionTime
-		now := time.Now().Unix()
-		if now > allowMinTime {
+		elapsedTime := time.Now().Unix() - int64(suitableLastBlock.Time)
+
+		if elapsedTime > allowMinTime {
 			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.chainParams.MinDiffReductionTime)
 
 			bytesLittleEndian := make([]byte, 4)
@@ -192,10 +211,15 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	d.logger.Debugf("work: %s", work.String())
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustment we are going to do.
+	d.logger.Debugf("suitableLastBlock.Height: %d, suitableFirstBlock.Height: %d", suitableLastBlock.Height, suitableFirstBlock.Height)
+	d.logger.Debugf("suitableLastBlock.Time: %d, suitableFirstBlock.Time: %d", suitableLastBlock.Time, suitableFirstBlock.Time)
+
 	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
 	if duration > 288*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
+		d.logger.Debugf("duration %d is greater than 288 * target time per block %d - setting to 288 * target time per block", duration, d.chainParams.TargetTimePerBlock.Seconds())
 		duration = 288 * int64(d.chainParams.TargetTimePerBlock.Seconds())
 	} else if duration < 72*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
+		d.logger.Debugf("duration %d is less than 72 * target time per block %d - setting to 72 * target time per block", duration, d.chainParams.TargetTimePerBlock.Seconds())
 		duration = 72 * int64(d.chainParams.TargetTimePerBlock.Seconds())
 	}
 
@@ -207,6 +231,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		d.logger.Debugf("duration is zero - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
+
 	pw := new(big.Int).Div(projectedWork, big.NewInt(duration))
 	// Calculate 2^256, which is the maximum possible value in a 256-bit space (used for Bitcoin's difficulty target).
 	e := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
@@ -218,6 +243,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		d.logger.Debugf("pw is zero, - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
+
 	newTarget := new(big.Int).Div(nt, pw)
 
 	// clip again if above minimum target (too easy)
@@ -225,8 +251,10 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		d.logger.Debugf("new target would be above pow limit, set to pow limit")
 		newTarget.Set(d.chainParams.PowLimit)
 	}
+
 	nBitsUint := BigToCompact(newTarget)
 	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
+
 	return nb, nil
 }
 
@@ -245,13 +273,17 @@ func BigToCompact(n *big.Int) uint32 {
 	// accordingly.  This is equivalent to:
 	// mantissa = mantissa / 256^(exponent-3)
 	var mantissa uint32
+
 	exponent := uint(len(n.Bytes()))
 	if exponent <= 3 {
+		//nolint:gosec // Ignore G115: integer overflow conversion
 		mantissa = uint32(n.Bits()[0])
 		mantissa <<= 8 * (3 - exponent)
 	} else {
 		// Use a copy to avoid modifying the caller's original number.
+		//nolint:gosec // Ignore G115: integer overflow conversion
 		tn := new(big.Int).Set(n)
+		//nolint:gosec // Ignore G115: integer overflow conversion
 		mantissa = uint32(tn.Rsh(tn, 8*(exponent-3)).Bits()[0])
 	}
 
@@ -265,16 +297,19 @@ func BigToCompact(n *big.Int) uint32 {
 
 	// Pack the exponent, sign bit, and mantissa into an unsigned 32-bit
 	// int and return it.
+	//nolint:gosec // Ignore G115: integer overflow conversion
 	compact := uint32(exponent<<24) | mantissa
 	if n.Sign() < 0 {
 		compact |= 0x00800000
 	}
+
 	return compact
 }
 
 func uint32ToBytes(value uint32) []byte {
 	bytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytes, value)
+
 	return bytes
 }
 
@@ -299,6 +334,7 @@ func CalcWork(bits uint32) *big.Int {
 
 	// (1 << 256) / (difficultyNum + 1)
 	denominator := new(big.Int).Add(difficultyNum, bigOne)
+
 	return new(big.Int).Div(oneLsh256, denominator)
 }
 
@@ -340,6 +376,7 @@ func CompactToBig(compact uint32) *big.Int {
 	// right or left accordingly.  This is equivalent to:
 	// N = mantissa * 256^(exponent-3)
 	var bn *big.Int
+
 	if exponent <= 3 {
 		mantissa >>= 8 * (3 - exponent)
 		bn = big.NewInt(int64(mantissa))
@@ -354,4 +391,18 @@ func CompactToBig(compact uint32) *big.Int {
 	}
 
 	return bn
+}
+func (d *Difficulty) validateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block) error {
+	// Calculate the expected difficulty for the new block
+	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height)
+	if err != nil {
+		return errors.NewError("failed to calculate expected difficulty: %v", err)
+	}
+
+	// Compare the expected difficulty with the difficulty in the block header
+	if newBlock.Header.Bits != *expectedNBits {
+		return errors.NewError("block header difficulty is incorrect: expected %v, got %v", expectedNBits, newBlock.Header.Bits)
+	}
+
+	return nil
 }

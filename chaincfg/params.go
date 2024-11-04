@@ -147,7 +147,7 @@ type Params struct {
 	// before the block difficulty requirement is examined to determine how
 	// it should be changed in order to maintain the desired block
 	// generation rate.
-	TargetTimespan time.Duration
+	// TargetTimespan time.Duration
 
 	// TargetTimePerBlock is the desired amount of time to generate each
 	// block.
@@ -241,9 +241,8 @@ var MainNetParams = Params{
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
-	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
+	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
 	ReduceMinDifficulty:      false,
 	NoDifficultyAdjustment:   false,
 	MinDiffReductionTime:     0,
@@ -346,9 +345,8 @@ var StnParams = Params{
 	GenesisActivationHeight: 100,
 
 	SubsidyReductionInterval: 210000,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
-	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
+	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
 	ReduceMinDifficulty:      false,
 	NoDifficultyAdjustment:   false,
 	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
@@ -420,9 +418,8 @@ var RegressionNetParams = Params{
 	GenesisActivationHeight: 0,
 
 	SubsidyReductionInterval: 150,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
-	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
+	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
 	ReduceMinDifficulty:      true,
 	NoDifficultyAdjustment:   true,
 	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
@@ -482,11 +479,10 @@ var TestNet3Params = Params{
 	},
 
 	// Chain parameters
-	GenesisBlock: &testNet3GenesisBlock,
-	GenesisHash:  &testNet3GenesisHash,
-	PowLimit:     testNet3PowLimit,
-	PowLimitBits: 0x2000ffff,
-	// PowLimitBits:  0x1d00ffff,
+	GenesisBlock:  &testNet3GenesisBlock,
+	GenesisHash:   &testNet3GenesisHash,
+	PowLimit:      testNet3PowLimit,
+	PowLimitBits:  0x1d00ffff,
 	BIP0034Height: 21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
@@ -497,9 +493,8 @@ var TestNet3Params = Params{
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
-	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
+	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
 	ReduceMinDifficulty:      true,
 	NoDifficultyAdjustment:   false,
 	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
@@ -583,7 +578,6 @@ var CustomTestNetParams = Params{
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
 	// TODO: change this back to 10 mins
 	TargetTimePerBlock:       time.Minute * 1, // 10 minutes
 	RetargetAdjustmentFactor: 4,               // 25% less, 400% more
