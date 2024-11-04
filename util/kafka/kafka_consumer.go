@@ -215,7 +215,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 
 			// if we can't process the message, log the error and skip to the next message
 			if err != nil {
-				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", msg)
+				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s, skipping", k.Config.Topic)
 			}
 
 			return nil // give up and move on
@@ -236,7 +236,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			// if we can't process the message, log the error and stop consuming any more messages
 			if err != nil {
 				if options.stopFn != nil {
-					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message, stopping: %v", msg)
+					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s, stopping", k.Config.Topic)
 					options.stopFn()
 				} else {
 					c := k.ConsumerGroup
