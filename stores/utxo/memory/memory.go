@@ -374,6 +374,7 @@ func (m *Memory) GetBlockHeight() uint32 {
 func (m *Memory) SetMedianBlockTime(medianTime uint32) error {
 	m.logger.Debugf("setting median block time to %d", medianTime)
 	m.medianBlockTime.Store(medianTime)
+
 	return nil
 }
 

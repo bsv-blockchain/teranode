@@ -38,6 +38,7 @@ func TestParseByteSize(t *testing.T) {
 			if err != nil {
 				t.Errorf("ParseByteSize(%q) unexpected error: %v", test.input, err)
 			}
+
 			if result != test.expected {
 				t.Errorf("ParseByteSize(%q) = %v, expected %v", test.input, result, test.expected)
 			}

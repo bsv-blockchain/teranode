@@ -49,6 +49,7 @@ func (b *Batcher2[T]) Trigger() {
 func (b *Batcher2[T]) worker() {
 	for {
 		expire := time.After(b.timeout)
+
 		for {
 			select {
 			case item := <-b.ch:

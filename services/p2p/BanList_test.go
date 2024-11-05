@@ -47,9 +47,10 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	return banList, eventChan, nil
 }
 
-func teardown(t *testing.T, banList *BanList) {
-	banList.Clear()
-}
+// func teardown(t *testing.T, banList *BanList) {
+// 	banList.Clear()
+// }
+
 func TestHandleSetBanAdd(t *testing.T) {
 	banTime := int64(3600)
 	absolute := false

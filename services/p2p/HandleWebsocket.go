@@ -15,7 +15,7 @@ type notificationMsg struct {
 	Type         string `json:"type"`
 	Hash         string `json:"hash,omitempty"`
 	BaseURL      string `json:"base_url,omitempty"`
-	PeerId       string `json:"peer_id,omitempty"`
+	PeerID       string `json:"peer_id,omitempty"`
 	PreviousHash string `json:"previousblockhash,omitempty"`
 	TxCount      uint64 `json:"tx_count,omitempty"`
 	Height       uint32 `json:"height,omitempty"`
@@ -35,7 +35,7 @@ var (
 	}
 )
 
-func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl string) func(c echo.Context) error {
+func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL string) func(c echo.Context) error {
 	clientChannels := make(map[chan []byte]struct{})
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
@@ -59,7 +59,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl s
 				data, err := json.MarshalIndent(&notificationMsg{
 					Timestamp: time.Now().UTC().Format(isoFormat),
 					Type:      asset_api.Type_PING.String(),
-					BaseURL:   baseUrl,
+					BaseURL:   baseURL,
 				}, "", "  ")
 				if err != nil {
 					s.logger.Errorf("Error marshaling notification: %v", err)

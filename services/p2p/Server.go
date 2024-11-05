@@ -609,7 +609,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		Hash:      blockMessage.Hash,
 		Height:    blockMessage.Height,
 		BaseURL:   blockMessage.DataHubUrl,
-		PeerId:    blockMessage.PeerId,
+		PeerID:    blockMessage.PeerId,
 	}
 
 	if from == s.P2PNode.HostID().String() {
@@ -656,7 +656,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		Type:      "subtree",
 		Hash:      subtreeMessage.Hash,
 		BaseURL:   subtreeMessage.DataHubUrl,
-		PeerId:    subtreeMessage.PeerId,
+		PeerID:    subtreeMessage.PeerId,
 	}
 
 	if from == s.P2PNode.HostID().String() {
@@ -701,7 +701,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		Type:         "mining_on",
 		Hash:         miningOnMessage.Hash,
 		BaseURL:      miningOnMessage.DataHubUrl,
-		PeerId:       miningOnMessage.PeerId,
+		PeerID:       miningOnMessage.PeerId,
 		PreviousHash: miningOnMessage.PreviousHash,
 		Height:       miningOnMessage.Height,
 		Miner:        miningOnMessage.Miner,

@@ -5,11 +5,10 @@ import (
 	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type NullStore struct {
