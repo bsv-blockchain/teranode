@@ -50,7 +50,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/felixge/fgprof"
-	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -593,7 +592,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation-"+uuid.New().String())
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation")
 		if err != nil {
 			return err
 		}
