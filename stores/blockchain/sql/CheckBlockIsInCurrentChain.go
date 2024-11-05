@@ -43,7 +43,21 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 
 	// Append the bestBlockID and recursionDepth to the arguments
 	bestBlockID := bestBlockMeta.ID
-	args = append(args, bestBlockID, 100000) // bestBlockID and recursionDepth
+
+	// get the lowest block id
+	lowestBlockID := blockIDs[0]
+	for _, id := range blockIDs {
+		if id < lowestBlockID {
+			lowestBlockID = id
+		}
+	}
+
+	recursionDepthBlockID := bestBlockID - lowestBlockID
+	if lowestBlockID > bestBlockID {
+		recursionDepthBlockID = 0
+	}
+
+	args = append(args, bestBlockID, recursionDepthBlockID) // bestBlockID and recursionDepth
 
 	// Calculate the positions for the placeholders
 	bestBlockIDPlaceholder := fmt.Sprintf("$%d", len(blockIDs)+1)
