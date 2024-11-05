@@ -82,7 +82,7 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
             INNER JOIN ChainBlocks cb ON bb.id = cb.parent_id
             WHERE
                 NOT cb.found_match -- Stop recursion if a match has been found
-                AND cb.depth < %s
+                AND cb.depth <= %s
         )
         SELECT CASE
             WHEN EXISTS (SELECT 1 FROM ChainBlocks WHERE found_match)
