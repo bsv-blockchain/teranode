@@ -111,7 +111,7 @@ DATABASE coinbase_allinone
 CREATE ROLE coinbase1 LOGIN
   PASSWORD 'coinbase1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase1 to postgres;
+grant coinbase1 to postgresuser;
 CREATE
 DATABASE coinbase1
   WITH OWNER = coinbase1
@@ -121,7 +121,7 @@ DATABASE coinbase1
 CREATE ROLE coinbase2 LOGIN
   PASSWORD 'coinbase2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase2 to postgres;
+grant coinbase2 to postgresuser;
 CREATE
 DATABASE coinbase2
   WITH OWNER = coinbase2
@@ -131,7 +131,7 @@ DATABASE coinbase2
 CREATE ROLE coinbase3 LOGIN
   PASSWORD 'coinbase3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase3 to postgres;
+grant coinbase3 to postgresuser;
 CREATE
 DATABASE coinbase3
   WITH OWNER = coinbase3
@@ -171,7 +171,7 @@ DATABASE coinbase6
 CREATE ROLE "prod-teranet-1" LOGIN
   PASSWORD 'prod-teranet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-1" to postgres;
+grant "prod-teranet-1" to postgresuser;
 CREATE
 DATABASE "prod-teranet-1"
   WITH OWNER = "prod-teranet-1"
@@ -181,7 +181,7 @@ DATABASE "prod-teranet-1"
 CREATE ROLE "prod-teranet-2" LOGIN
   PASSWORD 'prod-teranet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-2" to postgres;
+grant "prod-teranet-2" to postgresuser;
 CREATE
 DATABASE "prod-teranet-2"
   WITH OWNER = "prod-teranet-2"
@@ -191,7 +191,7 @@ DATABASE "prod-teranet-2"
 CREATE ROLE "prod-teranet-3" LOGIN
   PASSWORD 'prod-teranet-3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-3" to postgres;
+grant "prod-teranet-3" to postgresuser;
 CREATE
 DATABASE "prod-teranet-3"
   WITH OWNER = "prod-teranet-3"
@@ -202,7 +202,7 @@ DATABASE "prod-teranet-3"
 CREATE ROLE "mainnet-1" LOGIN
   PASSWORD 'mainnet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-1" to postgres;
+grant "mainnet-1" to postgresuser;
 CREATE
 DATABASE "mainnet-1"
   WITH OWNER = "mainnet-1"
@@ -212,7 +212,7 @@ DATABASE "mainnet-1"
 CREATE ROLE "mainnet-2" LOGIN
   PASSWORD 'mainnet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-2" to postgres;
+grant "mainnet-2" to postgresuser;
 CREATE
 DATABASE "mainnet-2"
   WITH OWNER = "mainnet-2"
@@ -222,7 +222,7 @@ DATABASE "mainnet-2"
 CREATE ROLE "mainnet-3" LOGIN
     PASSWORD 'mainnet-3'
     NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-3" to postgres;
+grant "mainnet-3" to postgresuser;
 CREATE
     DATABASE "mainnet-3"
     WITH OWNER = "mainnet-3"
