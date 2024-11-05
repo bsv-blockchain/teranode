@@ -1,6 +1,6 @@
-//go:build rpc
+////go:build rpc
 
-// go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
+// go test -v -run "^TestRPCTestSuite$/TestRPCGetBlockByHeight$" -tags rpc
 
 package test
 
@@ -47,8 +47,9 @@ func (suite *RPCTestSuite) SetupTest() {
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
-	stopKafka()
-	stopUbsv()
+	//	stopKafka()
+	//
+	// stopUbsv()
 }
 
 const (
@@ -282,6 +283,72 @@ func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
 		t.Errorf("Test failed: getmininginfo not working")
 	} else {
 		t.Logf("getmininginfo test succeeded")
+	}
+}
+
+func (suite *RPCTestSuite) TestRPCGetBlockHeader() {
+	t := suite.T()
+	height := 1
+
+	var getBlockByHeightResp GetBlockByHeightResponse
+
+	var getBlockHeaderResp GetBlockHeaderResponse
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+
+	defer cancel()
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
+	t.Logf("%s", resp)
+	t.Logf("%d", getBlockByHeightResp.Result.Height)
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &getBlockByHeightResp)
+	if err != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("Hash block %d: %s", height, getBlockByHeightResp.Result.Hash)
+	t.Log("Calling RPC endpoint getblockheader...")
+
+	respHeader, errHeader := helper.CallRPC(ubsv1RPCEndpoint, "getblockheader", []interface{}{getBlockByHeightResp.Result.Hash})
+
+	if errHeader != nil {
+		t.Errorf("Error CallRPC getblockheader: %v", errHeader)
+	}
+
+	errJSONHead := json.Unmarshal([]byte(respHeader), &getBlockHeaderResp)
+
+	if errJSONHead != nil {
+		t.Errorf("JSON decoding error getheader: %v", errJSONHead)
+		return
+	}
+
+	if getBlockHeaderResp.Error != nil {
+		if strErr, ok := getBlockHeaderResp.Error.(string); ok && strErr == "null" {
+			t.Errorf("Test failed: getblockheader RPC call returned error: %v", strErr)
+		} else {
+			t.Errorf("Test failed: getblockheader RPC call returned an unexpected error type: %v", getBlockHeaderResp.Error)
+		}
+	} else {
+		t.Logf("Test succeeded, retrieved information from getblockheader RPC call")
+		t.Logf("%s", respHeader)
 	}
 }
 
