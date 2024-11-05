@@ -155,7 +155,6 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
-
 	subtreeValidationClient, err := subtreevalidation.NewClient(ctx, u.logger, "blockvalidation")
 	if err != nil {
 		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
@@ -166,16 +165,27 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
-	expiration := uint64(0)
-	expirationValue := storeURL.Query().Get("expiration")
-	if expirationValue != "" {
-		expiration, err = strconv.ParseUint(expirationValue, 10, 64)
-		if err != nil {
-			return errors.NewConfigurationError("could not parse expiration %s", expirationValue, err)
+	var expiration time.Duration
+
+	expirationStr := storeURL.Query().Get("expiration")
+
+	if expirationStr != "" {
+		expirationVal, err := strconv.ParseUint(expirationStr, 10, 64)
+		if err == nil {
+			// We have a valid expiration value, so we can use it. We assume it is in seconds.
+			expiration = time.Duration(expirationVal) * time.Second // nolint:gosec
+		} else {
+			// We do not have a valid expiration value, so we see if we can parse it as a duration.
+			d, err := time.ParseDuration(expirationStr)
+			if err != nil {
+				return errors.NewConfigurationError("could not parse expiration %s", expirationStr, err)
+			}
+
+			expiration = d
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, expiration)
 
 	go u.processSubtreeNotify.Start()
 
@@ -306,6 +316,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	}
 
 	var baseUrl string
+
 	if len(msg.Value) > 32 {
 		baseUrl = string(msg.Value[32:])
 	}
@@ -582,6 +593,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("failed to get previous block header", err))
 		}
+
 		if previousBlockMeta != nil {
 			height = previousBlockMeta.Height + 1
 		}
@@ -662,6 +674,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	} else {
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	}
+
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
@@ -690,7 +703,9 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 			u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock),
 			u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock),
 		)
+
 		retries := 0
+
 		for {
 			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
 				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
@@ -763,6 +778,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	blockReader := bytes.NewReader(blockBytes)
 
 	blocks := make([]*model.Block, 0)
+
 	for {
 		block, err := model.NewBlockFromReader(blockReader)
 		if err != nil {
@@ -770,8 +786,10 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 				// if strings.Contains(err.Error(), "EOF") || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
 				break
 			}
+
 			return nil, errors.NewProcessingError("[getBlocks][%s] failed to create block from bytes", hash.String(), err)
 		}
+
 		blocks = append(blocks, block)
 	}
 
@@ -797,6 +815,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 		if err != nil {
 			return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to create block header from bytes", hash.String(), err)
 		}
+
 		blockHeaders = append(blockHeaders, blockHeader)
 	}
 
@@ -816,6 +835,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	if err != nil {
 		return errors.NewServiceError("[catchup][%s] failed to check if block exists", fromBlock.Hash().String(), err)
 	}
+
 	if exists {
 		return nil
 	}
@@ -903,7 +923,9 @@ LOOP:
 
 		blockCount := 0
 		i := 0
+
 		var blocks []*model.Block
+
 		for _, batch := range batches {
 			batch := batch
 			i++
@@ -952,6 +974,7 @@ LOOP:
 		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.NewServiceError("[catchup][%s]grep  [%s]", fromBlock.Hash().String(), block.String(), err)
 		}
+
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
 
@@ -1063,6 +1086,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 	}()
 
 	prometheusBlockValidationSetTXMetaCacheDel.Inc()
+
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create hash from bytes", err))
@@ -1086,6 +1110,7 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	u.logger.Warnf("GRPC SetMinedMulti %d: %d", request.BlockId, len(request.Hashes))
 
 	hashes := make([]*chainhash.Hash, 0, len(request.Hashes))
+
 	for _, hash := range request.Hashes {
 		hash32 := chainhash.Hash(hash)
 		hashes = append(hashes, &hash32)

@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/alert-system/app/models"
 	"github.com/bitcoin-sv/alert-system/app/models/model"
 	"github.com/bitcoin-sv/alert-system/app/p2p"
-	"github.com/bitcoin-sv/alert-system/app/webserver"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/alert/alert_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -43,7 +42,7 @@ type Server struct {
 	// alert system specific configuration
 	appConfig *config.Config
 	p2pServer *p2p.Server
-	webServer *webserver.Server
+	// webServer *webserver.Server
 }
 
 // New will return a server instance with the logger stored within it
@@ -252,7 +251,7 @@ func (s *Server) requireP2P() error {
 	}
 
 	// Load the p2p ip (local, ip address or domain name)
-	// todo better validation of what is a valid IP, domain name or local address
+	// @TODO better validation of what is a valid IP, domain name or local address
 	if len(s.appConfig.P2P.IP) < 5 {
 		return config.ErrNoP2PIP
 	}

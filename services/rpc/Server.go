@@ -547,7 +547,7 @@ type RPCServer struct {
 	blockAssemblyClient    *blockassembly.Client
 	peerClient             peer.ClientI
 	p2pClient              p2p.ClientI
-	assetHttpURL           *url.URL
+	assetHTTPURL           *url.URL
 	chainParams            *chaincfg.Params
 	helpCacher             *helpCacher
 }
@@ -1068,11 +1068,12 @@ func (s *RPCServer) Start(ctx context.Context) error {
 func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
-	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
+	assetHTTPAddress, ok := gocore.Config().Get("asset_httpAddress", "")
 	if !ok {
 		return nil, errors.NewConfigurationError("missing setting: asset_httpAddress")
 	}
-	parsedURL, err := url.ParseRequestURI(assetHttpAddress)
+
+	parsedURL, err := url.ParseRequestURI(assetHTTPAddress)
 	if err != nil {
 		return nil, errors.NewConfigurationError("Invalid URL", err)
 	}
@@ -1083,7 +1084,7 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPC
 		logger:                 logger,
 		quit:                   make(chan int),
 		blockchainClient:       blockchainClient,
-		assetHttpURL:           parsedURL,
+		assetHTTPURL:           parsedURL,
 		helpCacher:             newHelpCacher(),
 	}
 

@@ -86,7 +86,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	c := cmd.(*bsvjson.GetBlockHashCmd)
 
 	// Load the raw block bytes from the database.
-	b, err := s.blockchainClient.GetBlockByHeight(ctx, uint32(c.Index))
+	b, err := s.blockchainClient.GetBlockByHeight(ctx, uint32(c.Index)) // nolint:gosec
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 		diffFloat, _ := diff.Float64()
 		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
 			Hash:         b.Hash().String(),
-			Version:      int32(b.Version),
+			Version:      int32(b.Version), // nolint:gosec
 			VersionHex:   fmt.Sprintf("%08x", b.Version),
 			PreviousHash: b.HashPrevBlock.String(),
 			Nonce:        uint64(b.Nonce),
@@ -130,7 +130,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 			Difficulty:   diffFloat,
 			MerkleRoot:   b.HashMerkleRoot.String(),
 			// Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
-			Height: int32(meta.Height),
+			Height: int32(meta.Height), // nolint:gosec
 		}
 
 		return headerReply, nil
@@ -224,7 +224,6 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 		// 		}
 		// 		rawTxns[i] = *rawTxn
 		// 	}
-
 		blockReply = bsvjson.GetBlockVerboseTxResult{
 			GetBlockBaseVerboseResult: baseBlockReply,
 
@@ -266,11 +265,11 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 
 	c := cmd.(*bsvjson.GetRawTransactionCmd)
 
-	if s.assetHttpURL == nil {
+	if s.assetHTTPURL == nil {
 		return nil, errors.NewConfigurationError("asset_httpURL is not set")
 	}
 
-	fullURL := s.assetHttpURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
+	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
 
 	// Set up HTTP client with timeouts
 	client := &http.Client{
@@ -290,6 +289,9 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 
 	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.NewServiceError("Error reading response body", err)
+	}
 
 	return body, nil
 }

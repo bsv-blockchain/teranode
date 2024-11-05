@@ -6,11 +6,11 @@
 package rpc
 
 import (
-	"errors"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 )
 
@@ -809,8 +809,7 @@ func (c *helpCacher) rpcMethodHelp(method string) (string, error) {
 	// Look up the result types for the method.
 	resultTypes, ok := rpcResultTypes[method]
 	if !ok {
-		return "", errors.New("no result types specified for method " +
-			method)
+		return "", errors.NewProcessingError("no result types specified for method %s", method)
 	}
 
 	// Generate, cache, and return the help.
@@ -859,7 +858,7 @@ func (c *helpCacher) rpcUsage() (string, error) {
 	// 	}
 	// }
 
-	sort.Sort(sort.StringSlice(usageTexts))
+	sort.Strings(usageTexts)
 	c.usage = strings.Join(usageTexts, "\n")
 
 	return c.usage, nil

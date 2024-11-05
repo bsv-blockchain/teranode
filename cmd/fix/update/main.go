@@ -37,8 +37,10 @@ func main() {
 	}
 
 	for rows.Next() {
-		var height int
-		var b []byte
+		var (
+			height int
+			b      []byte
+		)
 
 		err = rows.Scan(&height, &b)
 		if err != nil {
@@ -81,6 +83,7 @@ func main() {
 			fmt.Printf("Height %d: %v - expected %d, actual %d\n", height, coinbaseTx.TxIDChainHash(), expectedHeight, spendingHeight)
 
 			newBin := aero.NewBin("spendingHeight", aero.NewIntegerValue(expectedHeight))
+
 			err := client.PutBins(nil, key, newBin)
 			if err != nil {
 				fmt.Printf("ERROR: %v\n", err)
