@@ -829,12 +829,17 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentTxStruct := parentTxStruct
 
 					parentG.Go(func() error {
+						// check if current transaction
 						oldParentBlockIDs, err := b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 
-						if len(oldParentBlockIDs) > 0 {
-							for _, blockID := range oldParentBlockIDs {
-								oldBlockIDs.Store(blockID, struct{}{})
-							}
+						// there are old blocks we need to return to the validator
+						if err == nil && len(oldParentBlockIDs) > 0 {
+							//for _, blockID := range oldParentBlockIDs {
+							//	oldBlockIDs.Store(blockID, struct{}{})
+							//}
+							// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
+							// Each tx id and its block ids will be checked by the validator separately.
+							oldBlockIDs.Store(parentTxStruct.txHash, oldParentBlockIDs)
 						}
 
 						return err
@@ -865,6 +870,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMeta(gCtx, txMetaStore, parentTxStruct)
+	//asd := parentTxStruct.txHash
 
 	var oldBlockIDs []uint32
 
