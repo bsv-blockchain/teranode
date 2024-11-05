@@ -43,13 +43,12 @@ func (suite *RPCTestSuite) SetupTest() {
 	}
 
 	// Ensure the app has time to initialize
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
-	//	stopKafka()
-	//
-	// stopUbsv()
+	stopKafka()
+	stopUbsv()
 }
 
 const (
@@ -182,14 +181,17 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
 	require.NoError(t, err)
 
+	t.Logf("Sending Run event")
+
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
 
-	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[5]"})
-	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(5 * time.Second)
+
+	t.Logf("Generating blocks")
+
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
 
@@ -375,7 +377,7 @@ func startKafka(logFile string) error {
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
 
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test")
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.rpc")
 
 	appLog, err := os.Create(logFile)
 	if err != nil {
