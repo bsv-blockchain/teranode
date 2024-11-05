@@ -866,7 +866,6 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMeta(gCtx, txMetaStore, parentTxStruct)
-	//asd := parentTxStruct.txHash
 
 	var oldBlockIDs []uint32
 
