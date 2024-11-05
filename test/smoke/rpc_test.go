@@ -1,4 +1,4 @@
-////go:build rpc
+//go:build rpc
 
 // go test -v -run "^TestRPCTestSuite$/TestRPCGetBlockByHeight$" -tags rpc
 
@@ -47,8 +47,8 @@ func (suite *RPCTestSuite) SetupTest() {
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
-	stopKafka()
-	stopUbsv()
+	// stopKafka()
+	// stopUbsv()
 }
 
 const (
@@ -159,7 +159,7 @@ func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 	t.Logf("%s", resp)
 
 	if getDifficulty.Error != nil {
-		if strErr, ok := getDifficulty.Error.(string); ok && strErr == "null" {
+		if strErr, ok := getDifficulty.Error.(string); ok && strErr == nullStr {
 			t.Errorf("Test failed: getdifficulty RPC call returned error: %v", strErr)
 		} else {
 			t.Errorf("Test failed: getdifficulty RPC call returned an unexpected error type: %v", getDifficulty.Error)
@@ -234,11 +234,16 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
 	require.NoError(t, err)
 
+	t.Logf("Sending Run Event...")
+
 	err = blockchainClient.Run(ctx, "test")
+
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Generate blocks
+	t.Logf("Generate blocks...")
+
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
 	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(5 * time.Second)
@@ -303,16 +308,24 @@ func (suite *RPCTestSuite) TestRPCGetBlockHeader() {
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
 	require.NoError(t, err)
 
+	t.Logf("Sending Run Event...")
+
 	err = blockchainClient.Run(ctx, "test")
+
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Generate blocks
+	t.Logf("Generate blocks...")
+
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
 	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(5 * time.Second)
 
+	t.Logf("Call RPC Endpoint GetBlockByHeight...")
+
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
+
 	t.Logf("%s", resp)
 	t.Logf("%d", getBlockByHeightResp.Result.Height)
 
@@ -389,6 +402,7 @@ func startApp(logFile string) error {
 	appCmd.Stderr = appLog
 
 	log.Println("Starting app in the background...")
+
 	if err := appCmd.Start(); err != nil {
 		return err
 	}
@@ -403,7 +417,9 @@ func startApp(logFile string) error {
 
 func stopKafka() {
 	log.Println("Stopping Kafka...")
+
 	cmd := exec.Command("docker", "stop", "kafka-server")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop Kafka: %v\n", err)
 	} else {
@@ -415,7 +431,9 @@ func stopUbsv() {
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
 	log.Println("Stopping UBSV...")
+
 	cmd := exec.Command("pkill", "-f", "ubsv")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop UBSV: %v\n", err)
 	} else {
