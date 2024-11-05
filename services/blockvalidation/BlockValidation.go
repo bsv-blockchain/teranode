@@ -714,7 +714,9 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				}
 
 				if !blocksPartOfCurrentChain {
-					// TODO TEMP disable invalidation in the scaling test. Re-enable in the future
+					// TODO TEMP disable invalidation in the scaling test
+					//      Since the invalidation is disabled, here we are not invalidating the block
+					// 		Consider enabling the invalidation in the future
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, block.String())
 				}
 
