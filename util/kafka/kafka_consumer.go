@@ -269,7 +269,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		for i := 0; i < k.Config.ConsumerCount; i++ {
 			go func(consumerIndex int) {
 				// defer consumer.Close() // Ensure cleanup, if necessary
-				k.Config.Logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, k.Config.ConsumerGroupID, topics[0])
+				k.Config.Logger.Debugf("[kafka] starting consumer [%d] for group %s on topic %s", consumerIndex, k.Config.ConsumerGroupID, topics[0])
 				wg.Done()
 
 				for {
