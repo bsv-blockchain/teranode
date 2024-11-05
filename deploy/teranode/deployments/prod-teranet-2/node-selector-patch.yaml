@@ -7,119 +7,119 @@ spec:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   blockAssembly:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   blockPersister:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   blockValidator:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   blockchain:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   coinbase:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   legacy:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   miner:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   peer:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   propagation:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   subtreeValidator:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
   utxoPersister:
     spec:
       deploymentOverrides:
         nodeSelector:
-          role: main
+          role: teranet-2
         tolerations:
           - effect: NoSchedule
             key: role
             operator: Equal
-            value: main
+            value: teranet-2
