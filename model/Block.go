@@ -428,7 +428,7 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDs *sync.Map,
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *sync.Map,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
 		tracing.WithHistogram(prometheusBlockValid),
@@ -561,7 +561,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		}
 
 		if !legacyLimitedBlockValidation {
-			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDs)
+			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDsMap)
 			if err != nil {
 				return false, err
 			}
@@ -657,7 +657,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
-	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDs *sync.Map) error {
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDsMap *sync.Map) error {
 	if b.txMap == nil {
 		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
 	}
@@ -831,10 +831,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentG.Go(func() error {
 						oldParentBlockIDs, err := b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 
-						if len(oldParentBlockIDs) > 0 {
-							for _, blockID := range oldParentBlockIDs {
-								oldBlockIDs.Store(blockID, struct{}{})
-							}
+						// there are old blocks we need to return to the validator
+						if err == nil && len(oldParentBlockIDs) > 0 {
+							// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
+							// Each tx id and its block ids will be checked by the validator separately.
+							oldBlockIDsMap.Store(parentTxStruct.txHash, oldParentBlockIDs)
 						}
 
 						return err

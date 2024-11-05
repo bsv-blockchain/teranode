@@ -100,6 +100,18 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
 		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return true
+		blockIDs = []uint32{metas[0].ID}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return false
+		blockIDs = []uint32{9999, 99999}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.False(t, isInChain)
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
@@ -233,6 +245,39 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 
 		// Check if block2Alt is in the chain, should return true
 		blockIDs := []uint32{metas[0].ID}
+		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.True(t, isInChain)
+	})
+
+	t.Run("one of the block is in chain other is not", func(t *testing.T) {
+		connStr, teardown, err := SetupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
+
+		storeURL, err := url.Parse(connStr)
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL)
+		require.NoError(t, err)
+
+		// Store block1 and block2
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+
+		// get metas for block1 and block2
+		_, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
+		require.NoError(t, err)
+
+		// Check if any of the blockIDs are in the chain, should return true
+		blockIDs := []uint32{metas[0].ID, 9999, 99999}
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
 		assert.True(t, isInChain)
