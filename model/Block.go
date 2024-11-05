@@ -894,9 +894,8 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 		}
 
 		if minBlockID < minSetBlockID {
-			// parent is from a block that is older than the 100 blocks we have in the current chain
-			// we can ignore this, as the parent is not on our current chain
-			logger.Warnf("[BLOCK][%s] parent transaction %s of tx %s is over 100 blocks ago - skipping", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
+			// parent is from a block that is older than the blocks we have in the current chain
+			logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s is over %d blocks ago - checking later in validator", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(currentBlockHeaderIDsMap))
 
 			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
 			oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
