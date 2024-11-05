@@ -1077,7 +1077,7 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 		// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
 		if !blocksPartOfCurrentChain {
-			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, blockStr)
+			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", blockStr, txHash, blockIDs)
 			return false
 		}
 
