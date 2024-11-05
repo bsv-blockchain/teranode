@@ -98,8 +98,13 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	res, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
-	if !res.Ok || err != nil {
-		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)
+	if res == nil || !res.Ok || err != nil {
+		details := "failed health check with no details"
+		if res != nil {
+			details = res.Details
+		}
+
+		return http.StatusFailedDependency, details, errors.UnwrapGRPC(err)
 	}
 
 	return http.StatusOK, res.Details, nil
