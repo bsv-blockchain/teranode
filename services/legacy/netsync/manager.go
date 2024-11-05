@@ -329,8 +329,10 @@ func (sm *SyncManager) startSync() {
 
 	okPeers := make([]*peerpkg.Peer, 0)
 
+	sm.logger.Debugf("[startSync] selecting sync peer from %d candidates", len(sm.peerStates))
 	for peer, state := range sm.peerStates {
 		if !state.syncCandidate {
+			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.Addr())
 			continue
 		}
 
@@ -338,16 +340,19 @@ func (sm *SyncManager) startSync() {
 		// only be used as a last resort.
 		if peer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
 			okPeers = append(okPeers, peer)
+			sm.logger.Debugf("[startSync][%v] peer is at the same height %d as us (%d), added to okPeers", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 			continue
 		}
 
 		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
 		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) {
+			sm.logger.Debugf("[startSync][%v] peer is behind us at height %d (us: %d), skipping", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 			continue
 		}
 
 		// Append each good peer to bestPeers for selection later.
+		sm.logger.Debugf("[startSync][%v] peer is a sync candidate at height %d (us: %d), adding to bestPeers", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 		bestPeers = append(bestPeers, peer)
 	}
 
@@ -366,6 +371,8 @@ func (sm *SyncManager) startSync() {
 
 	// Start syncing from the best peer if one was selected.
 	if bestPeer != nil {
+		sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.Addr())
+
 		// check whether we are in sync with this peer and send RUNNING FSM state
 		// nolint:gosec // the height will never exceed int32.Max
 		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
