@@ -298,6 +298,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		b.currentRunningState.Store("reorging")
+
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
