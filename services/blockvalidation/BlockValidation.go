@@ -332,8 +332,15 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	var iterationError error
 	// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 	oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-		txID = txID.(chainhash.Hash)
-		parentTransactionsBlockIDs := blockIDs.([]uint32)
+		txHash, ok := txID.(chainhash.Hash)
+		if !ok {
+			u.logger.Errorf("[Block Validation][Range] failed to assert txID to chainhash.Hash for txID: %v", txID)
+		}
+
+		parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
+		if !ok {
+			u.logger.Errorf("[Block Validation][Range] failed to assert blockIDs to []uint32 for txID: %v", txID)
+		}
 
 		// Flag to check if the old blocks are part of the current chain
 		var blocksPartOfCurrentChain bool
@@ -345,8 +352,7 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 
 		// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
 		if !blocksPartOfCurrentChain {
-			// TODO TEMP disable invalidation in the scaling test. Re-enable in the future
-			iterationError = errors.NewBlockInvalidError("[BlockValidation][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txID, block.String())
+			iterationError = errors.NewBlockInvalidError("[BlockValidation][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, block.String())
 			return false
 		}
 
@@ -684,10 +690,18 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				}
 			}
 
+			// TODO: Should we return error here?
 			// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 			oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-				txID = txID.(chainhash.Hash)
-				parentTransactionsBlockIDs := blockIDs.([]uint32)
+				txHash, ok := txID.(chainhash.Hash)
+				if !ok {
+					u.logger.Errorf("[Block Validation][Range] failed to assert txID to chainhash.Hash for txID: %v", txID)
+				}
+
+				parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
+				if !ok {
+					u.logger.Errorf("[Block Validation][Range] failed to assert blockIDs to []uint32 for txID: %v", txID)
+				}
 
 				// Flag to check if the old blocks are part of the current chain
 				var blocksPartOfCurrentChain bool
@@ -699,7 +713,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 				if !blocksPartOfCurrentChain {
 					// TODO TEMP disable invalidation in the scaling test. Re-enable in the future
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txID, block.String())
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, block.String())
 				}
 
 				return true
@@ -743,8 +757,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		var iterationError error
 		// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 		oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-			txID = txID.(chainhash.Hash)
-			parentTransactionsBlockIDs := blockIDs.([]uint32)
+			txHash, ok := txID.(chainhash.Hash)
+			if !ok {
+				u.logger.Errorf("[ValidateBlock][Range] failed to assert txID to chainhash.Hash for txID: %v", txID)
+			}
+
+			parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
+			if !ok {
+				u.logger.Errorf("[ValidateBlock][Range] failed to assert blockIDs to []uint32 for txID: %v", txID)
+			}
 
 			// Flag to check if the old blocks are part of the current chain
 			var blocksPartOfCurrentChain bool
@@ -756,7 +777,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 			// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
 			if !blocksPartOfCurrentChain {
-				iterationError = errors.NewBlockInvalidError("[ValidateBlock][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txID, block.String())
+				iterationError = errors.NewBlockInvalidError("[ValidateBlock][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, block.String())
 				return false
 			}
 
@@ -916,8 +937,15 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	var iterationError error
 	// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 	oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-		txID = txID.(chainhash.Hash)
-		parentTransactionsBlockIDs := blockIDs.([]uint32)
+		txHash, ok := txID.(chainhash.Hash)
+		if !ok {
+			u.logger.Errorf("[Block Validation][Range] failed to assert txID to chainhash.Hash for txID: %v", txID)
+		}
+
+		parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
+		if !ok {
+			u.logger.Errorf("[Block Validation][Range] failed to assert blockIDs to []uint32 for txID: %v", txID)
+		}
 
 		// Flag to check if the old blocks are part of the current chain
 		var blocksPartOfCurrentChain bool
@@ -929,19 +957,14 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 		// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
 		if !blocksPartOfCurrentChain {
-			iterationError = errors.NewBlockInvalidError("[ReValidateBlock][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain", txID, blockData.block.String())
+			iterationError = errors.NewBlockInvalidError("[ReValidateBlock][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, blockData.block.String())
 			return false
 		}
 
 		return true
 	})
 
-	// if iterationError is not nil, return the iterationError
-	if iterationError != nil {
-		return iterationError
-	}
-
-	return nil
+	return iterationError
 }
 
 func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
