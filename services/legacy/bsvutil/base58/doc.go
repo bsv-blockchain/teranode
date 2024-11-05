@@ -26,4 +26,5 @@ used to differentiate the same payload.  For Bitcoin addresses, the extra
 version is used to differentiate the network of otherwise identical public keys
 which helps prevent using an address intended for one network on another.
 */
+
 package base58

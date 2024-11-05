@@ -19,11 +19,13 @@ func Decode(b string) []byte {
 	j := big.NewInt(1)
 
 	scratch := new(big.Int)
+
 	for i := len(b) - 1; i >= 0; i-- {
 		tmp := b58[b[i]]
 		if tmp == 255 {
 			return []byte("")
 		}
+
 		scratch.SetInt64(int64(tmp))
 		scratch.Mul(j, scratch)
 		answer.Add(answer, scratch)
@@ -38,6 +40,7 @@ func Decode(b string) []byte {
 			break
 		}
 	}
+
 	flen := numZeros + len(tmpval)
 	val := make([]byte, flen)
 	copy(val[numZeros:], tmpval)
@@ -51,6 +54,7 @@ func Encode(b []byte) string {
 	x.SetBytes(b)
 
 	answer := make([]byte, 0, len(b)*136/100)
+
 	for x.Cmp(bigZero) > 0 {
 		mod := new(big.Int)
 		x.DivMod(x, bigRadix, mod)
@@ -62,6 +66,7 @@ func Encode(b []byte) string {
 		if i != 0 {
 			break
 		}
+
 		answer = append(answer, alphabetIdx0)
 	}
 
