@@ -115,37 +115,55 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		}
 	}()
 
+	var (
+		subscribeCtx    context.Context
+		subscribeCancel context.CancelFunc
+	)
+
 	if bv.blockchainClient != nil {
 		go func() {
 			for {
-				blockchainSubscription, err := bv.blockchainClient.Subscribe(ctx, "blockvalidation")
-				if err != nil {
-					bv.logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
+				select {
+				case <-ctx.Done():
+					if subscribeCancel != nil {
+						subscribeCancel()
+					}
 
-					// backoff for 5 seconds and try again
-					time.Sleep(5 * time.Second)
+					return
+				default:
+					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
-					continue
-				}
+					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, "blockvalidation")
+					if err != nil {
+						bv.logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
 
-				for notification := range blockchainSubscription {
-					if notification == nil {
+						// backoff for 5 seconds and try again
+						time.Sleep(5 * time.Second)
+
 						continue
 					}
 
-					if notification.Type == model.NotificationType_Block {
-						cHash := chainhash.Hash(notification.Hash)
-						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
-
-						// convert hash to chainhash
-						hash, err := chainhash.NewHash(notification.Hash)
-						if err != nil {
-							bv.logger.Errorf("[BlockValidation:setMined] failed to convert hash to chainhash: %s", err)
+					for notification := range blockchainSubscription {
+						if notification == nil {
 							continue
 						}
-						// push block hash to the setMinedChan
-						bv.setMinedChan <- hash
+
+						if notification.Type == model.NotificationType_Block {
+							cHash := chainhash.Hash(notification.Hash)
+							bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
+
+							// convert hash to chainhash
+							hash, err := chainhash.NewHash(notification.Hash)
+							if err != nil {
+								bv.logger.Errorf("[BlockValidation:setMined] failed to convert hash to chainhash: %s", err)
+								continue
+							}
+							// push block hash to the setMinedChan
+							bv.setMinedChan <- hash
+						}
 					}
+
+					subscribeCancel()
 				}
 			}
 		}()

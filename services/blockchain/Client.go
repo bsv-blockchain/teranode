@@ -630,7 +630,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 	go func() {
 		<-ctx.Done()
-		c.logger.Infof("[Blockchain] context done, closing subscription: %s", source)
+		c.logger.Infof("[Blockchain] server context done, closing subscription: %s", source)
 		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
