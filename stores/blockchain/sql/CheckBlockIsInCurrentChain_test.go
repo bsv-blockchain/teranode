@@ -100,6 +100,18 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
 		require.NoError(t, err)
 		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return true
+		blockIDs = []uint32{metas[0].ID}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return false
+		blockIDs = []uint32{9999, 99999}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.False(t, isInChain)
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
