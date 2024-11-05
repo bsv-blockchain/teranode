@@ -272,14 +272,18 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 }
 
 func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
+	_, _, deferFn := tracing.StartTracing(ctx, "UpdateBestBlock",
+		tracing.WithParentStat(stats),
+		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
+		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
+	)
+	defer deferFn()
+
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 		return
 	}
-	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
-
-	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
 
@@ -324,12 +328,11 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Warnf("[BlockAssembler] decremented getMiningCandidate wait count: %d", b.resetWaitCount.Load())
 	}
 
-	err = b.SetState(ctx)
-	if err != nil {
+	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
-	b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
-	if err != nil {
+
+	if b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
 }

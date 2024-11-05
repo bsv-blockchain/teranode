@@ -148,7 +148,9 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
 					for _, s := range c.subscribers {
-						utils.SafeSend(s.ch, notification)
+						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
+							utils.SafeSend(ch, notification)
+						}(s.ch, notification)
 					}
 					c.subscribersMu.Unlock()
 				}
@@ -592,8 +594,8 @@ func (c *Client) SendNotification(ctx context.Context, notification *blockchain_
 }
 
 func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
-	// create a new channel for the subscriber
-	ch := make(chan *blockchain_api.Notification)
+	// create a new buffered channel for the subscriber
+	ch := make(chan *blockchain_api.Notification, 1_000)
 
 	id := uuid.New().String()
 

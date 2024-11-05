@@ -29,6 +29,7 @@ var (
 	prometheusBlockAssemblerReorg                  prometheus.Counter
 	prometheusBlockAssemblerReorgDuration          prometheus.Histogram
 	prometheusBlockAssemblerGetReorgBlocksDuration prometheus.Histogram
+	prometheusBlockAssemblerUpdateBestBlock        prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight         prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight      prometheus.Gauge
 )
@@ -190,6 +191,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "get_reorg_blocks_duration",
 			Help:      "Histogram of GetReorgBlocks in block assembler",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerUpdateBestBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "update_best_block",
+			Help:      "Histogram of updating best block in block assembler",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
