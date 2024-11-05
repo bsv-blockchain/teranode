@@ -398,6 +398,9 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	return header, meta, nil
 }
 
+// CheckBlockIsInCurrentChain checks if ANY of the given blockIDs is in the current chain.
+// It will return true if at least of the blockIDs is in the current chain.
+// It will return false if none of the blockIDs is in the current chain.
 func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	resp, err := c.client.CheckBlockIsInCurrentChain(ctx, &blockchain_api.CheckBlockIsCurrentChainRequest{
 		BlockIDs: blockIDs,
