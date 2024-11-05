@@ -1,10 +1,16 @@
 @startuml
-entity Validator
+entity "Transaction Validator" as TxValidator
 control "Kafka Producer" as Kafka
-participant "Subtree Validation" as SubtreeValidation
+participant "Subtree Validation Service" as SubtreeValidation
 
-Validator -> Kafka: publishToKafka()
-Kafka -> SubtreeValidation: consume()
+TxValidator -> Kafka: publishToKafka(validationResult)
+Kafka --> SubtreeValidation: notify(validationResult)
+
+note right of SubtreeValidation
+  Subtree Validation Service
+  consumes the validation result
+  for further processing
+end note
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

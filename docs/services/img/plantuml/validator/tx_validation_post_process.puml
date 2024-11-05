@@ -1,56 +1,55 @@
 @startuml
-entity "Server" as Server
+participant "Server" as Server
 entity "Validator" as Validator
-entity "DefaultValidator" as DefaultValidator
+participant "TxValidator" as TxValidator
 database "UTXO Store" as UTXOStore
-participant "Block Assembly Service" as BlockAssembly
-participant P2P
+participant "Block Assembly" as BlockAssembly
+queue "Rejected Tx Kafka Producer" as RejectedKafka
+queue "Tx Meta Kafka Producer" as TxMetaKafka
+participant "Blockchain Client" as BlockchainClient
 
 Server -> Server: ValidateTransaction()
-Server -> Validator: Validate()
+Server -> Validator: Validate(ctx, tx, blockHeight)
 activate Validator
-Validator -> DefaultValidator: ValidateTransaction()
 
-DefaultValidator -> DefaultValidator: Validate the extended TX
+Validator -> BlockchainClient: GetFSMCurrentState()
+Validator -> Validator: validateInternal()
+activate Validator
 
-deactivate Validator
+Validator -> TxValidator: validateTransaction()
+TxValidator -> Validator: Return result
 
 alt if TX is valid
     Validator -> Validator: spendUtxos()
-    activate Validator
-    Validator -> UTXOStore: utxoStore.Spend() # Mark TX input UTXOs as spent
+    Validator -> UTXOStore: Spend() # Mark TX input UTXOs as spent
 
-    UTXOStore -> Validator: OK
-    deactivate Validator
+    Validator -> Validator: storeTxInUtxoMap()
+    Validator -> UTXOStore: Create() # Persist new UTXOs from TX
 
+    alt if Tx Meta Kafka Producer exists
+        Validator -> TxMetaKafka: Publish tx meta
+    end
 
-    Validator -> Validator: sendToBlockAssembler()
-    activate Validator
-    Validator -> BlockAssembly: Notify Tx
-
-    BlockAssembly -> Validator: Transaction added to Block Assembly
-    deactivate Validator
-
-    Validator -> Validator: storeUtxos()
-    activate Validator
-
-    Validator -> UTXOStore: utxoStore.Store() # Persist new UTXOs from TX
-    UTXOStore -> Validator
-
-    deactivate Validator
-
-    Validator -> Server: Return validation success
-
+    alt if !blockAssemblyDisabled
+        Validator -> BlockAssembly: Store()
+        alt if error in block assembler store
+            Validator -> UTXOStore: Delete() # reverseTxMetaStore
+            Validator -> UTXOStore: UnSpend() # reverseSpends
+            Validator --> Server: Return error
+        end
+    end
 
 else if TX is invalid
-    Validator -> Server: Return validation failure
+    Validator -> RejectedKafka: Publish rejected TX
+end
 
-    Server -> Server: sendInvalidTxNotification()
-    activate Server
-    loop For each P2P Service subscriber
-        Server -> P2P: Notify invalid TX
-    end
-    deactivate Server
+deactivate Validator
+
+Validator -> Server: Return validation result
+deactivate Validator
+
+alt if TX is invalid
+    Server -> Server: Return error response
 end
 
 left footer Last Modified On: %date("dd-MMM-yyyy")

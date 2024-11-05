@@ -2,9 +2,10 @@
 
 ## Index
 
+
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Starting the Validator as a Service](#21-starting-the-validator-service)
+- [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
 - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
 - [2.3. Validating the Transaction](#23-validating-the-transaction)
 - [2.4. Post-validation: Updating stores and propagating the transaction](#24-post-validation-updating-stores-and-propagating-the-transaction)
@@ -14,6 +15,7 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+9. [Other Resources](#9-other-resources)
 
 
 ## 1. Description
@@ -243,19 +245,31 @@ Depending on the configuration settings, the TX Validator can notify the Block A
 1. Directly, by calling the `Store()` method on the Block Assembly client.
 2. Through a Kafka topic, by sending the transaction to the `tx` topic.
 
-When the TX Validator Service is running in the node, the P2P Service will subscribe to it. We can see this in more detail here:
+When the Transaction Validator Service identifies an invalid transaction, it employs a Kafka-based notification system to inform other components of the system. Here's an overview of this process:
 
 ![tx_validation_p2p_subscribers.svg](img/plantuml/validator/tx_validation_p2p_subscribers.svg)
 
-1. **Establish gRPC Subscription**:
-   - The P2P Service starts and, if the `useLocalValidator` is false, it calls its `validatorSubscriptionListener` function.
-   - The Listener requests a gRPC subscription from the Validator Client.
-   - The Validator updates its subscribers map and confirms the subscription establishment back to the Listener and P2P Service.
+1. **Transaction Validation**:
+    - The Validator receives a transaction for validation via a gRPC call to the `ValidateTransaction` method.
+    - The Validator performs its checks, including script verification, UTXO spending, and other validation rules.
 
-2. **Send Failed Transaction Notification**:
-   - Upon encountering a failed transaction, the Validator calls the `sendInvalidTxNotification` function.
-   - It loops through all the subscribers (P2P Subscribers) in its list.
-   - A gRPC stream notification about the failed transaction is sent to each subscriber.
+2. **Identification of Invalid Transactions**:
+    - If the transaction fails any of the validation checks, it is deemed invalid (rejected).
+
+3. **Notification of Rejected Transactions**:
+    - When a transaction is rejected, the Validator doesn't directly notify other services.
+    - Instead, it publishes information about the rejected transaction to a dedicated Kafka topic.
+    - This is done using the Rejected Tx Kafka Producer, which is set up if configured in the system.
+
+4. **Kafka Message Content**:
+    - The Kafka message for a rejected transaction typically includes:
+        - The transaction ID (hash)
+        - The reason for rejection (error message)
+
+5. **Consumption of Rejected Transaction Notifications**:
+    - Other services in the system, such as the P2P Service or any component interested in invalid transactions, can subscribe to this Kafka topic.
+    - By consuming messages from this topic, these services receive notifications about rejected transactions.
+
 
 
 
@@ -267,18 +281,7 @@ The Validator, when run as a service, uses gRPC for communication between nodes.
 
 The Validation Service deals with the extended transaction format, as seen below:
 
-| Field           | Description                                                                                            | Size                                              |
-|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Version no      | currently 2                                                                                            | 4 bytes                                           |
-| **EF marker**   | **marker for extended format**                                                                         | **0000000000EF**                                  |
-| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of inputs  | **Extended Format** transaction Input Structure                                                        | <in-counter> qty with variable length per input   |
-| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
-
-More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Technology
 
@@ -308,51 +311,22 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 
 ```
 ./services/validator
-│
-├── Client.go
-│   └── Contains client-side logic for interacting with the Validator, including functions for connecting and utilizing its services.
-│
-├── Interface.go
-│   └── Defines interfaces for the Validator, outlining the structure and methods any implementation of the validator should adhere to.
-│
-├── Mock.go
-│   └── Provides mock implementations of the Validator, primarily used for testing and simulation purposes.
-│
-├── Server.go
-│   └── Implements the server-side logic of the Validator, detailing the core functionalities as exposed to clients.
-│
-├── Server_test.go
-│   └── Contains tests for the server-side logic implemented in Server.go, ensuring expected behavior and functionality.
-│
-├── Validator.go
-│   └── Contains the main logic for validator functionalities, including the business logic for transaction validation.
-│
-├── Validator_test.go
-│   └── Includes unit tests for the Validator.go code, ensuring correctness of the validator logic.
-│
-├── frpc.go
-│   └── Implements functionalities related to fRPC (Fast Remote Procedure Call), including server setup and request handling.
-│
-├── metrics.go
-│   └── Contains code for metrics collection within the Validator, covering performance data, usage statistics, etc.
-│
+├── Client.go                    # Contains client-side logic for interacting with the Validator
+├── Interface.go                 # Defines interfaces for the Validator
+├── ScriptVerificatorGoBDK.go    # Implements script verification using a Go Bitcoin Development Kit
+├── ScriptVerificatorGoBT.go     # Implements script verification using Go Bitcoin Tools
+├── ScriptVerificatorGoSDK.go    # Implements script verification using a Go Software Development Kit
+├── Server.go                    # Implements the server-side logic of the Validator
+├── TxValidator.go               # Contains specific logic for validating transactions
+├── Validator.go                 # Contains the main logic for validator functionalities
+├── data.go                      # Contains data structures or constants used in the validator service
+├── metrics.go                   # Contains code for metrics collection within the Validator
+├── options.go                   # Defines configuration options or settings for the validator service
+├── policy.go                    # Defines validation policies or rules
 └── validator_api
-    │
-    ├── validator_api.frpc.go
-    │   └── Contains Fast RPC specific code, auto-generated from the validator_api.proto file.
-    │
-    ├── validator_api.pb.go
-    │   └── Auto-generated Go code from validator_api.proto, defining structs and functions for gRPC requests and responses.
-    │
-    ├── validator_api.proto
-    │   └── The Protocol Buffers definition file for the validator API, outlining data structures and available RPC methods.
-    │
-    ├── validator_api_drpc.pb.go
-    │   └── Contains DRPC (Decentralized RPC) specific code, also generated from the validator_api.proto file.
-    │
-    └── validator_api_grpc.pb.go
-        └── Auto-generated gRPC specific code from the validator_api.proto file, detailing the gRPC server and client interfaces.
-
+    ├── validator_api.pb.go          # Auto-generated Go code from validator_api.proto
+    ├── validator_api.proto          # Protocol Buffers definition file for the validator API
+    └── validator_api_grpc.pb.go     # Auto-generated gRPC specific code from validator_api.proto
 ```
 
 
@@ -371,14 +345,19 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 ## 8. Configuration options (settings flags)
 
 1. **`validator_grpcAddress`**: Specifies the address for the validator's gRPC server to connect to.
-2. **`use_open_tracing`**: Enables OpenTracing for gRPC client connections.
-3. **`use_prometheus_grpc_metrics`**: Enables Prometheus metrics for gRPC client connections.
-4. **`blockassembly_disabled`**: Indicates whether the block assembly feature is disabled.
-5. **`kafka_txsConfig`**: URL for the Kafka configuration for transaction messages.
-6. **`blockassembly_kafkaWorkers`**: Number of workers for Kafka related to block assembly.
-7. **`kafka_txmetaConfig`**: URL for the Kafka configuration for transaction metadata.
-8. **`blockvalidation_kafkaWorkers`**: Number of workers for Kafka related to block validation.
-9. **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
-10. **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests to the validator gRPC server.
-11. **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests before sending them to the validator.
-12. **`validator_sendBatchWorkers`**: Configures the number of workers for processing batches of validation requests.
+2. **`blockassembly_disabled`**: Indicates whether the block assembly feature is disabled.
+3. **`kafka_validatortxsConfig`**: URL for the Kafka configuration for validator transactions.
+4. **`kafka_txmetaConfig`**: URL for the Kafka configuration for transaction metadata.
+5. **`kafka_rejectedTxConfig`**: URL for the Kafka configuration for rejected transactions.
+6. **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
+7. **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests to the validator gRPC server.
+8. **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests before sending them to the validator.
+9. **`validator_kafkaWorkers`**: Configures the number of workers for Kafka operations related to the validator.
+10. **`validator_scriptVerificationLibrary`**: Specifies the library to use for script verification, with a default value of `VerificatorGoBT`.
+11. **`fsm_state_restore`**: A boolean flag related to FSM (Finite State Machine) state restoration.
+12. **`blockvalidation_kafkaWorkers`**: Number of workers for Kafka related to block validation.
+
+
+## 9. Other Resources
+
+[Validator Reference](../references/services/validator_reference.md)
