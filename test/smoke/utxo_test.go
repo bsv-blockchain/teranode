@@ -10,6 +10,7 @@
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags utxo
 package test
 
 import (
@@ -358,6 +359,240 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 
 	assert.True(t, blTx1, "Transaction %d not found in block", tx1.TxIDChainHash())
 	assert.True(t, blTx2, "Transaction %d not found in block", tx2.TxIDChainHash())
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
+}
+
+/*
+TestShouldAllowSpendAllUtxosWithAerospikeFailure tests the system's resilience when Aerospike fails during UTXO processing.
+
+Test Steps:
+1. Initial Setup
+  - Create private keys and addresses for transaction testing
+  - Record initial UTXO balance for verification
+
+2. Faucet Transaction
+  - Request funds from faucet to get initial UTXOs
+  - Send faucet transaction to network
+  - Split faucet outputs into two sets for separate transactions
+
+3. First Transaction
+  - Create and send transaction using first set of UTXOs
+  - Verify successful transmission
+
+4. Concurrent Operations with Second Transaction
+  - Create second transaction using remaining UTXOs
+  - Execute two concurrent operations:
+    a. Send the second transaction to the network
+    b. Shutdown Aerospike node with small delay (100ms) to ensure transaction processing has started
+  - Wait for both operations to complete
+
+5. Recovery Phase
+  - Wait 2 seconds before attempting Aerospike restart
+  - Restart Aerospike node
+  - Wait 5 seconds for Aerospike to fully initialize
+
+6. Verification Phase
+  - Mine new blocks to include pending transactions
+  - Verify both transactions are included in blocks:
+    a. Check first transaction inclusion
+    b. Check second transaction inclusion
+  - Verify final UTXO balance matches expected state
+
+Expected Outcomes:
+- Both transactions should eventually be included in blocks
+- System should handle Aerospike failure gracefully
+- UTXO state should remain consistent after recovery
+
+Settings used in this test:
+- expiration=1
+- utxostore_utxoBatchSize=128
+- utxostore_utxoBatchSize=50
+*/
+func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
+	t := suite.T()
+	framework := suite.TeranodeTestEnv
+	logger := framework.Logger
+	ctx := framework.Context
+
+	txDistributor := &framework.Nodes[0].DistributorClient
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
+
+	// Generate keys and addresses
+	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	assert.NoError(t, err, "Failed to generate private key")
+
+	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	assert.NoError(t, err, "Failed to generate private key")
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
+
+	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
+
+	// Request funds from faucet
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	assert.NoError(t, err, "Failed to request funds")
+
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+
+	// Split outputs into two parts
+	firstSet := len(faucetTx.Outputs) - 2
+	secondSet := firstSet
+
+	createTx := func(outputs []*bt.Output, startIndex int) (*bt.Tx, error) {
+		logger.Infof("Creating transaction with %d outputs", len(outputs))
+
+		spendingTx := bt.NewTx()
+		totalSatoshis := uint64(0)
+		utxos := make([]*bt.UTXO, 0)
+
+		// nolint: gosec
+		for i, output := range outputs {
+			idx := i + startIndex
+			utxo := &bt.UTXO{
+				TxIDHash:      faucetTx.TxIDChainHash(),
+				Vout:          uint32(idx),
+				LockingScript: output.LockingScript,
+				Satoshis:      output.Satoshis,
+			}
+			utxos = append(utxos, utxo)
+			totalSatoshis += output.Satoshis
+		}
+
+		err := spendingTx.FromUTXOs(utxos...)
+		if err != nil {
+			return nil, errors.NewProcessingError("error adding UTXOs to transaction: %v", err)
+		}
+
+		fee := uint64(1000)
+		amountToSend := totalSatoshis - fee
+
+		err = spendingTx.AddP2PKHOutputFromAddress(address1.AddressString, amountToSend)
+		if err != nil {
+			return nil, errors.NewProcessingError("error adding output to transaction: %v", err)
+		}
+
+		err = spendingTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
+		if err != nil {
+			return nil, errors.NewProcessingError("error filling transaction inputs: %v", err)
+		}
+
+		return spendingTx, nil
+	}
+
+	// Create and send first transaction
+	tx1, err := createTx(faucetTx.Outputs[:firstSet], 0)
+	assert.NoError(t, err, "Failed to create first transaction")
+
+	_, err = txDistributor.SendTransaction(ctx, tx1)
+	assert.NoError(t, err, "Failed to send first transaction")
+	logger.Infof("First Transaction sent: %s %s", tx1.TxIDChainHash(), tx1.TxID())
+
+	// Create second transaction
+	tx2, err := createTx(faucetTx.Outputs[secondSet:], secondSet)
+	assert.NoError(t, err, "Failed to create second transaction")
+
+	// Channel to coordinate operations
+	done := make(chan struct{})
+	errChan := make(chan error, 2)
+
+	// Start Aerospike shutdown goroutine
+	go func() {
+		defer close(done)
+		time.Sleep(100 * time.Millisecond) // Small delay to ensure transaction starts sending
+		logger.Infof("Stopping Aerospike node")
+
+		if err := framework.StopNode("aerospike-1"); err != nil {
+			errChan <- errors.NewProcessingError("failed to stop aerospike: %v", err)
+			return
+		}
+		errChan <- nil
+	}()
+
+	// Send second transaction
+	go func() {
+		logger.Infof("Sending second transaction %s %s", tx2.TxIDChainHash(), tx2.TxID())
+
+		_, err := txDistributor.SendTransaction(ctx, tx2)
+		if err != nil {
+			errChan <- errors.NewProcessingError("failed to send second transaction: %v", err)
+			return
+		}
+		errChan <- nil
+	}()
+
+	// Wait for both operations to complete
+	for i := 0; i < 2; i++ {
+		if err := <-errChan; err != nil {
+			logger.Warnf("Operation error: %v", err)
+		}
+	}
+
+	<-done
+
+	// Restart Aerospike
+	time.Sleep(2 * time.Second) // Wait before restart
+
+	err = framework.StartNode("aerospike-1")
+	assert.NoError(t, err, "Failed to restart Aerospike")
+	time.Sleep(5 * time.Second) // Wait for Aerospike to fully start
+
+	// Mine blocks and verify transactions
+	height, _ := helper.GetBlockHeight(url)
+	logger.Infof("Block height before mining: %d", height)
+
+	baClient := framework.Nodes[0].BlockassemblyClient
+	_, err = helper.MineBlock(ctx, baClient, logger)
+	assert.NoError(t, err, "Failed to mine block")
+
+	blockStore := framework.Nodes[0].Blockstore
+	blockchainClient := framework.Nodes[0].BlockchainClient
+
+	// Verify both transactions are in blocks
+	verifyTxInBlock := func(tx *bt.Tx, desc string) bool {
+		targetHeight := height + 1
+		for i := 0; i < 30; i++ {
+			err := helper.WaitForBlockHeight(url, targetHeight, 60)
+			if err != nil {
+				logger.Warnf("Failed to wait for block height: %v", err)
+				continue
+			}
+
+			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
+
+			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL,
+				header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
+
+			if err != nil {
+				logger.Warnf("Error checking if tx exists in block: %v", err)
+			}
+
+			if found {
+				logger.Infof("Found %s in block at height %d", desc, targetHeight)
+				return true
+			}
+
+			targetHeight++
+
+			_, err = helper.MineBlock(ctx, baClient, logger)
+			if err != nil {
+				logger.Warnf("Failed to mine block: %v", err)
+			}
+		}
+
+		return false
+	}
+
+	// assert.True(t, verifyTxInBlock(tx1, "first transaction"), "First transaction not found in block")
+	assert.True(t, verifyTxInBlock(tx2, "second transaction"), "Second transaction not found in block")
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
@@ -726,7 +961,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	framework.StartNode("ubsv2")
 	time.Sleep(10 * time.Second)
 
-	err = framework.Nodes[1].BlockchainClient.Run(framework.Context)
+	err = framework.Nodes[1].BlockchainClient.Run(framework.Context, "test")
 	if err != nil {
 		t.Errorf("Failed to run blockchain client: %v", err)
 	}
