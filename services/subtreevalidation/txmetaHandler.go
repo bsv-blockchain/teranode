@@ -14,21 +14,20 @@ func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 	if msg != nil && len(msg.Value) > chainhash.HashSize {
 		startTime := time.Now()
 
+		hash := chainhash.Hash(msg.Value[:chainhash.HashSize])
+
 		// check whether the bytes == delete
 		if bytes.Equal(msg.Value[chainhash.HashSize:], []byte("delete")) {
-			hash := chainhash.Hash(msg.Value[:chainhash.HashSize])
 			if err := u.DelTxMetaCache(context.Background(), &hash); err != nil {
-				u.logger.Errorf("failed to delete tx meta data: %v", err)
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-				return errors.NewProcessingError("failed to delete tx meta data: %v", err)
+				return errors.NewProcessingError("[txmetaHandler][%s] failed to delete tx meta data", hash, err)
 			} else {
 				prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
 		} else {
-			if err := u.SetTxMetaCacheFromBytes(context.Background(), msg.Value[:chainhash.HashSize], msg.Value[chainhash.HashSize:]); err != nil {
-				u.logger.Errorf("failed to set tx meta data: %v", err)
+			if err := u.SetTxMetaCacheFromBytes(context.Background(), hash.CloneBytes(), msg.Value[chainhash.HashSize:]); err != nil {
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-				return errors.NewProcessingError("failed to set tx meta data: %v", err)
+				return errors.NewProcessingError("[txmetaHandler][%s] failed to set tx meta data", hash, err)
 			} else {
 				prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
