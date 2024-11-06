@@ -36,7 +36,15 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
 		)
-		SELECT count(1), sum(tx_count), max(height), avg(size_in_bytes), avg(tx_count), min(block_time), max(block_time) from ChainBlocks
+		SELECT 
+			COALESCE(count(1), 0),
+			COALESCE(sum(tx_count), 0),
+			COALESCE(max(height), 0),
+			COALESCE(avg(size_in_bytes), 0),
+			COALESCE(avg(tx_count), 0),
+			COALESCE(min(block_time), 0),
+			COALESCE(max(block_time), 0)
+		FROM ChainBlocks
 		WHERE id > 0
 	`
 
