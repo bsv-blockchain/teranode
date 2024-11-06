@@ -540,7 +540,8 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	if sm.topBlock() == int32(bestBlockHeaderMeta.Height) { // nolint:gosec
+	// check whether this sync peer is still valid, if its height is the same or higher than ours
+	if sm.topBlock() >= int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 		// Update the time and violations to prevent disconnects.
 		sm.syncPeerState.lastBlockTime = time.Now()
 		sm.syncPeerState.violations = 0
