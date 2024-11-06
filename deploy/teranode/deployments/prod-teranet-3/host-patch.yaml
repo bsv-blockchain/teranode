@@ -6,20 +6,20 @@ spec:
   asset:
     spec:
       grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
       httpIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
       httpsIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
   peer:
     spec:
       grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
       wsIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
       wssIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
   propagation:
     spec:
       grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
+        host: eu-central-1-teranode-teranet-prod-3.ubsv.dev
