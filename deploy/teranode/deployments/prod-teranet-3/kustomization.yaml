@@ -30,7 +30,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/configMapName
-        value: teranet-1-shared-config
+        value: teranet-3-shared-config
 
 
 resources:
