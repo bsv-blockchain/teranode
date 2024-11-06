@@ -22,6 +22,9 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 		err    error
 	)
 
+	// duplicate the logger, showing the source as coming from the caller of this function
+	logger = logger.Duplicate(ulogger.WithSkipFrame(1))
+
 	// NewSetOptions creates a new SetOptions struct with the default values,
 	// and then applies the options provided in the opts slice
 	setOptions := NewSetOptions(opts...)

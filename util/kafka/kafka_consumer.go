@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
+	"github.com/ordishs/go-utils"
 )
 
 type KafkaMessage struct {
@@ -215,7 +216,12 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 
 			// if we can't process the message, log the error and skip to the next message
 			if err != nil {
-				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s, skipping", k.Config.Topic)
+				key := ""
+				if msg != nil && msg.Key != nil {
+					key = utils.ReverseAndHexEncodeSlice(msg.Key)
+				}
+
+				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping", k.Config.Topic, key)
 			}
 
 			return nil // give up and move on
@@ -236,13 +242,18 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			// if we can't process the message, log the error and stop consuming any more messages
 			if err != nil {
 				if options.stopFn != nil {
-					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s, stopping", k.Config.Topic)
+					key := ""
+					if msg != nil && msg.Key != nil {
+						key = utils.ReverseAndHexEncodeSlice(msg.Key)
+					}
+
+					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), stopping", k.Config.Topic, key)
 					options.stopFn()
 				} else {
 					c := k.ConsumerGroup
 					k.ConsumerGroup = nil
 
-					c.Close() // nolint:errcheck
+					_ = c.Close()
 					panic("error processing kafka message, with no stop function provided")
 				}
 			}
