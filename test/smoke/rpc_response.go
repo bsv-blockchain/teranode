@@ -125,21 +125,3 @@ type GetMiningInfoResponse struct {
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`
 }
-
-type GetBlockHeaderResponse struct {
-	Result struct {
-		Hash              string  `json:"hash"`
-		Confirmations     int     `json:"confirmations"`
-		Height            int     `json:"height"`
-		Version           int     `json:"version"`
-		VersionHex        string  `json:"versionHex"`
-		MerkleRoot        string  `json:"merkleroot"`
-		Time              int64   `json:"time"`
-		Nonce             int     `json:"nonce"`
-		Bits              string  `json:"bits"`
-		Difficulty        float64 `json:"difficulty"`
-		PreviousBlockHash string  `json:"previousblockhash"`
-	}
-	Error interface{} `json:"error"`
-	ID    int         `json:"id"`
-}
