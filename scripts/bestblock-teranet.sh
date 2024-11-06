@@ -2,7 +2,8 @@
 
 function get_block_header() {
   local node=$1
-  local url="https://$node.testing.ubsv.dev/api/v1/bestblockheader/json"
+  https://eu-central-1-teranode-teranet-prod-1.ubsv.dev/
+  local url="https://$node.ubsv.dev/api/v1/bestblockheader/json"
   local output=$(curl -s "$url")
 
   if [[ -z $output ]]; then
@@ -23,11 +24,11 @@ while true; do
   tmp2=$(mktemp)
   tmp3=$(mktemp)
 
-  get_block_header t1 "$tmp1" &
+  get_block_header eu-central-1-teranode-teranet-prod-1 "$tmp1" &
   pid1=$!
-  get_block_header t2 "$tmp2" &
+  get_block_header eu-central-1-teranode-teranet-prod-2 "$tmp2" &
   pid2=$!
-  get_block_header t3 "$tmp3" &
+  get_block_header eu-central-1-teranode-teranet-prod-3 "$tmp3" &
   pid3=$!
 
   # Wait for both background processes to finish
