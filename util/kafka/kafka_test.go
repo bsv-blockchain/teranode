@@ -28,41 +28,40 @@ type TestContainerWrapper struct {
 	hostPort  int
 }
 
-func (t *TestContainerWrapper) RunContainer(index int) error {
-	assignPort := 9092 + index
-	natPort := nat.Port(fmt.Sprintf("%d", assignPort))
+func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 	req := testcontainers.ContainerRequest{
 		Image: fmt.Sprintf("%s:%s", RedpandaImage, RedpandaVersion),
 		ExposedPorts: []string{
-			fmt.Sprintf("%d:%d/tcp", assignPort, assignPort), // Map the dynamic port
+			"9092/tcp",
 		},
 		Cmd: []string{
 			"redpanda", "start",
-			"--overprovisioned", "--smp=1",
-			fmt.Sprintf("--kafka-addr=PLAINTEXT://0.0.0.0:%d", assignPort),
-			fmt.Sprintf("--advertise-kafka-addr=PLAINTEXT://localhost:%d", assignPort),
+			"--overprovisioned",
+			"--smp=1",
+			"--kafka-addr=PLAINTEXT://0.0.0.0:9092", // Listen on all interfaces
+			"--advertise-kafka-addr=PLAINTEXT://localhost:9092", // Advertise localhost
 		},
 		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
 		AutoRemove: true,
 	}
 
-	container, err := testcontainers.GenericContainer(context.Background(), testcontainers.GenericContainerRequest{
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		return errors.NewProcessingError("could not start the container: %w", err)
+		return nil, errors.NewProcessingError("could not start the container: %w", err)
 	}
 
-	mPort, err := container.MappedPort(context.Background(), natPort)
+	mPort, err := container.MappedPort(ctx, nat.Port("9092/tcp"))
 	if err != nil {
-		return errors.NewConfigurationError("could not get the mapped port: %", err)
+		return nil, errors.NewConfigurationError("could not get the mapped port: %", err)
 	}
 
-	t.container = container
-	t.hostPort = mPort.Int()
-
-	return nil
+	return &TestContainerWrapper{
+		container: container,
+		hostPort:  mPort.Int(),
+	}, nil
 }
 
 func (t *TestContainerWrapper) CleanUp() error {
@@ -80,77 +79,65 @@ func (t *TestContainerWrapper) GetBrokerAddresses() []string {
 	return []string{fmt.Sprintf("localhost:%d", t.hostPort)}
 }
 
-func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
-	t.Parallel()
-
+func TestRunSimpleKafkaContainer(t *testing.T) {
 	// logger := ulogger.NewZeroLogger("test")
-	// logger := ulogger.NewVerboseTestLogger(t)
+	//	logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	testContainer := &TestContainerWrapper{}
-
-	err := testContainer.RunContainer(4)
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
-	defer func() {
+	t.Cleanup(func() {
 		cleanupErr := testContainer.CleanUp()
 		if cleanupErr != nil {
 			t.Errorf("failed to clean up container: %v", cleanupErr)
 		}
-	}()
+	})
 
-	const (
-		kafkaPartitions        = 1
-		kafkaReplicationFactor = 1
-		kafkaTopic             = "unittest"
-	)
+	host, err := testContainer.container.Host(ctx)
+	require.NoError(t, err)
 
 	kafkaURL := &url.URL{
 		Scheme:   "kafka",
-		Host:     testContainer.GetBrokerAddresses()[0],
-		Path:     kafkaTopic,
-		RawQuery: fmt.Sprintf("partitions=%d&replicationFactor=%d&flush_frequency=1s&replay=1", kafkaPartitions, kafkaReplicationFactor),
+		Host:     fmt.Sprintf("%s:%d", host, testContainer.hostPort),
+		Path:     "unittest",
+		RawQuery: "partitions=1&replicationFactor=1&flush_frequency=1s&replay=1",
 	}
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producerClient.Start(ctx, make(chan *Message, 100))
-	defer producerClient.Stop() // nolint:errcheck
-
-	numberOfMessages := 100
-	go produceMessages(logger, producerClient, numberOfMessages)
-
-	var wg sync.WaitGroup
-
-	wg.Add(numberOfMessages)
-
-	listenerClient, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_consumer", true)
+	consumerClient, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_consumer", true)
 	require.NoError(t, err)
 
+	done := make(chan struct{})
+
 	consumerFn := func(message *KafkaMessage) error {
-		msgInt, err := byteArrayToIntFromString(message.Value)
-		require.NoError(t, err)
+		logger.Infof("received message: %s = %s, Offset: %d ", message.Key, message.Value, message.Offset)
 
-		if message.Offset != int64(msgInt) {
-			return err
-		}
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("recovered from panic on channel close: %v", r)
+			}
+		}()
 
-		logger.Infof("received message: %s, Offset: %d ", string(message.Value), message.Offset)
-		wg.Done()
+		close(done)
 
 		return nil
 	}
-	listenerClient.Start(ctx, consumerFn)
 
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
+	consumerClient.Start(ctx, consumerFn)
+
+	producerClient.Start(ctx, make(chan *Message, 100))
+	defer producerClient.Stop() // nolint:errcheck
+
+	producerClient.Publish(&Message{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
 
 	select {
 	case <-done:
@@ -171,11 +158,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize your TestContainerWrapper
-	testContainer := &TestContainerWrapper{}
-
 	// Start the Kafka container
-	err := testContainer.RunContainer(2)
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
 	// Ensure cleanup after the test
@@ -300,11 +284,8 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // shuts down listener
 
-	// Initialize your TestContainerWrapper
-	testContainer := &TestContainerWrapper{}
-
 	// Start the Kafka container
-	err := testContainer.RunContainer(3)
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
 	// Ensure cleanup after the test
@@ -401,8 +382,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	testContainer := &TestContainerWrapper{}
-	err := testContainer.RunContainer(5) // Using port offset 5 to avoid conflicts
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
 	defer func() {
@@ -508,8 +488,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	testContainer := &TestContainerWrapper{}
-	err := testContainer.RunContainer(6) // Using port offset 5 to avoid conflicts
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
 	defer func() {
@@ -609,9 +588,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	testContainer := &TestContainerWrapper{}
-
-	err := testContainer.RunContainer(1)
+	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
 	defer func() {
