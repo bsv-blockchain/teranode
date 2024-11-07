@@ -66,7 +66,7 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 			"--advertise-kafka-addr", fmt.Sprintf("PLAINTEXT://localhost:%d", hostPort),
 		},
 		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
-		AutoRemove: true,
+		// AutoRemove: true,
 	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -89,12 +89,12 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 }
 
 func (t *TestContainerWrapper) CleanUp() error {
-	// ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
-	// defer cancelFunc()
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelFunc()
 
-	// if err := t.container.Terminate(ctx); err != nil {
-	// 	return errors.NewConfigurationError("could not terminate the container: %w", err)
-	// }
+	if err := t.container.Terminate(ctx); err != nil {
+		return errors.NewConfigurationError("could not terminate the container: %w", err)
+	}
 
 	return nil
 }
