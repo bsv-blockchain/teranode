@@ -36,16 +36,21 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 		return nil, errors.NewTxInvalidError("could not parse fee: %v", err)
 	}
 
-	blockIDStrings := strings.Split(data["blockIDs"], ",")
-	blockIDs := make([]uint32, 0, len(blockIDStrings))
+	var blockIDs []uint32
 
-	for _, blockID := range blockIDStrings {
-		blockIDInt, err := strconv.ParseUint(blockID, 10, 32)
-		if err != nil {
-			return nil, errors.NewTxInvalidError("could not parse block ID: %v", err)
+	blockIDStr, found := data["blockIDs"]
+	if found {
+		blockIDStrings := strings.Split(blockIDStr, ",")
+		blockIDs = make([]uint32, 0, len(blockIDStrings))
+
+		for _, blockID := range blockIDStrings {
+			blockIDInt, err := strconv.ParseUint(blockID, 10, 32)
+			if err != nil {
+				return nil, errors.NewTxInvalidError("could not parse block ID: %v", err)
+			}
+
+			blockIDs = append(blockIDs, uint32(blockIDInt)) // nolint: gosec
 		}
-
-		blockIDs = append(blockIDs, uint32(blockIDInt)) // nolint: gosec
 	}
 
 	isCoinbase, err := strconv.ParseBool(data["isCoinbase"])
