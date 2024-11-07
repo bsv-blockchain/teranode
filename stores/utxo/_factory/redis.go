@@ -1,5 +1,3 @@
-// //go:build aerospike
-
 package _factory
 
 import (
