@@ -1,12 +1,16 @@
 package redis2
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
+	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 )
 
 func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...string) error {
@@ -47,15 +51,24 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(outpoints))
 
 		default:
-			txMeta, err := s.Get(ctx, &outpoint.PreviousTxID)
+			data, err := s.client.HGet(ctx, outpoint.PreviousTxID.String(), fmt.Sprintf("output:%d", outpoint.Vout)).Result()
 			if err != nil {
 				return err
 			}
 
-			data := txMeta.Tx.Outputs[outpoint.Vout]
+			b, err := hex.DecodeString(data)
+			if err != nil {
+				return err
+			}
 
-			outpoint.Satoshis = data.Satoshis
-			outpoint.LockingScript = *data.LockingScript
+			var output bt.Output
+
+			if _, err := output.ReadFrom(bytes.NewReader(b)); err != nil {
+				return err
+			}
+
+			outpoint.Satoshis = output.Satoshis
+			outpoint.LockingScript = output.LockingScript.Bytes()
 		}
 	}
 
