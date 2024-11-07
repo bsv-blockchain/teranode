@@ -173,7 +173,7 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
@@ -299,7 +299,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
@@ -399,7 +399,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.TestLogger{}
 
@@ -505,7 +505,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.TestLogger{}
 
@@ -605,7 +605,7 @@ This test is to ensure that when a consumer is restarted, it will resume from th
 and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.NewZeroLogger("test")
 
