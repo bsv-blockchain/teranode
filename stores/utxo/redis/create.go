@@ -113,7 +113,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 			// store all coinbases, non-zero utxos and exceptions from pre-genesis
 			if utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
-				fields[fmt.Sprintf("utxo:%d", utxoCount)] = utxoHashes[i].String()
+				fields[fmt.Sprintf("utxo:%d", i)] = utxoHashes[i].String()
 				utxoCount++
 			}
 		}

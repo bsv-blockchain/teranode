@@ -109,6 +109,41 @@ func TestRedis(t *testing.T) {
 		redis.Del(ctx, spendingTxID1.String())
 	})
 
+	t.Run("create", func(t *testing.T) {
+		// This transaction has 1 OP_RETURN in the middle of the other ouputs.
+		tx, err := bt.NewTxFromString("010000000000000000ef02c3c43bc34e9f7e1a2ead4ba7cf4645913272fa64a72b0d9e955864346b779238010000008b483045022100e4a16d5af4b589f81524fbd388b1c1837e5b0212cdb233feb077eadd8072d413022064aba214257cc3320c21ee81784d8caa0f78f2b4058f29c35cda9e19b5e3811c014104b5fd25825746d62249bcde7c245a751c96cea10531058e180635ebe632d8d2e899ea5ec2acd0a9c8c03e62e34017622ac292601b5f75785550a83a058ca2ab60ffffffff706f9800000000001976a9143425c1789ef28eee4d6c2b750adeee1a2bfad8ee88acc3c43bc34e9f7e1a2ead4ba7cf4645913272fa64a72b0d9e955864346b779238030000008c49304602210086814d55093b46dc455d02edaa0b1308a4027034c2ba5d0076d66fc7b21594420221008acac3ed9e96cc5d259eeeb66b14f7da9f13bb36d65f5d07fc8e49dcc9ccfd76014104f5678e5949d2253163ff8a9d902d596cda21376337717c7a4d3e39ee1ee239472d30d5e3882398f4ac9e2dffc0088ae5faaa8502be5cdad6bc999856c450a63affffffff5042d952000000001976a914ba83cee72fe722e4683fc3400ad8313b91b9b64988ac0410270000000000001976a914cd709ef0812e5ec671b7538b2760d41d884f69bb88ac60489800000000001976a9143425c1789ef28eee4d6c2b750adeee1a2bfad8ee88ac0000000000000000096a073132332062726f401bd952000000001976a914ba83cee72fe722e4683fc3400ad8313b91b9b64988ac00000000")
+		require.NoError(t, err)
+
+		err = store.Delete(ctx, tx.TxIDChainHash())
+		require.NoError(t, err)
+
+		meta, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+		assert.NotNil(t, meta)
+
+		// raw redis get
+		value, err := redis.HGetAll(ctx, tx.TxIDChainHash().String()).Result()
+		require.NoError(t, err)
+
+		assert.Equal(t, "1", value["version"])
+		assert.Equal(t, "0", value["locktime"])
+		assert.Equal(t, "10000", value["fee"])
+		assert.Equal(t, "491", value["sizeInBytes"])
+		assert.Equal(t, "565", value["extendedSize"])
+		assert.Equal(t, "0", value["isCoinbase"])
+		assert.Equal(t, "0", value["spentUtxos"])
+		assert.Equal(t, "2", value["nrInput"])
+		assert.Equal(t, "4", value["nrOutput"])
+		assert.Equal(t, "10270000000000001976a914cd709ef0812e5ec671b7538b2760d41d884f69bb88ac", value["output:0"])
+		assert.Equal(t, "60489800000000001976a9143425c1789ef28eee4d6c2b750adeee1a2bfad8ee88ac", value["output:1"])
+		assert.Equal(t, "0000000000000000096a073132332062726f", value["output:2"]) // OP_RETURN
+		assert.Equal(t, "401bd952000000001976a914ba83cee72fe722e4683fc3400ad8313b91b9b64988ac", value["output:3"])
+		assert.Equal(t, "14aba4a50c2362293e4b8a3fb456ad9eb00f6acd564df181d10c23cf0038c5f2", value["utxo:0"])
+		assert.Equal(t, "1ffdcaaa25a96df2e02a4b5e86fb5d27619082dd862642eb01ac895c9b283c4b", value["utxo:1"])
+		assert.Equal(t, "", value["utxo:2"]) // OP_RETURN
+		assert.Equal(t, "54179da3b4f21c2e2121e823013dd8a5c07f5e0d7924a4fbf59857d9703abc0c", value["utxo:3"])
+	})
+
 	t.Run("redis store", func(t *testing.T) {
 		cleanDB(t, redis, txHash, tx)
 
