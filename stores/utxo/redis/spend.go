@@ -76,7 +76,15 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err 
 			case LuaFrozen:
 				return errors.NewUtxoFrozenError("[SPEND_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, spend.Vout, text)
 			default:
-				return errors.NewProcessingError("Redis spend: %s", res)
+				if res.signal == "UTXO not found" {
+					return errors.NewNotFoundError("UTXO not found: %s:%d", spend.TxID.String(), spend.Vout)
+				}
+
+				if res.spendingTxID != nil {
+					return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, res.spendingTxID)
+				}
+
+				return errors.NewProcessingError("Redis spend: %s:%s", res.returnValue, res.signal)
 			}
 		}
 	}
