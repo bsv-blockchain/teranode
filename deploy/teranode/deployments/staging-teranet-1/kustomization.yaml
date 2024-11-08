@@ -33,9 +33,6 @@ patches:
         value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.7
   - target:
       kind: Cluster
-    path: storage-patch.yaml
-  - target:
-      kind: Cluster
     patch: |-
       - op: replace
         path: /spec/configMapName
