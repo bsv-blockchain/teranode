@@ -553,6 +553,27 @@ func (cm *ConnManager) Start() {
 	for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound); i++ {
 		go cm.NewConnReq()
 	}
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-cm.quit:
+				return
+			case <-ticker.C:
+				// try to connect to new address every minute, we might have disconnected or have new addresses
+				//nolint:gosec
+				connectionsOpen := uint32(cm.conns.Length())
+				cm.logger.Infof("checking active connections: %d", connectionsOpen)
+
+				for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound-connectionsOpen); i++ {
+					go cm.NewConnReq()
+				}
+			}
+		}
+	}()
 }
 
 // Wait blocks until the connection manager halts gracefully.
