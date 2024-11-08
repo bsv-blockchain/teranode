@@ -227,6 +227,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
+
+				// empty out the reset channel
+				for len(b.resetCh) > 0 {
+					<-b.resetCh
+				}
+
 				b.currentRunningState.Store("running")
 
 			case responseCh := <-b.miningCandidateCh:
@@ -277,7 +283,10 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
 		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
 	)
-	defer deferFn()
+	defer func() {
+		b.currentRunningState.Store("running")
+		deferFn()
+	}()
 
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -445,7 +454,10 @@ func (b *BlockAssembler) DeDuplicateTransactions() {
 }
 
 func (b *BlockAssembler) Reset() {
-	b.resetCh <- struct{}{}
+	// run in a go routine to prevent blocking
+	go func() {
+		b.resetCh <- struct{}{}
+	}()
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
