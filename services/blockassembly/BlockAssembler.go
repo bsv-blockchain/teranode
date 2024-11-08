@@ -159,7 +159,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
-				close(b.blockchainSubscriptionCh)
 
 				return
 

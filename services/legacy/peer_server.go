@@ -1950,7 +1950,6 @@ cleanup:
 			break cleanup
 		}
 	}
-	s.wg.Done()
 	s.logger.Infof("Peer handler done")
 }
 
