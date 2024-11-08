@@ -559,7 +559,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, 
 		"nBits":               hex.EncodeToString(reversedBits),
 		"time":                mc.Time,
 		"height":              mc.Height,
-		"num_txs":             mc.NumTxs,
+		"num_tx":              mc.NumTxs,
 		"sizeWithoutCoinbase": mc.SizeWithoutCoinbase,
 		"merkleProof":         merkleProofStrings,
 	}
