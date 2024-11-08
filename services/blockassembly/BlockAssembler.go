@@ -309,7 +309,12 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 		if err != nil {
-			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			if errors.Is(err, errors.ErrBlockAssemblyReset) {
+				// only warn about the reset
+				b.logger.Warnf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			} else {
+				b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			}
 			return
 		}
 	default:
@@ -587,10 +592,9 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 	if (len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5) && b.bestBlockHeight.Load() > 1000 {
 		// large reorg, log it and Reset the block assembler
-		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 		b.Reset()
 
-		return errors.NewProcessingError("large reorg, resetting block assembly")
+		return errors.NewBlockAssemblyResetError("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 	}
 
 	// now do the reorg in the subtree processor
