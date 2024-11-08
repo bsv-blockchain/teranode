@@ -159,7 +159,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
-				close(b.blockchainSubscriptionCh)
 
 				return
 
@@ -227,6 +226,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
+
+				// empty out the reset channel
+				for len(b.resetCh) > 0 {
+					<-b.resetCh
+				}
+
 				b.currentRunningState.Store("running")
 
 			case responseCh := <-b.miningCandidateCh:
@@ -277,7 +282,10 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
 		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
 	)
-	defer deferFn()
+	defer func() {
+		b.currentRunningState.Store("running")
+		deferFn()
+	}()
 
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -301,7 +309,12 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 		if err != nil {
-			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			if errors.Is(err, errors.ErrBlockAssemblyReset) {
+				// only warn about the reset
+				b.logger.Warnf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			} else {
+				b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			}
 			return
 		}
 	default:
@@ -445,7 +458,10 @@ func (b *BlockAssembler) DeDuplicateTransactions() {
 }
 
 func (b *BlockAssembler) Reset() {
-	b.resetCh <- struct{}{}
+	// run in a go routine to prevent blocking
+	go func() {
+		b.resetCh <- struct{}{}
+	}()
 }
 
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
@@ -576,10 +592,9 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 	if (len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5) && b.bestBlockHeight.Load() > 1000 {
 		// large reorg, log it and Reset the block assembler
-		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 		b.Reset()
 
-		return errors.NewProcessingError("large reorg, resetting block assembly")
+		return errors.NewBlockAssemblyResetError("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 	}
 
 	// now do the reorg in the subtree processor

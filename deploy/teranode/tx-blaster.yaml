@@ -20,7 +20,7 @@ roleRef:
 ---
 apiVersion: v1
 data:
-  SETTINGS_CONTEXT: "operator.testing.tx-blaster"
+  SETTINGS_CONTEXT: "operator.teratestnet.tx-blaster"
 kind: ConfigMap
 metadata:
   name: tx-blaster-config

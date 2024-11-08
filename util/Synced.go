@@ -56,16 +56,18 @@ func (m *SyncedMap[K, V]) Range() map[K]V {
 
 func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.m[key] = value
-	m.mu.Unlock()
 }
 
 func (m *SyncedMap[K, V]) SetMulti(keys []K, value V) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for _, key := range keys {
 		m.m[key] = value
 	}
-	m.mu.Unlock()
 }
 
 func (m *SyncedMap[K, V]) Delete(key K) bool {
