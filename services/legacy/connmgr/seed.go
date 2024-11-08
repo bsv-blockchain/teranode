@@ -65,7 +65,7 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 					// bitcoind seeds with addresses from
 					// a time randomly selected between 3
 					// and 7 days ago.
-					time.Now().Add(-1*time.Second*time.Duration(secondsIn3Days+int32(rand.Uint64()))),
+					time.Now().Add(-1*time.Second*time.Duration(secondsIn3Days+rand.Int32N(secondsIn4Days))),
 					0, peer, uint16(intPort))
 			}
 

@@ -186,6 +186,15 @@ type ConnManager struct {
 	requests       chan interface{}
 	quit           chan struct{}
 
+	// pending holds all registered conn requests that have yet to
+	// succeed.
+	pending   map[uint64]*ConnReq
+	pendingMu sync.RWMutex
+
+	// conns represents the set of all actively connected peers.
+	conns   map[uint64]*ConnReq
+	connsMu sync.RWMutex
+
 	// ubsv addition
 	logger ulogger.Logger
 }
@@ -232,14 +241,7 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 // are processed and mapped by their assigned ids.
 func (cm *ConnManager) connHandler() {
 
-	var (
-		// pending holds all registered conn requests that have yet to
-		// succeed.
-		pending = make(map[uint64]*ConnReq)
-
-		// conns represents the set of all actively connected peers.
-		conns = make(map[uint64]*ConnReq, cm.cfg.TargetOutbound)
-	)
+	var ()
 
 out:
 	for {
@@ -250,38 +252,42 @@ out:
 			case registerPending:
 				connReq := msg.c
 				connReq.updateState(ConnPending)
-				pending[msg.c.id] = connReq
+				cm.pendingMu.Lock()
+				cm.pending[msg.c.id] = connReq
+				cm.pendingMu.Unlock()
 				close(msg.done)
 
 			case handleConnected:
 				connReq := msg.c
 
-				if _, ok := pending[connReq.id]; !ok {
+				cm.pendingMu.RLock()
+				if _, ok := cm.pending[connReq.id]; !ok {
 					if msg.conn != nil {
-						msg.conn.Close()
+						_ = msg.conn.Close()
 					}
-					cm.logger.Debugf("Ignoring connection for "+
-						"canceled connreq=%v", connReq)
+					cm.logger.Debugf("Ignoring connection for canceled connreq=%v", connReq)
+					cm.pendingMu.RUnlock()
 					continue
 				}
+				cm.pendingMu.RUnlock()
 
 				connReq.updateState(ConnEstablished)
 				connReq.conn = msg.conn
-				conns[connReq.id] = connReq
+				cm.conns[connReq.id] = connReq
 				cm.logger.Debugf("Connected to %v", connReq)
 				connReq.retryCount = 0
 				cm.failedAttempts = 0
 
-				delete(pending, connReq.id)
+				delete(cm.pending, connReq.id)
 
 				if cm.cfg.OnConnection != nil {
 					go cm.cfg.OnConnection(connReq, msg.conn)
 				}
 
 			case handleDisconnected:
-				connReq, ok := conns[msg.id]
+				connReq, ok := cm.conns[msg.id]
 				if !ok {
-					connReq, ok = pending[msg.id]
+					connReq, ok = cm.pending[msg.id]
 					if !ok {
 						cm.logger.Errorf("Unknown connid=%d", msg.id)
 						continue
@@ -293,7 +299,7 @@ out:
 					// connection.
 					connReq.updateState(ConnCanceled)
 					cm.logger.Debugf("Canceling: %v", connReq)
-					delete(pending, msg.id)
+					delete(cm.pending, msg.id)
 					continue
 
 				}
@@ -302,7 +308,7 @@ out:
 				// disconnected and execute disconnection
 				// callback.
 				cm.logger.Debugf("Disconnected from %v", connReq)
-				delete(conns, msg.id)
+				delete(cm.conns, msg.id)
 
 				if connReq.conn != nil {
 					connReq.conn.Close()
@@ -326,20 +332,20 @@ out:
 				// re added to the pending map, so that
 				// subsequent processing of connections and
 				// failures do not ignore the request.
-				if uint32(len(conns)) < cm.cfg.TargetOutbound ||
+				if len(cm.conns) < int(cm.cfg.TargetOutbound) ||
 					connReq.Permanent {
 
 					connReq.updateState(ConnPending)
 					cm.logger.Debugf("Reconnecting to %v",
 						connReq)
-					pending[msg.id] = connReq
+					cm.pending[msg.id] = connReq
 					cm.handleFailedConn(connReq)
 				}
 
 			case handleFailed:
 				connReq := msg.c
 
-				if _, ok := pending[connReq.id]; !ok {
+				if _, ok := cm.pending[connReq.id]; !ok {
 					cm.logger.Debugf("Ignoring connection for "+
 						"canceled conn req: %v", connReq)
 					continue
@@ -399,6 +405,24 @@ func (cm *ConnManager) NewConnReq() {
 		case <-cm.quit:
 		}
 		return
+	}
+
+	if addr != nil {
+		// check whether we already have this connected to this address
+		for _, connReq := range cm.conns {
+			if connReq.Addr.String() == addr.String() {
+				cm.logger.Debugf("Ignoring connection to %v, already connected", addr)
+				return
+			}
+		}
+
+		// check whether we already have this pending to this address
+		for _, connReq := range cm.pending {
+			if connReq.Addr != nil && connReq.Addr.String() == addr.String() {
+				cm.logger.Debugf("Ignoring connection to %v, already pending", addr)
+				return
+			}
+		}
 	}
 
 	c.Addr = addr
@@ -576,6 +600,8 @@ func New(logger ulogger.Logger, cfg *Config) (*ConnManager, error) {
 		cfg:      *cfg, // Copy so caller can't mutate
 		requests: make(chan interface{}),
 		quit:     make(chan struct{}),
+		pending:  make(map[uint64]*ConnReq),
+		conns:    make(map[uint64]*ConnReq),
 	}
 	return &cm, nil
 }
