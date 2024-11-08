@@ -5,8 +5,8 @@ import (
 
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -105,7 +105,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		}
 
 		// Call the validateSubtreeInternal method
-		if err := u.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight); err != nil {
+		if err := u.validateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 			// Here we return the error directly without further wrapping, as validateSubtreeInternal categorizes the error
 			return err

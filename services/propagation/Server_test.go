@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -21,7 +21,7 @@ func TestValidatorErrors(t *testing.T) {
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)
-	err = v.Validate(context.Background(), tx, util.GenesisActivationHeight)
+	err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
 	require.Error(t, err)
 	// TODO - SAO - I am disabling this as it will be changed when the new error system is applied
 	// assert.True(t, errors.Is(err, errors.ErrProcessing))

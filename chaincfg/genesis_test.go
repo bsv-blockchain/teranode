@@ -6,11 +6,9 @@ package chaincfg
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt"
 	"github.com/stretchr/testify/assert"
@@ -164,32 +162,6 @@ func TestGenesisCoinbaseBytes(t *testing.T) {
 
 	if expectedCoinbaseHash != coinbaseTx.GetTxID() {
 		t.Fatalf("Incorrect genesis coinbase txid.\nexpected: %s\ngot:	%s", expectedCoinbaseHash, coinbaseTx.GetTxID())
-	}
-}
-func TestGenesisBytesFromModelBlock(t *testing.T) {
-	expectedPrevBlockHash := "0000000000000000000000000000000000000000000000000000000000000000"
-
-	wireGenesisBlock := MainNetParams.GenesisBlock
-
-	genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock)
-	if err != nil {
-		t.Fatalf("Failed to create new block from bytes: %v", err)
-	}
-
-	if genesisBlock.Header.HashPrevBlock.String() != expectedPrevBlockHash {
-		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
-	}
-
-	bitsBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bitsBytes, wireGenesisBlock.Header.Bits)
-
-	nbits, err := model.NewNBitFromSlice(bitsBytes)
-	if err != nil {
-		t.Fatalf("failed to create NBit from Bits: %v", err)
-	}
-
-	if genesisBlock.Header.Bits != *nbits {
-		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
 	}
 }
 

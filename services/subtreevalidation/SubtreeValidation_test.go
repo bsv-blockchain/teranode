@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
-
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -21,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
@@ -97,7 +97,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
+		err = subtreeValidation.validateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
 		require.NoError(t, err)
 	})
 }
@@ -202,7 +202,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		TxHashes:      nil,
 		AllowFailFast: false,
 	}
-	err = subtreeValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
+	err = subtreeValidation.validateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -248,7 +248,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the validateSubtreeInternal method
-	err = subtreeValidation.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight)
+	err = subtreeValidation.validateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
 	require.NoError(t, err)
 }
 

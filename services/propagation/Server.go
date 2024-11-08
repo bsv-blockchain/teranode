@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -451,7 +452,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	if ps.validatorKafkaProducerClient != nil {
 		validatorData := &validator.TxValidationData{
 			Tx:     req.Tx,
-			Height: util.GenesisActivationHeight,
+			Height: chaincfg.GenesisActivationHeight,
 		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
@@ -462,7 +463,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
-		if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
+		if err = ps.validator.Validate(ctx, btTx, chaincfg.GenesisActivationHeight); err != nil {
 			err = errors.NewServiceError("failed validating transaction", err)
 			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 
