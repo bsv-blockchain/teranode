@@ -30,7 +30,7 @@ patches:
     patch: |
       - op: replace
         path: /spec/image
-        value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.455
+        value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.7
   - target:
       kind: Cluster
     patch: |-

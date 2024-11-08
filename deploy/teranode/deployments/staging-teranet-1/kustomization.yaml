@@ -4,7 +4,7 @@ namespace: staging-teranet-1
 
 configMapGenerator:
   - literals:
-      - SETTINGS_CONTEXT=operator.testing.staging-teranet-1
+      - SETTINGS_CONTEXT=operator.teratestnet.staging.1
       - asset_centrifuge_disable=true
       - blockassembly_disabled=true
     name: shared-config
@@ -25,6 +25,15 @@ patches:
   - path: enabled-services-patch.yaml
     target:
       kind: Cluster
+  - target:
+      kind: Cluster
+    patch: |
+      - op: replace
+        path: /spec/image
+        value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.7
+  - target:
+      kind: Cluster
+    path: storage-patch.yaml
   - target:
       kind: Cluster
     patch: |-
