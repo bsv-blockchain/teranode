@@ -493,7 +493,7 @@ type Peer struct {
 //
 // This function is safe for concurrent access.
 func (p *Peer) String() string {
-	return fmt.Sprintf("%s (%s)", p.addr, directionString(p.inbound))
+	return fmt.Sprintf("%s (%s, syncPeer: %v, id: %d)", p.addr, directionString(p.inbound), p.SyncPeer(), p.ID())
 }
 
 // UpdateLastBlockHeight updates the last known block for the peer.
@@ -1051,10 +1051,10 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 	}))
 
 	if gocore.Config().GetBool("legacy_printInvMessages", false) {
-		p.logger.Debugf("%v", newLogClosure(func() string {
+		p.logger.Debugf("[readMessage][%s] %v", p, newLogClosure(func() string {
 			return spew.Sdump(msg)
 		}))
-		p.logger.Debugf("%v", newLogClosure(func() string {
+		p.logger.Debugf("[readMessage][%s] %v", p, newLogClosure(func() string {
 			return spew.Sdump(buf)
 		}))
 	}
@@ -1082,11 +1082,11 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	}))
 
 	if gocore.Config().GetBool("legacy_printInvMessages", false) {
-		p.logger.Debugf("%v", newLogClosure(func() string {
+		p.logger.Debugf("[writeMessage][%s] %v", p, newLogClosure(func() string {
 			return spew.Sdump(msg)
 		}))
 
-		p.logger.Debugf("%v", newLogClosure(func() string {
+		p.logger.Debugf("[writeMessage][%s] %v", p, newLogClosure(func() string {
 			var buf bytes.Buffer
 
 			_, err := wire.WriteMessageWithEncodingN(&buf, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)

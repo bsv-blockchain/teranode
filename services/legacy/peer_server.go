@@ -421,9 +421,10 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 // OnVersion is invoked when a peer receives a version bitcoin message
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
-func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
+func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
 	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnVersion",
 		tracing.WithHistogram(peerServerMetrics["OnVersion"]),
+		tracing.WithLogMessage(sp.server.logger, "OnVersion from %s", p),
 	)
 
 	// Update the address manager with the advertised services for outbound
@@ -1330,6 +1331,11 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	if sp == nil {
 		return false
 	}
+
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.handleAddPeerMsg",
+		tracing.WithHistogram(peerServerMetrics["handleAddPeerMsg"]),
+		tracing.WithLogMessage(sp.server.logger, "handleAddPeerMsg from %s", sp),
+	)
 
 	// ignore new peers if in banlist
 	if s.banList.IsBanned(sp.Addr()) {

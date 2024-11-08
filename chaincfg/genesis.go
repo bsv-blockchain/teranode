@@ -11,6 +11,17 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+var (
+	GenesisActivationHeight = uint32(620538)
+)
+
+func init() {
+	params := GetChainParamsFromConfig()
+	if params != nil {
+		GenesisActivationHeight = params.GenesisActivationHeight
+	}
+}
+
 // genesisCoinbaseTx is the coinbase transaction for the genesis blocks for
 // the main network, regression test network, and test network (version 3).
 var genesisCoinbaseTx = wire.MsgTx{

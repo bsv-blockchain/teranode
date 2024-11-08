@@ -332,7 +332,7 @@ func (sm *SyncManager) startSync() {
 	sm.logger.Debugf("[startSync] selecting sync peer from %d candidates", len(sm.peerStates))
 	for peer, state := range sm.peerStates {
 		if !state.syncCandidate {
-			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.Addr())
+			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.String())
 			continue
 		}
 
@@ -340,19 +340,19 @@ func (sm *SyncManager) startSync() {
 		// only be used as a last resort.
 		if peer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
 			okPeers = append(okPeers, peer)
-			sm.logger.Debugf("[startSync][%v] peer is at the same height %d as us (%d), added to okPeers", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
+			sm.logger.Debugf("[startSync][%v] peer is at the same height %d as us (%d), added to okPeers", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 			continue
 		}
 
 		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
 		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) {
-			sm.logger.Debugf("[startSync][%v] peer is behind us at height %d (us: %d), skipping", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
+			sm.logger.Debugf("[startSync][%v] peer is behind us at height %d (us: %d), skipping", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 			continue
 		}
 
 		// Append each good peer to bestPeers for selection later.
-		sm.logger.Debugf("[startSync][%v] peer is a sync candidate at height %d (us: %d), adding to bestPeers", peer.Addr(), peer.LastBlock(), bestBlockHeaderMeta.Height)
+		sm.logger.Debugf("[startSync][%v] peer is a sync candidate at height %d (us: %d), adding to bestPeers", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 		bestPeers = append(bestPeers, peer)
 	}
 
@@ -371,12 +371,12 @@ func (sm *SyncManager) startSync() {
 
 	// Start syncing from the best peer if one was selected.
 	if bestPeer != nil {
-		sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.Addr())
+		sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
 
 		// check whether we are in sync with this peer and send RUNNING FSM state
 		// nolint:gosec // the height will never exceed int32.Max
 		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
-			sm.logger.Infof("peer %v is at the same height %d as us, sending RUNNING", bestPeer.Addr(), bestPeer.LastBlock())
+			sm.logger.Infof("peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
 			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
@@ -394,7 +394,7 @@ func (sm *SyncManager) startSync() {
 			return
 		}
 
-		sm.logger.Infof("Syncing to block height %d from peer %v", bestPeer.LastBlock(), bestPeer.Addr())
+		sm.logger.Infof("Syncing to block height %d from peer %v", bestPeer.LastBlock(), bestPeer.String())
 
 		// When the current height is less than a known checkpoint we
 		// can use block headers to learn about which blocks comprise
@@ -417,16 +417,16 @@ func (sm *SyncManager) startSync() {
 			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height && // nolint:gosec
 			sm.chainParams != &chaincfg.RegressionNetParams {
 			if err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
-				sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", bestPeer.Addr(), err)
+				sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", bestPeer.String(), err)
 				return
 			}
 
 			sm.headersFirstMode = true
 
-			sm.logger.Infof("startSync - Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.Addr())
+			sm.logger.Infof("startSync - Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.String())
 		} else {
 			if err = bestPeer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				sm.logger.Warnf("Failed to send getblocks message to peer %s: %v", bestPeer.Addr(), err)
+				sm.logger.Warnf("Failed to send getblocks message to peer %s: %v", bestPeer.String(), err)
 				return
 			}
 		}
@@ -461,7 +461,7 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 	if sm.chainParams == &chaincfg.RegressionNetParams {
 		// The peer is not a candidate if it's not coming from localhost
 		// or the hostname can't be determined for some reason.
-		host, _, err := net.SplitHostPort(peer.Addr())
+		host, _, err := net.SplitHostPort(peer.String())
 		if err != nil {
 			return false
 		}
@@ -531,7 +531,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	sm.logger.Debugf("sync peer %s is slow, network speed: %v, last block time: %v", sm.syncPeer.Addr(), validNetworkSpeed, lastBlockSince)
+	sm.logger.Debugf("sync peer %s is slow, network speed: %v, last block time: %v", sm.syncPeer.String(), validNetworkSpeed, lastBlockSince)
 
 	// Don't update sync peers if you have all the available blocks.
 	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
@@ -549,14 +549,14 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	sm.logger.Debugf("sync peer %s is not at the same height (%d) as us (%d), updating sync peer", sm.syncPeer.Addr(), sm.topBlock(), bestBlockHeaderMeta.Height)
+	sm.logger.Debugf("sync peer %s is not at the same height (%d) as us (%d), updating sync peer", sm.syncPeer.String(), sm.topBlock(), bestBlockHeaderMeta.Height)
 
 	state, exists := sm.peerStates[sm.syncPeer]
 	if !exists {
 		return
 	}
 
-	sm.logger.Debugf("removing sync peer %s", sm.syncPeer.Addr())
+	sm.logger.Debugf("removing sync peer %s", sm.syncPeer.String())
 
 	sm.clearRequestedState(state)
 	sm.updateSyncPeer(state)
@@ -974,7 +974,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
-		sm.logger.Debugf("peer %s reports new best height %d, current %v", peer.Addr(), peer.LastBlock(), sm.current())
+		sm.logger.Debugf("peer %s reports new best height %d, current %v", peer.String(), peer.LastBlock(), sm.current())
 
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
@@ -1012,7 +1012,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 		err = peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 		if err != nil {
-			return errors.NewServiceError("failed to send getheaders message to peer %s", peer.Addr(), err)
+			return errors.NewServiceError("failed to send getheaders message to peer %s", peer.String(), err)
 		}
 
 		if sm.syncPeer != nil {
@@ -1020,7 +1020,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 				"handleBlockMsg - Downloading headers for blocks %d to %d from peer %s",
 				prevHeight+1,
 				sm.nextCheckpoint.Height,
-				sm.syncPeer.Addr(),
+				sm.syncPeer.String(),
 			)
 		}
 
@@ -1036,7 +1036,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.Addr(), err)
+		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
 	}
 
 	return nil
@@ -1118,7 +1118,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	numHeaders := len(msg.Headers)
 
 	if !sm.headersFirstMode {
-		sm.logger.Warnf("Got %d unrequested headers from %s -- disconnecting", numHeaders, peer.Addr())
+		sm.logger.Warnf("Got %d unrequested headers from %s -- disconnecting", numHeaders, peer.String())
 		peer.Disconnect()
 
 		return
@@ -1163,7 +1163,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		} else {
 			sm.logger.Warnf("Received block header that does not "+
 				"properly connect to the chain from peer %s "+
-				"-- disconnecting", peer.Addr())
+				"-- disconnecting", peer.String())
 			peer.Disconnect()
 
 			return
@@ -1182,7 +1182,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 					"%s from peer %s does NOT match "+
 					"expected checkpoint hash of %s -- "+
 					"disconnecting", node.height,
-					node.hash, peer.Addr(),
+					node.hash, peer.String(),
 					sm.nextCheckpoint.Hash)
 
 				peer.Disconnect()
@@ -1215,7 +1215,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 	if err != nil {
-		sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.Addr(), err)
+		sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.String(), err)
 		return
 	}
 }
@@ -1642,7 +1642,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 			netsyncInvMsg := invMsg{inv: invTxMsg, peer: peer}
 
 			// write to Kafka
-			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(netsyncInvMsg.inv.InvList))
+			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(netsyncInvMsg.inv.InvList))
 			sm.legacyKafkaInvCh <- &kafka.Message{
 				Value: netsyncInvMsg.Bytes(),
 			}

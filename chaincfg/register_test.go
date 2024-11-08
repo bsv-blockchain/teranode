@@ -1,12 +1,10 @@
-package chaincfg_test
+package chaincfg
 
 import (
 	"bytes"
 	"reflect"
 	"strings"
 	"testing"
-
-	. "github.com/bitcoinsv/bsvd/chaincfg"
 )
 
 // Define some of the required parameters for a user-registered
@@ -69,11 +67,6 @@ func TestRegister(t *testing.T) {
 					params: &TestNet3Params,
 					err:    ErrDuplicateNet,
 				},
-				{
-					name:   "duplicate simnet",
-					params: &SimNetParams,
-					err:    ErrDuplicateNet,
-				},
 			},
 			p2pkhMagics: []magicTest{
 				{
@@ -86,10 +79,6 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					magic: RegressionNetParams.LegacyPubKeyHashAddrID,
-					valid: true,
-				},
-				{
-					magic: SimNetParams.LegacyPubKeyHashAddrID,
 					valid: true,
 				},
 				{
@@ -115,10 +104,6 @@ func TestRegister(t *testing.T) {
 					valid: true,
 				},
 				{
-					magic: SimNetParams.LegacyScriptHashAddrID,
-					valid: true,
-				},
-				{
 					magic: mockNetParams.LegacyScriptHashAddrID,
 					valid: false,
 				},
@@ -138,10 +123,6 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.CashAddressPrefix + ":",
-					valid:  true,
-				},
-				{
-					prefix: SimNetParams.CashAddressPrefix + ":",
 					valid:  true,
 				},
 				{
@@ -182,11 +163,6 @@ func TestRegister(t *testing.T) {
 					err:  nil,
 				},
 				{
-					priv: SimNetParams.HDPrivateKeyID[:],
-					want: SimNetParams.HDPublicKeyID[:],
-					err:  nil,
-				},
-				{
 					priv: mockNetParams.HDPrivateKeyID[:],
 					err:  ErrUnknownHDKeyID,
 				},
@@ -223,10 +199,6 @@ func TestRegister(t *testing.T) {
 					valid: true,
 				},
 				{
-					magic: SimNetParams.LegacyPubKeyHashAddrID,
-					valid: true,
-				},
-				{
 					magic: mockNetParams.LegacyPubKeyHashAddrID,
 					valid: true,
 				},
@@ -249,10 +221,6 @@ func TestRegister(t *testing.T) {
 					valid: true,
 				},
 				{
-					magic: SimNetParams.LegacyScriptHashAddrID,
-					valid: true,
-				},
-				{
 					magic: mockNetParams.LegacyScriptHashAddrID,
 					valid: true,
 				},
@@ -272,10 +240,6 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.CashAddressPrefix + ":",
-					valid:  true,
-				},
-				{
-					prefix: SimNetParams.CashAddressPrefix + ":",
 					valid:  true,
 				},
 				{
@@ -326,11 +290,6 @@ func TestRegister(t *testing.T) {
 					err:    ErrDuplicateNet,
 				},
 				{
-					name:   "duplicate simnet",
-					params: &SimNetParams,
-					err:    ErrDuplicateNet,
-				},
-				{
 					name:   "duplicate mocknet",
 					params: &mockNetParams,
 					err:    ErrDuplicateNet,
@@ -347,10 +306,6 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					magic: RegressionNetParams.LegacyPubKeyHashAddrID,
-					valid: true,
-				},
-				{
-					magic: SimNetParams.LegacyPubKeyHashAddrID,
 					valid: true,
 				},
 				{
@@ -376,10 +331,6 @@ func TestRegister(t *testing.T) {
 					valid: true,
 				},
 				{
-					magic: SimNetParams.LegacyScriptHashAddrID,
-					valid: true,
-				},
-				{
 					magic: mockNetParams.LegacyScriptHashAddrID,
 					valid: true,
 				},
@@ -399,10 +350,6 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.CashAddressPrefix + ":",
-					valid:  true,
-				},
-				{
-					prefix: SimNetParams.CashAddressPrefix + ":",
 					valid:  true,
 				},
 				{
@@ -440,11 +387,6 @@ func TestRegister(t *testing.T) {
 				{
 					priv: RegressionNetParams.HDPrivateKeyID[:],
 					want: RegressionNetParams.HDPublicKeyID[:],
-					err:  nil,
-				},
-				{
-					priv: SimNetParams.HDPrivateKeyID[:],
-					want: SimNetParams.HDPublicKeyID[:],
 					err:  nil,
 				},
 				{

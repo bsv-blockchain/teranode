@@ -1,0 +1,125 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  blockAssembly:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  blockPersister:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  blockValidator:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  blockchain:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  coinbase:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  legacy:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  miner:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  peer:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  propagation:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  subtreeValidator:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3
+  utxoPersister:
+    spec:
+      deploymentOverrides:
+        nodeSelector:
+          role: teranet-3
+        tolerations:
+          - effect: NoSchedule
+            key: role
+            operator: Equal
+            value: teranet-3

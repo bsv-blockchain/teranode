@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
@@ -705,6 +707,7 @@ func TestNewBlockFromMsgBlock(t *testing.T) {
 	assert.Equal(t, uint64(msgBlock.SerializeSize()), block.SizeInBytes) // nolint: gosec
 	assert.Empty(t, block.Subtrees)
 }
+
 func TestNewBlockFromMsgBlockAndModelBlock(t *testing.T) {
 	blockHeaderBytes, err := hex.DecodeString(block1Header)
 	require.NoError(t, err)
@@ -724,4 +727,31 @@ func TestNewBlockFromMsgBlockAndModelBlock(t *testing.T) {
 	assert.Equal(t, modelBlockHeader.Nonce, wireBlockHeader.Nonce)
 	assert.Equal(t, *modelBlockHeader.HashMerkleRoot, wireBlockHeader.MerkleRoot)
 	assert.Equal(t, modelBlockHeader.Timestamp, uint32(wireBlockHeader.Timestamp.Unix())) // nolint: gosec
+}
+
+func TestGenesisBytesFromModelBlock(t *testing.T) {
+	expectedPrevBlockHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	wireGenesisBlock := chaincfg.MainNetParams.GenesisBlock
+
+	genesisBlock, err := NewBlockFromMsgBlock(wireGenesisBlock)
+	if err != nil {
+		t.Fatalf("Failed to create new block from bytes: %v", err)
+	}
+
+	if genesisBlock.Header.HashPrevBlock.String() != expectedPrevBlockHash {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
+	}
+
+	bitsBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bitsBytes, wireGenesisBlock.Header.Bits)
+
+	nbits, err := NewNBitFromSlice(bitsBytes)
+	if err != nil {
+		t.Fatalf("failed to create NBit from Bits: %v", err)
+	}
+
+	if genesisBlock.Header.Bits != *nbits {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
+	}
 }

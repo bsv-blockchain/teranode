@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ var (
 
 func TestGetFeesAndUtxoHashes(t *testing.T) {
 	t.Run("should return fees and utxo hashes", func(t *testing.T) {
-		fees, utxoHashes, err := GetFeesAndUtxoHashes(context.Background(), tx, util.GenesisActivationHeight)
+		fees, utxoHashes, err := GetFeesAndUtxoHashes(context.Background(), tx, chaincfg.GenesisActivationHeight)
 		require.NoError(t, err)
 
 		assert.Equal(t, uint64(215), fees)
@@ -98,8 +98,10 @@ func TestShouldStoreNonZeroUTXO(t *testing.T) {
 	require.Equal(t, txID, tx.TxIDChainHash().String())
 
 	t.Run("should return true for non-zero UTXO", func(t *testing.T) {
-		assert.True(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, util.GenesisActivationHeight-1))
-		assert.False(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, util.GenesisActivationHeight+1))
+		// TODO this should go when we remove the genesis activation height global variable
+		chaincfg.GenesisActivationHeight = uint32(620538)
+		assert.True(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, chaincfg.GenesisActivationHeight-1))
+		assert.False(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, chaincfg.GenesisActivationHeight+1))
 	})
 }
 

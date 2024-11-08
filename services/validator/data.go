@@ -8,7 +8,7 @@ import (
 
 type TxValidationData struct {
 	Tx     []byte
-	Height int32
+	Height uint32
 }
 
 func NewTxValidationDataFromBytes(bytes []byte) (*TxValidationData, error) {
@@ -19,7 +19,7 @@ func NewTxValidationDataFromBytes(bytes []byte) (*TxValidationData, error) {
 	d := &TxValidationData{}
 
 	// read first 4 bytes as height
-	d.Height = int32(binary.LittleEndian.Uint32(bytes[:4]))
+	d.Height = binary.LittleEndian.Uint32(bytes[:4])
 
 	// read remaining bytes as tx
 	if len(bytes) > 4 {

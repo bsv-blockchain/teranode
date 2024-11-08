@@ -1,0 +1,89 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.6"  # Existing value, modify as needed
+            memory: 500Mi  # Existing value, modify as needed
+  blockAssembly:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.5"  # Existing value, modify as needed
+            memory: 4Gi  # Existing value, modify as needed
+  blockPersister:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.5"  # Existing value, modify as needed
+            memory: 4Gi  # Existing value, modify as needed
+  blockValidator:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 2  # Existing value, modify as needed
+            memory: 8Gi  # Existing value, modify as needed
+  blockchain:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.5"  # Existing value, modify as needed
+            memory: 500Mi  # Existing value, modify as needed
+  coinbase:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 1  # Existing value, modify as needed
+            memory: 1Gi  # Existing value, modify as needed
+  legacy:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 8  # Existing value, modify as needed
+            memory: 4Gi  # Existing value, modify as needed
+  miner:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 1  # Existing value, modify as needed
+            memory: 1Gi  # Existing value, modify as needed
+  peer:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.5"  # Existing value, modify as needed
+            memory: 500Mi  # Existing value, modify as needed
+  propagation:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: "0.5"  # Existing value, modify as needed
+            memory: 500Mi  # Existing value, modify as needed
+  subtreeValidator:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 1  # Existing value, modify as needed
+            memory: 8Gi  # Existing value, modify as needed
+  utxoPersister:
+    spec:
+      deploymentOverrides:
+        resources:
+          requests:
+            cpu: 1  # Existing value, modify as needed
+            memory: 8Gi  # Existing value, modify as needed

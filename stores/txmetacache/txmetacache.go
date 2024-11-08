@@ -226,7 +226,11 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		if data.Data != nil {
 			data.Data.Tx = nil
 			if err := t.SetCache(&data.Hash, data.Data); err != nil {
-				t.logger.Errorf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
+				if errors.Is(err, errors.ErrProcessing) {
+					t.logger.Debugf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
+				} else {
+					t.logger.Errorf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
+				}
 			}
 		}
 	}

@@ -3,6 +3,7 @@ package utxo
 import (
 	"context"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -100,7 +101,7 @@ func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uin
 
 func shouldStoreNonZeroUTXO(isCoinbase bool, script *bscript.Script, blockHeight uint32) bool {
 	// there is an exception before Genesis where 0 sat outputs were stored in the utxo store
-	if blockHeight < util.GenesisActivationHeight || isCoinbase {
+	if blockHeight < chaincfg.GenesisActivationHeight || isCoinbase {
 		b := []byte(*script)
 		opReturn := len(b) > 0 && b[0] == bscript.OpRETURN
 		opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN

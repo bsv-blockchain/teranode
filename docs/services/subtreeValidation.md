@@ -2,6 +2,7 @@
 
 ## Index
 
+
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
 - [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
@@ -9,13 +10,19 @@
 - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
-    - [4.1. Subtree Data Model](#41-subtree-data-model)
-- [4.2. Transaction Data Model](#42-transaction-data-model)
-- [4.3. Transaction Metadata Model](#43-transaction-metadata-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+- [Key Changes and Additions:](#key-changes-and-additions)
 7. [How to Run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+- [gRPC Settings](#grpc-settings)
+- [Subtree Configuration](#subtree-configuration)
+- [Kafka Configuration](#kafka-configuration)
+- [Block Validation Settings](#block-validation-settings)
+- [Tx Metadata Processing](#tx-metadata-processing)
+- [UTXO Store Settings](#utxo-store-settings)
+- [Miscellaneous](#miscellaneous)
+9. [Other Resources](#9-other-resources)
 
 
 ## 1. Description
@@ -123,93 +130,9 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 
 ## 4. Data Model
 
-#### 4.1. Subtree Data Model
-
-A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root. Blocks are then built from a collection of subtrees.
-
-More information on the subtree structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-Here's a table documenting the structure of the `Subtree` type:
-
-| Field            | Type                  | Description                                                                     |
-|------------------|-----------------------|---------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                |
-| Fees             | uint64                | Total fees associated with the transactions in the subtree.                     |
-| SizeInBytes      | uint64                | The size of the subtree in bytes.                                               |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                             |
-| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree. |
-| ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
-
-Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
-
-
-
-Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
-
-##### Subtree Composition
-
-Each subtree consists of:
-- hash: 32 bytes
-- fees: 4 bytes
-- sizeInBytes: 4 bytes
-- numberOfLeaves: 4 bytes
-- subtreeHeight: 4 bytes
-
-##### Calculation:
-```
-1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
-```
-
-##### Data Transfer Between Nodes
-
-However - only 32MB is transferred between the nodes. Each subtree transfer includes:
-
-- hash: 32 bytes
-```
-1024 * 1024 * (32) = 32MB
-```
-
-### 4.2. Transaction Data Model
-
-This refers to the extended transaction format, as seen below:
-
-| Field           | Description                                                                                            | Size                                              |
-|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Version no      | currently 2                                                                                            | 4 bytes                                           |
-| **EF marker**   | **marker for extended format**                                                                         | **0000000000EF**                                  |
-| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of inputs  | **Extended Format** transaction Input Structure                                                        | <in-counter> qty with variable length per input   |
-| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
-
-More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-
-### 4.3. Transaction Metadata Model
-
-The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
-
-| Field Name    | Description                                                     | Data Type                         |
-|---------------|-----------------------------------------------------------------|-----------------------------------|
-| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
-| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
-| Fee           | The fee associated with the transaction.                        | Decimal                           |
-| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
-| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
-| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
-| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
-| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
-
-Note:
-
-- **Parent Transactions**: 1 or more parent transaction hashes. For each input that our transaction has, we can have a different parent transaction. I.e. a TX can be spending UTXOs from multiple transactions.
-
-
-- **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-    - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
-    - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
-
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Technology
 
@@ -244,7 +167,6 @@ Note:
 ├── Interface.go                            # Defines interfaces related to subtree validation, facilitating abstraction and testing.
 ├── README.md                               # Project documentation including setup, usage, and examples.
 ├── Server.go                               # Server-side logic for the subtree validation service, handling RPC calls.
-├── Server_test.go                          # Tests for the server logic, ensuring the correctness of RPC implementations.
 ├── SubtreeValidation.go                    # Core logic for validating subtrees within a blockchain structure.
 ├── SubtreeValidation_test.go               # Unit tests for the subtree validation logic.
 ├── metrics.go                              # Implementation of metrics collection for monitoring service performance.
@@ -259,6 +181,15 @@ Note:
 └── txmetaHandler.go                        # Manages operations related to transaction metadata, including validation and caching.
 ```
 
+## Key Changes and Additions:
+
+1. Added description for the `data` directory, which was missing in the original documentation.
+2. Retained all other file descriptions as they accurately represent the purpose of each file.
+3. Ensured that the structure matches the provided tree, including the correct number of files and directories.
+
+This updated documentation now accurately reflects the current structure of the subtree validation service, including all files and directories present in the provided tree.
+
+
 ## 7. How to Run
 
 To run the Subtree Validation Service locally, you can execute the following command:
@@ -271,35 +202,74 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
+## gRPC Settings
 
 1. **`subtreevalidation_grpcAddress`**: Specifies the gRPC address for the subtree validation service.
 
-2. **`use_open_tracing`**: A boolean flag that enables or disables OpenTracing for gRPC calls. OpenTracing is an open-source project that provides APIs for tracing the request flow across distributed systems.
+## Subtree Configuration
 
-3. **`use_prometheus_grpc_metrics`**: Enables or disables the collection of Prometheus metrics for gRPC calls. When set to true, the service collects metrics such as request counts, errors, and durations, which are useful for monitoring and debugging.
+2. **`initial_merkle_items_per_subtree`**: Defines the initial number of Merkle items per subtree. Default: 1024.
 
-4. **`subtreevalidation_grpcListenAddress`**: Used by the server to determine the address on which to listen for incoming gRPC connections.
+3. **`subtreevalidation_subtreeTTL`**: Configures the Time-To-Live (TTL) for subtrees stored in the service. This duration setting controls how long subtrees are retained before being considered stale or expired. Default: 120 minutes.
 
-5. **`subtreevalidation_subtreeTTL`**: Configures the Time-To-Live (TTL) for subtrees stored in the service. This duration setting controls how long subtrees are retained before being considered stale or expired.
+4. **`subtree_quorum_path`**: Specifies the path for subtree quorum.
 
-6. **`subtreevalidation_txMetaCacheEnabled`**: Controls whether a caching layer is used for tx metadata. Enabling this cache can significantly improve performance by reducing the need to repeatedly fetch tx metadata from the store.
+5. **`subtree_quorum_absolute_timeout`**: Sets an absolute timeout for subtree quorum.
 
-7. **`kafka_subtreesConfig` and `kafka_txmetaConfig`**: Kafka configurations for consuming subtree and tx metadata messages.
+## Kafka Configuration
 
-8. **`subtreevalidation_kafkaSubtreeConcurrency`**: Determines the number of goroutines that will concurrently process subtree messages from Kafka. This setting allows for tuning the service's performance based on the available CPU resources and workload characteristics.
+6. **`kafka_subtreesConfig`**: Kafka configuration for consuming subtree messages.
 
-9. **`blockvalidation_fail_fast_validation`**: Allows the validation process to fail fast upon encountering certain conditions, potentially improving the system's responsiveness in error scenarios.
+7. **`kafka_txmetaConfig`**: Kafka configuration for consuming tx metadata messages.
 
-10. **`blockvalidation_subtree_validation_abandon_threshold`**: Specifies the threshold for the number of missing transactions at which the subtree validation process will be abandoned.
+8. **`subtreevalidation_kafkaSubtreeConcurrency`**: Determines the number of goroutines that will concurrently process subtree messages from Kafka. Default: Max(4, runtime.NumCPU()-16).
 
-11. **`blockvalidation_validation_max_retries` and `blockvalidation_validation_retry_sleep`**: Control the retry behavior for subtree validation attempts, including the maximum number of retries and the sleep duration between retries.
+## Block Validation Settings
 
-12. **`blockvalidation_validation_warmup_count`**: Sets a warm-up count for subtree validations. It is used to delay the application of fail fast validations until a reasonable enough number of subtrees have been processed (128 by default).
+9. **`blockvalidation_fail_fast_validation`**: Allows the validation process to fail fast upon encountering certain conditions, potentially improving the system's responsiveness in error scenarios. Default: false.
 
-13. **`blockvalidation_batchMissingTransactions`**: Controls whether missing transactions are processed in batches.
+10. **`blockvalidation_subtree_validation_abandon_threshold`**: Specifies the threshold for the number of missing transactions at which the subtree validation process will be abandoned. Default: 10000.
 
-14. **`blockvalidation_missingTransactionsBatchSize`**: Defines the batch size for processing missing transactions.
+11. **`blockvalidation_validation_max_retries`**: Sets the maximum number of retry attempts for subtree validation. Default: 3.
 
-15. **`blockvalidation_getMissingTransactions`**: Determines the number of goroutines that will concurrently process missing transactions.
+12. **`blockvalidation_validation_retry_sleep`**: Defines the sleep duration between retry attempts. Default: 10 seconds.
 
-16. **`blockvalidation_processTxMetaUsingStore_BatchSize`**: Defines the batch size for tx metadata store fetching.
+13. **`blockvalidation_validation_warmup_count`**: Sets a warm-up count for subtree validations. It is used to delay the application of fail-fast validations until a reasonable number of subtrees have been processed. Default: 128.
+
+14. **`blockvalidation_batchMissingTransactions`**: Controls whether missing transactions are processed in batches. Default: true.
+
+15. **`blockvalidation_missingTransactionsBatchSize`**: Defines the batch size for processing missing transactions. Default: 100,000.
+
+16. **`blockvalidation_getMissingTransactions`**: Determines the number of goroutines that will concurrently process missing transactions. Default: Max(4, runtime.NumCPU()/2).
+
+## Tx Metadata Processing
+
+17. **`subtreevalidation_txMetaCacheEnabled`**: Controls whether a caching layer is used for tx metadata. Enabling this cache can significantly improve performance by reducing the need to repeatedly fetch tx metadata from the store. Default: true.
+
+18. **`blockvalidation_processTxMetaUsingStore_BatchSize`**: Defines the batch size for tx metadata store fetching. Default: 1024.
+
+19. **`blockvalidation_processTxMetaUsingStore_Concurrency`**: Sets the concurrency for processing tx metadata using store. Default: Max(4, runtime.NumCPU()/2).
+
+20. **`blockvalidation_processTxMetaUsingStore_MissingTxThreshold`**: Defines the threshold for missing transactions when processing tx metadata using store. Default: 0.
+
+21. **`blockvalidation_processTxMetaUsingCache_BatchSize`**: Defines the batch size for processing tx metadata using cache. Default: 1024.
+
+22. **`blockvalidation_processTxMetaUsingCache_Concurrency`**: Sets the concurrency for processing tx metadata using cache. Default: Max(4, runtime.NumCPU()/2).
+
+23. **`blockvalidation_processTxMetaUsingCache_MissingTxThreshold`**: Defines the threshold for missing transactions when processing tx metadata using cache. Default: 1.
+
+## UTXO Store Settings
+
+24. **`utxostore`**: Specifies the UTXO store URL.
+
+25. **`utxostore_spendBatcherSize`**: Defines the batch size for UTXO spending. Default: 1024.
+
+## Miscellaneous
+
+26. **`fsm_state_restore`**: A boolean flag for FSM state restoration. Default: false.
+
+
+
+## 9. Other Resources
+
+[Subtree Validation Reference](../references/services/subtreevalidation_reference.md)

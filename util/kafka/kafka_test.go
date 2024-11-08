@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"sync"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -28,21 +28,45 @@ type TestContainerWrapper struct {
 	hostPort  int
 }
 
+func GetFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+
+	defer l.Close()
+
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
 func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
+	// Get an ephemeral port
+	hostPort, err := GetFreePort()
+	if err != nil {
+		return nil, errors.NewConfigurationError("could not get free port: %w", err)
+	}
+
+	// const containerPort = 9092 // The internal port Redpanda uses
+
 	req := testcontainers.ContainerRequest{
 		Image: fmt.Sprintf("%s:%s", RedpandaImage, RedpandaVersion),
 		ExposedPorts: []string{
-			"9092/tcp",
+			fmt.Sprintf("%d:%d/tcp", hostPort, hostPort),
 		},
 		Cmd: []string{
 			"redpanda", "start",
 			"--overprovisioned",
 			"--smp=1",
-			"--kafka-addr=PLAINTEXT://0.0.0.0:9092", // Listen on all interfaces
-			"--advertise-kafka-addr=PLAINTEXT://localhost:9092", // Advertise localhost
+			"--kafka-addr", fmt.Sprintf("PLAINTEXT://0.0.0.0:%d", hostPort),
+			"--advertise-kafka-addr", fmt.Sprintf("PLAINTEXT://localhost:%d", hostPort),
 		},
 		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
-		AutoRemove: true,
+		// AutoRemove: true,
 	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -53,14 +77,14 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 		return nil, errors.NewProcessingError("could not start the container: %w", err)
 	}
 
-	mPort, err := container.MappedPort(ctx, nat.Port("9092/tcp"))
-	if err != nil {
-		return nil, errors.NewConfigurationError("could not get the mapped port: %", err)
-	}
+	// mPort, err := container.MappedPort(ctx, nat.Port(fmt.Sprintf("%d/tcp", hostPort, containerPort)))
+	// if err != nil {
+	// 	return nil, errors.NewConfigurationError("could not get the mapped port: %", err)
+	// }
 
 	return &TestContainerWrapper{
 		container: container,
-		hostPort:  mPort.Int(),
+		hostPort:  hostPort,
 	}, nil
 }
 
@@ -90,12 +114,12 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 	testContainer, err := RunContainer(ctx)
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
+	defer func() {
 		cleanupErr := testContainer.CleanUp()
 		if cleanupErr != nil {
 			t.Errorf("failed to clean up container: %v", cleanupErr)
 		}
-	})
+	}()
 
 	host, err := testContainer.container.Host(ctx)
 	require.NoError(t, err)
@@ -149,7 +173,7 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
@@ -275,7 +299,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
@@ -375,7 +399,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.TestLogger{}
 
@@ -481,7 +505,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 }
 
 func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.TestLogger{}
 
@@ -581,7 +605,7 @@ This test is to ensure that when a consumer is restarted, it will resume from th
 and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	logger := ulogger.NewZeroLogger("test")
 
