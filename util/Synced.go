@@ -41,6 +41,19 @@ func (m *SyncedMap[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
+func (m *SyncedMap[K, V]) Range() map[K]V {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	items := map[K]V{}
+
+	for k, v := range m.m {
+		items[k] = v
+	}
+
+	return items
+}
+
 func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	m.m[key] = value
@@ -82,11 +95,32 @@ func (m *SyncedSwissMap[K, V]) Get(key K) (V, bool) {
 	return m.swissMap.Get(key)
 }
 
+func (m *SyncedSwissMap[K, V]) Range() map[K]V {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	items := map[K]V{}
+
+	m.swissMap.Iter(func(key K, value V) bool {
+		items[key] = value
+		return true
+	})
+
+	return items
+}
+
 func (m *SyncedSwissMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.swissMap.Put(key, value)
+}
+
+func (m *SyncedSwissMap[K, V]) Length() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.swissMap.Count()
 }
 
 func (m *SyncedSwissMap[K, V]) Delete(key K) bool {
@@ -95,6 +129,7 @@ func (m *SyncedSwissMap[K, V]) Delete(key K) bool {
 
 	return m.swissMap.Delete(key)
 }
+
 func (m *SyncedSwissMap[K, V]) DeleteBatch(keys []K) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

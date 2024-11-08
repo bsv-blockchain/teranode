@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -188,12 +189,15 @@ func TestConnectMode(t *testing.T) {
 func TestTargetOutbound(t *testing.T) {
 	targetOutbound := uint32(10)
 	connected := make(chan *ConnReq)
+
 	cmgr, err := New(ulogger.TestLogger{}, &Config{
 		TargetOutbound: targetOutbound,
 		Dial:           mockDialer,
 		GetNewAddress: func() (net.Addr, error) {
+			//nolint:gosec
+			newAddress := rand.Int32N(255)
 			return &net.TCPAddr{
-				IP:   net.ParseIP("127.0.0.1"),
+				IP:   net.ParseIP(fmt.Sprintf("127.0.0.%d", newAddress)),
 				Port: 18555,
 			}, nil
 		},
