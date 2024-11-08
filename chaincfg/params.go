@@ -139,6 +139,9 @@ type Params struct {
 	// coins (coinbase transactions) can be spent.
 	CoinbaseMaturity uint16
 
+	// MaxCoinbaseScriptSize is the maximum size of the scriptSig in bytes for the coinbase transaction.
+	MaxCoinbaseScriptSize uint16
+
 	// SubsidyReductionInterval is the interval of blocks before the subsidy
 	// is reduced.
 	SubsidyReductionInterval int32
@@ -240,6 +243,7 @@ var MainNetParams = Params{
 	GenesisActivationHeight: 620538,
 
 	CoinbaseMaturity:         100,
+	MaxCoinbaseScriptSize:    100,
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
@@ -331,14 +335,16 @@ var StnParams = Params{
 	DNSSeeds:    []DNSSeed{},
 
 	// Chain parameters
-	GenesisBlock:     &stnGenesisBlock,
-	GenesisHash:      &stnGenesisHash,
-	PowLimit:         stnPowLimit,
-	PowLimitBits:     0x207fffff,
-	CoinbaseMaturity: 100,
-	BIP0034Height:    100000000, // Not active - Permit ver 1 blocks
-	BIP0065Height:    1351,      // Used by regression tests
-	BIP0066Height:    1251,      // Used by regression tests
+	GenesisBlock:          &stnGenesisBlock,
+	GenesisHash:           &stnGenesisHash,
+	PowLimit:              stnPowLimit,
+	PowLimitBits:          0x207fffff,
+	CoinbaseMaturity:      100,
+	MaxCoinbaseScriptSize: 100,
+
+	BIP0034Height: 100000000, // Not active - Permit ver 1 blocks
+	BIP0065Height: 1351,      // Used by regression tests
+	BIP0066Height: 1251,      // Used by regression tests
 
 	UahfForkHeight:          0, // Always active on regtest
 	DaaForkHeight:           0, // Always active on regtest
@@ -404,14 +410,16 @@ var RegressionNetParams = Params{
 	DNSSeeds:    []DNSSeed{},
 
 	// Chain parameters
-	GenesisBlock:     &regTestGenesisBlock,
-	GenesisHash:      newHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
-	PowLimit:         regressionPowLimit,
-	PowLimitBits:     0x207fffff,
-	CoinbaseMaturity: 100,
-	BIP0034Height:    100000000, // Not active - Permit ver 1 blocks
-	BIP0065Height:    1351,      // Used by regression tests
-	BIP0066Height:    1251,      // Used by regression tests
+	GenesisBlock:          &regTestGenesisBlock,
+	GenesisHash:           newHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
+	PowLimit:              regressionPowLimit,
+	PowLimitBits:          0x207fffff,
+	CoinbaseMaturity:      100,
+	MaxCoinbaseScriptSize: 100,
+
+	BIP0034Height: 100000000, // Not active - Permit ver 1 blocks
+	BIP0065Height: 1351,      // Used by regression tests
+	BIP0066Height: 1251,      // Used by regression tests
 
 	UahfForkHeight:          15,   // August 1, 2017 hard fork
 	DaaForkHeight:           2200, // must be > 2016 - see assert in pow.cpp:268
@@ -491,7 +499,9 @@ var TestNet3Params = Params{
 	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
 	GenesisActivationHeight: 1344302,
 
-	CoinbaseMaturity:         100,
+	CoinbaseMaturity:      100,
+	MaxCoinbaseScriptSize: 100,
+
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
@@ -576,7 +586,9 @@ var CustomTestNetParams = Params{
 	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
 	GenesisActivationHeight: 1344302,
 
-	CoinbaseMaturity:         100,
+	CoinbaseMaturity:      100,
+	MaxCoinbaseScriptSize: 100,
+
 	SubsidyReductionInterval: 210000,
 	// TODO: change this back to 10 mins
 	TargetTimePerBlock:       time.Minute * 1, // 10 minutes

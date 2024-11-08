@@ -516,9 +516,175 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
+
 		bn.SetString(hashStr, 16)
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+	})
+}
+
+func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
+	t.Run("GetMiningCandidate_MaxBlockSize", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		ctx := context.Background()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		testItems.blockAssembler.blockMaxSize = 15000*4 + 1000
+
+		testItems.blockAssembler.startChannelListeners(ctx)
+
+		var buf bytes.Buffer
+
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		require.NoError(t, err)
+		require.NotNil(t, genesisBlock)
+
+		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
+
+		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+
+		var wg sync.WaitGroup
+
+		// 15 txs is 3 complete subtrees
+		wg.Add(3)
+
+		go func() {
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					assert.NotNil(t, subtree)
+					// assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+					assert.Len(t, subtree.Nodes, 4)
+					// assert.Equal(t, uint64(4000000000), subtree.Fees)
+					wg.Done()
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		for i := 0; i < 15; i++ {
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			tx := newTx(uint32(i))
+			_, err = testItems.utxoStore.Create(ctx, tx, 0)
+			require.NoError(t, err)
+			if i == 0 {
+				// first add coinbase
+				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 15000})
+			} else {
+				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000})
+			}
+		}
+
+		wg.Wait()
+		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		assert.NotNil(t, miningCandidate)
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint32(1), miningCandidate.Height)
+		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
+		assert.Equal(t, uint32(45000), miningCandidate.SizeWithoutCoinbase) // 3 * 1500
+		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
+		// Check the MerkleProof
+		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)
+		assert.NoError(t, err)
+
+		expectedMerkleProof := [][]byte{}
+		for _, hash := range expectedMerkleProofChainhash {
+			expectedMerkleProof = append(expectedMerkleProof, hash.CloneBytes())
+		}
+
+		assert.Equal(t, expectedMerkleProof, miningCandidate.MerkleProof)
+
+		assert.NotNil(t, subtrees)
+		assert.Len(t, subtrees, 1)
+		assert.Len(t, subtrees[0].Nodes, 4)
+		assert.Equal(t, util.CoinbasePlaceholderHash.String(), subtrees[0].Nodes[0].Hash.String())
+		assert.Equal(t, hash1.String(), subtrees[0].Nodes[1].Hash.String())
+		assert.Equal(t, hash2.String(), subtrees[0].Nodes[2].Hash.String())
+		assert.Equal(t, hash3.String(), subtrees[0].Nodes[3].Hash.String())
+
+		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		require.NoError(t, err)
+
+		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		require.NoError(t, err)
+
+		blockHash := util.Sha256d(blockHeader)
+		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+
+		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
+		target := bits.CalculateTarget()
+
+		var bn = big.NewInt(0)
+		bn.SetString(hashStr, 16)
+
+		compare := bn.Cmp(target)
+		assert.LessOrEqual(t, compare, 0)
+	})
+}
+
+func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *testing.T) {
+	t.Run("GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		ctx := context.Background()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		testItems.blockAssembler.blockMaxSize = 430000
+
+		testItems.blockAssembler.startChannelListeners(ctx)
+
+		var buf bytes.Buffer
+
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		require.NoError(t, err)
+		require.NotNil(t, genesisBlock)
+
+		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
+
+		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+
+		go func() {
+			subtreeRequest := <-testItems.newSubtreeChan
+			subtree := subtreeRequest.Subtree
+			assert.NotNil(t, subtree)
+			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Len(t, subtree.Nodes, 4)
+			assert.Equal(t, uint64(3000000000), subtree.Fees)
+			wg.Done()
+		}()
+
+		for i := 0; i < 4; i++ {
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			tx := newTx(uint32(i))
+			_, err = testItems.utxoStore.Create(ctx, tx, 0)
+			require.NoError(t, err)
+			if i == 0 {
+				// first add coinbase
+				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 100})
+			} else {
+				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}) // 0.15MB
+			}
+		}
+
+		wg.Wait()
+		_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+		require.Error(t, err)
+		assert.Equal(t, "Error: PROCESSING, (error code: 4), Message: max block size is less than the size of the subtree", err.Error())
 	})
 }
