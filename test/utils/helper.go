@@ -52,12 +52,14 @@ var allowedHosts = []string{
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
 func CallRPC(url string, method string, params []interface{}) (string, error) {
-
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"method": method,
 		"params": params,
 	})
+	logger.Infof("Request: %s", string(requestBody))
+
 	if err != nil {
 		return "", errors.NewProcessingError("failed to marshal request body", err)
 	}

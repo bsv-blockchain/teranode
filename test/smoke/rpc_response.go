@@ -125,3 +125,20 @@ type GetMiningInfoResponse struct {
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`
 }
+
+type MiningCandidate struct {
+	Result struct {
+		ID                  string   `json:"id"`
+		PreviousHash        string   `json:"prevhash"`
+		CoinbaseValue       uint64   `json:"coinbaseValue"`
+		Version             uint32   `json:"version"`
+		NBits               string   `json:"nBits"`
+		Time                uint32   `json:"time"`
+		Height              uint32   `json:"height"`
+		MerkleProof         []string `json:"merkleProof"`
+		NumTxs              uint32   `json:"num_txs"`
+		SizeWithoutCoinbase uint32   `json:"sizeWithoutCoinbase"`
+	}
+	Error interface{} `json:"error"`
+	ID    int         `json:"id"`
+}
