@@ -1,6 +1,6 @@
 //go:build rpc
 
-// How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCInvalidateBlock$" -tags rpc
+// How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCReconsiderBlock$" -tags rpc
 // Change TestRPCInvalidateBlock with the name of the test to execute
 
 package test
@@ -602,6 +602,64 @@ func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
 		t.Error("Error invalidating block")
 	} else {
 		t.Logf("Block invalidated successfully")
+	}
+}
+
+func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
+	var bestBlockHash BestBlockHashResp
+
+	var respReconsiderBlock InvalidBlockResp
+
+	t := suite.T()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+
+	defer cancel()
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
+
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("Best block hash: %s", bestBlockHash.Result)
+
+	respInv, errInv := helper.CallRPC(ubsv1RPCEndpoint, "reconsiderblock", []interface{}{bestBlockHash.Result})
+
+	if errInv != nil {
+		t.Errorf("Error CallRPC invalidateblock: %v", err)
+	}
+
+	errJSONInv := json.Unmarshal([]byte(respInv), &respReconsiderBlock)
+
+	if errJSONInv != nil {
+		t.Errorf("JSON decoding error: %v", errJSONInv)
+		return
+	}
+
+	if respReconsiderBlock.Result != nil {
+		t.Error("Error reconsidering block")
+	} else {
+		t.Logf("Block reconsidered successfully")
 	}
 }
 
