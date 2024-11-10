@@ -1,3 +1,4 @@
+// Package propagation provides Bitcoin SV transaction propagation functionality.
 package propagation
 
 import (
@@ -9,27 +10,44 @@ import (
 	"google.golang.org/grpc"
 )
 
+// Package propagation provides Bitcoin SV transaction propagation functionality.
 type timing struct {
-	total time.Duration
-	count int
+	total time.Duration // Total time spent processing transactions
+	count int           // Number of transactions processed
 }
 
+// transaction represents a transaction to be processed along with its error channel
 type transaction struct {
-	txBytes []byte
-	errCh   chan error
+	txBytes []byte     // Raw transaction bytes
+	errCh   chan error // Channel for receiving processing errors
 }
 
+// StreamingClient handles streaming transaction processing over gRPC.
+// It maintains a persistent connection to the propagation server and
+// provides methods for submitting transactions and tracking metrics.
 type StreamingClient struct {
-	logger        ulogger.Logger
-	transactionCh chan *transaction
-	timingsCh     chan chan timing
-	conn          *grpc.ClientConn
-	stream        propagation_api.PropagationAPI_ProcessTransactionStreamClient
-	totalTime     time.Duration
-	count         int
-	testMode      bool
+	logger        ulogger.Logger                                                // Logger for client operations
+	transactionCh chan *transaction                                             // Channel for incoming transactions
+	timingsCh     chan chan timing                                              // Channel for timing requests
+	conn          *grpc.ClientConn                                              // gRPC connection
+	stream        propagation_api.PropagationAPI_ProcessTransactionStreamClient // Transaction stream
+	totalTime     time.Duration                                                 // Total processing time
+	count         int                                                           // Total transactions processed
+	testMode      bool                                                          // Flag for test mode operation
 }
 
+// NewStreamingClient creates a new StreamingClient instance with the specified buffer size.
+// It initializes channels and starts the background handler routine.
+//
+// Parameters:
+//   - ctx: Context for client operations
+//   - logger: Logger instance for client operations
+//   - bufferSize: Size of the transaction buffer channel
+//   - testMode: Optional boolean flag for test mode operation
+//
+// Returns:
+//   - *StreamingClient: New client instance
+//   - error: Error if client creation fails
 func NewStreamingClient(ctx context.Context, logger ulogger.Logger, bufferSize int, testMode ...bool) (*StreamingClient, error) {
 	sc := &StreamingClient{
 		logger:        logger,
@@ -48,6 +66,13 @@ func NewStreamingClient(ctx context.Context, logger ulogger.Logger, bufferSize i
 	return sc, nil
 }
 
+// handler is the main event loop for the StreamingClient.
+// It processes incoming transactions, manages timing requests, and handles
+// connection cleanup. The handler automatically closes idle connections
+// after 10 seconds of inactivity.
+//
+// Parameters:
+//   - ctx: Context for cancellation
 func (sc *StreamingClient) handler(ctx context.Context) {
 	defer sc.closeResources()
 
@@ -95,6 +120,8 @@ func (sc *StreamingClient) handler(ctx context.Context) {
 	}
 }
 
+// closeResources cleans up client resources including the gRPC stream and connection.
+// This is called automatically when the handler exits or the connection is idle.
 func (sc *StreamingClient) closeResources() {
 	if sc.stream != nil {
 		_ = sc.stream.CloseSend()
@@ -106,6 +133,14 @@ func (sc *StreamingClient) closeResources() {
 	sc.conn = nil
 }
 
+// ProcessTransaction submits a single transaction for processing.
+// It tracks timing information and waits for completion or error.
+//
+// Parameters:
+//   - txBytes: Raw transaction bytes to process
+//
+// Returns:
+//   - error: Error if transaction processing fails
 func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	start := time.Now()
 
@@ -124,6 +159,14 @@ func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	return err
 }
 
+// ProcessTransactionBatch processes multiple transactions sequentially.
+// It stops and returns on the first error encountered.
+//
+// Parameters:
+//   - txs: Slice of raw transaction bytes to process
+//
+// Returns:
+//   - error: Error if any transaction fails to process
 func (sc *StreamingClient) ProcessTransactionBatch(txs [][]byte) error {
 	for _, tx := range txs {
 		if err := sc.ProcessTransaction(tx); err != nil {
@@ -134,6 +177,12 @@ func (sc *StreamingClient) ProcessTransactionBatch(txs [][]byte) error {
 	return nil
 }
 
+// GetTimings returns the total processing time and count of transactions.
+// This provides metrics about the client's operation since creation.
+//
+// Returns:
+//   - time.Duration: Total time spent processing transactions
+//   - int: Total number of transactions processed
 func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 	ch := make(chan timing)
 	sc.timingsCh <- ch
@@ -143,6 +192,14 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 	return timings.total, timings.count
 }
 
+// initStream initializes the gRPC stream connection to the propagation server.
+// This is called automatically when needed and after connection timeouts.
+//
+// Parameters:
+//   - ctx: Context for stream initialization
+//
+// Returns:
+//   - error: Error if stream initialization fails
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
