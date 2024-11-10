@@ -142,3 +142,15 @@ type MiningCandidate struct {
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`
 }
+
+type InvalidBlockResp struct {
+	Result interface{} `json:"result"`
+	Error  interface{} `json:"error"`
+	ID     int         `json:"id"`
+}
+
+type BestBlockHashResp struct {
+	Result string      `json:"result"`
+	Error  interface{} `json:"error"`
+	ID     int         `json:"id"`
+}

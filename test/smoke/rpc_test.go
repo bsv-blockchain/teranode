@@ -1,6 +1,7 @@
 //go:build rpc
 
-// go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
+// How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCInvalidateBlock$" -tags rpc
+// Change TestRPCInvalidateBlock with the name of the test to execute
 
 package test
 
@@ -332,6 +333,7 @@ func startApp(logFile string) error {
 	appCmd.Stderr = appLog
 
 	log.Println("Starting app in the background...")
+
 	if err := appCmd.Start(); err != nil {
 		return err
 	}
@@ -543,13 +545,75 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 
+func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
+	var bestBlockHash BestBlockHashResp
+
+	var respInvalidateBlock InvalidBlockResp
+
+	t := suite.T()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+
+	defer cancel()
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
+
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("Best block hash: %s", bestBlockHash.Result)
+
+	respInv, errInv := helper.CallRPC(ubsv1RPCEndpoint, "invalidateblock", []interface{}{bestBlockHash.Result})
+
+	if errInv != nil {
+		t.Errorf("Error CallRPC invalidateblock: %v", err)
+	}
+
+	errJSONInv := json.Unmarshal([]byte(respInv), &respInvalidateBlock)
+
+	if errJSONInv != nil {
+		t.Errorf("JSON decoding error: %v", errJSONInv)
+		return
+	}
+
+	t.Logf("%s", respInv)
+
+	if respInvalidateBlock.Result != nil {
+		t.Error("Error invalidating block")
+	} else {
+		t.Logf("Block invalidated successfully")
+	}
+}
+
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
 }
 
 func stopKafka() {
 	log.Println("Stopping Kafka...")
+
 	cmd := exec.Command("docker", "stop", "kafka-server")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop Kafka: %v\n", err)
 	} else {
@@ -561,7 +625,9 @@ func stopUbsv() {
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
 	log.Println("Stopping UBSV...")
+
 	cmd := exec.Command("pkill", "-f", "ubsv")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop UBSV: %v\n", err)
 	} else {
