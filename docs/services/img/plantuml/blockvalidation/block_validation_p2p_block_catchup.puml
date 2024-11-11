@@ -2,36 +2,37 @@
 queue "catchupCh\nCatchup Channel" as CatchupCh
 participant "Validation Service" as ValidationService
 entity "Block Validation\n(BlockValidation.go)" as BVVB
-
 participant "Blockchain Client" as BC
 participant "Util HTTP Request" as Util
 
-
-CatchupCh -> ValidationService: catchup(ctx1, c.block, c.baseURL)
+CatchupCh -> ValidationService: catchup(ctx, fromBlock, baseURL)
 activate ValidationService
 
+ValidationService -> BC: GetBlockExists(ctx, fromBlock.Hash())
+BC --> ValidationService: exists / not exists
 
-alt Not Exists
-    loop Until Parent Block Found
+alt Block does not exist
+    ValidationService -> ValidationService: getBlockHeaders(ctx, fromBlock.Header.HashPrevBlock, baseURL)
+    ValidationService -> ValidationService: Reverse blockHeaders
 
-        alt Not Exists
-            ValidationService -> ValidationService: getBlockHeaders(spanCtx, fromBlockHeaderHash, baseURL)
-            activate ValidationService
-            ValidationService -> BC: GetBlockExists(spanCtx, blockHeader.Hash())
+    loop For each batch of block headers
+        loop For each blockHeader in batch
+            ValidationService -> BC: GetBlockExists(ctx, blockHeader.Hash())
             BC --> ValidationService: exists / not exists
-            deactivate ValidationService
 
-            alt Not Exists
-                ValidationService -> Util: DoHTTPRequest(spanCtx, URL)
-                activate Util
-                Util --> ValidationService: block data
-                ValidationService -> BVVB: ValidateBlock(spanCtx, block, baseURL)
-                deactivate Util
+            alt Block does not exist
+                ValidationService -> Util: getBlocks(ctx, blockHeader.Hash(), batchSize, baseURL)
+                Util --> ValidationService: blocks
+
+                loop For each block
+                    ValidationService -> BVVB: ValidateBlock(ctx, block, baseURL)
+                end
             end
         end
     end
 end
 
+ValidationService --> CatchupCh: Catchup complete
 deactivate ValidationService
 
 left footer Last Modified On: %date("dd-MMM-yyyy")

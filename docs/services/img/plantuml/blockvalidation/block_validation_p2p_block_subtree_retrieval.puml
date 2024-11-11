@@ -4,44 +4,48 @@ entity "Subtree Data" as SubtreeData
 participant "Util HTTP Request" as Util
 database "Subtree Store" as SubtreeStore
 database "Tx Meta Cache" as TxMetaStore
+database "UTXO Store" as UTXOStore
+participant "Block Assembly" as BlockAssembly
 
-
-ValidateSubtree -> ValidateSubtree: validateSubtree(ctx, subtreeHash, baseURL)
+ValidateSubtree -> ValidateSubtree: validateSubtreeInternal(ctx, v ValidateSubtree, blockHeight uint32)
 activate ValidateSubtree
 
-ValidateSubtree -> SubtreeStore: subtreeStore.Exists(spanCtx, subtreeHash[:])
-activate SubtreeStore
+ValidateSubtree -> SubtreeStore: Exists(ctx, subtreeHash[:])
 SubtreeStore --> ValidateSubtree: subtreeExists / err
-deactivate SubtreeStore
 
 alt subtreeExists is false
-    ValidateSubtree -> Util: DoHTTPRequest(spanCtx, url)
-    activate Util
-    Util --> ValidateSubtree: subtreeBytes / err
-    deactivate Util
+    loop retry mechanism
+        ValidateSubtree -> Util: getSubtreeTxHashes(ctx, subtreeHash, baseURL)
+        Util --> ValidateSubtree: txHashes / err
 
-    ValidateSubtree -> ValidateSubtree: Process subtreeBytes
-    activate TxMetaStore
-    loop for each txHash
-       ValidateSubtree -> TxMetaStore: GetMeta(gCtx, &txHash)
-        TxMetaStore --> ValidateSubtree: txMeta / err
+        ValidateSubtree -> ValidateSubtree: processTxMetaUsingCache(ctx, txHashes, txMetaSlice, failFast)
+        ValidateSubtree -> ValidateSubtree: processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched, failFast)
+
+        alt missing transactions
+            ValidateSubtree -> ValidateSubtree: processMissingTransactions(ctx, subtreeHash, missingTxHashes, baseURL, txMetaSlice, blockHeight)
+            ValidateSubtree -> UTXOStore: spendUtxos(ctx, tx, blockHeight)
+            ValidateSubtree -> UTXOStore: storeTxInUtxoMap(ctx, tx, blockHeight)
+
+            alt if !blockAssemblyDisabled
+                ValidateSubtree -> BlockAssembly: Store(ctx, txData)
+            end
+        end
     end
-    deactivate TxMetaStore
 
-    ValidateSubtree -> ValidateSubtree: processMissingTransactions(ctx, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
+    loop for each transaction
+        ValidateSubtree -> SubtreeData: AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
+        ValidateSubtree -> SubtreeData: SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
+    end
 
-    ValidateSubtree -> SubtreeData: Add transactions to Subtree
+    ValidateSubtree -> ValidateSubtree: Check if merkle root matches subtreeHash
 
-
-    ValidateSubtree -> SubtreeData: AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
-
-    ValidateSubtree -> SubtreeStore: Set(spanCtx, merkleRoot[:], completeSubtreeBytes)
-    activate SubtreeStore
-    SubtreeStore --> ValidateSubtree
-    deactivate SubtreeStore
+    ValidateSubtree -> SubtreeStore: Set(ctx, merkleRoot[:], completeSubtreeMetaBytes)
+    ValidateSubtree -> SubtreeStore: Set(ctx, merkleRoot[:], completeSubtreeBytes)
 end
 
-deactivate ValidateSubtree
+ValidateSubtree -> ValidateSubtree: SetSubtreeExists(subtreeHash)
+
+ValidateSubtree --> Caller: err
 
 deactivate ValidateSubtree
 

@@ -1,38 +1,67 @@
 @startuml
 participant "Blockchain" as Blockchain
+participant "Block Validation Server" as BVServer
 participant "Block Validation" as BlockValidation
 participant "Subtree Store" as SubtreeStore
 participant "UTXO Store" as UTXOStore
 
-BlockValidation -> Blockchain: Subscribe
+Blockchain -> BVServer: SendNotification(NotificationType_BlockSubtreesSet, \nblockHashBytes)
+activate BVServer
 
-Blockchain -> BlockValidation: SendNotification(ctx, \n   &blockchain_api.Notification{ \n     Type: model.NotificationType_BlockSubtreesSet, \n     Hash: blockHashBytes\n})
+BVServer -> BVServer: Enqueue to setMinedChan
+deactivate BVServer
+
+note right of BVServer
+  Background goroutine processes setMinedChan
+end note
+
+BVServer -> BlockValidation: setTxMined(ctx, blockHash)
 activate BlockValidation
 
-BlockValidation -> BlockValidation: setTxMined(ctx, blockHash)
-activate BlockValidation
-
-BlockValidation -> Blockchain: GetBlock(ctx, blockHash)
+BlockValidation -> Blockchain: GetBlockExists(ctx, blockHash)
 activate Blockchain
-Blockchain -> BlockValidation: Block
+Blockchain --> BlockValidation: exists / not exists
 deactivate Blockchain
 
-loop for each subtree hash in the block
-    BlockValidation -> SubtreeStore: Get(ctx, subtreeHash)
-    activate SubtreeStore
-    SubtreeStore -> BlockValidation: Subtree
-    deactivate SubtreeStore
+alt Block does not exist
+    BlockValidation -> Blockchain: GetBlock(ctx, blockHash)
+    activate Blockchain
+    Blockchain --> BlockValidation: Block
+    deactivate Blockchain
+
+    BlockValidation -> BlockValidation: Ensure all subtrees are loaded
+
+    loop for each subtree hash in the block
+        BlockValidation -> SubtreeStore: Get(ctx, subtreeHash)
+        activate SubtreeStore
+        SubtreeStore --> BlockValidation: Subtree
+        deactivate SubtreeStore
+    end
+
+    BlockValidation -> Blockchain: GetBlockHeaderIDs(ctx, blockHash, 1)
+    Blockchain --> BlockValidation: blockID
+
+    loop for each batch of tx hashes in the block subtrees
+        BlockValidation -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
+        activate UTXOStore
+        UTXOStore --> BlockValidation
+        deactivate UTXOStore
+    end
+
+    BlockValidation -> BlockValidation: updateSubtreesTTL(ctx, block)
+    activate BlockValidation
+    loop for each Subtree in the Block
+        BlockValidation -> SubtreeStore: SetTTL(ctx, subtreeHash, 0)
+        SubtreeStore --> BlockValidation: TTL set to 0
+    end
+    BlockValidation -> Blockchain: SetBlockSubtreesSet(ctx, blockHash)
+    deactivate BlockValidation
+
+    BlockValidation -> Blockchain: SetBlockMinedSet(ctx, blockHash)
 end
 
-loop for each batch of tx hashes in the block subtrees
-    BlockValidation -> UTXOStore: SetMinedMulti(gCtx, txBatchHashes, blockID)
-    activate UTXOStore
-    UTXOStore --> BlockValidation
-    deactivate UTXOStore
-end
+BlockValidation --> BVServer
 deactivate BlockValidation
-deactivate BlockValidation
-
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 
