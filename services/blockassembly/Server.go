@@ -565,6 +565,11 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
 	}
+
+	if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.chainParams.MaxCoinbaseScriptSigSize) {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID))
+	}
+
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
 	var sizeInBytes uint64
