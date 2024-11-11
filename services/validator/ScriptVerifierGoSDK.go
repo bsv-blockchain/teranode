@@ -15,41 +15,41 @@ import (
 )
 
 func init() {
-	ScriptVerificatorFactory[VerificatorGoSDK] = newScriptVerificatorGoSDK
+	ScriptVerificationFactory[TxInterpreterGoSDK] = newScriptVerifierGoSDK
 
-	log.Println("Registered scriptVerificatorGoSDK")
+	log.Println("Registered scriptVerifierGoSDK")
 }
 
-func newScriptVerificatorGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with GoSDK")
+func newScriptVerifierGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+	l.Infof("Use Script verifier with GoSDK")
 
-	return &scriptVerificatorGoSDK{
+	return &scriptVerifierGoSDK{
 		logger: l,
 		policy: po,
 		params: pa,
 	}
 }
 
-type scriptVerificatorGoSDK struct {
+type scriptVerifierGoSDK struct {
 	logger ulogger.Logger
 	policy *PolicySettings
 	params *chaincfg.Params
 }
 
-func (v *scriptVerificatorGoSDK) Logger() ulogger.Logger {
+func (v *scriptVerifierGoSDK) Logger() ulogger.Logger {
 	return v.logger
 }
 
-func (v *scriptVerificatorGoSDK) Params() *chaincfg.Params {
+func (v *scriptVerifierGoSDK) Params() *chaincfg.Params {
 	return v.params
 }
 
-func (v *scriptVerificatorGoSDK) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoSDK) PolicySettings() *PolicySettings {
 	return v.policy
 }
 
 // VerifyScript verifies script using Go-SDK
-func (v *scriptVerificatorGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
+func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed

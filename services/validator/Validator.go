@@ -32,7 +32,7 @@ const (
 
 type Validator struct {
 	logger                        ulogger.Logger
-	txValidator                   TxValidator
+	txValidator                   TxValidatorI
 	utxoStore                     utxo.Store
 	blockAssembler                blockassembly.Store
 	saveInParallel                bool
@@ -50,15 +50,9 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKaf
 		return nil, errors.NewServiceError("failed to create block assembly client", err)
 	}
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
-
 	v := &Validator{
 		logger:                        logger,
-		txValidator:                   NewTxValidator(scriptValidator, logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator:                   NewTxValidator(logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
 		utxoStore:                     store,
 		blockAssembler:                ba,
 		saveInParallel:                true,
@@ -525,7 +519,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	return v.txValidator.VerifyScript(tx, blockHeight)
+	// run the internal tx validation, checking policies, scripts, signatures etc.
+	return v.txValidator.ValidateTransaction(tx, blockHeight)
 }
 
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {

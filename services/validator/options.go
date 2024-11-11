@@ -37,3 +37,17 @@ func WithAddTXToBlockAssembly(add bool) Option {
 		o.addTXToBlockAssembly = add
 	}
 }
+
+type TxValidatorOptions struct {
+	scriptInterpreter TxInterpreter
+}
+
+// TxValidatorOption is a function that sets some option on the TxValidatorOptions struct
+type TxValidatorOption func(*TxValidatorOptions)
+
+// WithTxValidatorInterpreter is an option that sets the script interpreter
+func WithTxValidatorInterpreter(interpreter TxInterpreter) TxValidatorOption {
+	return func(o *TxValidatorOptions) {
+		o.scriptInterpreter = interpreter
+	}
+}

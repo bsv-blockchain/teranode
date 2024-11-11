@@ -84,17 +84,14 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 
 	initPrometheusMetrics()
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params, WithTxValidatorInterpreter(TxInterpreterGoBT)),
 		utxoStore:                     utxoStore,
 		blockAssembler:                BlockAssemblyStore{},
 		saveInParallel:                true,
@@ -103,7 +100,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	err = v.Validate(context.Background(), tx, 0)
+	err = v.Validate(context.Background(), tx, 100)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should have 1 message")
@@ -121,18 +118,15 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 
 	initPrometheusMetrics()
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
-
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
+
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		saveInParallel:                true,
@@ -141,7 +135,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	err = v.Validate(context.Background(), tx, 0)
+	err = v.Validate(context.Background(), tx, 100)
 	require.Error(t, err)
 
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
@@ -168,14 +162,16 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	var height uint32 = 257727
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator: NewTxValidator(
+			ulogger.TestLogger{},
+			NewPolicySettings(),
+			params,
+			WithTxValidatorInterpreter(TxInterpreterGoBT),
+		),
 	}
 
 	ctx := context.Background()
@@ -200,14 +196,8 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	chainParams, _ := chaincfg.GetChainParams("mainnet")
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
-
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chainParams),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), chainParams),
 	}
 
 	ctx := context.Background()
@@ -230,14 +220,11 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -285,14 +272,11 @@ func TestValidateTransactions(t *testing.T) {
 		tx, err := bt.NewTxFromString(txHex)
 		require.NoError(t, err)
 
-		// Get the type of verificator from config
-		scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-		if !ok {
-			scriptValidator = VerificatorGoBT
-		}
+		params, err := chaincfg.GetChainParams("mainnet")
+		require.NoError(t, err)
 
 		v := &Validator{
-			txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+			txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 		}
 
 		ctx := context.Background()
@@ -316,14 +300,11 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	var height uint32 = 249976
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -346,14 +327,11 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	var height uint32 = 478631
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -403,14 +381,11 @@ func Benchmark_validateInternal(b *testing.B) {
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(b, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
 	}
 
 	for i := 0; i < b.N; i++ {
