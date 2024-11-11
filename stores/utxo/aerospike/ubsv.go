@@ -94,7 +94,7 @@ func (s *Store) parseLuaReturnValue(returnValue string) (luaReturnMessage, error
 	}
 
 	if len(r) > 1 {
-		if len(r[1]) == 32 {
+		if len(r[1]) == 64 {
 			hash, err := chainhash.NewHashFromStr(r[1])
 			if err != nil {
 				return rets, errors.NewProcessingError("error parsing spendingTxID %s", r[1], err)

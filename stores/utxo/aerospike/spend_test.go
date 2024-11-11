@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -20,6 +21,33 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 	defer deferFn()
 
 	ctx := context.Background()
+
+	t.Run("Spent tx id", func(t *testing.T) {
+		// clean up the externalStore, if needed
+		_ = db.externalStore.Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+
+		// create a tx
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		// spend the tx
+		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID1}}, 102)
+		require.NoError(t, err)
+
+		// spend again, should not return an error
+		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID1}}, 102)
+		require.NoError(t, err)
+
+		// try to spend the tx with a different tx, check the spending tx ID
+		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID2}}, 102)
+		require.Error(t, err)
+
+		var uErr errors.Interface
+		ok := errors.As(err, &uErr)
+		require.True(t, ok)
+
+		assert.Contains(t, uErr.Error(), spendingTxID1.String())
+	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
 		db.utxoBatchSize = 1
