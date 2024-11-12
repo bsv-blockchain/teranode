@@ -406,19 +406,43 @@ func (cm *ConnManager) NewConnReq() {
 
 	if addr != nil {
 		// check whether we already have this connected to this address
-		for _, connReq := range cm.conns.Range() {
+		existingConns := false
+
+		// we use Iterate() instead of Range() to avoid reading and writing the map at the same time
+		cm.conns.Iterate(func(_ uint64, connReq *ConnReq) bool {
 			if connReq.Addr.String() == addr.String() {
 				cm.logger.Debugf("Ignoring connection to %v, already connected", addr)
-				return
+
+				existingConns = true
+
+				return false
 			}
+
+			return true
+		})
+
+		if existingConns {
+			return
 		}
 
 		// check whether we already have this pending to this address
-		for _, connReq := range cm.pending.Range() {
+		existingPendingTx := false
+
+		// we use Iterate() instead of Range() to avoid reading and writing the map at the same time
+		cm.pending.Iterate(func(_ uint64, connReq *ConnReq) bool {
 			if connReq.Addr != nil && connReq.Addr.String() == addr.String() {
 				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %s, retries: %d)", addr, connReq.State(), connReq.retryCount)
-				return
+
+				existingPendingTx = true
+
+				return false
 			}
+
+			return true
+		})
+
+		if existingPendingTx {
+			return
 		}
 	}
 

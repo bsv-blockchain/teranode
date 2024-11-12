@@ -41,6 +41,8 @@ func (m *SyncedMap[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
+// Range returns a copy of the map.
+// Note that if v is a pointer, the map value may be modified by other goroutines at the same time.
 func (m *SyncedMap[K, V]) Range() map[K]V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -52,6 +54,19 @@ func (m *SyncedMap[K, V]) Range() map[K]V {
 	}
 
 	return items
+}
+
+// Iterate iterates over the map and calls the function f for each key-value pair.
+// unlike Range(), Iterate does not return a copy of the map and keeps the lock for the duration of the iteration.
+func (m *SyncedMap[K, V]) Iterate(f func(key K, value V) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for k, v := range m.m {
+		if !f(k, v) {
+			return
+		}
+	}
 }
 
 func (m *SyncedMap[K, V]) Set(key K, value V) {
