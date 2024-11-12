@@ -1,7 +1,6 @@
 package aerospike
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -17,10 +16,8 @@ import (
 )
 
 func TestStore_SpendMultiRecord(t *testing.T) {
-	client, db, _, deferFn := initAerospike(t)
+	client, db, ctx, deferFn := initAerospike(t)
 	defer deferFn()
-
-	ctx := context.Background()
 
 	t.Run("Spent tx id", func(t *testing.T) {
 		// clean up the externalStore, if needed
@@ -50,6 +47,10 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
+		key, aErr := aerospike.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+		require.NoError(t, aErr)
+
+		cleanDB(t, client, key, tx)
 		db.utxoBatchSize = 1
 
 		// clean up the externalStore, if needed
