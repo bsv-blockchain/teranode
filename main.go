@@ -26,6 +26,7 @@ import (
 	cmdsettings "github.com/bitcoin-sv/ubsv/cmd/settings/settings"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/txblockidcheck/txblockidcheck"
+	"github.com/bitcoin-sv/ubsv/cmd/unspend/unspend"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/alert"
@@ -130,6 +131,9 @@ func main() {
 		return
 	case "settings.run":
 		cmdsettings.Start(version, commit)
+		return
+	case "unspend.run":
+		unspend.Start()
 		return
 	}
 
