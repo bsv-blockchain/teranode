@@ -43,6 +43,7 @@ type TeranodeTestClient struct {
 	UtxoStore           *utxostore.Store
 	SubtreesKafkaURL    *url.URL
 	RPCURL              string
+	IPAddress           string
 }
 
 // NewTeraNodeTestEnv creates a new test environment with the provided Compose file paths.
@@ -97,6 +98,10 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
 
+		if err := t.GetContainerIPAddress(node); err != nil {
+			return err
+		}
+
 		if err := t.setupCoinbaseClient(node); err != nil {
 			return err
 		}
@@ -116,7 +121,49 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		if err := t.setupStores(node); err != nil {
 			return err
 		}
+
+		if err := t.setupRPCURL(node); err != nil {
+			return err
+		}
 	}
+
+	return nil
+}
+
+func (t *TeranodeTestEnv) GetContainerIPAddress(node *TeranodeTestClient) error {
+	if t.Compose != nil {
+		if t.Compose != nil {
+			service, err := t.Compose.ServiceContainer(t.Context, node.Name)
+			if err != nil {
+				return err
+			}
+
+			ipAddress, err := service.ContainerIP(t.Context)
+			if err != nil {
+				return err
+			}
+
+			node.IPAddress = ipAddress
+			t.Logger.Infof("Node %s IP address: %s", node.Name, ipAddress)
+
+			return nil
+		}
+
+		return nil
+	}
+
+	return nil
+}
+
+func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
+	rpcPort := "9292/tcp"
+	rpcMappedPort, err := t.GetMappedPort(node.Name, nat.Port(rpcPort))
+
+	if err != nil {
+		return errors.NewConfigurationError("error getting rpc mapped port: %w", err)
+	}
+
+	node.RPCURL = fmt.Sprintf("http://%s", makeHostAddressFromPort(rpcMappedPort.Port()))
 
 	return nil
 }

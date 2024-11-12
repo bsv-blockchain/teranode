@@ -1,9 +1,9 @@
-//go:build functional
+//go:build peer
 
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
+// $ go test -v -run "^TestPeerTestSuite$/TestBanPeerList$" -tags peer
 
 package test
 
@@ -21,22 +21,32 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
-type SanityTestSuite struct {
+type PeerTestSuite struct {
 	arrange.TeranodeTestSuite
 }
 
-// func (suite *SanityTestSuite) TearDownTest() {
-// }
+func (suite *PeerTestSuite) TearDownTest() {
+}
 
-func (suite *SanityTestSuite) TestShouldAllowFairTx() {
+func (suite *PeerTestSuite) TestBanPeerList() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	logger := testEnv.Logger
 	url := "http://localhost:10090"
+	node1 := testEnv.Nodes[0]
+	node2 := testEnv.Nodes[1]
+	node3 := testEnv.Nodes[2]
+
+	_, err := helper.CallRPC(node1.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
+	require.NoError(t, err)
+
+	_, err = helper.CallRPC(node3.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
+	require.NoError(t, err)
 
 	txDistributor := testEnv.Nodes[0].DistributorClient
 
@@ -129,7 +139,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
-	bl := false
+	blNode1 := false
+	blNode3 := false
+
 	targetHeight := height + 1
 
 	for i := 0; i < 30; i++ {
@@ -142,13 +154,23 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 			t.Errorf("Failed to get block headers: %v", err)
 		}
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+		if !blNode1 {
+			blNode1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 
-		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
+			if err != nil {
+				t.Errorf("error checking if tx exists in block: %v", err)
+			}
 		}
 
-		if bl {
+		if !blNode3 {
+			blNode3, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[2].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+
+			if err != nil {
+				t.Errorf("error checking if tx exists in block: %v", err)
+			}
+		}
+
+		if blNode1 && blNode3 {
 			break
 		}
 
@@ -160,12 +182,18 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		}
 	}
 
-	assert.Equal(t, true, bl, "Test Tx not found in block")
+	assert.Equal(t, true, blNode1, "Test Tx not found in block")
+	assert.Equal(t, false, blNode3, "Test Tx found in block")
 
+	bestBlockHeightNode1, _, _ := node1.BlockchainClient.GetBestBlockHeader(ctx)
+	bestBlockHeightNode2, _, _ := node2.BlockchainClient.GetBestBlockHeader(ctx)
+	bestBlockHeightNode3, _, _ := node3.BlockchainClient.GetBestBlockHeader(ctx)
+
+	assert.NotEqual(t, bestBlockHeightNode1, bestBlockHeightNode2, "Best block height mismatch")
+	assert.NotEqual(t, bestBlockHeightNode2, bestBlockHeightNode3, "Best block height mismatch")
+	assert.Equal(t, bestBlockHeightNode1, bestBlockHeightNode3, "Best block height mismatch")
 }
 
-
-
-func TestSanityTestSuite(t *testing.T) {
-	suite.Run(t, new(SanityTestSuite))
+func TestPeerTestSuite(t *testing.T) {
+	suite.Run(t, new(PeerTestSuite))
 }
