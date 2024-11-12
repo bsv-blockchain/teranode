@@ -29,6 +29,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err 
 			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
 
 		default:
+			if spend == nil {
+				return errors.NewProcessingError("spend should not be nil")
+			}
+
 			if spend.TxID == nil {
 				return errors.NewProcessingError("TxID is required", nil)
 			}

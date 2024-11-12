@@ -43,7 +43,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 	for _, spend := range spends {
 		if spend == nil {
-			continue
+			return errors.NewProcessingError("spend should not be nil")
 		}
 
 		spend := spend
