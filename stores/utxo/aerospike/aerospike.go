@@ -60,6 +60,7 @@ type Store struct {
 	getBatcher                 batcherIfc[batchGetItem]
 	spendBatcher               batcherIfc[batchSpend]
 	outpointBatcher            batcherIfc[batchOutpoint]
+	incrementBatcher           batcherIfc[batchIncrement]
 	externalStore              blob.Store
 	utxoBatchSize              int
 	externalizeAllTransactions bool
@@ -176,6 +177,11 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 	outpointBatchDurationStr, _ := gocore.Config().GetInt("utxostore_outpointBatcherDurationMillis", 10)
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	s.outpointBatcher = batcher.New[batchOutpoint](outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, true)
+
+	incrementBatchSize, _ := gocore.Config().GetInt("utxostore_incrementBatcherSize", 256)
+	incrementBatchDurationStr, _ := gocore.Config().GetInt("utxostore_incrementBatcherDurationMillis", 10)
+	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
+	s.incrementBatcher = batcher.New[batchIncrement](incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

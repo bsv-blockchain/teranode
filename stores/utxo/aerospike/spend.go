@@ -23,6 +23,12 @@ type batchSpend struct {
 	done  chan error
 }
 
+type batchIncrement struct {
+	txID      *chainhash.Hash
+	increment int
+	res       chan incrementNrRecordsRes
+}
+
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
 	return s.spend(ctx, spends)
 }
@@ -180,6 +186,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		for idx, bItem := range batch {
 			bItem.done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
 		}
+
+		// TODO should we return here?
+		// return
 	}
 
 	start = stat.NewStat("BatchOperate").AddTime(start)
@@ -299,27 +308,94 @@ func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
 	}
 }
 
+type incrementNrRecordsRes struct {
+	res interface{}
+	err error
+}
+
 func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
-	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	res := make(chan incrementNrRecordsRes)
 
-	key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
-	if err != nil {
-		s.logger.Warnf("[incrementNrRecords][%s] failed to create key for %v: %v", txid, err)
+	go func() {
+		s.incrementBatcher.Put(&batchIncrement{
+			txID:      txid,
+			increment: increment,
+			res:       res,
+		})
+	}()
+
+	response := <-res
+
+	return response.res, response.err
+}
+
+func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
+	var err error
+
+	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+
+	// Create a batch of records to read, with a max size of the batch
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
+
+	// Create a batch of records to read from the txHashes
+	for _, item := range batch {
+		aeroKey, err := aerospike.NewKey(s.namespace, s.setName, item.txID[:])
+		if err != nil {
+			item.res <- incrementNrRecordsRes{
+				res: nil,
+				err: errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err),
+			}
+
+			continue
+		}
+
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "incrementNrRecords",
+			aerospike.NewIntegerValue(item.increment),
+			aerospike.NewValue(s.expiration), // ttl
+		))
 	}
 
-	res, err := s.client.Execute(
-		policy,
-		key,
-		luaPackage,
-		"incrementNrRecords",
-		aerospike.NewIntegerValue(increment),
-		aerospike.NewValue(s.expiration), // ttl
-	)
+	// send the batch to aerospike
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return nil, errors.NewProcessingError("[incrementNrRecords][%s] failed to increment nrRecords", key, err)
+		for _, item := range batch {
+			item.res <- incrementNrRecordsRes{
+				res: nil,
+				err: errors.NewStorageError("error in aerospike send outpoint batch records: %w", err),
+			}
+		}
+
+		return
 	}
 
-	return res, nil
+	// Process the batch records
+	for idx, batchRecordIfc := range batchRecords {
+		batchRecord := batchRecordIfc.BatchRec()
+		if batchRecord.Err != nil {
+			batch[idx].res <- incrementNrRecordsRes{
+				res: nil,
+				err: errors.NewStorageError("error in aerospike send outpoint batch records: %w", err),
+			}
+
+			continue
+		}
+
+		res, ok := batchRecord.Record.Bins["SUCCESS"].(string)
+		if !ok {
+			batch[idx].res <- incrementNrRecordsRes{
+				res: nil,
+				err: errors.NewProcessingError("failed to parse response"),
+			}
+
+			continue
+		}
+
+		batch[idx].res <- incrementNrRecordsRes{
+			res: res,
+			err: nil,
+		}
+	}
 }
 
 func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.Hash, newTTL time.Duration) {

@@ -136,3 +136,115 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		}
 	})
 }
+
+func TestStore_IncrementNrRecords(t *testing.T) {
+	client, db, ctx, deferFn := initAerospike(t)
+	defer deferFn()
+
+	t.Run("Increment nrRecords", func(t *testing.T) {
+		txID := tx.TxIDChainHash()
+
+		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		require.NoError(t, aErr)
+
+		// Clean up the database
+		cleanDB(t, client, key, tx)
+
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		// Increment nrRecords by 1
+		res, err := db.incrementNrRecords(txID, 1)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		// Verify the increment
+		resp, err := client.Get(nil, key)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 2, resp.Bins["nrRecords"])
+
+		// Decrement nrRecords by 1
+		res, err = db.incrementNrRecords(txID, -1)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		// Verify the decrement
+		resp, err = client.Get(nil, key)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 1, resp.Bins["nrRecords"])
+
+		r, ok := res.(string)
+		require.True(t, ok)
+
+		ret, err := db.parseLuaReturnValue(r)
+		require.NoError(t, err)
+		assert.Equal(t, LuaOk, ret.returnValue)
+		assert.Equal(t, luaReturnValue(""), ret.signal)
+		assert.Nil(t, ret.spendingTxID)
+	})
+
+	t.Run("Increment nrRecords - set TTL", func(t *testing.T) {
+		txID := tx.TxIDChainHash()
+
+		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		require.NoError(t, aErr)
+
+		// Clean up the database
+		cleanDB(t, client, key, tx)
+
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		// force the values we expect to be set
+		err = client.Put(nil, key, aerospike.BinMap{
+			"spentUtxos": 5,
+			"blockIDs":   []int{101},
+			"nrRecords":  2,
+		})
+		require.NoError(t, err)
+
+		rec, aErr := client.Get(nil, key)
+		require.NoError(t, aErr)
+		require.NotNil(t, rec)
+
+		// Decrement nrRecords by 1
+		res, err := db.incrementNrRecords(txID, -1)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		r, ok := res.(string)
+		require.True(t, ok)
+
+		ret, err := db.parseLuaReturnValue(r)
+		require.NoError(t, err)
+		assert.Equal(t, LuaOk, ret.returnValue)
+		assert.Equal(t, luaReturnValue("TTLSET"), ret.signal)
+	})
+
+	t.Run("Increment nrRecords - multi", func(t *testing.T) {
+		txID := tx.TxIDChainHash()
+
+		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		require.NoError(t, aErr)
+
+		// Clean up the database
+		cleanDB(t, client, key, tx)
+
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		for i := 0; i < 5; i++ {
+			// Decrement nrRecords by 1
+			res, err := db.incrementNrRecords(txID, 1)
+			require.NoError(t, err)
+			require.NotNil(t, res)
+		}
+
+		rec, aErr := client.Get(nil, key)
+		require.NoError(t, aErr)
+		require.NotNil(t, rec)
+		assert.Equal(t, 6, rec.Bins["nrRecords"])
+	})
+}
