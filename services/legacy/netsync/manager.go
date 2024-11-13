@@ -532,7 +532,6 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
 	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
-		sm.updateSyncPeer(nil)
 		return
 	}
 
@@ -999,6 +998,18 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if !isCheckpointBlock {
 		if sm.startHeader != nil && len(state.requestedBlocks) < minInFlightBlocks {
 			sm.fetchHeaderBlocks()
+		} else if !sm.current() && len(state.requestedBlocks) == 0 {
+			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
+
+			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+			if err != nil {
+				return errors.NewServiceError("Failed to get best block header", err)
+			}
+
+			locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
+			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+				return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+			}
 		}
 
 		return nil
@@ -1662,9 +1673,6 @@ func (sm *SyncManager) Start() {
 	sm.wg.Add(1)
 
 	go sm.blockHandler()
-
-	// kick off the initial sync
-	go sm.startSync()
 }
 
 // Stop gracefully shuts down the sync manager by stopping all asynchronous
