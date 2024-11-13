@@ -514,8 +514,10 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	// If we don't have a sync peer, then there is nothing to do.
+	// If we don't have a sync peer, select a new one and return.
 	if sm.syncPeer == nil {
+		sm.startSync()
+
 		return
 	}
 
@@ -528,6 +530,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
 	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
+		sm.updateSyncPeer(nil)
 		return
 	}
 
@@ -922,7 +925,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
-			sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
+			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", blockHash, err)
 		} else {
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !serviceError {
@@ -933,6 +936,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			panic(err)
 			// return err
 		}
+	} else {
+		sm.logger.Infof("accepted block %v", blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -954,7 +959,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	}
 
 	// When the block is not an orphan, log information about it and update the chain state.
-	sm.logger.Infof("accepted block %v", blockHash)
 
 	// Update this peer's latest block height, for future potential sync node candidacy.
 	// bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
@@ -991,8 +995,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// request more blocks using the header list when the request queue is
 	// getting short.
 	if !isCheckpointBlock {
-		if sm.startHeader != nil &&
-			len(state.requestedBlocks) < minInFlightBlocks {
+		if sm.startHeader != nil && len(state.requestedBlocks) < minInFlightBlocks {
 			sm.fetchHeaderBlocks()
 		}
 
