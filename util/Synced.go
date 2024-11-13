@@ -86,8 +86,8 @@ func (m *SyncedMap[K, V]) SetMulti(keys []K, value V) {
 }
 
 func (m *SyncedMap[K, V]) Delete(key K) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	delete(m.m, key)
 
