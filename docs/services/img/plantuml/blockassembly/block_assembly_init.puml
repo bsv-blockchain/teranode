@@ -4,36 +4,42 @@ participant "BlockAssembly" as BA
 participant "Logger" as Logger
 participant "Stores" as Stores
 participant "BlockchainClient" as Blockchain
+entity "BlockAssembler" as BAss
 entity "SubtreeProcessor" as SubtreeProc
-entity "JobStore" as JobStore
-entity "GRPCServer" as GRPC
+participant "KafkaConsumer" as Kafka
+participant "GRPCServer" as GRPC
+participant "HTTPServer" as HTTP
 
 == New ==
 Client -> BA : New(logger, stores, blockchainClient...)
 activate BA
 BA -> Logger : Initialize logger
-BA -> Stores : Initialize stores (txStore, utxoStore, etc.)
+BA -> Stores : Initialize stores (txStore, utxoStore, subtreeStore)
 BA -> Blockchain : Initialize blockchain client
-BA -> SubtreeProc : Initialize subtree processor
-BA -> JobStore : Initialize job store
+BA -> BAss : NewBlockAssembler(ctx, logger, utxoStore, subtreeStore, blockchainClient)
+BA -> BA : Initialize channels (blockSubmissionChan, etc.)
 BA --> Client : Return instance
 deactivate BA
 
 == Init ==
 Client -> BA : Init(ctx)
 activate BA
-BA -> BA : Setup internal channels
-BA -> SubtreeProc : Start subtree processor
-BA -> JobStore : Start job store
+BA -> BAss : Init block assembler
+BA -> Kafka : Setup Kafka consumers (if configured)
+BA -> BA : Start background goroutines (processing channels)
 BA --> Client : Initialization complete
 deactivate BA
 
 == Start ==
 Client -> BA : Start(ctx)
 activate BA
+alt FSM state restoration needed
+    BA -> Blockchain : Restore and wait for RUNNING state
+end
+BA -> Kafka : Start Kafka consumers
+BA -> HTTP : Start HTTP server (if configured)
 BA -> GRPC : Start gRPC server
 GRPC -> BA : Register block assembly service
-BA -> BA : Start internal listeners (Kafka, gRPC, fRPC)
 BA --> Client : Start complete
 deactivate BA
 

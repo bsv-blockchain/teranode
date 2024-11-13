@@ -3,24 +3,30 @@ participant "TX Validator" as TXValidator
 participant "Block Assembly Client" as BA
 participant "Block Assembly Server" as Server
 participant "Subtree Processor" as SubtreeProcessor
+queue "Queue" as Queue
 
 TXValidator -> BA : NewClient(ctx, logger)
 
-TXValidator -> BA : Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes)
+TXValidator -> BA : Store(ctx, bData.TxIDChainHash, \nbData.Fee, bData.Size, bData.LockTime,\n bData.UtxoHashes)
 
 alt if "batch mode" enabled
     BA -> BA : Add to batch
+    note right: Check batch size limit and timing
     BA -> Server : AddTxBatch(ctx, nodeBatch)
     loop for each node in nodeBatch
         Server -> SubtreeProcessor : AddTx(subtreeNode)
-        SubtreeProcessor --> SubtreeProcessor : Add(node)
+        SubtreeProcessor -> Queue : enqueue(node)
     end
 else if "batch mode" disabled
-    TXValidator -> BA : Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, bData.UtxoHashes)
-    BA --> Server : AddTx(subtreeNode)
-    Server --> SubtreeProcessor : AddTx(subtreeNode)
-    SubtreeProcessor --> SubtreeProcessor : Add(node)
+    BA -> Server : AddTx(subtreeNode)
+    Server -> SubtreeProcessor : AddTx(subtreeNode)
+    SubtreeProcessor -> Queue : enqueue(node)
 end
+
+note over SubtreeProcessor
+    Dequeue and process transactions
+    in separate goroutine
+end note
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 
