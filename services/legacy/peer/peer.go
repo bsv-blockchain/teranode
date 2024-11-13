@@ -45,11 +45,11 @@ const (
 
 	// invTrickleSize is the maximum amount of inventory to send in a single
 	// message when trickling inventory to remote peers.
-	maxInvTrickleSize = 5000
+	maxInvTrickleSize = wire.MaxInvPerMsg
 
 	// maxKnownInventory is the maximum number of items to keep in the known
 	// inventory cache.
-	maxKnownInventory = 1000 // TODO: find a good value for this or make it a setting
+	maxKnownInventory = wire.MaxInvPerMsg
 
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
