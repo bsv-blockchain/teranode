@@ -498,7 +498,7 @@ var TestNet3Params = Params{
 	GenesisActivationHeight:  1344302,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
-ter
+
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
