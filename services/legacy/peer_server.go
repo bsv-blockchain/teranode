@@ -1642,11 +1642,14 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			return
 		}
 
-		// TODO: if too many, nuke a non-perm peer.
-		go s.connManager.Connect(&connmgr.ConnReq{
-			Addr:      netAddr,
+		connReq := &connmgr.ConnReq{
 			Permanent: msg.permanent,
-		})
+		}
+		connReq.SetAddr(netAddr)
+
+		// TODO: if too many, nuke a non-perm peer.
+		go s.connManager.Connect(connReq)
+
 		msg.reply <- nil
 	case removeNodeMsg:
 		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
@@ -1811,12 +1814,13 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	if s.banList.IsBanned(addr) {
 		s.logger.Infof("Rejecting banned outbound peer %s", addr)
 		conn.Close()
+
 		return
 	}
 
-	p, err := peer.NewOutboundPeer(s.logger, newPeerConfig(sp), c.Addr.String())
+	p, err := peer.NewOutboundPeer(s.logger, newPeerConfig(sp), c.GetAddr().String())
 	if err != nil {
-		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.Addr, err)
+		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
 		s.connManager.Disconnect(c.ID())
 	}
 	sp.Peer = p
@@ -1950,7 +1954,6 @@ cleanup:
 			break cleanup
 		}
 	}
-	s.wg.Done()
 	s.logger.Infof("Peer handler done")
 }
 
@@ -2498,10 +2501,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 			return nil, err
 		}
 
-		go s.connManager.Connect(&connmgr.ConnReq{
-			Addr:      netAddr,
+		connReq := &connmgr.ConnReq{
 			Permanent: true,
-		})
+		}
+		connReq.SetAddr(netAddr)
+
+		go s.connManager.Connect(connReq)
 	}
 
 	go func() {

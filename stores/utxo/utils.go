@@ -6,16 +6,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/libsv/go-bt/v2/bscript"
-
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
+func CalculateUtxoStatus(spendingTxID *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
 	status := Status_OK
 
-	if spendingTxId != nil {
+	if spendingTxID != nil {
 		status = Status_SPENT
 	} else if coinbaseSpendingHeight > 0 && coinbaseSpendingHeight > blockHeight {
 		status = Status_LOCKED
@@ -24,10 +23,10 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight ui
 	return status
 }
 
-func CalculateUtxoStatus2(spendingTxId *chainhash.Hash) Status {
+func CalculateUtxoStatus2(spendingTxID *chainhash.Hash) Status {
 	status := Status_OK
 
-	if spendingTxId != nil {
+	if spendingTxID != nil {
 		status = Status_SPENT
 	}
 
@@ -57,9 +56,11 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 		case <-ctx.Done():
 			return fees, utxoHashes, errors.NewProcessingError("[GetFeesAndUtxoHashes] timeout - managed to prepare %d of %d", i, len(tx.Outputs))
 		default:
-			fees -= output.Satoshis
+			if !tx.IsCoinbase() {
+				fees -= output.Satoshis
+			}
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, uint32(i))
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, uint32(i)) // nolint:gosec
 			if utxoErr != nil {
 				return 0, nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}
@@ -81,9 +82,10 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 	}
 
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
+
 	for i, output := range tx.Outputs {
 		if output != nil {
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i)) // nolint:gosec
 			if utxoErr != nil {
 				return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}

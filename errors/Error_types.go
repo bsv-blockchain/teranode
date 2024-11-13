@@ -20,6 +20,7 @@ var (
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
 	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")
@@ -145,6 +146,9 @@ func NewStorageError(message string, params ...interface{}) *Error {
 }
 func NewBlockCoinbaseMissingHeightError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, message, params...)
+}
+func NewBlockAssemblyResetError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_ASSEMBLY_RESET, message, params...)
 }
 func NewUtxoSpentError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_SPENT, message, params...)

@@ -45,11 +45,11 @@ const (
 
 	// invTrickleSize is the maximum amount of inventory to send in a single
 	// message when trickling inventory to remote peers.
-	maxInvTrickleSize = 5000
+	maxInvTrickleSize = wire.MaxInvPerMsg
 
 	// maxKnownInventory is the maximum number of items to keep in the known
 	// inventory cache.
-	maxKnownInventory = 1000 // TODO: find a good value for this or make it a setting
+	maxKnownInventory = wire.MaxInvPerMsg
 
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
@@ -996,6 +996,8 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 // message.  For older clients, it does nothing and anything other than failure
 // is considered a successful ping.
 func (p *Peer) handlePingMsg(msg *wire.MsgPing) {
+	p.logger.Debugf("Received ping message (nonce %d) from %s", msg.Nonce, p)
+
 	// Only reply with pong if the message is from a new enough client.
 	if p.ProtocolVersion() > wire.BIP0031Version {
 		// Include nonce from ping so pong can be identified.
@@ -1008,6 +1010,8 @@ func (p *Peer) handlePingMsg(msg *wire.MsgPing) {
 // version > BIP0031Version).  There is no effect for older clients or when a
 // ping was not previously sent.
 func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
+	p.logger.Debugf("Received pong message in response to nonce %d from %s", msg.Nonce, p)
+
 	// Arguably we could use a buffered channel here sending data
 	// in a fifo manner whenever we send a ping, or a list keeping track of
 	// the times of each ping. For now we just make a best effort and

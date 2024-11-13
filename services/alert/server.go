@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/alert-system/app/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/alert/alert_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -31,8 +33,9 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	alert_api.UnimplementedAlertAPIServer
-	logger ulogger.Logger
-	stats  *gocore.Stat
+	logger   ulogger.Logger
+	settings *settings.Settings
+	stats    *gocore.Stat
 
 	// other services
 	blockchainClient    blockchain.ClientI
@@ -46,11 +49,12 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:              logger,
+		settings:            tSettings,
 		stats:               gocore.NewStat("alert"),
 		blockchainClient:    blockchainClient,
 		utxoStore:           utxoStore,
@@ -158,13 +162,8 @@ func (s *Server) Stop(ctx context.Context) error {
 // if testing is true, the node will be mocked
 func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error) {
 	// read configuration from Teranode settings file
-	genesisKeys, _ := gocore.Config().GetMulti("alert_genesis_keys", "|", []string{})
-	dbURL, _, _ := gocore.Config().GetURL("alert_store", "sqlite:///alert")
-	p2pPort, _ := gocore.Config().Get("ALERT_P2P_PORT", "9908")
-	network, _ := gocore.Config().Get("network", "mainnet")
-	privateKey, _ := gocore.Config().Get("alert_p2p_private_key", "")
-	topicName, _ := gocore.Config().Get("alert_topic_name", "bitcoin_alert_system")
-	protocolID, _ := gocore.Config().Get("alert_protocol_id", "/bitcoin/alert-system/1.0.0")
+	network := s.settings.ChainCfgParams.Name
+	topicName := s.settings.Alert.TopicName
 
 	if network != "mainnet" {
 		topicName = "bitcoin_alert_system_" + network
@@ -182,18 +181,18 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 		},
 		P2P: config.P2PConfig{
 			IP:                    "0.0.0.0",
-			Port:                  p2pPort,
+			Port:                  strconv.Itoa(s.settings.Alert.P2PPort),
 			DHTMode:               "client",
-			AlertSystemProtocolID: protocolID,
+			AlertSystemProtocolID: s.settings.Alert.ProtocolID,
 			TopicName:             topicName,
-			PrivateKey:            privateKey,
+			PrivateKey:            s.settings.Alert.P2PPrivateKey,
 		},
 		Services: config.Services{
 			Log:        NewLogger(s.logger.Duplicate(ulogger.WithSkipFrame(1))),
 			HTTPClient: http.DefaultClient,
 		},
 		RPCConnections: []config.RPCConfig{},
-		GenesisKeys:    genesisKeys,
+		GenesisKeys:    s.settings.Alert.GenesisKeys,
 	}
 
 	// Require list of genesis keys
@@ -218,7 +217,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 	}
 
 	// Load the datastore service
-	if err = s.loadDatastore(ctx, models, dbURL); err != nil {
+	if err = s.loadDatastore(ctx, models, s.settings.Alert.StoreURL); err != nil {
 		return err
 	}
 
@@ -294,7 +293,7 @@ func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL 
 	case "sqlite":
 		fallthrough
 	case "sqlitememory":
-		folder, _ := gocore.Config().Get("dataFolder", "data")
+		folder := s.settings.DataFolder
 
 		err := os.MkdirAll(folder, 0755)
 		if err != nil {

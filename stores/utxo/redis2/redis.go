@@ -28,9 +28,27 @@ type Store struct {
 func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store, error) {
 	addr := fmt.Sprintf("%s:%s", redisURL.Hostname(), redisURL.Port())
 
+	// Add more robust connection options
 	client := redis_db.NewClient(&redis_db.Options{
 		Addr: addr,
+		// Add connection pool settings
+		// PoolSize:     10, // Adjust based on your needs
+		// MinIdleConns: 5,
+		// Add timeouts
+		// DialTimeout:  5 * time.Second,
+		// ReadTimeout:  3 * time.Second,
+		// WriteTimeout: 3 * time.Second,
+		// PoolTimeout:  4 * time.Second,
+		// Add automatic reconnection
+		MaxRetries:      3,
+		MinRetryBackoff: 8 * time.Millisecond,
+		MaxRetryBackoff: 512 * time.Millisecond,
 	})
+
+	// Test the connection when creating the client
+	if err := client.Ping(ctx).Err(); err != nil {
+		return nil, errors.NewStorageError("Failed to connect to Redis", err)
+	}
 
 	expiration := time.Duration(0)
 

@@ -4,7 +4,7 @@ namespace: staging-teranet-3
 
 configMapGenerator:
   - literals:
-      - SETTINGS_CONTEXT=operator.testing.staging-teranet-3
+      - SETTINGS_CONTEXT=operator.teratestnet.staging.3
       - asset_centrifuge_disable=true
       - blockassembly_disabled=true
     name: shared-config

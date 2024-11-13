@@ -4,19 +4,9 @@ participant "Block Validation Client" as BVC
 participant "Block Validation Server" as BVS
 participant "Blockchain Client" as BC
 queue "blockFoundCh\nBlock Found Channel" as BFC
+participant "Background Processor" as BP
 
-P2P -> P2P: Init()
-activate P2P
-
-P2P -> BVC: NewClient()
-
-activate BVC
-BVC -> P2P
-deactivate BVC
-
-P2P -> P2P: handleBlockTopic(ctx)
-activate P2P
-P2P -> BVC: BlockFound(ctx, hash, blockMessageUrl)
+P2P -> BVC: BlockFound(ctx, hash, baseUrl)
 activate BVC
 
 BVC -> BVS: BlockFound(ctx, req)
@@ -27,14 +17,30 @@ activate BC
 BC --> BVS: exists / not exists
 deactivate BC
 
-alt Not Exists
-BVS -> BFC: blockFoundCh <- processBlockFound{hash, baseURL}
+alt Block does not exist
+    BVS -> BFC: enqueue processBlockFound{hash, baseURL, errCh}
+
+    alt if WaitToComplete is true
+        BVS -> BVS: Create errCh
+        BVS -> BVS: Wait for errCh
+    end
 end
 
+BVS --> BVC: Response
 deactivate BVS
+BVC --> P2P: Response
 deactivate BVC
-deactivate P2P
-deactivate P2P
+
+note right of BP
+  Background processing of blockFoundCh
+end note
+
+BP -> BFC: Dequeue processBlockFound
+activate BP
+BP -> BP: processBlockFoundChannel(ctx, blockFound)
+BP -> BC: GetBlock(ctx, hash)
+BP -> BVS: validateBlock(ctx, block, baseUrl)
+deactivate BP
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

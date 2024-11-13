@@ -141,7 +141,8 @@ install-tools:
 test: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	# pipefail is needed so proper exit code is passed on in CI
+	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json'
 else
 	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags "testtxmetacache" -count=1 $$(go list ./... | grep -v playground | grep -v poc )
 endif
@@ -150,7 +151,8 @@ endif
 longtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	# pipefail is needed so proper exit code is passed on in CI
+	bash -o pipefail -c 'SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json'
 else
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif

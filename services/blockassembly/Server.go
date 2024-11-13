@@ -141,7 +141,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	subtreeRetryChan := make(chan *subtreeRetrySend, subtreeRetryChanBuffer)
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	// start the new subtree retry processor in the background
 	go func() {
@@ -574,6 +574,11 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
 	}
+
+	if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.chainParams.MaxCoinbaseScriptSigSize) {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID))
+	}
+
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
 	var sizeInBytes uint64

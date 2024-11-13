@@ -29,8 +29,9 @@ type bdkDebugVerification struct {
 }
 
 func init() {
-	ScriptVerificatorFactory[VerificatorGoBDK] = newScriptVerificatorGoBDK
-	log.Println("Registered scriptVerificatorGoBDK")
+	ScriptVerificationFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
+
+	log.Println("Registered scriptVerifierGoBDK")
 }
 
 // getChainNameFromParams map the chain name from the ubsv way to bsv C++ code.
@@ -47,8 +48,8 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 	return chainNameMap[pa.Name]
 }
 
-func newScriptVerificatorGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
+func newScriptVerifierGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
 
 	bdkScriptConfig := bdkconfig.ScriptConfig{
 		ChainNetwork:                 getBDKChainNameFromParams(pa),
@@ -61,34 +62,33 @@ func newScriptVerificatorGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincf
 	}
 	bdkscript.SetGlobalScriptConfig(bdkScriptConfig)
 
-	return &scriptVerificatorGoBDK{
+	return &scriptVerifierGoBDK{
 		logger: l,
 		policy: po,
 		params: pa,
 	}
 }
 
-type scriptVerificatorGoBDK struct {
+type scriptVerifierGoBDK struct {
 	logger ulogger.Logger
 	policy *PolicySettings
 	params *chaincfg.Params
 }
 
-func (v *scriptVerificatorGoBDK) Logger() ulogger.Logger {
+func (v *scriptVerifierGoBDK) Logger() ulogger.Logger {
 	return v.logger
 }
 
-func (v *scriptVerificatorGoBDK) Params() *chaincfg.Params {
+func (v *scriptVerifierGoBDK) Params() *chaincfg.Params {
 	return v.params
 }
 
-func (v *scriptVerificatorGoBDK) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoBDK) PolicySettings() *PolicySettings {
 	return v.policy
 }
 
 // VerifyScript verifies script using Go-BDK
-func (v *scriptVerificatorGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
-
+func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 	for i, in := range tx.Inputs {
 		if in.PreviousTxScript == nil || in.UnlockingScript == nil {
 			continue

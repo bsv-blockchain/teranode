@@ -52,12 +52,14 @@ var allowedHosts = []string{
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
 func CallRPC(url string, method string, params []interface{}) (string, error) {
-
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"method": method,
 		"params": params,
 	})
+	logger.Infof("Request: %s", string(requestBody))
+
 	if err != nil {
 		return "", errors.NewProcessingError("failed to marshal request body", err)
 	}
@@ -552,22 +554,21 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTes
 	return *newTx.TxIDChainHash(), nil
 }
 
-// TODO: Use tenv
-func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (chainhash.Hash, error) {
-
+func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []tenv.TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
-	coinbaseClient := node[0].CoinbaseClient
+	coinbaseClient := nodes[0].CoinbaseClient
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
 	}
-	_, err = node[0].DistributorClient.SendTransaction(ctx, faucetTx)
+
+	_, err = nodes[0].DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
 	}
@@ -585,6 +586,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
 	}
+
 	newTx.LockTime = 0
 
 	newTxDouble := bt.NewTx()
@@ -592,12 +594,14 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
 	}
+
 	newTxDouble.LockTime = 1
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
 	}
+
 	err = newTxDouble.AddP2PKHOutputFromAddress("14qViLJfdGaP4EeHnDyJbEGQysnCpwk3gd", 10000)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
@@ -607,16 +611,18 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
 	}
+
 	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
 	}
 
-	_, err = node[0].DistributorClient.SendTransaction(ctx, newTx)
+	_, err = nodes[0].DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}
-	_, err = node[1].DistributorClient.SendTransaction(ctx, newTxDouble)
+
+	_, err = nodes[1].DistributorClient.SendTransaction(ctx, newTxDouble)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}

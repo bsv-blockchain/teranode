@@ -140,7 +140,7 @@ type Params struct {
 	CoinbaseMaturity uint16
 
 	// MaxCoinbaseScriptSize is the maximum size of the scriptSig in bytes for the coinbase transaction.
-	MaxCoinbaseScriptSize uint16
+	MaxCoinbaseScriptSigSize uint32
 
 	// SubsidyReductionInterval is the interval of blocks before the subsidy
 	// is reduced.
@@ -238,10 +238,10 @@ var MainNetParams = Params{
 	BIP0065Height: 388381, // 000000000000000004c2b624ed5d7756c508d90fd0da2c7c679febfa6c4735f0
 	BIP0066Height: 363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
 
-	UahfForkHeight:          478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
-	DaaForkHeight:           504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
-	GenesisActivationHeight: 620538,
-
+	UahfForkHeight:           478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
+	DaaForkHeight:            504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
+	GenesisActivationHeight:  620538,
+	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
 	MaxCoinbaseScriptSize:    100,
 	SubsidyReductionInterval: 210000,
@@ -335,16 +335,15 @@ var StnParams = Params{
 	DNSSeeds:    []DNSSeed{},
 
 	// Chain parameters
-	GenesisBlock:          &stnGenesisBlock,
-	GenesisHash:           &stnGenesisHash,
-	PowLimit:              stnPowLimit,
-	PowLimitBits:          0x207fffff,
-	CoinbaseMaturity:      100,
-	MaxCoinbaseScriptSize: 100,
-
-	BIP0034Height: 100000000, // Not active - Permit ver 1 blocks
-	BIP0065Height: 1351,      // Used by regression tests
-	BIP0066Height: 1251,      // Used by regression tests
+	GenesisBlock:             &stnGenesisBlock,
+	GenesisHash:              &stnGenesisHash,
+	PowLimit:                 stnPowLimit,
+	PowLimitBits:             0x207fffff,
+	MaxCoinbaseScriptSigSize: 100,
+	CoinbaseMaturity:         100,
+	BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
+	BIP0065Height:            1351,      // Used by regression tests
+	BIP0066Height:            1251,      // Used by regression tests
 
 	UahfForkHeight:          0, // Always active on regtest
 	DaaForkHeight:           0, // Always active on regtest
@@ -410,16 +409,15 @@ var RegressionNetParams = Params{
 	DNSSeeds:    []DNSSeed{},
 
 	// Chain parameters
-	GenesisBlock:          &regTestGenesisBlock,
-	GenesisHash:           newHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
-	PowLimit:              regressionPowLimit,
-	PowLimitBits:          0x207fffff,
-	CoinbaseMaturity:      100,
-	MaxCoinbaseScriptSize: 100,
-
-	BIP0034Height: 100000000, // Not active - Permit ver 1 blocks
-	BIP0065Height: 1351,      // Used by regression tests
-	BIP0066Height: 1251,      // Used by regression tests
+	GenesisBlock:             &regTestGenesisBlock,
+	GenesisHash:              newHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
+	PowLimit:                 regressionPowLimit,
+	PowLimitBits:             0x207fffff,
+	MaxCoinbaseScriptSigSize: 100,
+	CoinbaseMaturity:         100,
+	BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
+	BIP0065Height:            1351,      // Used by regression tests
+	BIP0066Height:            1251,      // Used by regression tests
 
 	UahfForkHeight:          15,   // August 1, 2017 hard fork
 	DaaForkHeight:           2200, // must be > 2016 - see assert in pow.cpp:268
@@ -495,13 +493,12 @@ var TestNet3Params = Params{
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 
-	UahfForkHeight:          1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
-	GenesisActivationHeight: 1344302,
-
-	CoinbaseMaturity:      100,
-	MaxCoinbaseScriptSize: 100,
-
+	UahfForkHeight:           1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	GenesisActivationHeight:  1344302,
+	MaxCoinbaseScriptSigSize: 100,
+	CoinbaseMaturity:         100,
+ter
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
@@ -523,6 +520,12 @@ var TestNet3Params = Params{
 		{800010, newHashFromStr("000000000017ed35296433190b6829db01e657d80631d43f5983fa403bfdb4c1")},
 		{900000, newHashFromStr("0000000000356f8d8924556e765b7a94aaebc6b5c8685dcfa2b1ee8b41acd89b")},
 		{1000007, newHashFromStr("00000000001ccb893d8a1f25b70ad173ce955e5f50124261bbbc50379a612ddf")},
+		{1100000, newHashFromStr("00000000001c2fb9880485b1f3d7b0ffa9fabdfd0cf16e29b122bb6275c73db0")},
+		{1200000, newHashFromStr("00000000d91bdbb5394bcf457c0f0b7a7e43eb978e2d881b6c2a4c2756abc558")},
+		{1300000, newHashFromStr("00000000000000f7569d4d0af19d8d0b59bb0b1a989caf0f552afb5c00d38fbf")},
+		{1400000, newHashFromStr("000000000000008f84faa5afa3e30bce81599108f932eabdf9ee3d39bb225e5b")},
+		{1500000, newHashFromStr("00000000000005a00d805e3555e53f18c6276cb5ddc90a3ceeaeaf03bb2fdbea")},
+		{1600000, newHashFromStr("000000000000133137efc60aab38163c0d032d651826ccbda90b169f3bcec6dd")},
 	},
 
 	// Consensus rule change deployments.
@@ -582,12 +585,12 @@ var CustomTestNetParams = Params{
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 
-	UahfForkHeight:          1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
-	GenesisActivationHeight: 1344302,
 
-	CoinbaseMaturity:      100,
-	MaxCoinbaseScriptSize: 100,
+	UahfForkHeight:           1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	GenesisActivationHeight:  1344302,
+	MaxCoinbaseScriptSigSize: 100,
+	CoinbaseMaturity:         100,
 
 	SubsidyReductionInterval: 210000,
 	// TODO: change this back to 10 mins

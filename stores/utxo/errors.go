@@ -26,6 +26,7 @@ func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chai
 		spendingTxString = spendingTxID.String()
 	}
 
+	// TODO add the spendingTxID to the error data
 	return errors.NewUtxoSpentError("%s:$%d utxo %s already spent by txid %s", txIDString, vOut, utxoHashString, spendingTxString)
 }
 

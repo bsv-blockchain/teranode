@@ -1,0 +1,56 @@
+package model
+
+import (
+	"crypto/rand"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libsv/go-bk/wif"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/ordishs/gocore"
+)
+
+// CreateCoinbaseTxCandidate creates a coinbase transaction for the mining candidate
+func (mc *MiningCandidate) CreateCoinbaseTxCandidate() (*bt.Tx, error) {
+	// Create a new coinbase transaction
+	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+
+	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
+	if !found {
+		return nil, errors.NewConfigurationError("miner_wallet_private_keys not found in config")
+	}
+
+	walletAddresses := make([]string, len(coinbasePrivKeys))
+
+	for i, coinbasePrivKey := range coinbasePrivKeys {
+		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		if err != nil {
+			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
+		}
+
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+		if err != nil {
+			return nil, errors.NewProcessingError("can't create coinbase address", err)
+		}
+
+		walletAddresses[i] = walletAddress.AddressString
+	}
+
+	a, b, err := GetCoinbaseParts(mc.Height, mc.CoinbaseValue, arbitraryText, walletAddresses)
+	if err != nil {
+		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
+	}
+
+	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
+	extranonce := make([]byte, 12)
+	_, _ = rand.Read(extranonce)
+	a = append(a, extranonce...)
+	a = append(a, b...)
+
+	coinbaseTx, err := bt.NewTxFromBytes(a)
+	if err != nil {
+		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
+	}
+
+	return coinbaseTx, nil
+}

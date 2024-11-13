@@ -522,13 +522,15 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningCandidate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningCandidate),
 		tracing.WithLogMessage(s.logger, "[handleGetMiningCandidate] called"),
 	)
 	defer deferFn()
+
+	c := cmd.(*bsvjson.GetMiningCandidateCmd)
 
 	mc, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
 	if err != nil {
@@ -562,6 +564,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, 
 		"num_tx":              mc.NumTxs,
 		"sizeWithoutCoinbase": mc.SizeWithoutCoinbase,
 		"merkleProof":         merkleProofStrings,
+	}
+
+	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
+		coinbaseTx, err := mc.CreateCoinbaseTxCandidate()
+		if err != nil {
+			return nil, err
+		}
+
+		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
 	}
 
 	return jsonMap, nil

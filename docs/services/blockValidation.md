@@ -14,17 +14,15 @@
 - [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
-- [4.1. Block Data Model](#41-block-data-model)
-  - [4.2. Subtree Data Model](#42-subtree-data-model)
-- [4.3. Transaction Data Model](#43-transaction-data-model)
-- [4.4. UTXO Metadata Model](#44-utxo-metadata-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [General Settings](#general-settings)
-- [Kafka and Concurrency Related](#kafka-and-concurrency-related)
+- [Network and Communication Settings](#network-and-communication-settings)
+- [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
 - [Performance and Optimization](#performance-and-optimization)
+- [Storage and State Management](#storage-and-state-management)
+9. [Other Resources](#9-other-resources)
 
 
 ## 1. Description
@@ -177,106 +175,10 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 
 ## 4. Data Model
 
-### 4.1. Block Data Model
-
-Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
-
-| Field       | Type                  | Description                                                 |
-|-------------|-----------------------|-------------------------------------------------------------|
-| Header      | *BlockHeader          | The Block Header                                            |
-| CoinbaseTx  | *bt.Tx                | The coinbase transaction.                                   |
-| Subtrees    | []*chainhash.Hash     | An array of hashes, representing the subtrees of the block. |
-
-This table provides an overview of each field in the `Block` struct, including the data type and a brief description of its purpose or contents.
-
-More information on the block structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-
-#### 4.2. Subtree Data Model
-
-A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root. Blocks are then built from a collection of subtrees.
-
-More information on the subtree structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-Here's a table documenting the structure of the `Subtree` type:
-
-| Field            | Type                  | Description                                                                     |
-|------------------|-----------------------|---------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                |
-| Fees             | uint64                | Total fees associated with the transactions in the subtree.                     |
-| SizeInBytes      | uint64                | The size of the subtree in bytes.                                               |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                             |
-| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree. |
-| ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
-
-Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
-
-
-Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
-
-##### Subtree Composition
-
-Each subtree consists of:
-- hash: 32 bytes
-- fees: 4 bytes
-- sizeInBytes: 4 bytes
-- numberOfLeaves: 4 bytes
-- subtreeHeight: 4 bytes
-
-##### Calculation:
-```
-1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
-```
-
-##### Data Transfer Between Nodes
-
-However - only 32MB is transferred between the nodes. Each subtree transfer includes:
-
-- hash: 32 bytes
-```
-1024 * 1024 * (32) = 32MB
-```
-
-### 4.3. Transaction Data Model
-
-This refers to the extended transaction format, as seen below:
-
-| Field           | Description                                                                                            | Size                                              |
-|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Version no      | currently 2                                                                                            | 4 bytes                                           |
-| **EF marker**   | **marker for extended format**                                                                         | **0000000000EF**                                  |
-| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of inputs  | **Extended Format** transaction Input Structure                                                        | <in-counter> qty with variable length per input   |
-| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
-
-More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-
-### 4.4. UTXO Metadata Model
-
-The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
-
-| Field Name    | Description                                                     | Data Type                         |
-|---------------|-----------------------------------------------------------------|-----------------------------------|
-| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
-| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
-| Fee           | The fee associated with the transaction.                        | Decimal                           |
-| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
-| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
-| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
-| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
-| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
-
-Note:
-
-- **Parent Transactions**: 1 or more parent transaction hashes. For each input that our transaction has, we can have a different parent transaction. I.e. a TX can be spending UTXOs from multiple transactions.
-
-
-- **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-  - Typically, a tx should only belong to one block. i.e. a) a tx is created (and it is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the UTXO store for the given transaction.
-  - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
+- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): UTXO and UTXO Metadata data models for managing unspent transaction outputs.
 
 
 ## 5. Technology
@@ -343,16 +245,55 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The Block Validation service uses the following configuration options:
 
-### General Settings
-- **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. It is crucial for initializing the block validation client and establishing communication with the block validation service.
-- **`blockvalidation_httpAddress`**: Configures the HTTP address for the block validation service. This setting is optional and, if provided, enables HTTP-based interactions with the block validation service.
+### Network and Communication Settings
 
-### Kafka and Concurrency Related
-- **`blockvalidation_subtreeGroupConcurrency`**: Determines the concurrency level for processing subtree groups. This setting is used to optimize the parallel processing of subtrees within blocks, balancing throughput with resource utilization.
-- **`blockvalidation_blockFoundCh_buffer_size`** and **`blockvalidation_catchupCh_buffer_size`**: Configure the buffer sizes for channels used in handling block found and catchup events. These settings influence the capacity of the system to buffer incoming block notifications and catchup requests, affecting how the system copes with spikes in load.
-- **`blockvalidation_frpcAddress`** and **`blockvalidation_httpListenAddress`**: Define addresses for starting the fRPC and HTTP servers within the block validation service, respectively.
-- **`blockvalidation_frpcConcurrency`**: Sets the concurrency level for the fRPC server, adjusting the number of concurrent requests the server can handle.
+1. **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. It is crucial for initializing the block validation client and establishing communication with the block validation service.
+
+2. **`blockvalidation_httpAddress`**: Configures the HTTP address for the block validation service. This setting is optional and, if provided, enables HTTP-based interactions with the block validation service.
+
+3. **`blockvalidation_httpListenAddress`**: Defines the address on which the HTTP server within the block validation service listens for incoming requests.
+
+### Kafka and Concurrency Settings
+
+4. **`kafka_blocksConfig`**: Specifies the Kafka configuration for block messages, enabling the service to consume block data from Kafka.
+
+5. **`blockvalidation_subtreeGroupConcurrency`**: Determines the concurrency level for processing subtree groups. Default: 1.
+
+6. **`blockvalidation_blockFoundCh_buffer_size`**: Configures the buffer size for the channel used in handling block found events. Default: 1000.
+
+7. **`blockvalidation_catchupCh_buffer_size`**: Sets the buffer size for the channel used in handling catchup events. Default: 10.
+
+8. **`blockvalidation_kafkaBlockConcurrency`**: Sets the concurrency level for processing Kafka block messages. Default: Max(4, Number of CPUs - 16).
+
+9. **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls the concurrency level for validating block subtrees. Default: Max(4, Number of CPUs / 2).
+
+10. **`blockvalidation_subtreeTTLConcurrency`**: Sets the concurrency level for subtree TTL operations. Default: 32.
+
+11. **`blockvalidation_catchupConcurrency`**: Determines the concurrency level for catch-up operations. Default: Max(4, Number of CPUs / 2).
 
 ### Performance and Optimization
-- **`blockvalidation_txMetaCacheEnabled`**: Enables or disables the transaction metadata cache. Turning on this cache can significantly improve performance by reducing the need to repeatedly fetch transaction metadata from persistent storage.
-- **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls the concurrency level for validating block subtrees, a critical setting for optimizing the validation process of blocks composed of multiple subtrees.
+
+12. **`optimisticMining`**: Enables or disables optimistic mining. Default: true.
+
+13. **`excessiveblocksize`**: Sets the excessive block size limit. Default: 0 (no limit).
+
+14. **`blockvalidation_subtreeTTL`**: Sets the Time-To-Live (in minutes) for subtrees. Default: 120 minutes.
+
+15. **`blockvalidation_maxPreviousBlockHeadersToCheck`**: Specifies the maximum number of previous block headers to check during validation. Default: 100.
+
+16. **`blockvalidation_isParentMined_retry_backoff_multiplier`**: Sets the backoff multiplier for retrying parent block mining checks. Default: 30.
+
+17. **`blockvalidation_isParentMined_retry_max_retry`**: Specifies the maximum number of retries for parent block mining checks. Default: 60.
+
+### Storage and State Management
+
+18. **`utxostore`**: Specifies the URL for the UTXO (Unspent Transaction Output) store.
+
+19. **`blockvalidation_useCatchupWhenBehind`**: Enables catch-up mode when the node is behind in block processing. Default: false.
+
+20. **`fsm_state_restore`**: Enables Finite State Machine (FSM) state restoration. Default: false.
+
+
+## 9. Other Resources
+
+[Block Validation Reference](../references/services/blockvalidation_reference.md)

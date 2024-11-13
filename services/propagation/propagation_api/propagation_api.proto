@@ -1,57 +1,106 @@
 syntax = "proto3";
 
+
+// Package propagation_api provides gRPC services for Bitcoin SV transaction propagation.
+// It handles individual and batch transaction processing, health checks, and debugging
+// capabilities for the BSV network.
 option go_package = "./;propagation_api";
 
 package propagation_api;
 
 import "google/protobuf/timestamp.proto";
 
+// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// across the network. It supports various transaction processing methods including
+// individual, batch, and streaming operations.
 service PropagationAPI {
-  // Health returns the health of the API.
+  // HealthGRPC checks the health status of the propagation service and its dependencies.
+  // Returns a HealthResponse containing the service status and details.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+
+  // ProcessTransaction processes a single BSV transaction.
+  // The transaction must be provided in raw byte format and must be extended.
+  // Coinbase transactions are not allowed.
   rpc ProcessTransaction (ProcessTransactionRequest) returns (EmptyMessage) {}
+
+  // ProcessTransactionBatch processes multiple transactions in a single request.
+  // This is more efficient than processing transactions individually when dealing
+  // with large numbers of transactions.
   rpc ProcessTransactionBatch (ProcessTransactionBatchRequest) returns (ProcessTransactionBatchResponse) {}
+
+  // ProcessTransactionHex processes a transaction provided in hexadecimal format.
+  // This is a convenience method for clients that have transactions in hex format.
   rpc ProcessTransactionHex (ProcessTransactionHexRequest) returns (EmptyMessage) {}
+
+  // ProcessTransactionStream establishes a bidirectional streaming connection for
+  // processing transactions. Useful for continuous transaction processing without
+  // establishing new connections for each transaction.
   rpc ProcessTransactionStream (stream ProcessTransactionRequest) returns (stream EmptyMessage) {}
+
+  // ProcessTransactionDebug provides debug-level transaction processing.
+  // It performs basic validation and storage without full processing, useful
+  // for testing and debugging purposes.
   rpc ProcessTransactionDebug (ProcessTransactionRequest) returns (EmptyMessage) {}
 }
 
+// EmptyMessage represents an empty request or response.
+// Used when no additional data needs to be transmitted.
 // swagger:model EmptyMessage
 message EmptyMessage {}
 
+
+// HealthResponse provides information about the service's health status.
 // swagger:model HealthResponse
 message HealthResponse {
+  // ok indicates whether the service is healthy
   bool ok = 1;
+  // details provides additional information about the health status
   string details = 2;
+  // timestamp indicates when the health check was performed
   google.protobuf.Timestamp timestamp = 3;
 }
 
+
+// GetRequest represents a request to retrieve a transaction by its ID.
 // swagger:model GetRequest
 message GetRequest {
+  // txid is the transaction ID in bytes
   bytes txid = 1;
 }
 
+
+// GetResponse contains the retrieved transaction data.
 // swagger:model GetResponse
 message GetResponse {
+  // tx contains the raw transaction bytes
   bytes tx = 1;
 }
 
+// ProcessTransactionRequest represents a request to process a single transaction.
 // swagger:model ProcessTransactionRequest
 message ProcessTransactionRequest {
+  // tx contains the raw transaction bytes to process
   bytes tx = 1;
 }
 
+// ProcessTransactionBatchRequest represents a request to process multiple transactions.
 // swagger:model ProcessTransactionRequest
 message ProcessTransactionBatchRequest {
+  // tx contains an array of raw transaction bytes to process
   repeated bytes tx = 1;
 }
 
+// ProcessTransactionBatchResponse contains the results of batch transaction processing.
 // swagger:model ProcessTransactionBatchResponse
 message ProcessTransactionBatchResponse {
+  // error contains error messages for each transaction in the batch
+  // empty string indicates success for that transaction
   repeated string error = 1;
 }
 
+// ProcessTransactionHexRequest represents a request to process a transaction in hex format.
 // swagger:model ProcessTransactionRequest
 message ProcessTransactionHexRequest {
+  // tx contains the transaction in hexadecimal string format
   string tx = 1;
 }

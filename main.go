@@ -23,9 +23,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
-	"github.com/bitcoin-sv/ubsv/cmd/settings/settings"
+	cmdsettings "github.com/bitcoin-sv/ubsv/cmd/settings/settings"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/txblockidcheck/txblockidcheck"
+	"github.com/bitcoin-sv/ubsv/cmd/unspend/unspend"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/alert"
@@ -44,6 +45,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -128,9 +130,14 @@ func main() {
 		bitcoin2utxoset.Start()
 		return
 	case "settings.run":
-		settings.Start(version, commit)
+		cmdsettings.Start(version, commit)
+		return
+	case "unspend.run":
+		unspend.Start()
 		return
 	}
+
+	teranodeSettings := settings.NewSettings()
 
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
 	logger := initLogger(serviceName)
@@ -168,7 +175,7 @@ func main() {
 		}
 	}()
 
-	err := startServices(ctx, logger, serviceName, sm)
+	err := startServices(ctx, logger, teranodeSettings, serviceName, sm)
 	if err != nil {
 		logger.Fatalf("error starting services: %v", err)
 	}
@@ -222,7 +229,9 @@ func main() {
 
 }
 
-func startServices(ctx context.Context, logger ulogger.Logger, serviceName string, sm *servicemanager.ServiceManager) error {
+// startServices starts the services based on the command line arguments and the config file
+// nolint:gocognit
+func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, serviceName string, sm *servicemanager.ServiceManager) error {
 	help := shouldStart("help")
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
@@ -462,6 +471,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 		if err = sm.AddService("Alert", alert.New(
 			logger.New("alert"),
+			tSettings,
 			blockchainClient,
 			utxoStore,
 			blockassemblyClient,

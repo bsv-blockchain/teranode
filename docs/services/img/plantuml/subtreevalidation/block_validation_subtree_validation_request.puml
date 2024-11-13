@@ -4,42 +4,56 @@ participant "Subtree Validation Client" as SVC
 participant "Subtree Validation Server" as SVS
 participant "Validator" as Validator
 database "Subtree Store" as SubtreeStore
+database "UTXO Store" as UTXOStore
+participant "Remote Asset Server" as RemoteServer
 
 BV -> BV: validateBlockSubtrees(ctx, block, baseUrl)
 activate BV
 
 loop for each subtree in the block
+    BV -> SVC: CheckSubtree(ctx, request)
+    activate SVC
+    SVC -> SVS: CheckSubtree(ctx, request)
+    deactivate SVC
+    activate SVS
 
-    alt if a subtree does not exist
-        BV -> SVC: CheckSubtree(ctx, request)
-        activate SVC
-        SVC -> SVS: CheckSubtree(ctx, request)
-        deactivate SVC
-        activate SVS
+    SVS -> SVS: checkSubtree(ctx, request)
+    activate SVS
 
-        SVS -> SubtreeStore: subtreeStore.Exists(spanCtx, subtreeHash[:])
+    SVS -> SVS: Attempt to obtain lock for Subtree
 
-        activate SubtreeStore
-        SubtreeStore --> SVS: subtreeExists / err
-        deactivate SubtreeStore
+    alt if lock obtained and subtree doesn't exist
+        SVS -> RemoteServer: Get subtree data (if not legacy)
+        RemoteServer --> SVS: Subtree data
 
-        SVS -> SVS: Obtain a lock on the Subtree
-
-        SVS -> Validator: validateSubtreeInternal(ctx, validateSubtreeMessage)
+        SVS -> Validator: validateSubtreeInternal(ctx, v, blockHeight)
         activate Validator
 
-        Validator --> SVS
+        Validator -> UTXOStore: Process tx metadata
+        UTXOStore --> Validator: Tx metadata
 
-        deactivate Validator
-        deactivate SVS
+        alt if missing transactions
+            Validator -> RemoteServer: Get missing transactions
+            RemoteServer --> Validator: Missing transactions
+            Validator -> Validator: Process missing transactions
+        end
 
+        Validator -> Validator: Create and populate subtree
+        Validator -> SubtreeStore: Store subtree and metadata
+        SubtreeStore --> Validator: Storage confirmation
+
+        Validator --> SVS: Validation result
         deactivate Validator
-        SVS --> SVC
-        SVC --> BV
+    else if subtree already exists
+        SVS -> SVS: Return existing subtree status
     end
+
+    deactivate SVS
+    SVS --> SVC: CheckSubtreeResponse
+    SVC --> BV: Validation result
 end
 
 deactivate BV
-left footer Last Modified On: %date("dd-MMM-yyyy")
 
+left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml

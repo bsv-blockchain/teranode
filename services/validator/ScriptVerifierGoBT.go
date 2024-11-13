@@ -12,41 +12,41 @@ import (
 )
 
 func init() {
-	ScriptVerificatorFactory[VerificatorGoBT] = newScriptVerificatorGoBt
+	ScriptVerificationFactory[TxInterpreterGoBT] = newScriptVerifierGoBt
 
-	log.Println("Registered scriptVerificatorGoBt")
+	log.Println("Registered scriptVerifierGoBt")
 }
 
-func newScriptVerificatorGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with GoBT")
+func newScriptVerifierGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+	l.Infof("Use Script Verifier with GoBT")
 
-	return &scriptVerificatorGoBt{
+	return &scriptVerifierGoBt{
 		logger: l,
 		policy: po,
 		params: pa,
 	}
 }
 
-type scriptVerificatorGoBt struct {
+type scriptVerifierGoBt struct {
 	logger ulogger.Logger
 	policy *PolicySettings
 	params *chaincfg.Params
 }
 
-func (v *scriptVerificatorGoBt) Logger() ulogger.Logger {
+func (v *scriptVerifierGoBt) Logger() ulogger.Logger {
 	return v.logger
 }
 
-func (v *scriptVerificatorGoBt) Params() *chaincfg.Params {
+func (v *scriptVerifierGoBt) Params() *chaincfg.Params {
 	return v.params
 }
 
-func (v *scriptVerificatorGoBt) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoBt) PolicySettings() *PolicySettings {
 	return v.policy
 }
 
 // VerifyScript verifies script using go-bt
-func (v *scriptVerificatorGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
+func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed

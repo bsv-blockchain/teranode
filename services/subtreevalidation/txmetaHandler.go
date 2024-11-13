@@ -42,7 +42,7 @@ func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 				if errors.Is(err, errors.ErrProcessing) {
 					// log the wrapped error, instead of throwing an error on Kafka. The message will never be able to be
 					// added to the tx meta cache, so we don't want to keep trying to process it.
-					u.logger.Warnf(wrappedErr.Error())
+					u.logger.Debugf(wrappedErr.Error())
 
 					return nil
 				}

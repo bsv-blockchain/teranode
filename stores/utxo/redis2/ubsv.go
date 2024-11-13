@@ -93,7 +93,11 @@ func registerLuaIfNecessary(ctx context.Context, logger ulogger.Logger, rdb *red
 		// Replace all instances of ___VERSION___ with the actual version
 		cmd = rdb.Do(ctx, "FUNCTION", "LOAD", strings.ReplaceAll(ubsvLUA, "___VERSION___", v))
 		if err := cmd.Err(); err != nil {
-			return err
+			if strings.Contains(err.Error(), "already exists") {
+				logger.Infof("LUA script %s already registered", scriptName)
+			} else {
+				return err
+			}
 		}
 	} else {
 		logger.Infof("LUA script %s already registered", scriptName)

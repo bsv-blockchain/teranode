@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -80,7 +81,7 @@ type SubtreeProcessor struct {
 	subtreeStore              blob.Store
 	utxoStore                 utxostore.Store
 	logger                    ulogger.Logger
-	stat                      *gocore.Stat
+	stats                     *gocore.Stat
 	currentRunningState       atomic.Value
 }
 
@@ -136,7 +137,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		subtreeStore:              subtreeStore,
 		utxoStore:                 utxoStore,
 		logger:                    logger,
-		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
+		stats:                     gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:       atomic.Value{},
 	}
 	stp.currentRunningState.Store("starting")
@@ -821,10 +822,15 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return errors.NewProcessingError("[moveUpBlock] you must pass in a block to moveUpBlock")
 	}
 
-	startTime := time.Now()
+	_, _, deferFn := tracing.StartTracing(ctx, "moveUpBlock",
+		tracing.WithParentStat(stp.stats),
+		tracing.WithCounter(prometheusSubtreeProcessorMoveUpBlock),
+		tracing.WithHistogram(prometheusSubtreeProcessorMoveUpBlockDuration),
+		tracing.WithLogMessage(stp.logger, "[moveUpBlock][%s] with block", block.String()),
+	)
+
 	defer func() {
-		prometheusSubtreeProcessorMoveUpBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		stp.logger.Infof("[moveUpBlock][%s] with block DONE in %s", block.String(), time.Since(startTime).String())
+		deferFn()
 
 		err := recover()
 		if err != nil {
@@ -834,17 +840,12 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		}
 	}()
 
-	prometheusSubtreeProcessorMoveUpBlock.Inc()
-
 	// TODO reactivate and test
 	// if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
 	//	return errors.NewProcessingError("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
 	// }
 
-	stp.logger.Infof("[moveUpBlock][%s] with block", block.String())
 	stp.logger.Debugf("[moveUpBlock][%s] resetting subtrees: %v", block.String(), block.Subtrees)
-
-	coinbaseID := block.CoinbaseTx.TxIDChainHash()
 
 	err := stp.processCoinbaseUtxos(ctx, block)
 	if err != nil {
@@ -854,7 +855,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	// if there are no transactions in the subtree processor, we do not have to do anything
 	// we will always have at least 1 single coinbase placeholder transaction
 	if stp.txCount.Load() == 1 && stp.SubtreeCount() == 1 && stp.currentSubtree.Nodes[0].Hash.Equal(*util.CoinbasePlaceholderHash) {
-		stp.logger.Infof("[moveUpBlock][%s] no transactions in subtree processor, skipping cleanup", block.String())
+		stp.logger.Debugf("[moveUpBlock][%s] no transactions in subtree processor, skipping cleanup", block.String())
 
 		// set the current block header
 		stp.currentBlockHeader = block.Header
@@ -889,14 +890,14 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	if len(blockSubtreesMap) > 0 {
 		mapStartTime := time.Now()
 
-		stp.logger.Infof("[moveUpBlock][%s] processing subtrees into transaction map", block.String())
+		stp.logger.Debugf("[moveUpBlock][%s] processing subtrees into transaction map", block.String())
 
 		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
 			// TODO revert the created utxos
 			return errors.NewProcessingError("[moveUpBlock][%s] error creating transaction map", block.String(), err)
 		}
 
-		stp.logger.Infof("[moveUpBlock][%s] processing subtrees into transaction map DONE in %s: %d", block.String(), time.Since(mapStartTime).String(), transactionMap.Length())
+		stp.logger.Debugf("[moveUpBlock][%s] processing subtrees into transaction map DONE in %s: %d", block.String(), time.Since(mapStartTime).String(), transactionMap.Length())
 	}
 
 	// reset the current subtree
@@ -915,7 +916,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	remainderStartTime := time.Now()
 
-	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees", block.String())
+	stp.logger.Debugf("[moveUpBlock][%s] processing remainder tx hashes into subtrees", block.String())
 
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
@@ -925,31 +926,33 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 		remainderTxHashesStartTime := time.Now()
 
-		stp.logger.Infof("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees", block.String(), len(chainedSubtrees))
+		stp.logger.Debugf("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees", block.String(), len(chainedSubtrees))
 
 		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, skipNotification); err != nil {
 			return errors.NewProcessingError("[moveUpBlock][%s] error getting remainder tx hashes", block.String(), err)
 		}
 
-		stp.logger.Infof("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees DONE in %s", block.String(), len(chainedSubtrees), time.Since(remainderTxHashesStartTime).String())
+		stp.logger.Debugf("[moveUpBlock][%s] processRemainderTxHashes with %d subtrees DONE in %s", block.String(), len(chainedSubtrees), time.Since(remainderTxHashesStartTime).String())
 
 		// empty the queue to make sure we have all the transactions that could be in the block
 		// we only have to do this when we have a transaction map, because otherwise we would be processing our own block
 		dequeueStartTime := time.Now()
 
-		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock: %d", block.String(), stp.queue.length())
+		stp.logger.Debugf("[moveUpBlock][%s] processing queue while moveUpBlock: %d", block.String(), stp.queue.length())
 
 		err = stp.moveUpBlockDeQueue(transactionMap, skipNotification)
 		if err != nil {
 			return errors.NewProcessingError("[moveUpBlock][%s] error moving up block deQueue", block.String(), err)
 		}
 
-		stp.logger.Infof("[moveUpBlock][%s] processing queue while moveUpBlock DONE in %s", block.String(), time.Since(dequeueStartTime).String())
+		stp.logger.Debugf("[moveUpBlock][%s] processing queue while moveUpBlock DONE in %s", block.String(), time.Since(dequeueStartTime).String())
 	} else {
 		// TODO find a way to this in parallel
 		// there were no subtrees in the block, that were not in our block assembly
 		// this was most likely our own block
 		removeMapLength := stp.removeMap.Length()
+
+		coinbaseID := block.CoinbaseTx.TxIDChainHash()
 
 		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
@@ -984,7 +987,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		}
 	}
 
-	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees DONE in %s", block.String(), time.Since(remainderStartTime).String())
+	stp.logger.Debugf("[moveUpBlock][%s] processing remainder tx hashes into subtrees DONE in %s", block.String(), time.Since(remainderStartTime).String())
 
 	stp.setTxCountFromSubtrees()
 

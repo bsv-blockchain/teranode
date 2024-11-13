@@ -32,7 +32,7 @@ const (
 
 type Validator struct {
 	logger                        ulogger.Logger
-	txValidator                   TxValidator
+	txValidator                   TxValidatorI
 	utxoStore                     utxo.Store
 	blockAssembler                blockassembly.Store
 	saveInParallel                bool
@@ -50,15 +50,9 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKaf
 		return nil, errors.NewServiceError("failed to create block assembly client", err)
 	}
 
-	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
-	if !ok {
-		scriptValidator = VerificatorGoBT
-	}
-
 	v := &Validator{
 		logger:                        logger,
-		txValidator:                   NewTxValidator(scriptValidator, logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator:                   NewTxValidator(logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
 		utxoStore:                     store,
 		blockAssembler:                ba,
 		saveInParallel:                true,
@@ -386,9 +380,9 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	// check the utxos
 	txIDChainHash := tx.TxIDChainHash()
 
-	spends := make([]*utxo.Spend, len(tx.Inputs))
+	spends := make([]*utxo.Spend, 0, len(tx.Inputs))
 
-	for idx, input := range tx.Inputs {
+	for _, input := range tx.Inputs {
 		if input.PreviousTxSatoshis == 0 {
 			continue // There are some old transactions (e.g. d5a13dcb1ad24dbffab91c3c2ffe7aea38d5e84b444c0014eb6c7c31fe8e23fc) that have 0 satoshis
 		}
@@ -400,12 +394,12 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 		}
 
 		// v.logger.Debugf("spending utxo %s:%d -> %s", input.PreviousTxIDChainHash().String(), input.PreviousTxOutIndex, hash.String())
-		spends[idx] = &utxo.Spend{
+		spends = append(spends, &utxo.Spend{
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,
 			UTXOHash:     hash,
 			SpendingTxID: txIDChainHash,
-		}
+		})
 	}
 
 	err = v.utxoStore.Spend(ctx, spends, blockHeight)
@@ -525,7 +519,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	return v.txValidator.VerifyScript(tx, blockHeight)
+	// run the internal tx validation, checking policies, scripts, signatures etc.
+	return v.txValidator.ValidateTransaction(tx, blockHeight)
 }
 
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {
