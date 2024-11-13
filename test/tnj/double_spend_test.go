@@ -1,7 +1,6 @@
-////go:build tnj
+//go:build tnj
 
 // How to run this test manually:
-//
 // $ cd test/tnj
 // $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestDoubleSpendMultipleUtxos$" -tags tnj
 package tnj
