@@ -1,4 +1,4 @@
-package cpuminer
+package model
 
 /*
 Here is a real example coinbase broken down...
@@ -39,7 +39,9 @@ Here is a real example coinbase broken down...
 import (
 	"encoding/binary"
 	"encoding/hex"
+
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/util"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.
@@ -82,7 +84,7 @@ func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, 
 
 // AddressToScript comment
 func AddressToScript(address string) (script []byte, err error) {
-	decoded, err := DecodeString(address)
+	decoded, err := util.DecodeString(address)
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package cpuminer
+package util
 
 // Copied from github.com/drewwells/go-bitpay-client/encoding/base58
 /*
@@ -9,10 +9,11 @@ base58 returns encoded text suitable for use with Bitcoin.  Bitcoin compatible b
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"math/big"
 	"strings"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 const base58table = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

@@ -797,7 +797,9 @@ func NewVerifyTxOutProofCmd(proof string) *VerifyTxOutProofCmd {
 	}
 }
 
-type GetMiningCandidateCmd struct{}
+type GetMiningCandidateCmd struct {
+	ProvideCoinbaseTx *bool `jsonrpcdefault:"false"`
+}
 
 type SubmitMiningSolutionCmd struct {
 	JSONString string

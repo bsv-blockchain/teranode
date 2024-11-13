@@ -1,4 +1,4 @@
-package cpuminer
+package model
 
 import (
 	"encoding/hex"
