@@ -23,6 +23,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -308,10 +309,13 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
+	stats := gocore.NewStat("test")
+
 	// we cannot rely on the settings to be set in the test environment
 	ba := NewBlockAssembler(
 		context.Background(),
 		ulogger.TestLogger{},
+		stats,
 		items.utxoStore,
 		items.blobStore,
 		items.blockchainClient,

@@ -25,10 +25,6 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var (
-	stats = gocore.NewStat("blockassembler")
-)
-
 type miningCandidateResponse struct {
 	miningCandidate *model.MiningCandidate
 	subtrees        []*util.Subtree
@@ -37,6 +33,7 @@ type miningCandidateResponse struct {
 
 type BlockAssembler struct {
 	logger           ulogger.Logger
+	stats            *gocore.Stat
 	utxoStore        utxo.Store
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
@@ -64,7 +61,7 @@ type BlockAssembler struct {
 
 const DifficultyAdjustmentWindow = 144
 
-func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store,
+func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, stats *gocore.Stat, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
@@ -86,6 +83,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
 		logger:                logger,
+		stats:                 stats.NewStat("BlockAssembler"),
 		utxoStore:             utxoStore,
 		subtreeStore:          subtreeStore,
 		blockchainClient:      blockchainClient,
@@ -278,7 +276,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	_, _, deferFn := tracing.StartTracing(ctx, "UpdateBestBlock",
-		tracing.WithParentStat(stats),
+		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
 		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
 	)
@@ -609,7 +607,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader) ([]*model.Block, []*model.Block, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
-		tracing.WithParentStat(stats),
+		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerGetReorgBlocksDuration),
 		tracing.WithLogMessage(b.logger, "[getReorgBlocks] called"),
 	)
