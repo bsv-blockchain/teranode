@@ -117,7 +117,7 @@ func TestStartStop(t *testing.T) {
 	cmgr.Stop()
 	// ignored
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -154,7 +154,7 @@ func TestConnectMode(t *testing.T) {
 		t.Fatalf("New error: %v", err)
 	}
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -166,16 +166,16 @@ func TestConnectMode(t *testing.T) {
 	wantID := cr.ID()
 	gotID := gotConnReq.ID()
 	if gotID != wantID {
-		t.Fatalf("connect mode: %v - want ID %v, got ID %v", cr.Addr, wantID, gotID)
+		t.Fatalf("connect mode: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 	gotState := cr.State()
 	wantState := ConnEstablished
 	if gotState != wantState {
-		t.Fatalf("connect mode: %v - want state %v, got state %v", cr.Addr, wantState, gotState)
+		t.Fatalf("connect mode: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
 	}
 	select {
 	case c := <-connected:
-		t.Fatalf("connect mode: got unexpected connection - %v", c.Addr)
+		t.Fatalf("connect mode: got unexpected connection - %v", c.GetAddr())
 	case <-time.After(time.Millisecond):
 		break
 	}
@@ -215,7 +215,7 @@ func TestTargetOutbound(t *testing.T) {
 
 	select {
 	case c := <-connected:
-		t.Fatalf("target outbound: got unexpected connection - %v", c.Addr)
+		t.Fatalf("target outbound: got unexpected connection - %v", c.GetAddr())
 	case <-time.After(time.Millisecond):
 		break
 	}
@@ -245,7 +245,7 @@ func TestRetryPermanent(t *testing.T) {
 	}
 
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -257,12 +257,12 @@ func TestRetryPermanent(t *testing.T) {
 	wantID := cr.ID()
 	gotID := gotConnReq.ID()
 	if gotID != wantID {
-		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.Addr, wantID, gotID)
+		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 	gotState := cr.State()
 	wantState := ConnEstablished
 	if gotState != wantState {
-		t.Fatalf("retry: %v - want state %v, got state %v", cr.Addr, wantState, gotState)
+		t.Fatalf("retry: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
 	}
 
 	cmgr.Disconnect(cr.ID())
@@ -270,24 +270,24 @@ func TestRetryPermanent(t *testing.T) {
 	wantID = cr.ID()
 	gotID = gotConnReq.ID()
 	if gotID != wantID {
-		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.Addr, wantID, gotID)
+		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 	gotState = cr.State()
 	wantState = ConnPending
 	if gotState != wantState {
-		t.Fatalf("retry: %v - want state %v, got state %v", cr.Addr, wantState, gotState)
+		t.Fatalf("retry: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
 	}
 
 	gotConnReq = <-connected
 	wantID = cr.ID()
 	gotID = gotConnReq.ID()
 	if gotID != wantID {
-		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.Addr, wantID, gotID)
+		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 	gotState = cr.State()
 	wantState = ConnEstablished
 	if gotState != wantState {
-		t.Fatalf("retry: %v - want state %v, got state %v", cr.Addr, wantState, gotState)
+		t.Fatalf("retry: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
 	}
 
 	cmgr.Remove(cr.ID())
@@ -295,12 +295,12 @@ func TestRetryPermanent(t *testing.T) {
 	wantID = cr.ID()
 	gotID = gotConnReq.ID()
 	if gotID != wantID {
-		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.Addr, wantID, gotID)
+		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
 	gotState = cr.State()
 	wantState = ConnDisconnected
 	if gotState != wantState {
-		t.Fatalf("retry: %v - want state %v, got state %v", cr.Addr, wantState, gotState)
+		t.Fatalf("retry: %v - want state %v, got state %v", cr.GetAddr(), wantState, gotState)
 	}
 	cmgr.Stop()
 }
@@ -337,7 +337,7 @@ func TestMaxRetryDuration(t *testing.T) {
 	}
 
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -374,7 +374,7 @@ func TestNetworkFailure(t *testing.T) {
 			}, nil
 		},
 		OnConnection: func(c *ConnReq, conn net.Conn) {
-			t.Fatalf("network failure: got unexpected connection - %v", c.Addr)
+			t.Fatalf("network failure: got unexpected connection - %v", c.GetAddr())
 		},
 	})
 	if err != nil {
@@ -418,7 +418,7 @@ func TestStopFailed(t *testing.T) {
 		cmgr.Stop()
 	}()
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -448,7 +448,7 @@ func TestRemovePendingConnection(t *testing.T) {
 
 	// Establish a connection request to a random IP we've chosen.
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},
@@ -515,7 +515,7 @@ func TestCancelIgnoreDelayedConnection(t *testing.T) {
 
 	// Establish a connection request to a random IP we've chosen.
 	cr := &ConnReq{
-		Addr: &net.TCPAddr{
+		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: 18555,
 		},

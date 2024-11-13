@@ -61,9 +61,9 @@ type ConnReq struct {
 	// The following variables must only be used atomically.
 	id uint64
 
-	Addr      net.Addr
 	Permanent bool
 
+	addr       net.Addr
 	conn       net.Conn
 	state      ConnState
 	stateMtx   sync.RWMutex
@@ -92,10 +92,26 @@ func (c *ConnReq) State() ConnState {
 
 // String returns a human-readable string for the connection request.
 func (c *ConnReq) String() string {
-	if c.Addr == nil || c.Addr.String() == "" {
+	addr := c.GetAddr()
+	if addr == nil || addr.String() == "" {
 		return fmt.Sprintf("reqid %d", atomic.LoadUint64(&c.id))
 	}
-	return fmt.Sprintf("%s (reqid %d)", c.Addr, atomic.LoadUint64(&c.id))
+
+	return fmt.Sprintf("%s (reqid %d)", addr, atomic.LoadUint64(&c.id))
+}
+
+func (c *ConnReq) SetAddr(addr net.Addr) {
+	c.stateMtx.Lock()
+	defer c.stateMtx.Unlock()
+
+	c.addr = addr
+}
+
+func (c *ConnReq) GetAddr() net.Addr {
+	c.stateMtx.Lock()
+	defer c.stateMtx.Unlock()
+
+	return c.addr
 }
 
 // Config holds the configuration options related to the connection manager.
@@ -410,7 +426,8 @@ func (cm *ConnManager) NewConnReq() {
 
 		// we use Iterate() instead of Range() to avoid reading and writing the map at the same time
 		cm.conns.Iterate(func(_ uint64, connReq *ConnReq) bool {
-			if connReq.Addr.String() == addr.String() {
+			connReqAddr := connReq.GetAddr()
+			if connReqAddr != nil && connReqAddr.String() == addr.String() {
 				cm.logger.Debugf("Ignoring connection to %v, already connected", addr)
 
 				existingConns = true
@@ -430,7 +447,8 @@ func (cm *ConnManager) NewConnReq() {
 
 		// we use Iterate() instead of Range() to avoid reading and writing the map at the same time
 		cm.pending.Iterate(func(_ uint64, connReq *ConnReq) bool {
-			if connReq.Addr != nil && connReq.Addr.String() == addr.String() {
+			connReqAddr := connReq.GetAddr()
+			if connReqAddr != nil && connReqAddr.String() == addr.String() {
 				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %s, retries: %d)", addr, connReq.State(), connReq.retryCount)
 
 				existingPendingTx = true
@@ -446,7 +464,8 @@ func (cm *ConnManager) NewConnReq() {
 		}
 	}
 
-	c.Addr = addr
+	// we need a lock on the object here to set it
+	c.SetAddr(addr)
 
 	cm.Connect(c)
 }
@@ -489,7 +508,7 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 
 	cm.logger.Debugf("Attempting to connect to %v", c)
 
-	conn, err := cm.cfg.Dial(c.Addr)
+	conn, err := cm.cfg.Dial(c.GetAddr())
 	if err != nil {
 		select {
 		case cm.requests <- handleFailed{c, err}:
