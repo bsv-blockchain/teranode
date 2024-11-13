@@ -701,9 +701,9 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	//	ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
 	// }
 
-	ba.logger.Infof("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
-	ba.logger.Infof("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
-	ba.logger.Infof("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(ba.blockAssembler.bestBlockHeader.Load().Timestamp), 0)).String())
+	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
+	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
+	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(ba.blockAssembler.bestBlockHeader.Load().Timestamp), 0)).String())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
 		return nil, errors.WrapGRPC(
