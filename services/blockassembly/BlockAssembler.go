@@ -526,16 +526,16 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 			} else {
 				break
 			}
+		}
 
-			if len(subtreesToInclude) > 0 {
-				coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesToInclude)
-				if err != nil {
-					return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
-				}
+		if len(subtreesToInclude) > 0 {
+			coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesToInclude)
+			if err != nil {
+				return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
+			}
 
-				for _, hash := range coinbaseMerkleProof {
-					coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
-				}
+			for _, hash := range coinbaseMerkleProof {
+				coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
 			}
 		}
 
