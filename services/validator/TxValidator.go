@@ -187,17 +187,8 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	// }
 
 	for index, output := range tx.Outputs {
-		isData := output.LockingScript.IsData()
-
-		switch {
-		// TODO there are transactions on-chain with 0 sat outputs WTF
-		case !isData && output.Satoshis > MaxSatoshis: // || (minOutput > 0 && output.Satoshis < minOutput)):
+		if output.Satoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
-		case isData && output.Satoshis != 0 && blockHeight >= tv.params.GenesisActivationHeight:
-			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
-			// 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
-			//		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
-			return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
 
 		total += output.Satoshis
