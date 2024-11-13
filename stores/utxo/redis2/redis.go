@@ -32,13 +32,13 @@ func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store,
 	client := redis_db.NewClient(&redis_db.Options{
 		Addr: addr,
 		// Add connection pool settings
-		PoolSize:     10, // Adjust based on your needs
-		MinIdleConns: 5,
+		// PoolSize:     10, // Adjust based on your needs
+		// MinIdleConns: 5,
 		// Add timeouts
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolTimeout:  4 * time.Second,
+		// DialTimeout:  5 * time.Second,
+		// ReadTimeout:  3 * time.Second,
+		// WriteTimeout: 3 * time.Second,
+		// PoolTimeout:  4 * time.Second,
 		// Add automatic reconnection
 		MaxRetries:      3,
 		MinRetryBackoff: 8 * time.Millisecond,
