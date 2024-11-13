@@ -243,7 +243,6 @@ var MainNetParams = Params{
 	GenesisActivationHeight:  620538,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
-	MaxCoinbaseScriptSize:    100,
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
