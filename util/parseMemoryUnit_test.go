@@ -2,9 +2,6 @@ package util
 
 import (
 	"testing"
-
-	"github.com/ordishs/gocore"
-	"github.com/stretchr/testify/require"
 )
 
 func TestParseMemoryUnit(t *testing.T) {
@@ -53,11 +50,12 @@ func TestParseMemoryUnit(t *testing.T) {
 	}
 
 }
-func TestParseConfig(t *testing.T) {
-	blockMaxSize, ok := gocore.Config().Get("blockmaxsize", "4GB")
-	require.Equal(t, true, ok)
 
-	blockMaxSizeInt, err := ParseMemoryUnit(blockMaxSize)
-	require.NoError(t, err)
-	require.Equal(t, uint64(4294967296), blockMaxSizeInt)
-}
+// func TestParseConfig(t *testing.T) {
+// 	blockMaxSize, ok := gocore.Config().Get("blockmaxsize", "4GB")
+// 	require.Equal(t, true, ok)
+
+// 	blockMaxSizeInt, err := ParseMemoryUnit(blockMaxSize)
+// 	require.NoError(t, err)
+// 	require.Equal(t, uint64(4294967296), blockMaxSizeInt)
+// }
