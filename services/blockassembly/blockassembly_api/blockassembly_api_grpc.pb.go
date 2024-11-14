@@ -30,6 +30,7 @@ const (
 	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
 	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName    = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
+	BlockAssemblyAPI_GenerateBlocks_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -58,6 +59,7 @@ type BlockAssemblyAPIClient interface {
 	ResetBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// Get the block assembly state.
 	GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error)
+	GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -168,6 +170,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GenerateBlocks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility.
@@ -194,6 +206,7 @@ type BlockAssemblyAPIServer interface {
 	ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// Get the block assembly state.
 	GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error)
+	GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -233,6 +246,9 @@ func (UnimplementedBlockAssemblyAPIServer) ResetBlockAssembly(context.Context, *
 }
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockAssemblyState not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GenerateBlocks not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -435,6 +451,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GenerateBlocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GenerateBlocksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GenerateBlocks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GenerateBlocks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GenerateBlocks(ctx, req.(*GenerateBlocksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -481,6 +515,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockAssemblyState",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyState_Handler,
+		},
+		{
+			MethodName: "GenerateBlocks",
+			Handler:    _BlockAssemblyAPI_GenerateBlocks_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

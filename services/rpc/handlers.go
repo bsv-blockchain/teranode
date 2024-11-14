@@ -511,58 +511,14 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, errors.NewInvalidArgumentError("Invalid number of blocks: %d", c.NumBlocks)
 	}
 
-	// causes lint:gosec error G107: Potential HTTP request made with variable url (gosec)
-	// url := fmt.Sprintf("http://localhost:%d/mine?blocks=%d", minerHTTPPort, c.NumBlocks)
-
-	// Construct URL using net/url
-	u := &url.URL{
-		Scheme: "http",
-		Host:   fmt.Sprintf("localhost:%d", minerHTTPPort),
-		Path:   "mine",
-	}
-	q := u.Query()
-	q.Set("blocks", fmt.Sprintf("%d", c.NumBlocks))
-	u.RawQuery = q.Encode()
-
-	// Send the GET request
-	response, err := http.Get(u.String())
+	err := s.blockAssemblyClient.GenerateBlocks(ctx, int32(c.NumBlocks)) //nolint:gosec
 	if err != nil {
-		s.logger.Errorf("The HTTP request failed with error %s\n", err)
-
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCMisc,
-			Message: "Can't contact miner",
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: err.Error(),
 		}
 	}
-	defer response.Body.Close() // Always close the response body
 
-	// Read the response body
-	data, _ := io.ReadAll(response.Body)
-
-	// Print the response status and body
-	s.logger.Debugf("Status Code:", response.StatusCode)
-	s.logger.Debugf("Response Body: %s\n", data)
-
-	// // Respond with an error if the client is requesting 0 blocks to be generated.
-
-	// // Create a reply
-	// reply := make([]string, c.NumBlocks)
-
-	// blockHashes, err := s.cfg.CPUMiner.GenerateNBlocks(c.NumBlocks)
-	// if err != nil {
-	// 	return nil, &bsvjson.RPCError{
-	// 		Code:    bsvjson.ErrRPCInternal.Code,
-	// 		Message: herr.Error(),
-	// 	}
-	// }
-
-	// // Mine the correct number of blocks, assigning the hex representation of the
-	// // hash of each one to its place in the reply.
-	// for i, hash := range blockHashes {
-	// 	reply[i] = hash.String()
-	// }
-
-	// return reply, nil
 	return nil, nil
 }
 
@@ -605,7 +561,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 		"nBits":               hex.EncodeToString(reversedBits),
 		"time":                mc.Time,
 		"height":              mc.Height,
-		"num_txs":             mc.NumTxs,
+		"num_tx":              mc.NumTxs,
 		"sizeWithoutCoinbase": mc.SizeWithoutCoinbase,
 		"merkleProof":         merkleProofStrings,
 	}

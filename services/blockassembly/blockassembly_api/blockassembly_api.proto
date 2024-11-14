@@ -41,6 +41,8 @@ service BlockAssemblyAPI {
 
   // Get the block assembly state.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
+
+  rpc GenerateBlocks (GenerateBlocksRequest) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -120,4 +122,9 @@ message StateMessage {
 // Response containing the current difficulty of the blockchain.
 message GetCurrentDifficultyResponse {
   double difficulty = 1; // the current difficulty of the blockchain
+}
+
+// Request for generating a block.
+message GenerateBlocksRequest {
+  int32 count = 1; // the number of blocks to generate
 }

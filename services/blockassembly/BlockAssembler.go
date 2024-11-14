@@ -57,13 +57,13 @@ type BlockAssembler struct {
 	resetWaitCount           atomic.Int32
 	resetWaitTime            atomic.Int32
 	currentRunningState      atomic.Value
+	blockMaxSize             uint64
 }
 
 const DifficultyAdjustmentWindow = 144
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, stats *gocore.Stat, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
-
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
 	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)
 
@@ -79,6 +79,13 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, stats *gocore
 	bytesLittleEndian := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytesLittleEndian, params.PowLimitBits)
 	defaultMiningBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+
+	maxBlockSize, _ := gocore.Config().Get("blockmaxsize", "0")
+
+	maxBlockSizeInt, err := util.ParseMemoryUnit(maxBlockSize)
+	if err != nil {
+		logger.Fatalf("Invalid blockmaxsize: %v", err)
+	}
 
 	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
@@ -100,6 +107,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, stats *gocore
 		resetWaitCount:        atomic.Int32{},
 		resetWaitTime:         atomic.Int32{},
 		currentRunningState:   atomic.Value{},
+		blockMaxSize:          maxBlockSizeInt,
 	}
 	b.currentRunningState.Store("starting")
 
@@ -152,6 +160,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		}()
 
 		b.currentRunningState.Store("running")
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -412,6 +421,7 @@ func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint
 	}
 
 	bestBlockHeight := binary.LittleEndian.Uint32(state[:4])
+
 	bestBlockHeader, err := model.NewBlockHeaderFromBytes(state[4:])
 	if err != nil {
 		return nil, 0, err
@@ -491,30 +501,58 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
 
-	var coinbaseValue uint64
-	for _, subtree := range subtrees {
-		coinbaseValue += subtree.Fees
+	if b.blockMaxSize > 0 && len(subtrees) > 0 && b.blockMaxSize < subtrees[0].SizeInBytes {
+		b.logger.Warnf("[BlockAssembler] max block size is less than the size of the subtree: %d < %d", b.blockMaxSize, subtrees[0].SizeInBytes)
+		return nil, nil, errors.NewProcessingError("max block size is less than the size of the subtree")
 	}
-	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load() + 1)
+
+	var coinbaseValue uint64
 
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
 	var txCount uint32
+
 	var sizeWithoutCoinbase uint32
 
+	var subtreesToInclude []*util.Subtree
+
+	var coinbaseMerkleProofBytes [][]byte
+
 	if len(subtrees) > 0 {
+		currentBlockSize := uint64(0)
+
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("error creating top tree", err)
 		}
+
 		for _, subtree := range subtrees {
-			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
-			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-			txCount += uint32(len(subtree.Nodes))
-			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-			sizeWithoutCoinbase += uint32(subtree.SizeInBytes)
+			if b.blockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= b.blockMaxSize {
+				subtreesToInclude = append(subtreesToInclude, subtree)
+				coinbaseValue += subtree.Fees
+				currentBlockSize += subtree.SizeInBytes
+				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+				txCount += uint32(len(subtree.Nodes))
+				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+				sizeWithoutCoinbase += uint32(subtree.SizeInBytes)
+			} else {
+				break
+			}
 		}
+
+		if len(subtreesToInclude) > 0 {
+			coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesToInclude)
+			if err != nil {
+				return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
+			}
+
+			for _, hash := range coinbaseMerkleProof {
+				coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
+			}
+		}
+
 		id = topTree.RootHash()
 	}
 
@@ -529,6 +567,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 			nBits = b.currentDifficulty
 		} else {
 			b.logger.Warnf("nextNbits and current difficulty are nil. Setting to pow limit bits")
+
 			bitsBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(bitsBytes, b.chainParams.PowLimitBits)
 
@@ -536,28 +575,16 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 			if err != nil {
 				return nil, nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
 			}
+
 			b.currentDifficulty = nBits
 		}
 	}
-
-	var coinbaseMerkleProofBytes [][]byte
-
-	if len(subtrees) > 0 {
-		coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
-		}
-
-		for _, hash := range coinbaseMerkleProof {
-			coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
-		}
-	} else {
-		coinbaseMerkleProofBytes = [][]byte{}
-	}
-
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	timeNow := uint32(time.Now().Unix())
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNow)
+
+	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load() + 1)
 
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{
@@ -565,7 +592,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
 		PreviousHash:        previousHash,
 		CoinbaseValue:       coinbaseValue,
-		Version:             1,
+		Version:             0x20000000,
 		NBits:               nBits.CloneBytes(),
 		Height:              b.bestBlockHeight.Load() + 1,
 		Time:                timeNow,
@@ -573,14 +600,15 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		NumTxs:              txCount,
 		SizeWithoutCoinbase: sizeWithoutCoinbase,
 		// nolint:gosec
-		SubtreeCount: uint32(len(subtrees)),
+		SubtreeCount: uint32(len(subtreesToInclude)),
 	}
 
-	return miningCandidate, subtrees, nil
+	return miningCandidate, subtreesToInclude, nil
 }
 
 func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader) error {
 	startTime := time.Now()
+
 	prometheusBlockAssemblerReorg.Inc()
 
 	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
@@ -687,6 +715,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 
 	// find the first blockHeader that is the same in both chains
 	var commonAncestor *model.BlockHeader
+
 	for _, blockHeader := range newChain {
 		// check whether the blockHeader is in the current chain
 		if _, ok := currentChainMap[*blockHeader.Hash()]; ok {
@@ -717,6 +746,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		moveDownBlockHeaders = append(moveDownBlockHeaders, blockHeader)
 	}
 
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	if len(moveDownBlockHeaders) > int(maxGetHashes) {
 		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", b.maxBlockReorgRollback)
 	}
@@ -725,7 +755,6 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 }
 
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
-
 	// use difficulty
 	if b.difficultyAdjustment {
 		nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
@@ -742,6 +771,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	randomOffset := rand.Int31n(21) - 10
 
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Load().Timestamp
 
 	b.logger.Debugf("timeDifference: %d", timeDifference)

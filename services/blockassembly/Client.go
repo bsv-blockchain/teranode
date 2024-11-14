@@ -208,6 +208,19 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 	return unwrappedErr
 }
 
+func (s *Client) GenerateBlocks(ctx context.Context, count int32) error {
+	_, err := s.client.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{
+		Count: count,
+	})
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
+}
+
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
 	txRequests := make([]*blockassembly_api.AddTxRequest, len(batch))
 	for i, item := range batch {

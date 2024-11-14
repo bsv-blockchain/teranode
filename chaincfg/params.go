@@ -5,13 +5,13 @@
 package chaincfg
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -139,7 +139,7 @@ type Params struct {
 	// coins (coinbase transactions) can be spent.
 	CoinbaseMaturity uint16
 
-	// Maximum coinbase scriptSig size
+	// MaxCoinbaseScriptSigSize is the maximum size of the scriptSig in bytes for the coinbase transaction.
 	MaxCoinbaseScriptSigSize uint32
 
 	// SubsidyReductionInterval is the interval of blocks before the subsidy
@@ -497,6 +497,7 @@ var TestNet3Params = Params{
 	GenesisActivationHeight:  1344302,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
+
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
 	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
@@ -588,6 +589,7 @@ var CustomTestNetParams = Params{
 	GenesisActivationHeight:  1344302,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
+
 	SubsidyReductionInterval: 210000,
 	// TODO: change this back to 10 mins
 	TargetTimePerBlock:       time.Minute * 1, // 10 minutes
@@ -656,12 +658,12 @@ var (
 	// ErrDuplicateNet describes an error where the parameters for a Bitcoin
 	// network could not be set due to the network already being a standard
 	// network or previously-registered into this package.
-	ErrDuplicateNet = errors.New("duplicate Bitcoin network")
+	ErrDuplicateNet = errors.New(errors.ERR_INVALID_ARGUMENT, "duplicate Bitcoin network")
 
 	// ErrUnknownHDKeyID describes an error where the provided id which
 	// is intended to identify the network for a hierarchical deterministic
 	// private extended key is not registered.
-	ErrUnknownHDKeyID = errors.New("unknown hd private extended key bytes")
+	ErrUnknownHDKeyID = errors.New(errors.ERR_INVALID_ARGUMENT, "unknown hd private extended key bytes")
 )
 
 var (
@@ -760,7 +762,7 @@ func GetChainParams(network string) (*Params, error) {
 	case "custom":
 		return &CustomTestNetParams, nil
 	default:
-		return nil, errors.New(fmt.Sprintf("unknown network %s", network))
+		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, fmt.Sprintf("unknown network %s", network))
 	}
 }
 

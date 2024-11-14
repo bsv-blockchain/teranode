@@ -32,6 +32,7 @@ var (
 	prometheusBlockAssemblerUpdateBestBlock        prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight         prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight      prometheus.Gauge
+	prometheusBlockAssemblerGenerateBlocks         prometheus.Histogram
 )
 
 var (
@@ -220,6 +221,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "current_block_height",
 			Help:      "Current block height in block assembly",
+		},
+	)
+
+	prometheusBlockAssemblerGenerateBlocks = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "generate_blocks",
+			Help:      "Histogram of generating blocks in block assembler",
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 }
