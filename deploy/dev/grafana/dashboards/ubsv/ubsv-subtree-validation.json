@@ -113,7 +113,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
+          "expr": "sum(increase(teranode_validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60  >0",
           "hide": false,
           "legendFormat": "{{service}}",
           "range": true,
@@ -188,7 +188,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.95, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.95, (teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"})))",
           "instant": false,
           "interval": "",
           "legendFormat": "p95 us - {{namespace}}",
@@ -201,7 +201,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.99, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.99, (teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"})))",
           "interval": "",
           "legendFormat": "p99 us - {{namespace}}",
           "range": true,
@@ -214,7 +214,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.999, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.999, (teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"})))",
           "hide": false,
           "instant": false,
           "interval": "",
@@ -317,7 +317,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_set_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_subtreevalidation_set_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -436,7 +436,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_del_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_subtreevalidation_del_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -555,7 +555,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_bless_missing_transaction_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_subtreevalidation_bless_missing_transaction_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -674,7 +674,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_validate_subtree_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -877,8 +877,8 @@
       {
         "current": {
           "selected": true,
-          "text": "Prometheus Frankfurt ",
-          "value": "Prometheus Frankfurt "
+          "text": "Prometheus Mainnet",
+          "value": "Prometheus Mainnet"
         },
         "hide": 0,
         "includeAll": false,
@@ -892,6 +892,37 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "definition": "label_values(subsystem)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Subsystem",
+        "multi": true,
+        "name": "subsystem",
+        "options": [],
+        "query": {
+          "query": "label_values(subsystem)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
       }
     ]
   },
@@ -903,6 +934,6 @@
   "timezone": "",
   "title": "UBSV Subtree Validation",
   "uid": "b0e7b163-27a5-4f20-af5d-dca915d0a2ed",
-  "version": 6,
+  "version": 8,
   "weekStart": ""
 }

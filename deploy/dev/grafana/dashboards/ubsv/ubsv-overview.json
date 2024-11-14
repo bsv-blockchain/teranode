@@ -111,7 +111,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service,) >0) / 60",
+          "expr": "(sum(increase(propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,) >0) / 60",
           "interval": "",
           "legendFormat": "Propagation - {{service}}",
           "range": true,
@@ -123,7 +123,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(tx_blaster_processed_transactions{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) / 60",
+          "expr": "sum(increase(tx_blaster_processed_transactions{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "Tx Blaster ",
           "range": true,
@@ -135,7 +135,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(blockassembly_transactions{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval]))  by (service,) / 60",
+          "expr": "sum(increase(teranode_blockassembly_transactions{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval]))  by (service,) / 60",
           "hide": false,
           "legendFormat": "Blockassembly - {{service}}",
           "range": true,
@@ -254,7 +254,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(tx_blaster_workers{service=~\"tx-blaster-service.*\",namespace=~\"$namespace\"})",
+          "expr": "sum(teranode_tx_blaster_workers{service=~\"tx-blaster-service.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"})",
           "hide": false,
           "instant": false,
           "legendFormat": "workers",
@@ -267,7 +267,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(tx_blaster_processed_transactions{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (instance,) / 60 > 0",
+          "expr": "sum(increase(teranode_tx_blaster_processed_transactions{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (instance,) / 60 > 0",
           "hide": false,
           "legendFormat": "Valid-{{instance}}",
           "range": true,
@@ -279,7 +279,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(tx_blaster_invalid_transactions{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (instance) / 60 > 0",
+          "expr": "sum(increase(teranode_tx_blaster_invalid_transactions{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (instance) / 60 > 0",
           "hide": false,
           "legendFormat": "Invalid-{{instance}}",
           "range": true,
@@ -291,7 +291,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(tx_blaster_retry_transactions{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (instance) / 60 > 0",
+          "expr": "sum(increase(teranode_tx_blaster_retry_transactions{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (instance) / 60 > 0",
           "hide": false,
           "legendFormat": "Retries-{{instance}}",
           "range": true,
@@ -392,7 +392,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (instance,) >0) / 60",
+          "expr": "(sum(increase(teranode_propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (instance,) >0) / 60",
           "hide": false,
           "legendFormat": "{{instance}}",
           "range": true,
@@ -404,7 +404,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(propagation_invalid_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (instance,) >0) / 60",
+          "expr": "(sum(increase(teranode_propagation_invalid_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (instance,) >0) / 60",
           "hide": false,
           "legendFormat": "Invalid: {{instance}}",
           "range": true,
@@ -461,7 +461,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -504,7 +505,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (node,) >0) / 60",
+          "expr": "(sum(increase(teranode_propagation_transactions_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (node,) >0) / 60",
           "hide": false,
           "legendFormat": "{{node}}",
           "range": true,
@@ -559,7 +560,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               }
             ]
           },
@@ -663,7 +665,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -706,7 +709,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(blockassembly_transactions{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60",
+          "expr": "sum(increase(teranode_blockassembly_transactions{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60",
           "hide": false,
           "legendFormat": "Transactions-{{service}}",
           "range": true,
@@ -763,7 +766,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -806,7 +810,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(blockassembly_transactions{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service,) >0)",
+          "expr": "(sum(teranode_blockassembly_transactions{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service,) >0)",
           "hide": false,
           "legendFormat": "Transactions",
           "range": true,
@@ -818,7 +822,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "(sum(blockassembly_queued_transactions{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service,) >0)",
+          "expr": "(sum(teranode_blockassembly_queued_transactions{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service,) >0)",
           "hide": false,
           "legendFormat": "Queued",
           "range": true,
@@ -830,7 +834,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "\n(sum(blockassembly_subtrees{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service,) >0) / 60",
+          "expr": "\n(sum(teranode_blockassembly_subtrees{instance=~\"$instance\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service,) >0) / 60",
           "hide": false,
           "legendFormat": "Subtrees",
           "range": true,
@@ -887,7 +891,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -930,7 +935,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_validator_send_to_block_assembly_count{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60 > 0",
+          "expr": "sum(increase(teranode_validator_send_to_block_assembly_count{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60 > 0",
           "hide": false,
           "legendFormat": "Tx Data (block assembly)",
           "range": true,
@@ -942,7 +947,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_send_to_blockvalidation_kafka_micros_count{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60 > 0",
+          "expr": "sum(increase(teranode_validator_send_to_blockvalidation_kafka_count{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60 > 0",
           "hide": false,
           "legendFormat": "Tx Meta (block/subtree validation)",
           "range": true,
@@ -999,7 +1004,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1042,7 +1048,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(subtreevalidation_set_tx_meta_cache_kafka_count{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service,instance) / 60 > 0",
+          "expr": "sum(increase(teranode_subtreevalidation_set_tx_meta_cache_kafka_count{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) / 60 > 0",
           "hide": false,
           "legendFormat": "{{service}} - {{instance}}",
           "range": true,
@@ -1099,7 +1105,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1142,7 +1149,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(tx_blaster_workers{namespace=~\"$namespace\"})by (instance,)   >0",
+          "expr": "sum(teranode_tx_blaster_workers{namespace=~\"$namespace\"})by (instance,)   >0",
           "hide": false,
           "legendFormat": "Workers-{{instance}}",
           "range": true,
@@ -1154,7 +1161,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(tx_blaster_worker_errors{namespace=~\"$namespace\"}) by (instance,)  >0",
+          "expr": "sum(teranode_tx_blaster_worker_errors{namespace=~\"$namespace\"}) by (instance,)  >0",
           "hide": false,
           "legendFormat": "Worker errors - {{instance}}",
           "range": true,
@@ -1211,7 +1218,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1254,7 +1262,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(blockvalidation_block_found_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_block_found_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "legendFormat": "Blocks queued-{{service}}",
           "range": true,
@@ -1266,7 +1274,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(blockvalidation_catchup_count{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_catchup_count{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "legendFormat": "Blocks catchup-{{service}}",
           "range": true,
@@ -1324,7 +1332,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               }
             ]
           },
@@ -1363,7 +1372,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(subtreevalidation_validate_subtree_count{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60",
+          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_count{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60",
           "hide": false,
           "legendFormat": "{{service}}",
           "range": true,
@@ -1420,7 +1429,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1463,7 +1473,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(blockvalidation_catchup_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_catchup_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "legendFormat": "Blocks catchup-{{service}}",
           "range": true,
@@ -1519,7 +1529,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1582,7 +1593,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(subtreevalidation_validate_subtree_count{service=~\"$srvc\",namespace=~\"$namespace\"}) by (service) >0",
+          "expr": "sum(teranode_subtreevalidation_validate_subtree_count{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service) >0",
           "hide": false,
           "interval": "$grouping_interval",
           "legendFormat": "Count: {{service}}",
@@ -1595,7 +1606,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(subtreevalidation_validate_subtree_duration_sum{service=~\"$srvc\",namespace=~\"$namespace\"}) by (service) >0",
+          "expr": "sum(teranode_subtreevalidation_validate_subtree_duration_sum{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service) >0",
           "hide": false,
           "interval": "$grouping_interval",
           "legendFormat": "Duration: {{service}}",
@@ -1655,7 +1666,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1697,7 +1709,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(blockchain_add_block_count{service=~\"$srvc\",namespace=~\"$namespace\"}[1m])) by (service) >0",
+          "expr": "sum(increase(teranode_blockchain_add_block_count{service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[1m])) by (service) >0",
           "hide": false,
           "interval": "$grouping_interval",
           "legendFormat": "{{service}}",
@@ -1754,7 +1766,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1797,7 +1810,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(aerospike_utxo_create_batch_count[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_utxo_create_batch_count[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "UTXO: Batch Create",
           "range": true,
@@ -1809,7 +1822,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(aerospike_utxo_store[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_utxo_store[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "UTXO: Store",
           "range": true,
@@ -1821,7 +1834,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(aerospike_utxo_spend_batch_count[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_utxo_spend_batch_count[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "UTXO: Spend Batch",
           "range": true,
@@ -1833,7 +1846,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(aerospike_map_utxo_reset[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_utxo_reset[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "Map: Restore",
           "range": true,
@@ -1845,7 +1858,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(aerospike_map_utxo_spend[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_utxo_spend[$grouping_interval])) / 60",
           "hide": false,
           "legendFormat": "Map: Spend",
           "range": true,
@@ -1858,7 +1871,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_utxo_respend[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_utxo_respend[$grouping_interval])) / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Map: Respend",
@@ -1872,7 +1885,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_utxo_reset[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_utxo_reset[$grouping_interval])) / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Map: Reset",
@@ -1929,7 +1942,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -1973,7 +1987,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_get[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_get[$grouping_interval])) / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Get",
@@ -1987,7 +2001,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_set_mined[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_set_mined[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set",
@@ -2001,7 +2015,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_delete[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_delete[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Delete",
@@ -2015,7 +2029,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_set_mined[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_set_mined[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set-Mined",
@@ -2029,7 +2043,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_set_mined_batch[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_set_mined_batch[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set-Mined-Batch",
@@ -2043,7 +2057,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_set_mined_batch_n[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_set_mined_batch_n[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set-Mined-BatchN",
@@ -2057,7 +2071,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_txmeta_get_multi_n[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_txmeta_get_multi_n[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Get-Multi-BatchN",
@@ -2071,7 +2085,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_txmeta_set_mined_batch_err_n[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_txmeta_set_mined_batch_err_n[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set-Multi-ErrN",
@@ -2085,7 +2099,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_set_mined_batch[$grouping_interval]))/ 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_set_mined_batch[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set-Batch",
@@ -2099,7 +2113,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_get_multi[$grouping_interval])) / 60",
+          "expr": "sum(increase(teranode_aerospike_map_txmeta_get_multi[$grouping_interval])) / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Get-Multi",
@@ -2156,7 +2170,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2345,7 +2360,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2558,7 +2574,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2602,7 +2619,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(blockvalidation_tx_meta_cache_insertions{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service,instance) > 0 / 60",
+          "expr": "sum(rate(teranode_blockvalidation_tx_meta_cache_insertions{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) > 0 / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache insertions - {{service}} - {{instance}}",
@@ -2616,7 +2633,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(blockvalidation_tx_meta_cache_hits{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service,instance) > 0 / 60",
+          "expr": "sum(rate(teranode_blockvalidation_tx_meta_cache_hits{service!~\"tx-blaster.*\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) > 0 / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache hits - {{service}} - {{instance}}",
@@ -2630,7 +2647,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(blockvalidation_tx_meta_cache_misses{service!~\"tx-blaster.*\",service=~\"$srvc\"}[$grouping_interval])) by (service,instance) > 0 / 60",
+          "expr": "sum(rate(teranode_blockvalidation_tx_meta_cache_misses{service!~\"tx-blaster.*\",service=~\"$srvc\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) > 0 / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache misses - {{service}} - {{instance}}",
@@ -2644,7 +2661,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(blockvalidation_tx_meta_cache_evictions{service!~\"tx-blaster.*\",service=~\"$srvc\"}[$grouping_interval])) by (service,instance) > 0 / 60",
+          "expr": "sum(rate(teranode_blockvalidation_tx_meta_cache_evictions{service!~\"tx-blaster.*\",service=~\"$srvc\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) > 0 / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache evictions - {{service}} - {{instance}}",
@@ -2658,7 +2675,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(blockvalidation_tx_meta_cache_get_origin{service!~\"tx-blaster.*\",service=~\"$srvc\"}[$grouping_interval])) by (service,instance) > 0 / 60",
+          "expr": "sum(rate(teranode_blockvalidation_tx_meta_cache_get_origin{service!~\"tx-blaster.*\",service=~\"$srvc\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service,instance) > 0 / 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Get from Aeropsike - {{service}} - {{instance}}",
@@ -2715,7 +2732,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2760,7 +2778,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(blockvalidation_tx_meta_cache_size{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service,instance)",
+          "expr": "sum(teranode_blockvalidation_tx_meta_cache_size{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service,instance)",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache size - {{service}} - {{instance}}",
@@ -2818,7 +2836,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2863,7 +2882,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(blockvalidation_subtree_exists_cache{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_subtree_exists_cache{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "instant": false,
           "legendFormat": "Subtrees queued - {{service}}",
@@ -2920,7 +2939,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -2965,7 +2985,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(blockvalidation_tx_meta_cache_cache_total_elements_added{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service,instance)",
+          "expr": "sum(teranode_blockvalidation_tx_meta_cache_cache_total_elements_added{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service,instance)",
           "hide": false,
           "instant": false,
           "legendFormat": "Cache size - {{service}} - {{instance}}",
@@ -3022,7 +3042,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -3066,7 +3087,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(Asset_http_get_subtree{namespace=~\"$namespace\"}[$grouping_interval])) by (app,)",
+          "expr": "sum(rate(teranode_Asset_http_get_subtree{namespace=~\"$namespace\"}[$grouping_interval])) by (app,)",
           "hide": false,
           "instant": false,
           "interval": "$grouping_interval",
@@ -3125,7 +3146,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -3170,7 +3192,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(blockvalidation_block_found_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_block_found_ch{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "instant": false,
           "legendFormat": "Blocks queued - {{service}}",
@@ -3184,7 +3206,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(blockvalidation_last_validated_blocks_cache{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\"}) by (service)",
+          "expr": "sum(teranode_blockvalidation_last_validated_blocks_cache{service!~\"tx-blaster.*\",service=~\"$srvc\",service!~\"tx-blaster.*\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}) by (service)",
           "hide": false,
           "instant": false,
           "legendFormat": "Blocks in RAM - {{service}}",
@@ -3241,7 +3263,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
                 "color": "red",
@@ -3285,7 +3308,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(tx_blaster_errors{service=~\"$service\",namespace=~\"$namespace\"}[$grouping_interval])) /60",
+          "expr": "sum(increase(teranode_tx_blaster_errors{service=~\"$service\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) /60",
           "hide": false,
           "instant": false,
           "interval": "$grouping_interval",
@@ -3309,7 +3332,7 @@
         "auto_count": 30,
         "auto_min": "10s",
         "current": {
-          "selected": false,
+          "selected": true,
           "text": "1m",
           "value": "1m"
         },
@@ -3382,7 +3405,7 @@
       {
         "allValue": ".*",
         "current": {
-          "selected": true,
+          "selected": false,
           "text": [
             "All"
           ],
@@ -3414,7 +3437,7 @@
       {
         "allValue": "",
         "current": {
-          "selected": true,
+          "selected": false,
           "text": [
             "All"
           ],
@@ -3446,7 +3469,7 @@
       {
         "allValue": ".*",
         "current": {
-          "selected": true,
+          "selected": false,
           "text": [
             "All"
           ],
@@ -3478,8 +3501,8 @@
       {
         "current": {
           "selected": false,
-          "text": "Prometheus EU",
-          "value": "Prometheus EU"
+          "text": "Prometheus Mainnet",
+          "value": "Prometheus Mainnet"
         },
         "hide": 0,
         "includeAll": false,
@@ -3493,6 +3516,37 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "definition": "label_values(subsystem)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Subsystem",
+        "multi": true,
+        "name": "subsystem",
+        "options": [],
+        "query": {
+          "query": "label_values(subsystem)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
       }
     ]
   },
@@ -3504,6 +3558,6 @@
   "timezone": "utc",
   "title": "UBSV Service Overview",
   "uid": "cde0cde9-5698-4433-b851-ccae709ee2b2",
-  "version": 169,
+  "version": 175,
   "weekStart": ""
 }
