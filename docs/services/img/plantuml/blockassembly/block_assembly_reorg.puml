@@ -3,12 +3,15 @@ participant "BlockAssembler" as BA
 participant "BlockchainClient" as BC
 participant "SubtreeProcessor" as STP
 database "SubtreeStore" as SStore
+database "UTXOStore" as UTXOStore
 entity "Block" as BlockEntity
 
-BA -> BC : GetBlockHeaders(ctx, header)
+BA -> BC : GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorgCatchup))
 activate BC
-BC --> BA : moveDownBlockHeaders, moveUpBlockHeaders
+BC --> BA : newChain, _, err
 deactivate BC
+
+BA -> BA : Calculate moveUpBlockHeaders and moveDownBlockHeaders
 
 loop For Each BlockHeader in moveUpBlockHeaders
     BA -> BC : GetBlock(ctx, blockHeader.Hash())
@@ -29,16 +32,23 @@ activate STP
 
 loop For Each Block in moveDownBlocks
     STP -> STP : moveDownBlock(ctx, block)
+    STP -> UTXOStore : Delete coinbase UTXO
 end
 
 loop For Each Block in moveUpBlocks
-    STP -> STP : moveUpBlock(ctx, block, skipNotification)
+    STP -> STP : moveUpBlock(ctx, block, true)
+    STP -> UTXOStore : Process coinbase UTXOs
 end
+
+STP -> STP : Announce all subtrees to network
+STP -> STP : setTxCount()
 
 STP --> BA : reorg completion
 deactivate STP
 
-BA -> BA : Update internal state
+BA -> BA : Update internal state (bestBlockHeader, bestBlockHeight)
+BA -> BA : SetState(ctx)
+BA -> BA : setCurrentChain(ctx)
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

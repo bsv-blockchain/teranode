@@ -4,11 +4,13 @@ participant "Block Assembler" as BA
 participant "Blockchain Client" as BC
 participant "Subtree Processor" as STP
 database "Subtree Store" as SStore
+database "UTXO Store" as UTXOStore
 
-BA -> BC: GetBlock(ctx, bestBlockchainBlockHeader.Hash())
+BA -> BC: GetBlock(ctx, \nbestBlockchainBlockHeader.Hash())
 activate BC
 BC --> BA: block / err
 deactivate BC
+
 BA -> STP: MoveUpBlock(block)
 activate STP
 
@@ -16,18 +18,31 @@ STP -> STP: moveUpBlockChan <- moveBlockRequest
 STP -> STP: Process moveBlockRequest
 activate STP
 
-STP -> SStore: Get subtrees from store
-activate SStore
-SStore --> STP: Subtrees
-deactivate SStore
+STP -> UTXOStore: Process coinbase utxos
+activate UTXOStore
+UTXOStore --> STP: Coinbase UTXOs processed
+deactivate UTXOStore
 
-STP -> STP: Process coinbase utxos
-STP -> STP: Create transaction map from block subtrees
-STP -> STP: Update current subtree with pending transactions
+alt if block is not from our own mining
+    STP -> SStore: Get subtrees from store
+    activate SStore
+    SStore --> STP: Subtrees
+    deactivate SStore
+
+    STP -> STP: Create transaction map\n from block subtrees
+    STP -> STP: Process remainder tx hashes
+else if block is from our own mining
+    STP -> STP: Process existing chainedSubtrees \nand currentSubtree
+end
+
+STP -> STP: Update current subtree \nwith pending transactions
+STP -> STP: setTxCount()
 
 STP --> BA: err / nil
 deactivate STP
 deactivate BA
+
+BA -> BA: UpdateBestBlock(ctx)
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

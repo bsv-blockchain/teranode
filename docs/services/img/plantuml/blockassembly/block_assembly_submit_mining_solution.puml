@@ -2,17 +2,14 @@
 participant "Mining" as Miner
 participant "Block Assembly Client" as Client
 participant "Block Assembly Server" as Server
-participant "blockSubmissionCh" as SubmissionCh
+participant "blockSubmissionChan" as SubmissionCh
 database "JobStore" as JobStore
 entity "Block" as Block
-entity "Model" as Model
 database "Transaction Store" as TxStore
-database "Transaction Meta Store" as TxMetaStore
 database "Subtree Store" as SubtreeStore
 participant "Blockchain Client" as BlockchainClient
 
-Miner -> Miner : Solve the mining challenge
-
+Miner -> Miner: Solve Mining Challenge
 Miner -> Client : SubmitMiningSolution(ctx, solution)
 activate Client
 
@@ -23,57 +20,33 @@ Server -> SubmissionCh : Add block submission
 SubmissionCh -> Server : submitMiningSolution(ctx, blockSubmission)
 
 Server -> JobStore : jobItem = Get(*storeId)
-activate JobStore
 JobStore --> Server : return jobItem
-deactivate JobStore
 
 Server -> Server : Create new block with proof of work
-Server -> Block : block.Valid(cntxt, nil, nil, nil)
-activate Block
+Server -> Block : block.Valid(ctx, nil, nil, nil, nil, \nnil, nil, nil, nil)
 Block --> Server : Validation result
-deactivate Block
 
-Server -> TxStore : Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
-activate TxStore
+Server -> TxStore : Set(context.Background(), \nblock.CoinbaseTx.TxIDChainHash().CloneBytes(), \nblock.CoinbaseTx.ExtendedBytes())
 TxStore --> Server : Coinbase Transaction stored
-deactivate TxStore
 
-Server -> TxMetaStore : Create(cntxt, block.CoinbaseTx)
-activate TxMetaStore
-TxMetaStore --> Server : Coinbase Metadata stored
-deactivate TxMetaStore
-
-Server -> BlockchainClient : AddBlock(cntxt, block, "")
-activate BlockchainClient
+Server -> BlockchainClient : AddBlock(ctx, block, "")
 BlockchainClient --> Server : Block added to the local Blockchain
-deactivate BlockchainClient
 
-Server -> Server : removeSubtreesTTL(gCtx, block)
+Server -> Server : UpdateBestBlock(ctx)
+
+Server -> Server : Go routine: removeSubtreesTTL(ctx, block)
 activate Server
 loop for each subtree
-    Server -> SubtreeStore : SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
-    activate SubtreeStore
-    SubtreeStore --> Server : Subtree TTL updated
-    deactivate SubtreeStore
+    Server -> SubtreeStore : SetTTL(ctx, subtreeHashBytes, 0)
 end
-
 Server -> BlockchainClient : SetBlockSubtreesSet(ctx, blockHash)
-activate BlockchainClient
-BlockchainClient --> Server : Block Subtrees marked as "set"
-deactivate BlockchainClient
-
 deactivate Server
-
-
 
 Server -> JobStore : DeleteAll()
 JobStore --> Server : All jobs deleted
 
 alt If Error Occurs
-    Server -> BlockchainClient : InvalidateBlock(setCtx, block.Header.Hash())
-    activate BlockchainClient
-    BlockchainClient --> Server : Block invalidated
-    deactivate BlockchainClient
+    Server -> BlockchainClient : InvalidateBlock(ctx, block.Header.Hash())
 end
 
 Server --> Client : Return result

@@ -1,25 +1,38 @@
 @startuml
 actor Client
+participant "Block Assembler" as Assembler
+participant "Blockchain Client" as BlockchainClient
+participant "Subtree Processor" as Processor
 
-entity "Block Assembler" as Assembler
-entity "Blockchain BlockchainClient" as BlockchainClient
-entity "Subtree Processor" as Processor
+Client -> Assembler : ResetBlockAssembly()
+activate Assembler
 
+Assembler -> Assembler : resetCh <- struct{}{}
+Assembler -> BlockchainClient : GetBestBlockHeader(ctx)
+activate BlockchainClient
+BlockchainClient --> Assembler : bestBlockchainBlockHeader, meta, err
+deactivate BlockchainClient
 
-Client -> Assembler : Call ResetBlockAssembly
+Assembler -> Assembler : getReorgBlocks(ctx, bestBlockchainBlockHeader)
+Assembler -> Processor : Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks)
+activate Processor
+Processor --> Assembler : ResetResponse
+deactivate Processor
 
-Assembler -> BlockchainClient : GetBestBlockHeader()
-BlockchainClient -> Assembler : Return bestBlockHeader, meta, err
+alt if reset was successful
+    Assembler -> Assembler : Update bestBlockHeader and bestBlockHeight
+else if reset failed
+    Assembler -> Assembler : Set bestBlockHeader from Processor's current block header
+end
 
-Assembler -> Assembler : Calculate reorg blocks(moveDownBlocks, moveUpBlocks)
-Assembler -> Processor : Reset subtree with new blocks
-Processor -> Assembler : Return response (with errors if any)
+Assembler -> Assembler : SetState(ctx)
+Assembler -> Assembler : setCurrentChain(ctx)
 
-Assembler -> Assembler : Update internal state with new block header
-Assembler -> Assembler : Update block height
+Assembler -> Assembler : Set resetWaitCount and resetWaitTime
 
+Assembler --> Client : EmptyMessage{}
+deactivate Assembler
 
-Assembler -> Assembler : Set current chain
-
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

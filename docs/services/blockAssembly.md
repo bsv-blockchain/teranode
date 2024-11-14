@@ -16,20 +16,18 @@
 - [3.5.3. The block received is a new block, but it represents a fork.](#353-the-block-received-is-a-new-block-but-it-represents-a-fork)
 - [3.6. Resetting the Block Assembly](#36-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
-- [3.1. Block Data Model](#31-block-data-model)
-    - [3.2. Subtree Data Model](#32-subtree-data-model)
-    - [3.3 UTXO Meta Data Model](#33-utxo-meta-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [gRPC and fRPC Server Settings:](#grpc-and-frpc-server-settings)
-- [Subtree and Cache Settings:](#subtree-and-cache-settings)
-- [Kafka Integration:](#kafka-integration)
-- [Blockchain and Mining Settings:](#blockchain-and-mining-settings)
-- [General Operational Settings:](#general-operational-settings)
-
+- [Network and Communication Settings](#network-and-communication-settings)
+- [gRPC Client Settings](#grpc-client-settings)
+- [Subtree Management](#subtree-management)
+- [Block and Transaction Processing](#block-and-transaction-processing)
+- [Mining and Difficulty](#mining-and-difficulty)
+- [Service Control](#service-control)
+9. [Other Resources](#9-other-resources)
 
 ## 1. Description
 
@@ -74,7 +72,6 @@ A high level diagram:
 Based on its settings, the Block Assembly receives TX notifications from the validator service via 3 different paths:
 * A Kafka topic.
 * A gRPC client.
-* A fRPC client (experimental).
 
 The Block Assembly service also subscribes to the Blockchain service, and receives notifications when a new subtree or block is received from another node.
 
@@ -103,7 +100,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 
 ![block_assembly_add_tx.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx.svg)
 
-- The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication can be done over gRPC, fRPC or through Kafka.
+- The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication can be done over gRPC or through Kafka.
 
 
 - The Block Assembly client then delegates to the Server, which adds the transactions to the Subtree Processor.
@@ -279,90 +276,9 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
 
 ## 3. Data Model
 
-
-### 3.1. Block Data Model
-
-Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
-
-| Field       | Type                  | Description                                                 |
-|-------------|-----------------------|-------------------------------------------------------------|
-| Header      | *BlockHeader          | The Block Header                                            |
-| CoinbaseTx  | *bt.Tx                | The coinbase transaction.                                   |
-| Subtrees    | []*chainhash.Hash     | An array of hashes, representing the subtrees of the block. |
-
-This table provides an overview of each field in the `Block` struct, including the data type and a brief description of its purpose or contents.
-
-More information on the block structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-
-#### 3.2. Subtree Data Model
-
-A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root. Blocks are then built from a collection of subtrees.
-
-More information on the subtree structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-Here's a table documenting the structure of the `Subtree` type:
-
-| Field            | Type                  | Description                                                                     |
-|------------------|-----------------------|---------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                |
-| Fees             | uint64                | Total fees associated with the transactions in the subtree.                     |
-| SizeInBytes      | uint64                | The size of the subtree in bytes.                                               |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                             |
-| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree. |
-| ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
-
-Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
-
-Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
-
-##### Subtree Composition
-
-Each subtree consists of:
-- hash: 32 bytes
-- fees: 4 bytes
-- sizeInBytes: 4 bytes
-- numberOfLeaves: 4 bytes
-- subtreeHeight: 4 bytes
-
-##### Calculation:
-```
-1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
-```
-
-##### Data Transfer Between Nodes
-
-However - only 32MB is transferred between the nodes. Each subtree transfer includes:
-
-- hash: 32 bytes
-```
-1024 * 1024 * (32) = 32MB
-```
-
-#### 3.3 UTXO Meta Data Model
-
-The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
-
-| Field Name    | Description                                                     | Data Type                         |
-|---------------|-----------------------------------------------------------------|-----------------------------------|
-| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
-| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
-| Fee           | The fee associated with the transaction.                        | Decimal                           |
-| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
-| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
-| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
-| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
-| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
-
-Note:
-
-- **Parent Transactions**: 1 or more parent transaction hashes. For each input that our transaction has, we can have a different parent transaction. I.e. a TX can be spending UTXOs from multiple transactions.
-
-
-- **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-    - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the tx meta store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
-    - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
-
+- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
 
 ## 4. gRPC Protobuf Definitions
 
@@ -373,7 +289,7 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 
 - **Go (Golang)**: The service is written in Go.
 
-- **gRPC and fRPC**: For communication between different services, gRPC is commonly used. Experimental support for fRPC is also available.
+- **gRPC**: For communication between different services, gRPC is commonly used.
 
 - **Kafka**: Used for tx message queuing and streaming, Kafka can efficiently handle the high throughput of transaction data in a distributed manner.
 
@@ -391,19 +307,15 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 ├── Interface.go                   - Interface definitions for block assembly.
 ├── Server.go                      - Server-side logic for block assembly.
 ├── Server_test.go                 - Tests for Server.go.
-├── auxiliarystore.go              - Implementation of an auxiliary store.
 ├── blockassembly_api              - Directory for block assembly API.
-│   ├── blockassembly_api.frpc.go  - FRPC (Function Remote Procedure Call) implementation.
 │   ├── blockassembly_api.pb.go    - Generated protobuf code.
 │   ├── blockassembly_api.proto    - Protobuf definitions.
 │   ├── blockassembly_api_grpc.pb.go - gRPC generated code.
-│   └── frpc.go                    - Additional FRPC related code.
 ├── data.go                        - Data structures used in block assembly.
 ├── data_test.go                   - Tests for data.go.
-├── frpc.go                        - FRPC specific implementation.
 ├── metrics.go                     - Metrics collection for block assembly.
 ├── remotettl.go                   - Management of remote TTL (Time To Live) values.
-└── subtreeprocessor               - Directory for subtree processing.
+├── subtreeprocessor               - Directory for subtree processing.
 ├── SubtreeProcessor.go        - Main logic for processing subtrees.
 ├── SubtreeProcessor_test.go   - Tests for SubtreeProcessor.go.
 ├── metrics.go                 - Metrics specific to subtree processing.
@@ -426,27 +338,50 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
-### gRPC and fRPC Server Settings:
-- **`blockassembly_grpcListenAddress`**: Specifies the listening address for the gRPC server dedicated to block assembly operations.
-- **`blockassembly_frpcListenAddress`**: Defines the listening address for the fRPC server, a custom fast RPC mechanism utilized for block assembly processes.
+The Block Assembly service uses the following configuration options:
 
-### Subtree and Cache Settings:
-- **`blockassembly_subtreeTTL`**: Time-to-live (in minutes) for subtrees stored in the cache, affecting how long they are retained before expiration.
-- **`blockassembly_newSubtreeChanBuffer`**: The buffer size for the channel that handles new subtree processing, influencing concurrency and throughput.
-- **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the channel dedicated to retrying subtree storage operations, impacting resilience and retry logic.
-- **`blockassembly_remoteTTLStores`**: A boolean flag indicating the use of remote stores for managing TTL data of subtrees, enhancing storage scalability.
-- **`blockassembly_auxiliarySubtreeStore`**: Path to an auxiliary store for subtrees, providing additional storage options and redundancy.
+## Network and Communication Settings
 
-### Kafka Integration:
-- **`blockassembly_kafkaBrokers`**: URL or connection string for Kafka brokers, enabling integration with Kafka for transaction ingestion.
-- **`blockassembly_kafkaWorkers`**: Number of workers allocated for processing Kafka messages, affecting parallel processing capabilities.
+1. **`blockassembly_grpcAddress`**: Specifies the gRPC address for the block assembly service.
+2. **`network`**: Defines the network setting (e.g., "mainnet"). Default: "mainnet".
 
-### Blockchain and Mining Settings:
-- **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization, ensuring integrity and continuity.
-- **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization, critical for maintaining current state with the blockchain.
+## gRPC Client Settings
 
-### General Operational Settings:
-- **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether, allowing for dynamic control of service operation.
+3. **`blockassembly_grpcMaxRetries`**: Maximum number of gRPC retries. Default: 3.
+4. **`blockassembly_grpcRetryBackoff`**: Backoff duration for gRPC retries. Default: 2 seconds.
+5. **`blockassembly_sendBatchSize`**: Batch size for sending operations. Default: 0 (no batching).
+6. **`blockassembly_sendBatchTimeout`**: Timeout for batch send operations in milliseconds. Default: 100.
 
-### Deleted settings
-- **`mining_n_bits`**: Configures the "nBits" value for mining, dictating the difficulty level of the proof-of-work algorithm for new blocks.
+## Subtree Management
+
+7. **`blockassembly_subtreeTTL`**: Time-to-live (in minutes) for subtrees stored in the cache. Default: 120 minutes.
+8. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the channel that handles new subtree processing. Default: 1,000.
+9. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the channel dedicated to retrying subtree storage operations. Default: 1,000.
+10. **`blockassembly_subtreeTTLConcurrency`**: Concurrency level for subtree TTL operations. Default: 32.
+11. **`initial_merkle_items_per_subtree`**: Initial number of items per subtree. Default: 1,048,576.
+
+## Block and Transaction Processing
+
+12. **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization. Default: 100.
+13. **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization. Default: 100.
+14. **`tx_chan_buffer_size`**: Buffer size for transaction channel. Default: 0 (unlimited).
+15. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for subtree processor. Default: 1000.
+16. **`double_spend_window_millis`**: Window for detecting double spends in milliseconds. Default: 2000.
+17. **`blockassembly_moveDownBlockConcurrency`**: Concurrency for moving down block operations. Default: 64.
+18. **`blockassembly_processRemainderTxHashesConcurrency`**: Concurrency for processing remainder transaction hashes. Default: 64.
+19. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent reads for subtree processor. Default: 4.
+
+## Mining and Difficulty
+
+20. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for response when submitting mining solutions. Default: true.
+21. **`difficulty_adjustment`**: Boolean flag for difficulty adjustment. Default: false.
+
+## Service Control
+
+22. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether. Default: false.
+23. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration. Default: false.
+
+
+## 9. Other Resources
+
+[Block Assembly Reference](../references/services/blockassembly_reference.md)
