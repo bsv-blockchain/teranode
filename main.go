@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/recovertx/recovertx"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
@@ -134,6 +135,9 @@ func main() {
 		return
 	case "unspend.run":
 		unspend.Start()
+		return
+	case "recovertx.run":
+		recovertx.Start()
 		return
 	}
 

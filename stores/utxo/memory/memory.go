@@ -382,6 +382,19 @@ func (m *Memory) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime.Load()
 }
 
+// GetUtxoMap returns the utxo map for a given transaction hash
+// this function can only be used internally in tests, as it is not part of the interface
+func (m *Memory) GetUtxoMap(txHash chainhash.Hash) map[chainhash.Hash]*chainhash.Hash {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	if _, ok := m.txs[txHash]; !ok {
+		return nil
+	}
+
+	return m.txs[txHash].utxoMap
+}
+
 func (m *Memory) delete(hash *chainhash.Hash) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()

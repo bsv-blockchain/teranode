@@ -69,6 +69,7 @@ RUN ln -s ubsv.run seeder.run
 RUN ln -s ubsv.run bitcoin2utxoset.run
 RUN ln -s ubsv.run settings.run
 RUN ln -s ubsv.run unspend.run
+RUN ln -s ubsv.run recovertx.run
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV PATH=/app:$PATH
