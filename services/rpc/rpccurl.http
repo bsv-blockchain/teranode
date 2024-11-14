@@ -1,0 +1,107 @@
+###############################################################################
+# Bitcoin RPC API Test Guide
+###############################################################################
+# Prerequisites:
+# 1. Install VS Code "REST Client" extension
+# 2. Start local node:
+#    ```
+#    rm -rf data
+#    SETTINGS_CONTEXT=dev.system.test go run .
+#    grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+#    ```
+###############################################################################
+
+@hostname = localhost
+@port = 9292
+@credentials = bitcoin:bitcoin
+
+### Get Best Block Hash
+# @name getbestblockhash
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getbestblockhash", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getbestblockhash",
+    "params": []
+}
+
+### Get Block Chain Info
+# @name getblockchaininfo
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockchaininfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getblockchaininfo",
+    "params": []
+}
+
+### Get Block
+# @name getblock
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblock", "params": ["00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09"]}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getblock",
+    "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1]
+}
+
+### Get Mining Info
+# @name getmininginfo
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getmininginfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getmininginfo",
+    "params": []
+}
+
+### Generate Blocks
+# @name generate
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "generate", "params": [101]}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "generate",
+    "params": [101]
+}
+
+### Get Peer Info
+# @name getpeerinfo
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getpeerinfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getpeerinfo",
+    "params": []
+}
+
+### Get Difficulty
+# @name getdifficulty
+# @note Equivalent curl:
+# curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getdifficulty", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:8332/
+POST http://{{hostname}}:{{port}}
+Content-Type: application/json
+Authorization: Basic {{credentials}}
+
+{
+    "method": "getdifficulty",
+    "params": []
+}
