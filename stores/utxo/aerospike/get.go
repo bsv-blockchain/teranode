@@ -556,7 +556,12 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		if err != nil {
 			return nil, errors.NewStorageError("[getTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
 		}
+
 	}
+
+	defer func() {
+		_ = reader.Close()
+	}()
 
 	tx := &bt.Tx{}
 
