@@ -113,7 +113,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
+          "expr": "sum(increase(teranode_validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (service) / 60  >0",
           "hide": false,
           "legendFormat": "{{service}}",
           "range": true,
@@ -188,7 +188,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.95, (sum(rate(validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])))))",
+          "expr": "avg by (namespace) (histogram_quantile(0.95, (sum(rate(teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])))))",
           "instant": false,
           "interval": "",
           "legendFormat": "p95 us",
@@ -201,7 +201,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.99, (sum(rate(validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])))))",
+          "expr": "avg by (namespace) (histogram_quantile(0.99, (sum(rate(teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])))))",
           "interval": "",
           "legendFormat": "p99 us",
           "range": true,
@@ -214,7 +214,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.999, (sum(rate(validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])))))",
+          "expr": "avg by (namespace) (histogram_quantile(0.999, (sum(rate(teranode_validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])))))",
           "hide": false,
           "instant": false,
           "interval": "",
@@ -317,7 +317,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(blockpersister_subtree_batch_millis{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_blockpersister_subtree_batch_millis{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -436,7 +436,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(blockpersister_subtrees_duration_millis{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_blockpersister_subtrees_duration_millis{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -555,7 +555,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(blockvalidation_block_found_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(teranode_blockvalidation_block_found_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\",subsystem=~\"$subsystem\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -758,8 +758,8 @@
       {
         "current": {
           "selected": true,
-          "text": "Prometheus Frankfurt ",
-          "value": "Prometheus Frankfurt "
+          "text": "Prometheus Mainnet",
+          "value": "Prometheus Mainnet"
         },
         "hide": 0,
         "includeAll": false,
@@ -773,6 +773,33 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "definition": "label_values(subsystem)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Subsystem",
+        "multi": true,
+        "name": "subsystem",
+        "options": [],
+        "query": {
+          "query": "label_values(subsystem)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
       }
     ]
   },
@@ -784,6 +811,6 @@
   "timezone": "",
   "title": "UBSV Block Persister",
   "uid": "e5f2e71f-c229-4f17-88ab-29721caefe78",
-  "version": 3,
+  "version": 5,
   "weekStart": ""
 }
