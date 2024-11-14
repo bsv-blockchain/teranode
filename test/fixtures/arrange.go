@@ -65,6 +65,8 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
 	var err error
 
+	const ubsv1RPCEndpoint = "http://localhost:11292"
+
 	suite.ComposeFiles = composeFiles
 	suite.SettingsMap = settingsMap
 
@@ -123,23 +125,31 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			suite.T().Fatal(err)
 		}
 
+		time.Sleep(10 * time.Second)
+
 		// Min height possible is 101
 		// whatever height you specify, make sure :
 		// mine_initial_blocks_count.docker = [height]
 		// blockvalidation_maxPreviousBlockHeadersToCheck = [height - 1]
 		height := uint32(101)
 
-		err = helper.WaitForBlockHeight(NodeURL1, height, 120)
+		// Generate blocks
+		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL2, height, 120)
+		err = helper.WaitForBlockHeight(NodeURL1, height, 30)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL3, height, 120)
+		err = helper.WaitForBlockHeight(NodeURL2, height, 30)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+
+		err = helper.WaitForBlockHeight(NodeURL3, height, 30)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

@@ -21,6 +21,7 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -120,19 +121,18 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := testEnv.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
-
-	if err != nil {
-		t.Errorf("Failed to mine block: %v", err)
-	}
+	const ubsv1RPCEndpoint = "http://localhost:11292"
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(1 * time.Second)
 
 	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 5; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
@@ -153,7 +153,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+		require.NoError(t, err, "Failed to generate blocks")
+		time.Sleep(1 * time.Second)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -163,8 +165,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 
 }
-
-
 
 func TestSanityTestSuite(t *testing.T) {
 	suite.Run(t, new(SanityTestSuite))
