@@ -1,4 +1,4 @@
-//go:build rpc
+////go:build rpc
 
 // How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCReconsiderBlock$" -tags rpc
 // Change TestRPCInvalidateBlock with the name of the test to execute
@@ -661,6 +661,92 @@ func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
 	} else {
 		t.Logf("Block reconsidered successfully")
 	}
+}
+
+func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+
+	ctx := context.Background()
+	t := suite.T()
+	// url := "http://localhost:8090"
+
+	blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Failed to create Blockchain client")
+	time.Sleep(20 * time.Second)
+
+	txDistributor, err := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+	require.NoError(t, err, "Failed to create distributor client")
+
+	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	require.NoError(t, err, "Failed to request funds")
+	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
+
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	require.NoError(t, err, "Failed to broadcast faucet tx")
+
+	t.Logf("Faucet Transaction sent: %s\n", tx.TxIDChainHash())
+
+	// Wait for faucet transaction to be mined
+	time.Sleep(2 * time.Second)
+
+	// Create raw transaction using RPC
+	inputs := []map[string]interface{}{
+		{
+			"txid": tx.TxIDChainHash().String(),
+			"vout": 0,
+		},
+	}
+
+	outputs := map[string]float64{
+		coinbaseAddr.AddressString: 0.0001, // 10000 satoshis
+	}
+
+	// Call createrawtransaction RPC
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "createrawtransaction", []interface{}{inputs, outputs})
+	require.NoError(t, err, "Failed to create raw transaction")
+
+	var createRawTxResp struct {
+		Result string      `json:"result"`
+		Error  interface{} `json:"error"`
+		ID     string      `json:"id"`
+	}
+
+	err = json.Unmarshal([]byte(resp), &createRawTxResp)
+	logger.Infof("Create raw transaction response: %v", createRawTxResp)
+	require.NoError(t, err, "Failed to unmarshal createrawtransaction response")
+	require.Nil(t, createRawTxResp.Error, "Create raw transaction returned error")
+
+	t.Logf("Create raw transaction response result: %v", createRawTxResp.Result)
+	newTx, _ := bt.NewTxFromString(createRawTxResp.Result)
+
+	// Send the signed transaction
+	t.Logf("Sending signed transaction: %s", newTx.TxIDChainHash())
+	txHex := hex.EncodeToString(newTx.ExtendedBytes())
+
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txHex})
+	require.NoError(t, err, "Failed to send transaction")
+
+	// Mine a block to include our transaction
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	require.NoError(t, err, "Failed to generate block")
 }
 
 func TestRPCTestSuite(t *testing.T) {
