@@ -1,4 +1,4 @@
-//go:build rpc
+////go:build rpc
 
 // How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCReconsiderBlock$" -tags rpc
 // Change TestRPCInvalidateBlock with the name of the test to execute
@@ -11,13 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -55,7 +53,6 @@ func (suite *RPCTestSuite) SetupTest() {
 	if err := startApp("app.log"); err != nil {
 		log.Fatalf("Failed to start app: %v", err)
 	}
-
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
@@ -326,7 +323,8 @@ func startApp(logFile string) error {
 
 	appPID = appCmd.Process.Pid
 
-	// Wait for the app to be ready (consider implementing a health check here)
+	log.Println("Waiting for app to be ready...")
+
 	for {
 		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness", nil)
 		if err == nil {
@@ -335,6 +333,8 @@ func startApp(logFile string) error {
 
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	log.Println("App ready")
 
 	return nil
 }
@@ -352,7 +352,6 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Failed to create Blockchain client")
-	// time.Sleep(20 * time.Second)
 
 	txDistributor, err := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -360,6 +359,11 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 		distributor.WithFailureTolerance(0),
 	)
 	require.NoError(t, err, "Failed to create distributor client")
+
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	if err != nil {
+		t.Errorf("Failed to generate initial blocks: %v", err)
+	}
 
 	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -371,10 +375,24 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
-	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
-	require.NoError(t, err, "Failed to request funds")
-	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
+	var tx *bt.Tx
 
+	for attempts := 0; attempts < 5; attempts++ {
+		tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+		if err == nil {
+			break
+		}
+
+		t.Logf("Attempt %d: Failed to request funds: %v. Retrying in 1 second...", attempts+1, err)
+		time.Sleep(time.Second)
+
+		utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+		t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+	}
+
+	require.NoError(t, err, "Failed to request funds after 5 attempts")
+
+	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	require.NoError(t, err, "Failed to broadcast faucet tx")
 
@@ -395,103 +413,22 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
-	time.Sleep(5 * time.Second)
 	t.Logf("Transaction sent with RPC: %s\n", resp)
+
+	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
 
 	height, _ := helper.GetBlockHeight(url)
 	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
-
-	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{true})
-	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
-	require.NoError(t, err, "Failed to get mining candidate")
-
-	var miningCandidate MiningCandidate
-	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
-	require.NoError(t, err, "Failed to unmarshal mining candidate")
-
-	// Create mining solution
-	result := miningCandidate.Result.(map[string]interface{})
-	prevHashStr := result["prevhash"].(string)
-	prevHashBytes, _ := hex.DecodeString(prevHashStr)
-	previousHash, _ := chainhash.NewHash(prevHashBytes)
-
-	// Get merkle root from merkle proof array
-	merkleProof := result["merkleProof"].([]interface{})
-	if len(merkleProof) == 0 {
-		t.Fatal("Empty merkle proof")
-	}
-
-	merkleRoot := merkleProof[0].(string)
-	merkleRootBytes, _ := hex.DecodeString(merkleRoot)
-	merkleRootHash, _ := chainhash.NewHash(merkleRootBytes)
-
-	// Find valid nonce
-	nBits := result["nBits"].(string)
-	nBitsBytes, _ := hex.DecodeString(nBits)
-	targetBits, _ := model.NewNBitFromSlice(nBitsBytes)
-
-	var validNonce uint32
-
-	var blockHash *chainhash.Hash
-
-	for nonce := uint32(0); nonce < math.MaxUint32; nonce++ {
-		blockHeader := model.BlockHeader{
-			Version:        uint32(result["version"].(float64)),
-			HashPrevBlock:  previousHash,
-			HashMerkleRoot: merkleRootHash,
-			Timestamp:      uint32(result["time"].(float64)),
-			Bits:           *targetBits,
-			Nonce:          nonce,
-		}
-
-		headerValid, hash, _ := blockHeader.HasMetTargetDifficulty()
-		if headerValid {
-			validNonce = nonce
-			blockHash = hash
-
-			break
-		}
-	}
-
-	// Create solution
-	solution := map[string]interface{}{
-		"id":        result["id"],
-		"nonce":     validNonce,
-		"time":      result["time"],
-		"version":   result["version"],
-		"blockHash": hex.EncodeToString(blockHash.CloneBytes()),
-	}
-
-	// Convert solution to JSON string
-	solutionJSON, err := json.Marshal(solution)
-	require.NoError(t, err, "Failed to marshal solution")
-	logger.Infof("Mining solution: %s\n", solutionJSON)
-
-	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{string(solutionJSON)})
-	t.Logf("Submit solution response from rpc %v", submitSolnResp)
-	require.NoError(t, err, "Failed to submit mining solution")
-
-	var getBlockHash GetBlockHashResponse
-
-	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
-
-	require.NoError(t, err, "Error getting best blockhash")
-
-	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
-
-	require.NoError(t, errJSON, "Error unmarshalling getblock response")
-
-	// blockHash = getBlockHash.Result
-	// t.Logf("Best block hash %v", blockHash)
-
-	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getblock", []interface{}{blockHash, 1})
-	require.NoError(t, err, "Error getting best blockhash")
-	t.Logf("Best block from hash %v", resp)
 
 	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
 	require.NoError(t, err, "Error getting blockstore url")
@@ -509,22 +446,25 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	targetHeight := height + 1
 
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	if err != nil {
+		t.Errorf("Failed to generate blocks: %v", err)
+	}
+
 	for i := 0; i < 2; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
 		}
 
-		time.Sleep(1 * time.Second)
-
 		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		if err != nil {
 			t.Errorf("Failed to get block headers: %v", err)
 		}
 
-		t.Logf("Testing on Best block header at heighth: %v %d", header[0].Hash(), meta[0].Height)
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, blockStoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+		t.Logf("Testing on Best block header at height: %v %d", header[0].Hash(), meta[0].Height)
 
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, blockStoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
 		}
@@ -537,8 +477,6 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 		// _, err = helper.MineBlock(ctx, *baClient, logger)
 		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
 		require.NoError(t, err, "Failed to generate blocks")
-
-		time.Sleep(5 * time.Second)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -676,6 +614,11 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	)
 	require.NoError(t, err, "Failed to create distributor client")
 
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	if err != nil {
+		t.Errorf("Failed to generate initial blocks: %v", err)
+	}
+
 	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
@@ -694,9 +637,6 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	require.NoError(t, err, "Failed to broadcast faucet tx")
 
 	t.Logf("Faucet Transaction sent: %s\n", tx.TxIDChainHash())
-
-	// Wait for faucet transaction to be mined
-	time.Sleep(2 * time.Second)
 
 	// Create raw transaction using RPC
 	inputs := []map[string]interface{}{

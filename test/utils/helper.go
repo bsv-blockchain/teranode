@@ -1190,16 +1190,12 @@ func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url
 		return false, errors.NewProcessingError("error getting block reader: %v", err)
 	}
 
-	if err == nil {
-		if bl, err := ReadFile(ctx, "block", logger, r, tx, storeURL); err != nil {
-			return false, errors.NewProcessingError("error reading block: %v", err)
-		} else {
-			logger.Infof("Block at height (%d): was tested for the test Tx\n", blockHeight)
-			return bl, nil
-		}
+	if bl, err := ReadFile(ctx, "block", logger, r, tx, storeURL); err != nil {
+		return false, errors.NewProcessingError("error reading block: %v", err)
+	} else {
+		logger.Infof("Block at height (%d): was tested for the test Tx\n", blockHeight)
+		return bl, nil
 	}
-
-	return false, nil
 }
 
 func Unzip(src, dest string) error {

@@ -141,9 +141,10 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		if err != nil {
 			t.Errorf("Failed to get block headers: %v", err)
 		}
-		t.Logf("Testing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 
+		t.Logf("Testing on Best block header: %v", header[0].Hash())
+
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
 		}
