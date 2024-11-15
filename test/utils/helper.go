@@ -93,6 +93,28 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 		return "", errors.NewProcessingError("failed to read response body", err)
 	}
 
+	/*
+		Example of a response:
+		{
+			"result": null,
+			"error": {
+				"code": -32601,
+				"message": "Method not found"
+		}
+	*/
+	// Check if the response body contains an error
+	var jsonResponse struct {
+		Error interface{} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &jsonResponse); err != nil {
+		return string(body), errors.NewProcessingError("failed to parse response JSON", err)
+	}
+
+	if jsonResponse.Error != nil {
+		return string(body), errors.NewProcessingError("RPC returned error: %v", jsonResponse.Error)
+	}
+
 	// Return the response as a string
 	return string(body), nil
 }
