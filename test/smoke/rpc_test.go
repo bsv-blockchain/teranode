@@ -11,13 +11,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -64,7 +64,7 @@ func (suite *RPCTestSuite) SetupTest() {
 
 func (suite *RPCTestSuite) TearDownTest() {
 	stopKafka()
-	stopUbsv()
+	// stopUbsv()
 }
 
 const (
@@ -413,58 +413,75 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient, _ := ba.NewClient(ctx, logger)
-	miningCandidateResp, err := helper.GetMiningCandidate_rpc(ubsv1RPCEndpoint)
+	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{true})
 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
+	require.NoError(t, err, "Failed to get mining candidate")
 
-	if err != nil {
-		t.Errorf("Failed to get mining candidate: %v", err)
+	var miningCandidate MiningCandidate
+	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
+	require.NoError(t, err, "Failed to unmarshal mining candidate")
+
+	// Create mining solution
+	result := miningCandidate.Result.(map[string]interface{})
+	prevHashStr := result["prevhash"].(string)
+	prevHashBytes, _ := hex.DecodeString(prevHashStr)
+	previousHash, _ := chainhash.NewHash(prevHashBytes)
+
+	// Get merkle root from merkle proof array
+	merkleProof := result["merkleProof"].([]interface{})
+	if len(merkleProof) == 0 {
+		t.Fatal("Empty merkle proof")
 	}
 
-	var miningCandidateStruct MiningCandidate
-	errJSON := json.Unmarshal([]byte(miningCandidateResp), &miningCandidateStruct)
+	merkleRoot := merkleProof[0].(string)
+	merkleRootBytes, _ := hex.DecodeString(merkleRoot)
+	merkleRootHash, _ := chainhash.NewHash(merkleRootBytes)
 
-	if errJSON != nil {
-		t.Errorf("JSON decoding error: %v", errJSON)
-		return
+	// Find valid nonce
+	nBits := result["nBits"].(string)
+	nBitsBytes, _ := hex.DecodeString(nBits)
+	targetBits, _ := model.NewNBitFromSlice(nBitsBytes)
+
+	var validNonce uint32
+
+	var blockHash *chainhash.Hash
+
+	for nonce := uint32(0); nonce < math.MaxUint32; nonce++ {
+		blockHeader := model.BlockHeader{
+			Version:        uint32(result["version"].(float64)),
+			HashPrevBlock:  previousHash,
+			HashMerkleRoot: merkleRootHash,
+			Timestamp:      uint32(result["time"].(float64)),
+			Bits:           *targetBits,
+			Nonce:          nonce,
+		}
+
+		headerValid, hash, _ := blockHeader.HasMetTargetDifficulty()
+		if headerValid {
+			validNonce = nonce
+			blockHash = hash
+
+			break
+		}
 	}
 
-	require.NotNil(t, miningCandidateStruct)
-	//nolint:prealloc
-	var coinbaseMerkleProofBytes [][]byte
-
-	for _, hash := range miningCandidateStruct.Result.MerkleProof {
-		hash := newHashFromStr(hash)
-		coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
+	// Create solution
+	solution := map[string]interface{}{
+		"id":        result["id"],
+		"nonce":     validNonce,
+		"time":      result["time"],
+		"version":   result["version"],
+		"blockHash": hex.EncodeToString(blockHash.CloneBytes()),
 	}
 
-	nbits, err := model.NewNBitFromString(miningCandidateStruct.Result.NBits)
-	require.NoError(t, err, "Error when converting NBits")
+	// Convert solution to JSON string
+	solutionJSON, err := json.Marshal(solution)
+	require.NoError(t, err, "Failed to marshal solution")
+	logger.Infof("Mining solution: %s\n", solutionJSON)
 
-	prevHashB := newHashFromStr(miningCandidateStruct.Result.PreviousHash)
-
-	idHash := newHashFromStr(miningCandidateStruct.Result.ID)
-
-	mc := model.MiningCandidate{
-		CoinbaseValue:       miningCandidateStruct.Result.CoinbaseValue,
-		Height:              miningCandidateStruct.Result.Height,
-		Id:                  idHash.CloneBytes(),
-		MerkleProof:         coinbaseMerkleProofBytes,
-		NBits:               nbits.CloneBytes(),
-		NumTxs:              miningCandidateStruct.Result.NumTxs,
-		PreviousHash:        prevHashB.CloneBytes(),
-		SizeWithoutCoinbase: miningCandidateStruct.Result.SizeWithoutCoinbase,
-		Time:                miningCandidateStruct.Result.Time,
-		Version:             miningCandidateStruct.Result.Version,
-	}
-
-	_, err = helper.MineBlockWithCandidate_rpc(ctx, ubsv1RPCEndpoint, &mc, logger)
-
-	if err != nil {
-		t.Errorf("Failed to mine block: %v", err)
-	}
-
-	time.Sleep(5 * time.Second)
+	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{string(solutionJSON)})
+	t.Logf("Submit solution response from rpc %v", submitSolnResp)
+	require.NoError(t, err, "Failed to submit mining solution")
 
 	var getBlockHash GetBlockHashResponse
 
@@ -472,27 +489,16 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	require.NoError(t, err, "Error getting best blockhash")
 
-	errJSON = json.Unmarshal([]byte(resp), &getBlockHash)
+	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
 
 	require.NoError(t, errJSON, "Error unmarshalling getblock response")
 
-	blockHash := getBlockHash.Result
-	t.Logf("Best block hash %v", blockHash)
-
-	time.Sleep(5 * time.Second)
+	// blockHash = getBlockHash.Result
+	// t.Logf("Best block hash %v", blockHash)
 
 	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getblock", []interface{}{blockHash, 1})
 	require.NoError(t, err, "Error getting best blockhash")
 	t.Logf("Best block from hash %v", resp)
-
-	// bb, _, _ := blockchainClient.GetBestBlockHeader(ctx)
-	// block, _ := blockchainClient.GetBlock(ctx, bb.Hash())
-	// subtrees := block.SubtreeSlices
-	// for _, subtree := range subtrees {
-	// 	for _, node := range subtree.Nodes {
-	// 		t.Logf("Node: %v", node.Hash)
-	// 	}
-	// }
 
 	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
 	require.NoError(t, err, "Error getting blockstore url")
@@ -535,7 +541,11 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, *baClient, logger)
+		// _, err = helper.MineBlock(ctx, *baClient, logger)
+		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[1]"})
+		require.NoError(t, err, "Failed to generate blocks")
+
+		time.Sleep(5 * time.Second)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
