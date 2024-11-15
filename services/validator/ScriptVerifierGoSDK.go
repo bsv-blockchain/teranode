@@ -1,3 +1,9 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This file implements the Go-SDK script verification functionality, providing
+script validation using the Bitcoin SV Go-SDK library implementation.
+*/
 package validator
 
 import (
@@ -14,12 +20,22 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
+// init registers the Go-SDK script verifier with the verification factory
+// This is called automatically when the package is imported
 func init() {
 	ScriptVerificationFactory[TxInterpreterGoSDK] = newScriptVerifierGoSDK
 
 	log.Println("Registered scriptVerifierGoSDK")
 }
 
+// newScriptVerifierGoSDK creates a new Go-SDK script verifier instance
+// Parameters:
+//   - l: Logger instance for verification operations
+//   - po: Policy settings for validation rules
+//   - pa: Network parameters
+//
+// Returns:
+//   - TxScriptInterpreter: The created script interpreter
 func newScriptVerifierGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script verifier with GoSDK")
 
@@ -30,25 +46,47 @@ func newScriptVerifierGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.P
 	}
 }
 
+// scriptVerifierGoSDK implements the TxScriptInterpreter interface using Go-SDK
 type scriptVerifierGoSDK struct {
 	logger ulogger.Logger
 	policy *PolicySettings
 	params *chaincfg.Params
 }
 
+// Logger returns the verifier's logger instance
 func (v *scriptVerifierGoSDK) Logger() ulogger.Logger {
 	return v.logger
 }
 
+// Params returns the verifier's network parameters
 func (v *scriptVerifierGoSDK) Params() *chaincfg.Params {
 	return v.params
 }
 
+// PolicySettings returns the verifier's policy settings
 func (v *scriptVerifierGoSDK) PolicySettings() *PolicySettings {
 	return v.policy
 }
 
-// VerifyScript verifies script using Go-SDK
+// VerifyScript implements script verification using the Go-SDK
+// This method verifies all inputs of a transaction against their corresponding
+// locking scripts from the previous outputs.
+//
+// The verification process:
+// 1. Converts the transaction to Go-SDK format
+// 2. Iterates through all inputs
+// 3. Verifies each input's unlocking script against its corresponding locking script
+// 4. Handles special cases and historical quirks
+//
+// Parameters:
+//   - tx: The transaction containing scripts to verify
+//   - blockHeight: Current block height for validation context
+//
+// Returns:
+//   - error: Any script verification errors encountered
+//
+// Note: Contains special handling for negative shift amount errors
+// which are bypassed for historical compatibility
 func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -102,6 +140,15 @@ func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 	return nil
 }
 
+// goBt2GoSDKTransaction converts a go-bt transaction to Go-SDK format
+// This is a helper function that performs deep copying of transaction data
+// to ensure proper conversion between different transaction representations.
+//
+// Parameters:
+//   - tx: The go-bt transaction to convert
+//
+// Returns:
+//   - *transaction.Transaction: The converted Go-SDK transaction
 func goBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 	sdkTx := &transaction.Transaction{
 		Version:  tx.Version,

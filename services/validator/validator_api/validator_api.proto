@@ -1,3 +1,9 @@
+/*
+validator_api.proto defines the gRPC service interface for the Bitcoin SV transaction
+validation service. It specifies the methods and message types for transaction
+validation, health checking, and block information retrieval.
+*/
+
 syntax = "proto3";
 
 option go_package = "./;validator_api";
@@ -6,56 +12,71 @@ package validator_api;
 
 import "google/protobuf/timestamp.proto";
 
+// ValidatorAPI service provides methods for transaction validation and related operations
 service ValidatorAPI {
-  // Health returns the health of the API.
+  // HealthGRPC checks the health status of the validation service
+  // Returns detailed health information including service status and timestamp
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+
+  // ValidateTransaction validates a single transaction
+  // Performs comprehensive validation including script verification and UTXO checks
   rpc ValidateTransaction(ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+
+  // ValidateTransactionBatch validates multiple transactions in a single request
+  // Provides efficient batch processing of transactions
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
+
+  // ValidateTransactionStream validates transactions received through a stream
+  // Allows for continuous streaming of transactions for validation
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
+
+  // GetBlockHeight retrieves the current block height
+  // Used for validation context and protocol upgrade determination
   rpc GetBlockHeight(EmptyMessage) returns (GetBlockHeightResponse) {}
+
+  // GetMedianBlockTime retrieves the median time of recent blocks
+  // Used for time-based validation rules
   rpc GetMedianBlockTime(EmptyMessage) returns (GetMedianBlockTimeResponse) {}
 }
 
+
+// EmptyMessage represents an empty request message
+// Used for endpoints that don't require input parameters
 // swagger:model EmptyMessage
 message EmptyMessage {}
 
+// HealthResponse provides health check information
 // swagger:model HealthResponse
 message HealthResponse {
-  bool ok = 1;
-  string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  bool ok = 1;                                    // Overall health status
+  string details = 2;                            // Detailed health information
+  google.protobuf.Timestamp timestamp = 3;       // Timestamp of health check
 }
 
+// ValidateTransactionRequest contains data for transaction validation
 // swagger:model ValidateTransactionRequest
 message ValidateTransactionRequest {
-  bytes transaction_data = 1;
-  uint32 block_height = 2;
+  bytes transaction_data = 1;    // Raw transaction data to validate
+  uint32 block_height = 2;       // Block height for validation context
 }
 
+// ValidateTransactionResponse provides transaction validation results
 // swagger:model ValidateTransactionResponse
 message ValidateTransactionResponse {
-  bool valid = 1;
-  bytes txid = 2;
-  string reason = 3;
+  bool valid = 1;        // Validation result (true if valid)
+  bytes txid = 2;        // Transaction ID of the validated transaction
+  string reason = 3;     // Reason for rejection if invalid
 }
 
+// ValidateTransactionBatchRequest contains multiple transactions for batch validation
 // swagger:model ValidateTransactionBatchRequest
 message ValidateTransactionBatchRequest {
-  repeated ValidateTransactionRequest transactions = 1;
+  repeated ValidateTransactionRequest transactions = 1;    // Array of transactions to validate
 }
 
+// ValidateTransactionBatchResponse provides batch validation results
 // swagger:model ValidateTransactionBatchResponse
 message ValidateTransactionBatchResponse {
-  bool valid = 1;
-  repeated string errors = 2;
-}
-
-// swagger:model GetBlockHeightResponse
-message GetBlockHeightResponse {
-  uint32 height = 1;
-}
-
-// swagger:model GetMedianBlockTimeResponse
-message GetMedianBlockTimeResponse {
-  uint32 median_time = 1;
+  bool valid = 1;                    // Overall batch validation status
+  repeated string errors = 2;        // Array of error messages, one per transaction
 }

@@ -1,35 +1,117 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This package provides comprehensive transaction validation for Bitcoin SV nodes,
+including script verification, UTXO management, and policy enforcement. It supports
+multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
+transaction validation ruleset.
+
+Key features:
+  - Transaction validation against Bitcoin consensus rules
+  - UTXO spending and creation
+  - Script verification using multiple interpreters
+  - Policy enforcement
+  - Block assembly integration
+  - Kafka integration for transaction metadata
+
+Usage:
+
+	validator := NewTxValidator(logger, policy, params)
+	err := validator.ValidateTransaction(tx, blockHeight)
+*/
 package validator
 
+// PolicySettings defines the validation and consensus policy parameters for Bitcoin transactions and blocks
 type PolicySettings struct {
-	ExcessiveBlockSize              int     `json:"excessiveblocksize"`
-	BlockMaxSize                    int     `json:"blockmaxsize"`
-	MaxTxSizePolicy                 int     `json:"maxtxsizepolicy"`
-	MaxOrphanTxSize                 int     `json:"maxorphantxsize"`
-	DataCarrierSize                 int64   `json:"datacarriersize"`
-	MaxScriptSizePolicy             int     `json:"maxscriptsizepolicy"`
-	MaxOpsPerScriptPolicy           int64   `json:"maxopsperscriptpolicy"`
-	MaxScriptNumLengthPolicy        int     `json:"maxscriptnumlengthpolicy"`
-	MaxPubKeysPerMultisigPolicy     int64   `json:"maxpubkeyspermultisigpolicy"`
-	MaxTxSigopsCountsPolicy         int64   `json:"maxtxsigopscountspolicy"`
-	MaxStackMemoryUsagePolicy       int     `json:"maxstackmemoryusagepolicy"`
-	MaxStackMemoryUsageConsensus    int     `json:"maxstackmemoryusageconsensus"`
-	LimitAncestorCount              int     `json:"limitancestorcount"`
-	LimitCPFPGroupMembersCount      int     `json:"limitcpfpgroupmemberscount"`
-	MaxMempool                      int     `json:"maxmempool"`
-	MaxMempoolSizedisk              int     `json:"maxmempoolsizedisk"`
-	MempoolMaxPercentCPFP           int     `json:"mempoolmaxpercentcpfp"`
-	AcceptNonStdOutputs             bool    `json:"acceptnonstdoutputs"`
-	DataCarrier                     bool    `json:"datacarrier"`
-	MinMiningTxFee                  float64 `json:"minminingtxfee"`
-	MaxStdTxValidationDuration      int     `json:"maxstdtxvalidationduration"`
-	MaxNonStdTxValidationDuration   int     `json:"maxnonstdtxvalidationduration"`
-	MaxTxChainValidationBudget      int     `json:"maxtxchainvalidationbudget"`
-	ValidationClockCPU              bool    `json:"validationclockcpu"`
-	MinConsolidationFactor          int     `json:"minconsolidationfactor"`
-	MaxConsolidationInputScriptSize int     `json:"maxconsolidationinputscriptsize"`
-	MinConfConsolidationInput       int     `json:"minconfconsolidationinput"`
-	MinConsolidationInputMaturity   int     `json:"minconsolidationinputmaturity"`
-	AcceptNonStdConsolidationInput  bool    `json:"acceptnonstdconsolidationinput"`
+	// ExcessiveBlockSize defines the maximum block size allowed by the node
+	// Blocks larger than this size will be rejected
+	ExcessiveBlockSize int `json:"excessiveblocksize"`
+
+	// BlockMaxSize defines the maximum size of blocks that this node will mine
+	// Must be less than or equal to ExcessiveBlockSize
+	BlockMaxSize int `json:"blockmaxsize"`
+
+	// MaxTxSizePolicy defines the maximum allowed size for a single transaction
+	// Transactions larger than this size will be rejected by policy
+	MaxTxSizePolicy int `json:"maxtxsizepolicy"`
+
+	// MaxOrphanTxSize defines the maximum size for transactions held in the orphan pool
+	MaxOrphanTxSize int `json:"maxorphantxsize"`
+
+	// DataCarrierSize defines the maximum size of OP_RETURN data carrier outputs
+	DataCarrierSize int64 `json:"datacarriersize"`
+
+	// MaxScriptSizePolicy defines the maximum allowed script size in bytes
+	MaxScriptSizePolicy int `json:"maxscriptsizepolicy"`
+
+	// MaxOpsPerScriptPolicy defines the maximum number of operations allowed in a script
+	MaxOpsPerScriptPolicy int64 `json:"maxopsperscriptpolicy"`
+
+	// MaxScriptNumLengthPolicy defines the maximum length for numeric operands in scripts
+	MaxScriptNumLengthPolicy int `json:"maxscriptnumlengthpolicy"`
+
+	// MaxPubKeysPerMultisigPolicy defines the maximum number of public keys allowed in a multi-signature script
+	MaxPubKeysPerMultisigPolicy int64 `json:"maxpubkeyspermultisigpolicy"`
+
+	// MaxTxSigopsCountsPolicy defines the maximum number of signature operations allowed in a transaction
+	MaxTxSigopsCountsPolicy int64 `json:"maxtxsigopscountspolicy"`
+
+	// MaxStackMemoryUsagePolicy defines the maximum memory usage allowed for script execution stack
+	MaxStackMemoryUsagePolicy int `json:"maxstackmemoryusagepolicy"`
+
+	// MaxStackMemoryUsageConsensus defines the consensus limit for script stack memory usage
+	MaxStackMemoryUsageConsensus int `json:"maxstackmemoryusageconsensus"`
+
+	// LimitAncestorCount defines the maximum number of ancestor transactions allowed
+	LimitAncestorCount int `json:"limitancestorcount"`
+
+	// LimitCPFPGroupMembersCount defines the maximum number of transactions in a CPFP group
+	LimitCPFPGroupMembersCount int `json:"limitcpfpgroupmemberscount"`
+
+	// MaxMempool defines the maximum size of the mempool in bytes
+	MaxMempool int `json:"maxmempool"`
+
+	// MaxMempoolSizedisk defines the maximum size of the mempool on disk
+	MaxMempoolSizedisk int `json:"maxmempoolsizedisk"`
+
+	// MempoolMaxPercentCPFP defines the maximum percentage of mempool that can be used for CPFP
+	MempoolMaxPercentCPFP int `json:"mempoolmaxpercentcpfp"`
+
+	// AcceptNonStdOutputs determines if non-standard outputs are accepted
+	AcceptNonStdOutputs bool `json:"acceptnonstdoutputs"`
+
+	// DataCarrier determines if OP_RETURN outputs are allowed
+	DataCarrier bool `json:"datacarrier"`
+
+	// MinMiningTxFee defines the minimum fee rate for transaction mining
+	MinMiningTxFee float64 `json:"minminingtxfee"`
+
+	// MaxStdTxValidationDuration defines the maximum time allowed for standard transaction validation
+	MaxStdTxValidationDuration int `json:"maxstdtxvalidationduration"`
+
+	// MaxNonStdTxValidationDuration defines the maximum time allowed for non-standard transaction validation
+	MaxNonStdTxValidationDuration int `json:"maxnonstdtxvalidationduration"`
+
+	// MaxTxChainValidationBudget defines the maximum time budget for validating a chain of transactions
+	MaxTxChainValidationBudget int `json:"maxtxchainvalidationbudget"`
+
+	// ValidationClockCPU determines if CPU time should be used for validation timing
+	ValidationClockCPU bool `json:"validationclockcpu"`
+
+	// MinConsolidationFactor defines the minimum consolidation factor for transactions
+	MinConsolidationFactor int `json:"minconsolidationfactor"`
+
+	// MaxConsolidationInputScriptSize defines the maximum script size for consolidation inputs
+	MaxConsolidationInputScriptSize int `json:"maxconsolidationinputscriptsize"`
+
+	// MinConfConsolidationInput defines the minimum confirmations required for consolidation inputs
+	MinConfConsolidationInput int `json:"minconfconsolidationinput"`
+
+	// MinConsolidationInputMaturity defines the minimum maturity for consolidation inputs
+	MinConsolidationInputMaturity int `json:"minconsolidationinputmaturity"`
+
+	// AcceptNonStdConsolidationInput determines if non-standard inputs are accepted in consolidation
+	AcceptNonStdConsolidationInput bool `json:"acceptnonstdconsolidationinput"`
 }
 
 func NewPolicySettings() *PolicySettings {

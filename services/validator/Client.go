@@ -1,3 +1,24 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This package provides comprehensive transaction validation for Bitcoin SV nodes,
+including script verification, UTXO management, and policy enforcement. It supports
+multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
+transaction validation ruleset.
+
+Key features:
+  - Transaction validation against Bitcoin consensus rules
+  - UTXO spending and creation
+  - Script verification using multiple interpreters
+  - Policy enforcement
+  - Block assembly integration
+  - Kafka integration for transaction metadata
+
+Usage:
+
+	validator := NewTxValidator(logger, policy, params)
+	err := validator.ValidateTransaction(tx, blockHeight)
+*/
 package validator
 
 import (
@@ -19,21 +40,51 @@ import (
 	"google.golang.org/grpc/resolver"
 )
 
+// batchItem represents a single item in a validation batch request
 type batchItem struct {
-	req  *validator_api.ValidateTransactionRequest
+	// req contains the validation request for a single transaction
+	req *validator_api.ValidateTransactionRequest
+
+	// done is a channel that receives the validation result
 	done chan error
 }
 
+// Client implements a gRPC client for the validator service, providing transaction
+// validation capabilities through remote procedure calls
 type Client struct {
-	client       validator_api.ValidatorAPIClient
-	running      *atomic.Bool
-	conn         *grpc.ClientConn
-	logger       ulogger.Logger
-	batchSize    int
+	// client is the gRPC client implementation for validator API calls
+	client validator_api.ValidatorAPIClient
+
+	// running indicates whether the client is currently operational
+	running *atomic.Bool
+
+	// conn holds the gRPC connection to the validator service
+	conn *grpc.ClientConn
+
+	// logger provides logging functionality for the client
+	logger ulogger.Logger
+
+	// batchSize defines the maximum number of transactions to batch together
+	// for validation requests
+	batchSize int
+
+	// batchTimeout defines the maximum time to wait for batching transactions
+	// before sending the batch, in milliseconds
 	batchTimeout int
-	batcher      batcher.Batcher2[batchItem]
+
+	// batcher handles the batching of transaction validation requests
+	batcher batcher.Batcher2[batchItem]
 }
 
+// NewClient creates and initializes a new validator client
+//
+// Parameters:
+//   - ctx: Context for client initialization
+//   - logger: Logger instance for client operations
+//
+// Returns:
+//   - *Client: Initialized client instance
+//   - error: Any error encountered during initialization
 func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {

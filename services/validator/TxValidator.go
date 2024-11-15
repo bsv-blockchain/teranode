@@ -1,3 +1,9 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This file contains the core transaction validation logic and implements the standard
+Bitcoin transaction validation rules and policies.
+*/
 package validator
 
 import (
@@ -13,7 +19,12 @@ import (
 )
 
 var (
+
+	// txWhitelist contains transaction IDs that are exempt from standard validation rules
+	// These are typically historical transactions that would otherwise fail validation
+	// due to changes in validation rules over time
 	txWhitelist = map[string]struct{}{
+		// Historical transactions with special handling requirements
 		"c99c49da4c38af669dea436d3e73780dfdb6c1ecf9958baa52960e8baee30e73": {},
 		"0ad07700151caa994c0bc3087ad79821adf071978b34b8b3f0838582e45ef305": {},
 		"7c451f68e15303ab3e28450405cfa70f2c2cc9fa29e92cb2d8ed6ca6edb13645": {},
@@ -34,42 +45,77 @@ var (
 	}
 )
 
+// TxInterpreter defines the type of script interpreter to be used
+// for transaction validation
 type TxInterpreter string
 
 const (
-	TxInterpreterGoBT  TxInterpreter = "GoBT"
+	// TxInterpreterGoBT specifies the Go-BT library interpreter
+	TxInterpreterGoBT TxInterpreter = "GoBT"
+
+	// TxInterpreterGoSDK specifies the Go-SDK library interpreter
 	TxInterpreterGoSDK TxInterpreter = "GoSDK"
+
+	// TxInterpreterGoBDK specifies the Go-BDK library interpreter
 	TxInterpreterGoBDK TxInterpreter = "GoBDK"
 
+	// defaultTxVerifier specifies the default interpreter to use
 	defaultTxVerifier = TxInterpreterGoBT
 )
 
-// TxValidatorI interface implement method to validate transactions
+// TxValidatorI defines the interface for transaction validation operations
 type TxValidatorI interface {
-	// ValidateTransaction implements the method to validate a transaction
+	// ValidateTransaction performs comprehensive validation of a transaction
+	// Parameters:
+	//   - tx: The transaction to validate
+	//   - blockHeight: The current block height for validation context
+	// Returns:
+	//   - error: Any validation errors encountered
 	ValidateTransaction(tx *bt.Tx, blockHeight uint32) error
 }
 
+// TxValidator implements transaction validation logic
 type TxValidator struct {
-	logger      ulogger.Logger
-	policy      *PolicySettings
-	params      *chaincfg.Params
-	interpreter TxScriptInterpreter
+	logger      ulogger.Logger      // Logger instance
+	policy      *PolicySettings     // Validation policy settings
+	params      *chaincfg.Params    // Network parameters
+	interpreter TxScriptInterpreter // Script interpreter implementation
 }
 
+// TxScriptInterpreter defines the interface for script verification operations
 type TxScriptInterpreter interface {
-	// VerifyScript implement the method to verify a script for a transaction
+	// VerifyScript implements script verification for a transaction
+	// Parameters:
+	//   - tx: The transaction containing the scripts to verify
+	//   - blockHeight: Current block height for validation context
+	// Returns:
+	//   - error: Any script verification errors encountered
 	VerifyScript(tx *bt.Tx, blockHeight uint32) error
 }
 
-// TxValidatorCreator is the creator method to be registered in the factory
+// TxValidatorCreator defines a function type for creating script interpreters
+// Parameters:
+//   - logger: Logger instance for the interpreter
+//   - policy: Policy settings for validation
+//   - params: Network parameters
+//
+// Returns:
+//   - TxScriptInterpreter: The created script interpreter
 type TxValidatorCreator func(logger ulogger.Logger, policy *PolicySettings, params *chaincfg.Params) TxScriptInterpreter
 
-// ScriptVerificationFactory store all TxValidator creator methods.
-// They are registered at build time depending to the build tags
+// ScriptVerificationFactory stores registered TxValidator creator methods
+// The factory is populated at build time based on build tags
 var ScriptVerificationFactory = make(map[TxInterpreter]TxValidatorCreator)
 
-// NewTxValidator lookup from the factory and return the appropriate TxValidator
+// NewTxValidator creates a new transaction validator with the specified configuration
+// Parameters:
+//   - logger: Logger instance for validation operations
+//   - policy: Policy settings for validation rules
+//   - params: Network parameters
+//   - opts: Optional validator settings
+//
+// Returns:
+//   - TxValidatorI: The created transaction validator
 func NewTxValidator(logger ulogger.Logger, policy *PolicySettings, params *chaincfg.Params, opts ...TxValidatorOption) TxValidatorI {
 	options := &TxValidatorOptions{}
 	for _, opt := range opts {
@@ -108,7 +154,23 @@ func NewTxValidator(logger ulogger.Logger, policy *PolicySettings, params *chain
 	}
 }
 
-// ValidateTransaction use the TxValidator method VerifyScript to verify a script
+// ValidateTransaction performs comprehensive validation of a transaction
+// This includes checking:
+//  1. Input and output presence
+//  2. Transaction size limits
+//  3. Input values and coinbase restrictions
+//  4. Output values and dust limits
+//  5. Lock time requirements
+//  6. Script operation limits
+//  7. Script validation
+//  8. Fee requirements
+//
+// Parameters:
+//   - tx: The transaction to validate
+//   - blockHeight: Current block height for validation context
+//
+// Returns:
+//   - error: Any validation errors encountered
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
 	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
 		return nil

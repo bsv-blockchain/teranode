@@ -1,3 +1,9 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This file implements Prometheus metrics collection for the validator service,
+providing detailed monitoring and observability of transaction validation operations.
+*/
 package validator
 
 import (
@@ -8,30 +14,61 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics collectors
 var (
-	prometheusHealth                              prometheus.Counter
-	prometheusInvalidTransactions                 prometheus.Counter
-	prometheusTransactionValidateTotal            prometheus.Histogram
-	prometheusTransactionValidate                 prometheus.Histogram
-	prometheusTransactionValidateBatch            prometheus.Histogram
-	prometheusTransactionSpendUtxos               prometheus.Histogram
-	prometheusValidateTransaction                 prometheus.Histogram
-	prometheusTransactionSize                     prometheus.Histogram
-	prometheusValidatorSendToBlockAssembly        prometheus.Histogram
+	// prometheusHealth tracks the number of health check calls
+	prometheusHealth prometheus.Counter
+
+	// prometheusInvalidTransactions counts invalid transactions
+	prometheusInvalidTransactions prometheus.Counter
+
+	// prometheusTransactionValidateTotal measures total validation time
+	prometheusTransactionValidateTotal prometheus.Histogram
+
+	// prometheusTransactionValidate measures individual validation steps
+	prometheusTransactionValidate prometheus.Histogram
+
+	// prometheusTransactionValidateBatch measures batch validation performance
+	prometheusTransactionValidateBatch prometheus.Histogram
+
+	// prometheusTransactionSpendUtxos measures UTXO spending operations
+	prometheusTransactionSpendUtxos prometheus.Histogram
+
+	// prometheusValidateTransaction measures overall transaction processing
+	prometheusValidateTransaction prometheus.Histogram
+
+	// prometheusTransactionSize tracks transaction size distribution
+	prometheusTransactionSize prometheus.Histogram
+
+	// prometheusValidatorSendToBlockAssembly measures block assembly operations
+	prometheusValidatorSendToBlockAssembly prometheus.Histogram
+
+	// prometheusValidatorSendToBlockValidationKafka measures Kafka operations for block validation
 	prometheusValidatorSendToBlockValidationKafka prometheus.Histogram
-	prometheusValidatorSendToP2PKafka             prometheus.Histogram
-	prometheusValidatorSetTxMeta                  prometheus.Histogram
+
+	// prometheusValidatorSendToP2PKafka measures Kafka operations for P2P
+	prometheusValidatorSendToP2PKafka prometheus.Histogram
+
+	// prometheusValidatorSetTxMeta measures transaction metadata operations
+	prometheusValidatorSetTxMeta prometheus.Histogram
 )
 
+// Synchronization primitives
 var (
+	// prometheusMetricsInitOnce ensures metrics are initialized only once
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics
+// This function is called once during service startup
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the actual initialization function for Prometheus metrics
+// This function creates and registers all metrics with appropriate configuration
 func _initPrometheusMetrics() {
+	// Health check counter
 	prometheusHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -40,6 +77,8 @@ func _initPrometheusMetrics() {
 			Help:      "Number of calls to the health endpoint",
 		},
 	)
+
+	// Invalid transactions counter
 	prometheusInvalidTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -48,6 +87,8 @@ func _initPrometheusMetrics() {
 			Help:      "Number of transactions found invalid by the validator service",
 		},
 	)
+
+	// Total validation time histogram
 	prometheusTransactionValidateTotal = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -57,6 +98,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// Individual validation steps histogram
 	prometheusTransactionValidate = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -66,6 +109,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// Batch validation histogram
 	prometheusTransactionValidateBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -75,6 +120,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	// UTXO spending operations histogram
 	prometheusTransactionSpendUtxos = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -84,6 +131,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// Overall transaction processing histogram
 	prometheusValidateTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -93,6 +142,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	// Transaction size histogram
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -102,6 +153,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsSize,
 		},
 	)
+
+	// Block assembly operations histogram
 	prometheusValidatorSendToBlockAssembly = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -111,6 +164,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// Block validation Kafka operations histogram
 	prometheusValidatorSendToBlockValidationKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -120,6 +175,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// P2P Kafka operations histogram
 	prometheusValidatorSendToP2PKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -129,6 +186,8 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
+
+	// Transaction metadata operations histogram
 	prometheusValidatorSetTxMeta = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",

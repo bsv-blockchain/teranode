@@ -1,3 +1,10 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This package provides comprehensive transaction validation for Bitcoin SV nodes,
+including script verification, UTXO management, and policy enforcement. It supports
+multiple script interpreters and implements the full Bitcoin transaction validation ruleset.
+*/
 package validator
 
 import (
@@ -23,25 +30,56 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// Constants defining key validation parameters and limits.
 const (
-	MaxBlockSize                       = 4 * 1024 * 1024 * 1024
-	MaxSatoshis                        = 21_000_000_00_000_000
-	coinbaseTxID                       = "0000000000000000000000000000000000000000000000000000000000000000"
-	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0) // UINT32_MAX
+	// MaxBlockSize defines the maximum allowed size of a block in bytes (4GB).
+	MaxBlockSize = 4 * 1024 * 1024 * 1024
+
+	// MaxSatoshis defines the maximum number of satoshis that can exist (21M BSV).
+	MaxSatoshis = 21_000_000_00_000_000
+
+	// coinbaseTxID represents the transaction ID for coinbase transactions.
+	coinbaseTxID = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
+	// operations allowed in a transaction after the Genesis upgrade (UINT32_MAX).
+	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0)
 )
 
+// Validator implements Bitcoin SV transaction validation and manages the lifecycle
+// of transactions from validation through block assembly.
 type Validator struct {
-	logger                        ulogger.Logger
-	txValidator                   TxValidatorI
-	utxoStore                     utxo.Store
-	blockAssembler                blockassembly.Store
-	saveInParallel                bool
-	blockAssemblyDisabled         bool
-	stats                         *gocore.Stat
-	txmetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+	// logger handles structured logging for the validator
+	logger ulogger.Logger
+
+	// txValidator performs transaction-specific validation checks
+	txValidator TxValidatorI
+
+	// utxoStore manages the UTXO set and transaction metadata
+	utxoStore utxo.Store
+
+	// blockAssembler handles block template creation and transaction ordering
+	blockAssembler blockassembly.Store
+
+	// saveInParallel indicates if UTXOs should be saved concurrently
+	saveInParallel bool
+
+	// blockAssemblyDisabled toggles whether validated transactions are sent to block assembly
+	blockAssemblyDisabled bool
+
+	// stats tracks validator performance metrics
+	stats *gocore.Stat
+
+	// txmetaKafkaProducerClient publishes transaction metadata events
+	txmetaKafkaProducerClient kafka.KafkaAsyncProducerI
+
+	// rejectedTxKafkaProducerClient publishes rejected transaction events
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
+// New creates a new Validator instance with the provided configuration.
+// It initializes the validator with the given logger, UTXO store, and Kafka producers.
+// Returns an error if initialization fails.
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
 	initPrometheusMetrics()
 
@@ -83,6 +121,10 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKaf
 	return v, nil
 }
 
+// Health performs health checks on the validator and its dependencies.
+// When checkLiveness is true, only checks service liveness.
+// When false, performs full readiness check including dependencies.
+// Returns HTTP status code, status message, and error if any.
 func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -138,15 +180,20 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// GetBlockHeight returns the current block height from the UTXO store.
 func (v *Validator) GetBlockHeight() uint32 {
 	return v.utxoStore.GetBlockHeight()
 }
 
+// GetMedianBlockTime returns the median block time from the UTXO store.
 func (v *Validator) GetMedianBlockTime() uint32 {
 	return v.utxoStore.GetMedianBlockTime()
 }
 
-// Validate validates a transaction
+// Validate performs comprehensive validation of a transaction.
+// It checks transaction finality, validates inputs and outputs, updates the UTXO set,
+// and optionally adds the transaction to block assembly.
+// Returns error if validation fails.
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (err error) {
 	// apply options
 	validationOptions := ProcessOptions(opts...)
@@ -166,6 +213,10 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return err
 }
 
+// validateInternal performs the core validation logic for a transaction.
+// It handles UTXO spending, transaction metadata storage, and block assembly integration.
+// Returns error if any validation step fails.
+//
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	txID := tx.TxID()
@@ -241,7 +292,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	if !validationOptions.skipUtxoCreation {
 		// TODO do we need to make this a 2 phase commit?
 		//      if the block assembly addition fails, the utxo should not be spendable yet
-		txMetaData, err = v.storeTxInUtxoMap(setSpan, tx, blockHeight)
+		txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
 				// stop all processing, this transaction has already been validated and passed into the block assembly
@@ -337,7 +388,9 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 	return err
 }
 
-func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
+// storeTxInUtxoMap stores transaction metadata in the UTXO store.
+// Returns transaction metadata and error if storage fails.
+func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "storeTxInUtxoMap",
 		tracing.WithHistogram(prometheusValidatorSetTxMeta),
 	)
@@ -361,6 +414,8 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 	return data, nil
 }
 
+// spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
+// Returns the spent UTXOs and error if spending fails.
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
@@ -422,6 +477,8 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	return spends, nil
 }
 
+// sendToBlockAssembler sends validated transaction data to the block assembler.
+// Returns error if block assembly integration fails.
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error { //nolint:gosec
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "sendToBlockAssembler",
 		tracing.WithHistogram(prometheusValidatorSendToBlockAssembly),
@@ -443,6 +500,9 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	return nil
 }
 
+// reverseSpends reverses previously spent UTXOs in case of validation failure.
+// Attempts up to 3 retries with exponential backoff.
+// Returns error if UTXO reversal fails.
 func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spend) error {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "reverseSpends")
 	defer deferFn()
@@ -468,6 +528,8 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 	return nil
 }
 
+// extendTransaction adds previous output information to transaction inputs.
+// Returns error if required parent transaction data cannot be found.
 func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "extendTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -503,6 +565,9 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
+// validateTransaction performs transaction-level validation checks.
+// Ensures transaction is properly extended and meets all validation rules.
+// Returns error if validation fails.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -523,6 +588,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	return v.txValidator.ValidateTransaction(tx, blockHeight)
 }
 
+// feesToBtFeeQuote converts a minimum mining fee rate to a bt.FeeQuote structure.
+// The fee rate is specified in BSV/KB and converted to satoshis/KB.
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {
 	satoshisPerKB := int(minMiningFee * 1e8)
 

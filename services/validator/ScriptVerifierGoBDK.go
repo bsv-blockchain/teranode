@@ -1,5 +1,12 @@
 //go:build bdk
 
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This file implements the Go-BDK script verification functionality, providing
+script validation using the Bitcoin Development Kit (BDK) implementation.
+This verifier is only built when the 'bdk' build tag is specified.
+*/
 package validator
 
 import (
@@ -17,24 +24,39 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
+// bdkDebugVerification defines the structure for debug information during script verification
+// Used for detailed logging when script verification fails
 type bdkDebugVerification struct {
-	UScript     string `mapstructure:"uScript" json:"uScript" validate:"required"`
-	LScript     string `mapstructure:"lScript" json:"lScript" validate:"required"`
-	TxBytes     string `mapstructure:"txBytes" json:"txBytes" validate:"required"`
-	Flags       uint32 `mapstructure:"flags" json:"flags" validate:"required"`
-	Input       int    `mapstructure:"input" json:"input" validate:"required"`
-	Satoshis    uint64 `mapstructure:"satoshis" json:"satoshis" validate:"required"`
-	BlockHeight uint32 `mapstructure:"blockHeight" json:"blockHeight" validate:"required"`
-	Err         string `mapstructure:"err" json:"err" validate:"required"`
+	UScript     string `mapstructure:"uScript" json:"uScript" validate:"required"`         // Unlocking script in hex
+	LScript     string `mapstructure:"lScript" json:"lScript" validate:"required"`         // Locking script in hex
+	TxBytes     string `mapstructure:"txBytes" json:"txBytes" validate:"required"`         // Full transaction in hex
+	Flags       uint32 `mapstructure:"flags" json:"flags" validate:"required"`             // Script verification flags
+	Input       int    `mapstructure:"input" json:"input" validate:"required"`             // Input index
+	Satoshis    uint64 `mapstructure:"satoshis" json:"satoshis" validate:"required"`       // Amount in satoshis
+	BlockHeight uint32 `mapstructure:"blockHeight" json:"blockHeight" validate:"required"` // Current block height
+	Err         string `mapstructure:"err" json:"err" validate:"required"`                 // Error message if verification fails
 }
 
+// init registers the Go-BDK script verifier with the verification factory
+// This is called automatically when the package is imported with the 'bdk' build tag
 func init() {
 	ScriptVerificationFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
 
 	log.Println("Registered scriptVerifierGoBDK")
 }
 
-// getChainNameFromParams map the chain name from the ubsv way to bsv C++ code.
+// getBDKChainNameFromParams maps chain names from ubsv format to BDK format (bsv C++)
+// Parameters:
+//   - pa: Chain parameters containing the network name
+//
+// Returns:
+//   - string: The BDK-compatible chain name
+//
+// Chain name mappings:
+//   - mainnet  -> main
+//   - testnet3 -> test
+//   - regtest  -> regtest
+//   - stn      -> stn
 func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 	// ubsv : mainnet  testnet3  regtest  stn
 	// bdk  :    main      test  regtest  stn
@@ -48,9 +70,18 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 	return chainNameMap[pa.Name]
 }
 
+// newScriptVerifierGoBDK creates a new Go-BDK script verifier instance
+// Parameters:
+//   - l: Logger instance for verification operations
+//   - po: Policy settings for validation rules
+//   - pa: Network parameters
+//
+// Returns:
+//   - TxScriptInterpreter: The created script interpreter
 func newScriptVerifierGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
 
+	// Configure BDK script verification settings
 	bdkScriptConfig := bdkconfig.ScriptConfig{
 		ChainNetwork:                 getBDKChainNameFromParams(pa),
 		MaxOpsPerScriptPolicy:        uint64(po.MaxOpsPerScriptPolicy),
@@ -69,27 +100,49 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.P
 	}
 }
 
+// scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
 type scriptVerifierGoBDK struct {
-	logger ulogger.Logger
-	policy *PolicySettings
-	params *chaincfg.Params
+	logger ulogger.Logger   // Logger instance
+	policy *PolicySettings  // Policy settings for validation
+	params *chaincfg.Params // Network parameters
 }
 
+// Logger returns the verifier's logger instance
 func (v *scriptVerifierGoBDK) Logger() ulogger.Logger {
 	return v.logger
 }
 
+// Params returns the verifier's network parameters
 func (v *scriptVerifierGoBDK) Params() *chaincfg.Params {
 	return v.params
 }
 
+// PolicySettings returns the verifier's policy settings
 func (v *scriptVerifierGoBDK) PolicySettings() *PolicySettings {
 	return v.policy
 }
 
-// VerifyScript verifies script using Go-BDK
+// VerifyScript implements script verification using the Go-BDK library
+// This method verifies all inputs of a transaction against their corresponding
+// locking scripts using the BDK script verification engine.
+//
+// The verification process:
+// 1. Iterates through all transaction inputs
+// 2. Calculates appropriate script flags based on block height
+// 3. Performs script verification using BDK's native implementation
+// 4. Provides detailed error information for debugging
+//
+// Parameters:
+//   - tx: The transaction containing scripts to verify
+//   - blockHeight: Current block height for validation context
+//
+// Returns:
+//   - error: Any script verification errors encountered
+//
+// Note: Empty scripts and special cases are handled with appropriate logging
 func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 	for i, in := range tx.Inputs {
+		// Skip empty scripts
 		if in.PreviousTxScript == nil || in.UnlockingScript == nil {
 			continue
 		}
@@ -109,6 +162,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 			return errors.NewTxInvalidError("failed to calculate flags from prev locking script, flags : %v, error: %v", flags, errF)
 		}
 
+		// Perform script verification
 		txBinary := tx.Bytes()
 		if errV := bdkscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, uint(flags), txBinary, i, in.PreviousTxSatoshis); errV != nil {
 			// Helpful logging to get full information to debug separately in GoBDK

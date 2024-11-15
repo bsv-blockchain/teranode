@@ -1,5 +1,26 @@
 //go:build bdk
 
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This package provides comprehensive transaction validation for Bitcoin SV nodes,
+including script verification, UTXO management, and policy enforcement. It supports
+multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
+transaction validation ruleset.
+
+Key features:
+  - Transaction validation against Bitcoin consensus rules
+  - UTXO spending and creation
+  - Script verification using multiple interpreters
+  - Policy enforcement
+  - Block assembly integration
+  - Kafka integration for transaction metadata
+
+Usage:
+
+	validator := NewTxValidator(logger, policy, params)
+	err := validator.ValidateTransaction(tx, blockHeight)
+*/
 package validator
 
 import (

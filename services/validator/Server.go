@@ -1,3 +1,10 @@
+/*
+Package validator implements Bitcoin SV transaction validation functionality.
+
+This file implements the validator server component, providing gRPC endpoints
+for transaction validation services and managing the interaction between
+different validation components.
+*/
 package validator
 
 import (
@@ -27,7 +34,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Server type carries the logger within it
+// Server implements the validator gRPC service and manages validation operations
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
 	validator                     Interface
@@ -42,7 +49,17 @@ type Server struct {
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
-// NewServer will return a server instance with the logger stored within it
+// NewServer creates and initializes a new validator server instance
+// Parameters:
+//   - logger: Logger instance for server operations
+//   - utxoStore: UTXO database interface
+//   - blockchainClient: Interface to blockchain operations
+//   - consumerClient: Kafka consumer client
+//   - txMetaKafkaProducerClient: Kafka producer for transaction metadata
+//   - rejectedTxKafkaProducerClient: Kafka producer for rejected transactions
+//
+// Returns:
+//   - *Server: Initialized server instance
 func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
 	initPrometheusMetrics()
 
@@ -57,6 +74,15 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blo
 	}
 }
 
+// Health performs health checks on the validator service
+// Parameters:
+//   - ctx: Context for the health check operation
+//   - checkLiveness: If true, performs only liveness checks
+//
+// Returns:
+//   - int: HTTP status code indicating health status
+//   - string: Detailed health status message
+//   - error: Any errors encountered during health check
 func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -85,6 +111,14 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC implements the gRPC health check endpoint
+// Parameters:
+//   - ctx: Context for the health check operation
+//   - _: Empty message parameter (unused)
+//
+// Returns:
+//   - *validator_api.HealthResponse: Health check response
+//   - error: Any errors encountered
 func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(v.stats),
@@ -101,6 +135,12 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the validator server
+// Parameters:
+//   - ctx: Context for initialization
+//
+// Returns:
+//   - error: Any initialization errors
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
@@ -112,7 +152,12 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// Start function
+// Start begins the validator server operation
+// Parameters:
+//   - ctx: Context for server operation
+//
+// Returns:
+//   - error: Any startup errors
 func (v *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
@@ -176,7 +221,7 @@ func (v *Server) Start(ctx context.Context) error {
 		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
-	// this will block
+	//  Start gRPC server - this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
 	}); err != nil {
@@ -186,6 +231,12 @@ func (v *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the validator server
+// Parameters:
+//   - ctx: Context for shutdown operation
+//
+// Returns:
+//   - error: Any shutdown errors
 func (v *Server) Stop(_ context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
@@ -194,6 +245,12 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
+// ValidateTransactionStream implements streaming transaction validation
+// Parameters:
+//   - stream: gRPC stream for transaction data
+//
+// Returns:
+//   - error: Any validation errors
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
 	_, _, deferFn := tracing.StartTracing(v.ctx, "ValidateTransactionStream",
 		tracing.WithParentStat(v.stats),
