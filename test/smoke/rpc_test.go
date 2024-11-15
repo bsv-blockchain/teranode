@@ -1,4 +1,4 @@
-////go:build rpc
+//go:build rpc
 
 // How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCReconsiderBlock$" -tags rpc
 // Change TestRPCInvalidateBlock with the name of the test to execute
