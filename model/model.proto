@@ -25,9 +25,9 @@ message MiningCandidate {
 message MiningSolution {
   bytes id = 1;
   bytes coinbase= 2;
-  uint32 time = 3;
+  optional uint32 time = 3;
   uint32 nonce = 4;
-  uint32 version = 5;
+  optional uint32 version = 5;
   bytes blockHash = 6;
 }
 

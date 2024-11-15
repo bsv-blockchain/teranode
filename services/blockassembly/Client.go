@@ -200,12 +200,7 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 		Version:    solution.Version,
 	})
 
-	unwrappedErr := errors.UnwrapGRPC(err)
-	if unwrappedErr == nil {
-		return nil
-	}
-
-	return unwrappedErr
+	return errors.UnwrapGRPC(err)
 }
 
 func (s *Client) GenerateBlocks(ctx context.Context, count int32) error {

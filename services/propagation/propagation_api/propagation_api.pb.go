@@ -21,6 +21,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// EmptyMessage represents an empty request or response.
+// Used when no additional data needs to be transmitted.
 // swagger:model EmptyMessage
 type EmptyMessage struct {
 	state         protoimpl.MessageState
@@ -58,14 +60,18 @@ func (*EmptyMessage) Descriptor() ([]byte, []int) {
 	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{0}
 }
 
+// HealthResponse provides information about the service's health status.
 // swagger:model HealthResponse
 type HealthResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok        bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Details   string                 `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	// ok indicates whether the service is healthy
+	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	// details provides additional information about the health status
+	Details string `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	// timestamp indicates when the health check was performed
 	Timestamp *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 }
 
@@ -120,12 +126,14 @@ func (x *HealthResponse) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
+// GetRequest represents a request to retrieve a transaction by its ID.
 // swagger:model GetRequest
 type GetRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// txid is the transaction ID in bytes
 	Txid []byte `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
 }
 
@@ -166,12 +174,14 @@ func (x *GetRequest) GetTxid() []byte {
 	return nil
 }
 
+// GetResponse contains the retrieved transaction data.
 // swagger:model GetResponse
 type GetResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// tx contains the raw transaction bytes
 	Tx []byte `protobuf:"bytes,1,opt,name=tx,proto3" json:"tx,omitempty"`
 }
 
@@ -212,12 +222,14 @@ func (x *GetResponse) GetTx() []byte {
 	return nil
 }
 
+// ProcessTransactionRequest represents a request to process a single transaction.
 // swagger:model ProcessTransactionRequest
 type ProcessTransactionRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// tx contains the raw transaction bytes to process
 	Tx []byte `protobuf:"bytes,1,opt,name=tx,proto3" json:"tx,omitempty"`
 }
 
@@ -258,12 +270,14 @@ func (x *ProcessTransactionRequest) GetTx() []byte {
 	return nil
 }
 
+// ProcessTransactionBatchRequest represents a request to process multiple transactions.
 // swagger:model ProcessTransactionRequest
 type ProcessTransactionBatchRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// tx contains an array of raw transaction bytes to process
 	Tx [][]byte `protobuf:"bytes,1,rep,name=tx,proto3" json:"tx,omitempty"`
 }
 
@@ -304,12 +318,15 @@ func (x *ProcessTransactionBatchRequest) GetTx() [][]byte {
 	return nil
 }
 
+// ProcessTransactionBatchResponse contains the results of batch transaction processing.
 // swagger:model ProcessTransactionBatchResponse
 type ProcessTransactionBatchResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// error contains error messages for each transaction in the batch
+	// empty string indicates success for that transaction
 	Error []string `protobuf:"bytes,1,rep,name=error,proto3" json:"error,omitempty"`
 }
 
@@ -350,12 +367,14 @@ func (x *ProcessTransactionBatchResponse) GetError() []string {
 	return nil
 }
 
+// ProcessTransactionHexRequest represents a request to process a transaction in hex format.
 // swagger:model ProcessTransactionRequest
 type ProcessTransactionHexRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// tx contains the transaction in hexadecimal string format
 	Tx string `protobuf:"bytes,1,opt,name=tx,proto3" json:"tx,omitempty"`
 }
 

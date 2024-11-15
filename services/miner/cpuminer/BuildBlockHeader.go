@@ -10,10 +10,20 @@ import (
 
 // BuildBlockHeader builds the block header byte array from the specific fields in the header.
 func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSolution) ([]byte, error) {
+	version := candidate.Version
+	if solution.Version != nil {
+		version = *solution.Version
+	}
+
 	v := make([]byte, 4)
-	binary.LittleEndian.PutUint32(v, solution.Version)
+	binary.LittleEndian.PutUint32(v, version)
+
+	time := candidate.Time
+	if solution.Time != nil {
+		time = *solution.Time
+	}
 	t := make([]byte, 4)
-	binary.LittleEndian.PutUint32(t, solution.Time)
+	binary.LittleEndian.PutUint32(t, time)
 	n := make([]byte, 4)
 	binary.LittleEndian.PutUint32(n, solution.Nonce)
 

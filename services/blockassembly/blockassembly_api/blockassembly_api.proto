@@ -97,8 +97,8 @@ message SubmitMiningSolutionRequest {
   bytes id = 1; // the id of the mining candidate
   uint32 nonce = 2; // the nonce value used for mining
   bytes coinbase_tx = 3; // the coinbase transaction bytes
-  uint32 time = 4; // the timestamp of the block
-  uint32 version = 5; // the version of the block
+  optional uint32 time = 4; // the timestamp of the block
+  optional uint32 version = 5; // the version of the block
 }
 
 // Response indicating whether the submission of a mining solution was successful.

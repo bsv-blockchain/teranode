@@ -801,8 +801,14 @@ type GetMiningCandidateCmd struct {
 	ProvideCoinbaseTx *bool `jsonrpcdefault:"false"`
 }
 
-type SubmitMiningSolutionCmd struct {
-	JSONString string
+type SubmitMiningSolutionCmd struct { // This is expect 1 param, but the param should be an object
+	MiningSolution struct {
+		ID       string  `json:"id"`
+		Coinbase string  `json:"coinbase"`
+		Time     *uint32 `json:"time"`
+		Nonce    uint32  `json:"nonce"`
+		Version  *uint32 `json:"version"`
+	}
 }
 
 func init() {

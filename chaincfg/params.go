@@ -5,7 +5,6 @@
 package chaincfg
 
 import (
-	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -762,7 +761,7 @@ func GetChainParams(network string) (*Params, error) {
 	case "custom":
 		return &CustomTestNetParams, nil
 	default:
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, fmt.Sprintf("unknown network %s", network))
+		return nil, errors.NewProcessingError("unknown network %s", network)
 	}
 }
 

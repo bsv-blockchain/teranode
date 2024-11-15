@@ -39,7 +39,7 @@ var (
 
 type BlockSubmissionRequest struct {
 	*blockassembly_api.SubmitMiningSolutionRequest
-	responseChan chan bool
+	responseChan chan error
 }
 
 // BlockAssembly type carries the logger within it
@@ -228,18 +228,15 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 			case <-ctx.Done():
 				ba.logger.Infof("Stopping block submission listener")
 				return
+
 			case blockSubmission := <-ba.blockSubmissionChan:
-				// _, _, c := util.NewStatFromContext(ctx, "blockSubmissionChan", channelStats, false)
-				ok := true
-
-				if _, err := ba.submitMiningSolution(ctx, blockSubmission); err != nil {
+				_, err := ba.submitMiningSolution(ctx, blockSubmission)
+				if err != nil {
 					ba.logger.Warnf("Failed to submit block [%s]", err)
-
-					ok = false
 				}
 
 				if blockSubmission.responseChan != nil {
-					blockSubmission.responseChan <- ok
+					blockSubmission.responseChan <- err
 				}
 
 				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
@@ -471,6 +468,8 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		return nil, errors.WrapGRPC(err)
 	}
 
+	ba.logger.Debugf("in GetMiningCandidate: miningCandidate: %+v", miningCandidate.Stringify(true))
+
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 
 	ba.jobStore.Set(*id, &subtreeprocessor.Job{
@@ -513,10 +512,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 
 	waitForResponse := gocore.Config().GetBool("blockassembly_SubmitMiningSolution_waitForResponse", true)
 
-	var responseChan chan bool
+	var responseChan chan error
 
 	if waitForResponse {
-		responseChan = make(chan bool)
+		responseChan = make(chan error)
 		defer close(responseChan)
 	}
 
@@ -526,21 +525,23 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		SubmitMiningSolutionRequest: req,
 		responseChan:                responseChan,
 	}
+
 	ba.blockSubmissionChan <- request
 
-	ok := true
+	var err error
 
 	if waitForResponse {
-		ok = <-request.responseChan
+		err = <-request.responseChan
 	}
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
-		Ok: ok,
-	}, nil
+		Ok: err == nil, // The response only has Ok boolean in it.  If waitForResponse is false, err will always be nil.
+	}, err
 }
 
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
+
 	ctx, _, deferFn := tracing.StartTracing(ctx, "submitMiningSolution",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblySubmitMiningSolution),
@@ -549,15 +550,16 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	defer deferFn()
 
-	storeId, err := chainhash.NewHash(req.Id)
+	storeID, err := chainhash.NewHash(req.Id)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
-	jobItem := ba.jobStore.Get(*storeId)
+	jobItem := ba.jobStore.Get(*storeID)
 	if jobItem == nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] job not found", jobID)
 	}
+
 	job := jobItem.Value()
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
@@ -587,6 +589,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
+
 	if len(job.Subtrees) > 0 {
 		ba.logger.Infof("[BlockAssembly][%s] submit job has subtrees: %d", jobID, len(job.Subtrees))
 
@@ -666,12 +669,23 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	version := job.MiningCandidate.Version
+	if req.Version != nil {
+		version = *req.Version
+	}
+
+	nTime := job.MiningCandidate.Time
+	if req.Time != nil {
+		nTime = *req.Time
+	}
+
 	block := &model.Block{
 		Header: &model.BlockHeader{
-			Version:        req.Version,
+			Version:        version,
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
-			Timestamp:      req.Time,
+			Timestamp:      nTime,
 			Bits:           *bits,
 			Nonce:          req.Nonce,
 		},
@@ -844,9 +858,9 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
 		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),
-		ResetWaitCount:        uint32(ba.blockAssembler.resetWaitCount.Load()),
-		ResetWaitTime:         uint32(ba.blockAssembler.resetWaitTime.Load()),
-		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()), //nolint:gosec
+		ResetWaitCount:        uint32(ba.blockAssembler.resetWaitCount.Load()), // nolint:gosec
+		ResetWaitTime:         uint32(ba.blockAssembler.resetWaitTime.Load()),  // nolint:gosec
+		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),        // nolint:gosec
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
@@ -900,7 +914,7 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 		return errors.NewProcessingError("error mining block", err)
 	}
 
-	var responseChan chan bool
+	var responseChan chan error
 
 	// submit the block
 	req := &BlockSubmissionRequest{

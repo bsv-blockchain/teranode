@@ -23,8 +23,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/segmentio/encoding/json"
 )
 
 // handleGetBlock implements the getblock command.
@@ -554,7 +554,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	jsonMap := map[string]interface{}{
-		"id":                  hex.EncodeToString(mc.Id),
+		"id":                  utils.ReverseAndHexEncodeSlice(mc.Id),
 		"prevhash":            pb.String(),
 		"coinbaseValue":       mc.CoinbaseValue,
 		"version":             mc.Version,
@@ -748,21 +748,31 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 
 	c := cmd.(*bsvjson.SubmitMiningSolutionCmd)
 
-	ms := &model.MiningSolution{}
-
-	err := json.Unmarshal([]byte(c.JSONString), ms)
+	id, err := utils.DecodeAndReverseHexString(c.MiningSolution.ID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.MiningSolution.ID)
+	}
+
+	coinbase, err := hex.DecodeString(c.MiningSolution.Coinbase)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.MiningSolution.Coinbase)
+	}
+
+	ms := &model.MiningSolution{
+		Id:       id,
+		Coinbase: coinbase,
+		Time:     c.MiningSolution.Time,
+		Nonce:    c.MiningSolution.Nonce,
+		Version:  c.MiningSolution.Version,
 	}
 
 	s.logger.Debugf("in handleSubmitMiningSolution: ms: %+v", ms)
 
-	err = s.blockAssemblyClient.SubmitMiningSolution(ctx, ms)
-	if err != nil {
+	if err := s.blockAssemblyClient.SubmitMiningSolution(ctx, ms); err != nil {
 		return nil, err
 	}
 
-	return nil, nil
+	return true, nil
 }
 
 // handleInvalidateBlock implements the invalidateblock command.

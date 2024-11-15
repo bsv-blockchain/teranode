@@ -68,9 +68,9 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 						solutionCh <- &model.MiningSolution{
 							Id:        candidate.Id,
 							Nonce:     nonce,
-							Time:      candidate.Time,
+							Time:      &candidate.Time,
 							Coinbase:  coinbaseTx.Bytes(),
-							Version:   candidate.Version,
+							Version:   &candidate.Version,
 							BlockHash: blockHash.CloneBytes(),
 						}
 						return

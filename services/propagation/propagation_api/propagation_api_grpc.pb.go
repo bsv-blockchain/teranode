@@ -30,13 +30,32 @@ const (
 // PropagationAPIClient is the client API for PropagationAPI service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// across the network. It supports various transaction processing methods including
+// individual, batch, and streaming operations.
 type PropagationAPIClient interface {
-	// Health returns the health of the API.
+	// HealthGRPC checks the health status of the propagation service and its dependencies.
+	// Returns a HealthResponse containing the service status and details.
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
+	// ProcessTransaction processes a single BSV transaction.
+	// The transaction must be provided in raw byte format and must be extended.
+	// Coinbase transactions are not allowed.
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// ProcessTransactionBatch processes multiple transactions in a single request.
+	// This is more efficient than processing transactions individually when dealing
+	// with large numbers of transactions.
 	ProcessTransactionBatch(ctx context.Context, in *ProcessTransactionBatchRequest, opts ...grpc.CallOption) (*ProcessTransactionBatchResponse, error)
+	// ProcessTransactionHex processes a transaction provided in hexadecimal format.
+	// This is a convenience method for clients that have transactions in hex format.
 	ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// ProcessTransactionStream establishes a bidirectional streaming connection for
+	// processing transactions. Useful for continuous transaction processing without
+	// establishing new connections for each transaction.
 	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProcessTransactionRequest, EmptyMessage], error)
+	// ProcessTransactionDebug provides debug-level transaction processing.
+	// It performs basic validation and storage without full processing, useful
+	// for testing and debugging purposes.
 	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
@@ -114,13 +133,32 @@ func (c *propagationAPIClient) ProcessTransactionDebug(ctx context.Context, in *
 // PropagationAPIServer is the server API for PropagationAPI service.
 // All implementations must embed UnimplementedPropagationAPIServer
 // for forward compatibility.
+//
+// PropagationAPI provides services for processing and propagating Bitcoin SV transactions
+// across the network. It supports various transaction processing methods including
+// individual, batch, and streaming operations.
 type PropagationAPIServer interface {
-	// Health returns the health of the API.
+	// HealthGRPC checks the health status of the propagation service and its dependencies.
+	// Returns a HealthResponse containing the service status and details.
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
+	// ProcessTransaction processes a single BSV transaction.
+	// The transaction must be provided in raw byte format and must be extended.
+	// Coinbase transactions are not allowed.
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
+	// ProcessTransactionBatch processes multiple transactions in a single request.
+	// This is more efficient than processing transactions individually when dealing
+	// with large numbers of transactions.
 	ProcessTransactionBatch(context.Context, *ProcessTransactionBatchRequest) (*ProcessTransactionBatchResponse, error)
+	// ProcessTransactionHex processes a transaction provided in hexadecimal format.
+	// This is a convenience method for clients that have transactions in hex format.
 	ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error)
+	// ProcessTransactionStream establishes a bidirectional streaming connection for
+	// processing transactions. Useful for continuous transaction processing without
+	// establishing new connections for each transaction.
 	ProcessTransactionStream(grpc.BidiStreamingServer[ProcessTransactionRequest, EmptyMessage]) error
+	// ProcessTransactionDebug provides debug-level transaction processing.
+	// It performs basic validation and storage without full processing, useful
+	// for testing and debugging purposes.
 	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedPropagationAPIServer()
 }
