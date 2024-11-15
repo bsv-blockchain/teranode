@@ -996,6 +996,8 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	logger := testenv.Logger
 	ctx := testenv.Context
 
+	const ubsv1RPCEndpoint = "http://localhost:11292"
+
 	node1 := testenv.Nodes[0]
 
 	utxoBalanceBefore := helper.GetUtxoBalance(ctx, node1)
@@ -1021,8 +1023,11 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	logger.Infof("Alice sends to Bob output[0] of faucet sent", aliceToBobTx.TxID())
 
 	// Mine a block
-	_, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
-	assert.NoError(t, err, "Failed to mine block")
+	// _, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
+	// assert.NoError(t, err, "Failed to mine block")
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(1 * time.Second)
 
 	// Create throwaway and reassignment transactions, do not send these transactions
 	// assumed alice would have sent this to charles instead of bob
@@ -1045,6 +1050,10 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	err = helper.ReassignUtxo(ctx, *testenv, aliceToBobTx, reassignTx, logger)
 	assert.NoError(t, err, "Failed to reassign UTXOs")
 	logger.Infof("Alice to Bob Transaction reassigned to Charles", reassignTx.TxID())
+
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1000})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(60 * time.Second)
 
 	// Spend the reassigned UTXO
 	aliceToCharlesReassignedTxUtxo := helper.CreateUtxoFromTransaction(aliceToBobTx, 0)
