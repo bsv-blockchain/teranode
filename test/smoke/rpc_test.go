@@ -542,7 +542,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 		targetHeight++
 		// _, err = helper.MineBlock(ctx, *baClient, logger)
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[1]"})
+		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
 		require.NoError(t, err, "Failed to generate blocks")
 
 		time.Sleep(5 * time.Second)
