@@ -24,7 +24,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 // handleGetBlock implements the getblock command.
@@ -486,29 +485,11 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	if c.NumBlocks == 0 {
+	if c.NumBlocks <= 0 {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInternal.Code,
 			Message: "Please request a nonzero number of blocks to generate.",
 		}
-	}
-
-	minerHTTPPort, ok := gocore.Config().GetInt("MINER_HTTP_PORT")
-	if !ok {
-		s.logger.Warnf("MINER_HTTP_PORT not set in config")
-
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCMisc,
-			Message: "Can't contact miner",
-		}
-	}
-
-	if minerHTTPPort < 0 || minerHTTPPort > 65535 {
-		return nil, errors.NewInvalidArgumentError("Invalid port number: %d", minerHTTPPort)
-	}
-
-	if c.NumBlocks <= 0 {
-		return nil, errors.NewInvalidArgumentError("Invalid number of blocks: %d", c.NumBlocks)
 	}
 
 	err := s.blockAssemblyClient.GenerateBlocks(ctx, int32(c.NumBlocks)) //nolint:gosec
