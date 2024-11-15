@@ -6,7 +6,6 @@ package legacy
 
 import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
 
 // activeNetParams is a pointer to the parameters specific to the
@@ -40,11 +39,11 @@ var regressionNetParams = params{
 	rpcPort: "18334",
 }
 
-// testNet3Params contains parameters specific to the test network (version 3)
-// (wire.TestNet3).  NOTE: The RPC port is intentionally different than the
+// testNetParams contains parameters specific to the test network (version 3)
+// (wire.TestNet).  NOTE: The RPC port is intentionally different than the
 // reference implementation - see the mainNetParams comment for details.
-var testNet3Params = params{
-	Params:  &chaincfg.TestNet3Params,
+var testNetParams = params{
+	Params:  &chaincfg.TestNetParams,
 	rpcPort: "18334",
 }
 
@@ -54,21 +53,3 @@ var testNet3Params = params{
 // 	Params:  &chaincfg.SimNetParams,
 // 	rpcPort: "18556",
 // }
-
-// netName returns the name used when referring to a bitcoin network.  At the
-// time of writing, bsvd currently places blocks for testnet version 3 in the
-// data and log directory "testnet", which does not match the Name field of the
-// chaincfg parameters.  This function can be used to override this directory
-// name as "testnet" when the passed active network matches wire.TestNet3.
-//
-// A proper upgrade to move the data and log directories for this network to
-// "testnet3" is planned for the future, at which point this function can be
-// removed and the network parameter's name used instead.
-func netName(chainParams *params) string {
-	switch chainParams.Net {
-	case wire.TestNet3:
-		return "testnet"
-	default:
-		return chainParams.Name
-	}
-}

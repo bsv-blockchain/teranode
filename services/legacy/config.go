@@ -126,7 +126,7 @@ type config struct {
 	Proxy                   string        `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyUser               string        `long:"proxyuser" description:"Username for proxy server"`
 	ProxyPass               string        `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
-	TestNet3                bool          `long:"testnet" description:"Use the test network"`
+	TestNet                 bool          `long:"testnet" description:"Use the test network"`
 	RegressionTest          bool          `long:"regtest" description:"Use the regression test network"`
 	SimNet                  bool          `long:"simnet" description:"Use the simulation test network"`
 	AddCheckpoints          []string      `long:"addcheckpoint" description:"Add a custom checkpoint.  Format: '<height>:<hash>'"`
@@ -364,9 +364,9 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	numNets := 0
 	// Count number of network flags passed; assign active network params
 	// while we're at it
-	if cfg.TestNet3 {
+	if cfg.TestNet {
 		numNets++
-		activeNetParams = &testNet3Params
+		activeNetParams = &testNetParams
 	}
 	if cfg.RegressionTest {
 		numNets++

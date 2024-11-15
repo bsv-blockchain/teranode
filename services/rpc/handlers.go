@@ -722,16 +722,16 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	jsonMap := map[string]interface{}{
-		"version":         1,                                  // the version of the server
-		"protocolversion": wire.ProtocolVersion,               // the latest supported protocol version
-		"blocks":          height,                             // the number of blocks processed
-		"timeoffset":      1,                                  // the time offset
-		"connections":     1,                                  // the number of connected peers
-		"proxy":           "host:port",                        // the proxy used by the server
-		"difficulty":      1,                                  // the current target difficulty
-		"testnet":         s.chainParams.Net == wire.TestNet3, // whether or not server is using testnet
-		"stn":             s.chainParams.Net == wire.STN,      // whether or not server is using stn
-		"relayfee":        100,                                // the minimum relay fee for non-free transactions in BSV/KB
+		"version":         1,                                 // the version of the server
+		"protocolversion": wire.ProtocolVersion,              // the latest supported protocol version
+		"blocks":          height,                            // the number of blocks processed
+		"timeoffset":      1,                                 // the time offset
+		"connections":     1,                                 // the number of connected peers
+		"proxy":           "host:port",                       // the proxy used by the server
+		"difficulty":      1,                                 // the current target difficulty
+		"testnet":         s.chainParams.Net == wire.TestNet, // whether or not server is using testnet
+		"stn":             s.chainParams.Net == wire.STN,     // whether or not server is using stn
+		"relayfee":        100,                               // the minimum relay fee for non-free transactions in BSV/KB
 
 	}
 

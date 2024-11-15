@@ -58,13 +58,13 @@ func init() {
 //   - regtest  -> regtest
 //   - stn      -> stn
 func getBDKChainNameFromParams(pa *chaincfg.Params) string {
-	// ubsv : mainnet  testnet3  regtest  stn
+	// ubsv : mainnet  testnet   regtest  stn
 	// bdk  :    main      test  regtest  stn
 	chainNameMap := map[string]string{
-		"mainnet":  "main",
-		"stn":      "stn",
-		"testnet3": "test",
-		"regtest":  "regtest",
+		"mainnet": "main",
+		"stn":     "stn",
+		"testnet": "test",
+		"regtest": "regtest",
 	}
 
 	return chainNameMap[pa.Name]

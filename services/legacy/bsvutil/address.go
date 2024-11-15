@@ -549,12 +549,12 @@ func (a *AddressPubKey) PubKey() *bsvec.PublicKey {
 
 func paramsFromNetID(netID byte) *chaincfg.Params {
 	switch netID {
-	case chaincfg.TestNet3Params.LegacyPubKeyHashAddrID:
-		return &chaincfg.TestNet3Params
+	case chaincfg.TestNetParams.LegacyPubKeyHashAddrID:
+		return &chaincfg.TestNetParams
 	case chaincfg.RegressionNetParams.LegacyPubKeyHashAddrID:
 		return &chaincfg.RegressionNetParams
-	case chaincfg.TestNet3Params.LegacyScriptHashAddrID:
-		return &chaincfg.TestNet3Params
+	case chaincfg.TestNetParams.LegacyScriptHashAddrID:
+		return &chaincfg.TestNetParams
 	case chaincfg.RegressionNetParams.LegacyScriptHashAddrID:
 		return &chaincfg.RegressionNetParams
 	default:

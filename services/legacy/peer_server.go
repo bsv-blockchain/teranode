@@ -2305,7 +2305,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	network, _ := gocore.Config().Get("network", "mainnet")
 
 	if network == "testnet" {
-		activeNetParams = &testNet3Params
+		activeNetParams = &testNetParams
 	} else if network == "regtest" {
 		activeNetParams = &regressionNetParams
 	}

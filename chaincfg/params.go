@@ -31,10 +31,10 @@ var (
 	// can have for the regression test network.  It is the value 2^255 - 1.
 	regressionPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 255), bigOne)
 
-	// testNet3PowLimit is the highest proof of work value a Bitcoin block
+	// testNetPowLimit is the highest proof of work value a Bitcoin block
 	// can have for the test network (version 3).  It is the value
 	// 2^224 - 1.
-	testNet3PowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
+	testNetPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
 
 	customPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 255), bigOne)
 
@@ -402,7 +402,7 @@ var StnParams = Params{
 // 3), this network is sometimes simply called "testnet".
 var RegressionNetParams = Params{
 	Name:        "regtest",
-	Net:         wire.TestNet,
+	Net:         wire.RegTestNet,
 	DefaultPort: "18444",
 	DNSSeeds:    []DNSSeed{},
 
@@ -471,21 +471,21 @@ var RegressionNetParams = Params{
 	HDCoinType: 1, // all coins use 1
 }
 
-// TestNet3Params defines the network parameters for the test Bitcoin network
+// TestNetParams defines the network parameters for the test Bitcoin network
 // (version 3).  Not to be confused with the regression test network, this
 // network is sometimes simply called "testnet".
-var TestNet3Params = Params{
-	Name:        "testnet3",
-	Net:         wire.TestNet3,
+var TestNetParams = Params{
+	Name:        "testnet",
+	Net:         wire.TestNet,
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoinsv.io", true},
 	},
 
 	// Chain parameters
-	GenesisBlock:  &testNet3GenesisBlock,
-	GenesisHash:   &testNet3GenesisHash,
-	PowLimit:      testNet3PowLimit,
+	GenesisBlock:  &testNetGenesisBlock,
+	GenesisHash:   &testNetGenesisHash,
+	PowLimit:      testNetPowLimit,
 	PowLimitBits:  0x1d00ffff,
 	BIP0034Height: 21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
@@ -574,8 +574,8 @@ var CustomTestNetParams = Params{
 	},
 
 	// Chain parameters
-	GenesisBlock: &testNet3GenesisBlock,
-	GenesisHash:  &testNet3GenesisHash,
+	GenesisBlock: &testNetGenesisBlock,
+	GenesisHash:  &testNetGenesisHash,
 	PowLimit:     customPowLimit,
 	PowLimitBits: 0x2000ffff,
 	// PowLimitBits:  0x1d00ffff,
@@ -753,7 +753,7 @@ func GetChainParams(network string) (*Params, error) {
 	case "mainnet":
 		return &MainNetParams, nil
 	case "testnet":
-		return &TestNet3Params, nil
+		return &TestNetParams, nil
 	case "regtest":
 		return &RegressionNetParams, nil
 	case "stn":
@@ -775,7 +775,7 @@ func GetChainParamsFromConfig() *Params {
 func init() {
 	// Register all default networks when the package is initialized.
 	mustRegister(&MainNetParams)
-	mustRegister(&TestNet3Params)
+	mustRegister(&TestNetParams)
 	mustRegister(&RegressionNetParams)
 	mustRegister(&StnParams)
 	mustRegister(&CustomTestNetParams)

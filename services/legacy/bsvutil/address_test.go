@@ -51,13 +51,13 @@ func TestAddresses(t *testing.T) {
 		// 	result: bsvutil.TstAddressPubKeyHash(
 		// 		[ripemd160.Size]byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
 		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169},
-		// 		&chaincfg.TestNet3Params),
+		// 		&chaincfg.TestNetParams),
 		// 	f: func() (bsvutil.Address, error) {
 		// 		pkHash := []byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
 		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169}
-		// 		return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
+		// 		return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.TestNetParams)
 		// 	},
-		// 	net: &chaincfg.TestNet3Params,
+		// 	net: &chaincfg.TestNetParams,
 		// },
 		// {
 		// 	name:    "cashaddr regtest p2pkh",
@@ -100,13 +100,13 @@ func TestAddresses(t *testing.T) {
 		// 	result: bsvutil.TstAddressScriptHash(
 		// 		[ripemd160.Size]byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
 		// 			184, 106, 21, 195, 178, 159, 85, 152, 115},
-		// 		&chaincfg.TestNet3Params),
+		// 		&chaincfg.TestNetParams),
 		// 	f: func() (bsvutil.Address, error) {
 		// 		pkHash := []byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
 		// 			184, 106, 21, 195, 178, 159, 85, 152, 115}
-		// 		return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.TestNet3Params)
+		// 		return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.TestNetParams)
 		// 	},
-		// 	net: &chaincfg.TestNet3Params,
+		// 	net: &chaincfg.TestNetParams,
 		// },
 		// {
 		// 	name:    "cashaddr regtest p2p2sh",
@@ -170,14 +170,14 @@ func TestAddresses(t *testing.T) {
 		// 		[ripemd160.Size]byte{
 		// 			0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
 		// 			0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f},
-		// 		chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+		// 		chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 		// 	f: func() (bsvutil.Address, error) {
 		// 		pkHash := []byte{
 		// 			0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
 		// 			0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f}
-		// 		return bsvutil.NewLegacyAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
+		// 		return bsvutil.NewLegacyAddressPubKeyHash(pkHash, &chaincfg.TestNetParams)
 		// 	},
-		// 	net: &chaincfg.TestNet3Params,
+		// 	net: &chaincfg.TestNetParams,
 		// },
 
 		// Negative legacy P2PKH tests.
@@ -273,14 +273,14 @@ func TestAddresses(t *testing.T) {
 				[ripemd160.Size]byte{
 					0xc5, 0x79, 0x34, 0x2c, 0x2c, 0x4c, 0x92, 0x20, 0x20, 0x5e,
 					0x2c, 0xdc, 0x28, 0x56, 0x17, 0x04, 0x0c, 0x92, 0x4a, 0x0a},
-				chaincfg.TestNet3Params.LegacyScriptHashAddrID),
+				chaincfg.TestNetParams.LegacyScriptHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				hash := []byte{
 					0xc5, 0x79, 0x34, 0x2c, 0x2c, 0x4c, 0x92, 0x20, 0x20, 0x5e,
 					0x2c, 0xdc, 0x28, 0x56, 0x17, 0x04, 0x0c, 0x92, 0x4a, 0x0a}
-				return bsvutil.NewLegacyAddressScriptHashFromHash(hash, &chaincfg.TestNet3Params)
+				return bsvutil.NewLegacyAddressScriptHashFromHash(hash, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 
 		// Negative legacy P2SH tests.
@@ -441,16 +441,16 @@ func TestAddresses(t *testing.T) {
 					0x69, 0xc2, 0xe7, 0x79, 0x01, 0x57, 0x3d, 0x8d, 0x79, 0x03,
 					0xc3, 0xeb, 0xec, 0x3a, 0x95, 0x77, 0x24, 0x89, 0x5d, 0xca,
 					0x52, 0xc6, 0xb4},
-				bsvutil.PKFCompressed, chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+				bsvutil.PKFCompressed, chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				serializedPubKey := []byte{
 					0x02, 0x19, 0x2d, 0x74, 0xd0, 0xcb, 0x94, 0x34, 0x4c, 0x95,
 					0x69, 0xc2, 0xe7, 0x79, 0x01, 0x57, 0x3d, 0x8d, 0x79, 0x03,
 					0xc3, 0xeb, 0xec, 0x3a, 0x95, 0x77, 0x24, 0x89, 0x5d, 0xca,
 					0x52, 0xc6, 0xb4}
-				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNet3Params)
+				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 		{
 			name:    "testnet p2pk compressed (0x03)",
@@ -463,16 +463,16 @@ func TestAddresses(t *testing.T) {
 					0xe9, 0x86, 0xe8, 0x84, 0x18, 0x5c, 0x61, 0xcf, 0x43, 0xe0,
 					0x01, 0xf9, 0x13, 0x7f, 0x23, 0xc2, 0xc4, 0x09, 0x27, 0x3e,
 					0xb1, 0x6e, 0x65},
-				bsvutil.PKFCompressed, chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+				bsvutil.PKFCompressed, chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				serializedPubKey := []byte{
 					0x03, 0xb0, 0xbd, 0x63, 0x42, 0x34, 0xab, 0xbb, 0x1b, 0xa1,
 					0xe9, 0x86, 0xe8, 0x84, 0x18, 0x5c, 0x61, 0xcf, 0x43, 0xe0,
 					0x01, 0xf9, 0x13, 0x7f, 0x23, 0xc2, 0xc4, 0x09, 0x27, 0x3e,
 					0xb1, 0x6e, 0x65}
-				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNet3Params)
+				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 		{
 			name: "testnet p2pk uncompressed (0x04)",
@@ -489,7 +489,7 @@ func TestAddresses(t *testing.T) {
 					0xf9, 0x74, 0x44, 0x64, 0xf8, 0x2e, 0x16, 0x0b, 0xfa, 0x9b,
 					0x8b, 0x64, 0xf9, 0xd4, 0xc0, 0x3f, 0x99, 0x9b, 0x86, 0x43,
 					0xf6, 0x56, 0xb4, 0x12, 0xa3},
-				bsvutil.PKFUncompressed, chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+				bsvutil.PKFUncompressed, chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				serializedPubKey := []byte{
 					0x04, 0x11, 0xdb, 0x93, 0xe1, 0xdc, 0xdb, 0x8a, 0x01, 0x6b,
@@ -499,9 +499,9 @@ func TestAddresses(t *testing.T) {
 					0xf9, 0x74, 0x44, 0x64, 0xf8, 0x2e, 0x16, 0x0b, 0xfa, 0x9b,
 					0x8b, 0x64, 0xf9, 0xd4, 0xc0, 0x3f, 0x99, 0x9b, 0x86, 0x43,
 					0xf6, 0x56, 0xb4, 0x12, 0xa3}
-				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNet3Params)
+				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 		{
 			name: "testnet p2pk hybrid (0x06)",
@@ -518,7 +518,7 @@ func TestAddresses(t *testing.T) {
 					0x96, 0x85, 0x26, 0x62, 0xce, 0x6a, 0x84, 0x7b, 0x19, 0x73,
 					0x76, 0x83, 0x01, 0x60, 0xc6, 0xd2, 0xeb, 0x5e, 0x6a, 0x4c,
 					0x44, 0xd3, 0x3f, 0x45, 0x3e},
-				bsvutil.PKFHybrid, chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+				bsvutil.PKFHybrid, chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				serializedPubKey := []byte{
 					0x06, 0x19, 0x2d, 0x74, 0xd0, 0xcb, 0x94, 0x34, 0x4c, 0x95,
@@ -528,9 +528,9 @@ func TestAddresses(t *testing.T) {
 					0x96, 0x85, 0x26, 0x62, 0xce, 0x6a, 0x84, 0x7b, 0x19, 0x73,
 					0x76, 0x83, 0x01, 0x60, 0xc6, 0xd2, 0xeb, 0x5e, 0x6a, 0x4c,
 					0x44, 0xd3, 0x3f, 0x45, 0x3e}
-				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNet3Params)
+				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 		{
 			name: "testnet p2pk hybrid (0x07)",
@@ -547,7 +547,7 @@ func TestAddresses(t *testing.T) {
 					0x8a, 0x7e, 0xf8, 0xbd, 0x3b, 0x3c, 0xfb, 0x1e, 0xdb, 0x71,
 					0x17, 0xab, 0x65, 0x12, 0x9b, 0x8a, 0x2e, 0x68, 0x1f, 0x3c,
 					0x1e, 0x09, 0x08, 0xef, 0x7b},
-				bsvutil.PKFHybrid, chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+				bsvutil.PKFHybrid, chaincfg.TestNetParams.LegacyPubKeyHashAddrID),
 			f: func() (bsvutil.Address, error) {
 				serializedPubKey := []byte{
 					0x07, 0xb0, 0xbd, 0x63, 0x42, 0x34, 0xab, 0xbb, 0x1b, 0xa1,
@@ -557,9 +557,9 @@ func TestAddresses(t *testing.T) {
 					0x8a, 0x7e, 0xf8, 0xbd, 0x3b, 0x3c, 0xfb, 0x1e, 0xdb, 0x71,
 					0x17, 0xab, 0x65, 0x12, 0x9b, 0x8a, 0x2e, 0x68, 0x1f, 0x3c,
 					0x1e, 0x09, 0x08, 0xef, 0x7b}
-				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNet3Params)
+				return bsvutil.NewAddressPubKey(serializedPubKey, &chaincfg.TestNetParams)
 			},
-			net: &chaincfg.TestNet3Params,
+			net: &chaincfg.TestNetParams,
 		},
 	}
 
