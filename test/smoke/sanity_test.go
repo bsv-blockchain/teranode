@@ -125,7 +125,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	// Generate blocks
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(1 * time.Second)
 
 	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
@@ -137,6 +136,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
 		}
+
 		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		if err != nil {
 			t.Errorf("Failed to get block headers: %v", err)
@@ -155,15 +155,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		targetHeight++
 		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
 		require.NoError(t, err, "Failed to generate blocks")
-		time.Sleep(1 * time.Second)
-
-		if err != nil {
-			t.Errorf("Failed to mine block: %v", err)
-		}
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")
-
 }
 
 func TestSanityTestSuite(t *testing.T) {
