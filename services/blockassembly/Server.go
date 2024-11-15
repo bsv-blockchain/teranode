@@ -914,8 +914,6 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 		return errors.NewProcessingError("error mining block", err)
 	}
 
-	var responseChan chan error
-
 	// submit the block
 	req := &BlockSubmissionRequest{
 		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
@@ -925,7 +923,6 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 			Time:       miningSolution.Time,
 			Version:    miningSolution.Version,
 		},
-		responseChan: responseChan,
 	}
 	resp, err := ba.submitMiningSolution(ctx, req)
 	if err != nil {
