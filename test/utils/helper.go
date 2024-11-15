@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,12 +18,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ordishs/go-utils"
+
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -342,12 +346,21 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 
 	blockHash := util.Sha256d(blockHeader)
 
-	solutionJSON, err := json.Marshal(solution)
+	submitMiningSolutionCmd := bsvjson.MiningSolution{
+		ID:       utils.ReverseAndHexEncodeSlice(solution.Id),
+		Coinbase: hex.EncodeToString(solution.Coinbase),
+		Time:     solution.Time,
+		Nonce:    solution.Nonce,
+		Version:  solution.Version,
+	}
+
+	solutionJSON, err := json.Marshal(submitMiningSolutionCmd)
 	if err != nil {
 		return nil, errors.NewProcessingError("error marshalling solution: %w", err)
 	}
+
 	method := "submitminingsolution"
-	params := []interface{}{string(solutionJSON)}
+	params := []interface{}{submitMiningSolutionCmd}
 	logger.Infof("Submitting mining solution: %s", string(solutionJSON))
 
 	resp, err := CallRPC(rpcUrl, method, params)
@@ -356,6 +369,7 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	} else {
 		fmt.Printf("Response: %s\n", resp)
 	}
+
 	return blockHash, nil
 }
 

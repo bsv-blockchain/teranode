@@ -24,6 +24,7 @@ import (
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -50,16 +51,11 @@ func (suite *RPCTestSuite) SetupTest() {
 		log.Fatalf("Failed to start Kafka: %v", err)
 	}
 
-	// Ensure Kafka has time to initialize
-	time.Sleep(5 * time.Second)
-
 	// Start the app
 	if err := startApp("app.log"); err != nil {
 		log.Fatalf("Failed to start app: %v", err)
 	}
 
-	// Ensure the app has time to initialize
-	time.Sleep(5 * time.Second)
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
@@ -199,21 +195,16 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[5]"})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{5})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
-
-	if err != nil {
-		t.Errorf("Error CallRPC: %v", err)
-	}
+	require.NoError(t, err, "Failed to generate blocks")
 
 	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
-	if err != nil {
+	if errJSON != nil {
 		t.Errorf("JSON decoding error: %v", errJSON)
 		return
 	}
@@ -249,21 +240,16 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
-
-	if err != nil {
-		t.Errorf("Error CallRPC: %v", err)
-	}
+	require.NoError(t, err, "Failed to get block by height")
 
 	errJSON := json.Unmarshal([]byte(resp), &getBlockByHeightResp)
-	if err != nil {
+	if errJSON != nil {
 		t.Errorf("JSON decoding error: %v", errJSON)
 		return
 	}
@@ -341,7 +327,14 @@ func startApp(logFile string) error {
 	appPID = appCmd.Process.Pid
 
 	// Wait for the app to be ready (consider implementing a health check here)
-	time.Sleep(30 * time.Second) // Adjust this as needed for your app's startup time
+	for {
+		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness", nil)
+		if err == nil {
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	return nil
 }
@@ -359,7 +352,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Failed to create Blockchain client")
-	time.Sleep(20 * time.Second)
+	// time.Sleep(20 * time.Second)
 
 	txDistributor, err := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -571,21 +564,15 @@ func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
-
-	if err != nil {
-		t.Errorf("Error CallRPC: %v", err)
-	}
+	require.NoError(t, err, "Failed to get block hash")
 
 	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
-
 	if errJSON != nil {
 		t.Errorf("JSON decoding error: %v", errJSON)
 		return
@@ -631,21 +618,15 @@ func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
-	time.Sleep(1 * time.Second)
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
-
-	if err != nil {
-		t.Errorf("Error CallRPC: %v", err)
-	}
+	require.NoError(t, err, "Failed to get block hash")
 
 	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
-
 	if errJSON != nil {
 		t.Errorf("JSON decoding error: %v", errJSON)
 		return
