@@ -242,6 +242,13 @@ func (v *Server) Stop(_ context.Context) error {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
 
+	if v.consumerClient != nil {
+		// close the kafka consumer gracefully
+		if err := v.consumerClient.Close(); err != nil {
+			v.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+		}
+	}
+
 	return nil
 }
 

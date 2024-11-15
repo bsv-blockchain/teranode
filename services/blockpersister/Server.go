@@ -195,5 +195,10 @@ func (u *Server) Start(ctx context.Context) error {
 }
 
 func (u *Server) Stop(_ context.Context) error {
+	// close the kafka consumer gracefully
+	if err := u.blocksFinalKafkaConsumerClient.Close(); err != nil {
+		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	}
+
 	return nil
 }

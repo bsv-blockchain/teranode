@@ -517,6 +517,11 @@ func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
 
+	// close the kafka consumer gracefully
+	if err := u.kafkaConsumerClient.Close(); err != nil {
+		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	}
+
 	return nil
 }
 

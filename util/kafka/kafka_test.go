@@ -374,7 +374,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 		}
 	}
 
-	client.ConsumerGroup.Close()
+	_ = client.ConsumerGroup.Close()
 
 	// In total we should have 4 messages (1 + 3 retries) for each of the 2 original messages
 	require.Equal(t, numberOfMessages*4, len(messagesReceived))
@@ -467,7 +467,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 		client.ConsumerGroup = nil
 		stopped = true
 
-		c.Close()
+		_ = c.Close()
 	}))
 
 	messagesReceived := [][]byte{}
@@ -588,7 +588,8 @@ func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T)
 	}()
 
 	<-processingDone
-	client.ConsumerGroup.Close() // nolint:errcheck
+
+	_ = client.ConsumerGroup.Close() // nolint:errcheck
 
 	// Verify first message was attempted more than once and that every message attempt was first message
 	require.Greater(t, len(messagesReceived), 1)
@@ -652,7 +653,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	consume := func() {
 		consumer, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
 		require.NoError(t, err)
-		defer consumer.ConsumerGroup.Close()
+
+		defer func() {
+			_ = consumer.ConsumerGroup.Close()
+		}()
 
 		consumer.Start(ctx, func(msg *KafkaMessage) error {
 			receivedMessages = append(receivedMessages, string(msg.Value))

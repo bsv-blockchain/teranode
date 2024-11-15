@@ -65,12 +65,12 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.
 
 // Consumer functions
 func getKafkaConsumerGroup(logger ulogger.Logger, setting string, consumerGroupID string, autoCommit bool) (*kafka.KafkaConsumerGroup, error) {
-	url, err, _ := gocore.Config().GetURL(setting)
+	URL, err, _ := gocore.Config().GetURL(setting)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for "+setting, err)
 	}
 
-	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit)
+	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, URL, consumerGroupID, autoCommit)
 	if err != nil {
 		return nil, errors.NewConfigurationError("missing Kafka URL for "+setting, err)
 	}

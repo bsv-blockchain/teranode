@@ -518,6 +518,12 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Infof("[Stop] Stopping P2P service")
+
+	// close the kafka consumer gracefully
+	if err := s.rejectedTxKafkaConsumerClient.Close(); err != nil {
+		s.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	}
+
 	return s.e.Shutdown(ctx)
 }
 

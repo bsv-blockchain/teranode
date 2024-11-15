@@ -25,6 +25,7 @@ type KafkaMessage struct {
 type KafkaConsumerGroupI interface {
 	Start(ctx context.Context, consumerFn func(message *KafkaMessage) error, opts ...ConsumerOption)
 	BrokersURL() []string
+	Close() error
 }
 
 type KafkaConsumerConfig struct {
@@ -43,6 +44,7 @@ type KafkaConsumerConfig struct {
 type KafkaConsumerGroup struct {
 	Config        KafkaConsumerConfig
 	ConsumerGroup sarama.ConsumerGroup
+	cancel        context.CancelFunc
 }
 
 func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
@@ -93,6 +95,24 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	return NewKafkaConsumerGroup(consumerConfig)
 }
 
+// Close gracefully shuts down the Kafka consumer group
+func (k *KafkaConsumerGroup) Close() error {
+	if k.ConsumerGroup != nil {
+		if err := k.ConsumerGroup.Close(); err != nil {
+			k.Config.Logger.Errorf("[Kafka] %s: error closing consumer group: %v", k.Config.ConsumerGroupID, err)
+			return err
+		}
+	}
+
+	// cancel the context
+	if k.cancel != nil {
+		k.cancel()
+	}
+
+	return nil
+}
+
+// NewKafkaConsumerGroup creates a new Kafka consumer group
 // We DO NOT read autocommit parameter from the URL because the handler func has specific error handling logic.
 func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error) {
 	if cfg.URL == nil {
@@ -266,12 +286,18 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	wg.Add(k.Config.ConsumerCount)
 
 	go func() {
-		ctx, cancel := context.WithCancel(ctx)
+		internalCtx, cancel := context.WithCancel(ctx)
+		k.cancel = cancel
 		defer cancel()
 
 		go func() {
-			for err := range k.ConsumerGroup.Errors() {
-				k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case err := <-k.ConsumerGroup.Errors():
+					k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+				}
 			}
 		}()
 
@@ -285,11 +311,11 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 
 				for {
 					select {
-					case <-ctx.Done():
+					case <-internalCtx.Done():
 						// Context cancelled, exit goroutine
 						return
 					default:
-						if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config, consumerFn)); err != nil {
+						if err := k.ConsumerGroup.Consume(internalCtx, topics, NewKafkaConsumer(k.Config, consumerFn)); err != nil {
 							if errors.Is(err, sarama.ErrClosedConsumerGroup) { // nolint:gocritic
 								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s closed", consumerIndex, k.Config.ConsumerGroupID)
 								return
@@ -317,7 +343,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		case <-signals:
 			k.Config.Logger.Infof("[kafka] Received signal, shutting down consumers for group %s", k.Config.ConsumerGroupID)
 			cancel() // Ensure the context is canceled
-		case <-ctx.Done():
+		case <-internalCtx.Done():
 			k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.ConsumerGroupID)
 		}
 
