@@ -3,14 +3,16 @@ package model
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -105,6 +107,121 @@ func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 	return NewBlockHeaderFromBytes(headerBytes)
 }
 
+// Helper function to create a BlockHeader from a json string that we get from RPC
+func NewBlockHeaderFromJSON(jsonString string) (*BlockHeader, error) {
+	var data map[string]interface{}
+
+	if err := json.Unmarshal([]byte(jsonString), &data); err != nil {
+		return nil, errors.NewProcessingError("error unmarshalling json", err)
+	}
+
+	version, ok := data["version"].(float64)
+	if !ok {
+		return nil, errors.NewProcessingError("error parsing version from json")
+	}
+
+	previousBlockHash, ok := data["previousblockhash"].(string)
+	if !ok {
+		previousBlockHash, ok = data["prevhash"].(string)
+		if !ok {
+			return nil, errors.NewProcessingError("error parsing previous block hash from json")
+		}
+	}
+
+	hashPrevBlock, err := chainhash.NewHashFromStr(previousBlockHash)
+	if err != nil {
+		return nil, errors.NewProcessingError("error decoding previous block hash from json", err)
+	}
+
+	var hashMerkleRoot []byte
+
+	merkleRootStr, ok := data["merkleroot"].(string)
+	if ok {
+		hash, err := chainhash.NewHashFromStr(merkleRootStr)
+		if err != nil {
+			return nil, errors.NewProcessingError("error decoding merkle root hash from json", err)
+		}
+
+		hashMerkleRoot = hash.CloneBytes()
+	} else {
+		// try merkleProofs and build a proper merkle root hash from them
+		hashMerkleRoot, err = buildMerkleRootHashFromProofs(data)
+		if err != nil {
+			return nil, errors.NewProcessingError("error building merkle root hash from merkleProofs", err)
+		}
+	}
+
+	timestamp, ok := data["time"].(float64)
+	if !ok {
+		return nil, errors.NewProcessingError("error parsing timestamp from json")
+	}
+
+	bitsStr, ok := data["bits"].(string)
+	if !ok {
+		bitsStr, ok = data["nBits"].(string)
+		if !ok {
+			return nil, errors.NewProcessingError("error parsing bits from json")
+		}
+	}
+
+	bits, err := NewNBitFromString(bitsStr)
+	if err != nil {
+		return nil, errors.NewProcessingError("error parsing bits from json", err)
+	}
+
+	nonce, ok := data["nonce"].(float64)
+	if !ok {
+		nonce = 0 // if nonce is not present, use zero
+	}
+
+	bh := &BlockHeader{
+		Version:        uint32(version),
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: (*chainhash.Hash)(hashMerkleRoot),
+		Timestamp:      uint32(timestamp),
+		Bits:           *bits,
+		Nonce:          uint32(nonce),
+	}
+
+	return bh, nil
+}
+
+func buildMerkleRootHashFromProofs(data map[string]interface{}) ([]byte, error) {
+	// Get the coinbase tx from the data
+	coinbaseTxStr, ok := data["coinbase"].(string)
+	if !ok {
+		return nil, errors.NewProcessingError("error parsing coinbase tx from json")
+	}
+
+	coinbaseTx, err := bt.NewTxFromString(coinbaseTxStr)
+	if err != nil {
+		return nil, errors.NewProcessingError("error building coinbase tx", err)
+	}
+
+	proofs, ok := data["merkleProof"].([]interface{})
+	if !ok {
+		return nil, errors.NewProcessingError("error parsing merkle proofs from json")
+	}
+
+	hashes := make([][]byte, len(proofs))
+
+	for i, proof := range proofs {
+		p, ok := proof.(string)
+		if !ok {
+			return nil, errors.NewProcessingError("error parsing merkle proof from json")
+		}
+
+		hash, err := chainhash.NewHashFromStr(p)
+		if err != nil {
+			return nil, errors.NewProcessingError("error decoding proof hash from json", err)
+		}
+
+		hashes[i] = hash.CloneBytes()
+	}
+
+	return util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDChainHash()[:], hashes), nil
+}
+
 func (bh *BlockHeader) Hash() *chainhash.Hash {
 	hash := chainhash.DoubleHashH(bh.Bytes())
 	return &hash
@@ -116,6 +233,7 @@ func (bh *BlockHeader) String() string {
 
 func (bh *BlockHeader) StringDump() string {
 	var sb strings.Builder
+
 	sb.WriteString(fmt.Sprintf("Version: %d\n", bh.Version))
 	sb.WriteString(fmt.Sprintf("HashPrevBlock: %s\n", bh.HashPrevBlock.String()))
 	sb.WriteString(fmt.Sprintf("HashMerkleRoot: %s\n", bh.HashMerkleRoot.String()))
@@ -162,6 +280,7 @@ func (bh *BlockHeader) Bytes() []byte {
 	}
 
 	var blockHeaderBytes []byte
+
 	uint32Bytes := make([]byte, 4)
 
 	binary.LittleEndian.PutUint32(uint32Bytes, bh.Version)
