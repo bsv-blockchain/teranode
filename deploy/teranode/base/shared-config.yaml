@@ -1,6 +1,0 @@
-apiVersion: v1
-data:
-  SETTINGS_CONTEXT: operator
-kind: ConfigMap
-metadata:
-  name: shared-config
