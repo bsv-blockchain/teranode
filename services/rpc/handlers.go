@@ -678,7 +678,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		"difficulty":           bestBlockHeader.Bits.CalculateDifficulty(),
 		"mediantime":           0,
 		"verificationprogress": 0,
-		"chainwork":            "",
+		"chainwork":            bestBlockMeta.ChainWork,
 		"pruned":               false, // the minimum relay fee for non-free transactions in BSV/KB
 		"softforks":            []interface{}{},
 	}

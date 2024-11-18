@@ -15,10 +15,24 @@
     try {
       const result: any = await api.getBlockStats()
       if (result.ok) {
-
         const start_time = result.data.first_block_time
         const last_block_time = result.data.last_block_time
-        const txs_per_second = result.data.tx_count / (last_block_time - start_time);
+        const txs_per_second = result.data.tx_count / (last_block_time - start_time)
+        const chain_work_number = parseInt(result.data.chain_work, 16) // Convert hex string to number
+
+        // Format chain_work in scientific notation (n * 10^y)
+        const formatChainWork = (num) => {
+          if (num === 0) return { base: 0, exp: 0 }
+
+          const exp = Math.floor(Math.log10(num))
+          const base = (num / Math.pow(10, exp)).toFixed(2)
+
+          const result = `${base} × 10^${exp}`
+          console.log(num, base, exp, result)
+          return { base, exp }
+        }
+
+        const chain_work = formatChainWork(chain_work_number)
 
         statsData = {
           block_count: {
@@ -50,6 +64,11 @@
             id: 'txns_per_second',
             icon: 'icon-arrow-transfer-line',
             value: Math.round(txs_per_second),
+          },
+          chain_work: {
+            id: 'chain_work',
+            icon: 'icon-cube-line',
+            value: chain_work,
           },
         }
       } else {

@@ -206,6 +206,7 @@ message GetBlockHeaderResponse {
   string miner = 5;
   uint32 block_time = 6;
   uint32 timestamp = 7;
+  bytes chain_work = 8;
 }
 
 // swagger:model CheckBlockIsCurrentChainResponse

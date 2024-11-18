@@ -395,6 +395,7 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 		Miner:       resp.Miner,
 		BlockTime:   resp.BlockTime,
 		Timestamp:   resp.Timestamp,
+		ChainWork:   resp.ChainWork,
 	}
 
 	return header, meta, nil

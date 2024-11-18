@@ -43,7 +43,8 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			COALESCE(avg(size_in_bytes), 0),
 			COALESCE(avg(tx_count), 0),
 			COALESCE(min(block_time), 0),
-			COALESCE(max(block_time), 0)
+			COALESCE(max(block_time), 0),
+			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), '\x00'::bytea)
 		FROM ChainBlocks
 		WHERE id > 0
 	`
@@ -58,6 +59,7 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 		&blockStats.AvgTxCountPerBlock,
 		&blockStats.FirstBlockTime,
 		&blockStats.LastBlockTime,
+		&blockStats.ChainWork,
 	)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to get stats", err)

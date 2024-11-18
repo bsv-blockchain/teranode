@@ -24,6 +24,7 @@
     'tx_count',
     'max_height',
     'avg_tx_count_per_block',
+    'chain_work',
   ]
 
   const colsMd = [
@@ -33,17 +34,14 @@
     'max_height',
     'avg_block_size',
     'avg_tx_count_per_block',
+    'chain_work',
   ]
 
   $: cols = $mediaSize <= MediaSize.md ? colsMd : colsLg
-  $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
+  $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 4
 </script>
 
-<Card
-  title={t(`${baseKey}.title`)}
-  showFooter={false}
-  headerPadding="20px 24px 10px 24px"
->
+<Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
   <svelte:fragment slot="header-tools">
     <div class="live">
       <div class="live-icon" class:connected>
@@ -83,9 +81,15 @@
               <div class="label">
                 {t(`${fieldKey}.${colId}`)}
               </div>
-              <div class="value">
-                {addNumCommas(data[colId].value)}
-              </div>
+              {#if typeof data[colId].value === 'object' && data[colId].value !== null}
+                <div class="value base-exp">
+                  <div>{data[colId].value.base}</div>
+                  x 10
+                  <div class="exp">{data[colId].value.exp}</div>
+                </div>
+              {:else}
+                <div class="value">{addNumCommas(data[colId].value)}</div>
+              {/if}
             </div>
           </div>
         </div>
@@ -185,5 +189,18 @@
     font-weight: 700;
     line-height: 28px;
     letter-spacing: 0.44px;
+  }
+
+  .base-exp {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .exp {
+    font-size: 12px;
+    font-weight: 400;
+    position: relative;
+    top: -0.5em;
+    left: -0.3em;
   }
 </style>

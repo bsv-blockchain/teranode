@@ -532,6 +532,7 @@ type BlockStats struct {
 	AvgTxCountPerBlock float64 `protobuf:"fixed64,5,opt,name=avg_tx_count_per_block,json=avgTxCountPerBlock,proto3" json:"avg_tx_count_per_block,omitempty"`
 	FirstBlockTime     uint32  `protobuf:"varint,6,opt,name=first_block_time,json=firstBlockTime,proto3" json:"first_block_time,omitempty"`
 	LastBlockTime      uint32  `protobuf:"varint,7,opt,name=last_block_time,json=lastBlockTime,proto3" json:"last_block_time,omitempty"`
+	ChainWork          []byte  `protobuf:"bytes,8,opt,name=chain_work,json=chainWork,proto3" json:"chain_work,omitempty"`
 }
 
 func (x *BlockStats) Reset() {
@@ -611,6 +612,13 @@ func (x *BlockStats) GetLastBlockTime() uint32 {
 		return x.LastBlockTime
 	}
 	return 0
+}
+
+func (x *BlockStats) GetChainWork() []byte {
+	if x != nil {
+		return x.ChainWork
+	}
+	return nil
 }
 
 // swagger:model DataPoint

@@ -77,6 +77,7 @@ message BlockStats {
   double avg_tx_count_per_block = 5;
   uint32 first_block_time = 6;
   uint32 last_block_time = 7;
+  bytes chain_work = 8;
 }
 
 // swagger:model DataPoint
