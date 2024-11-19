@@ -1736,18 +1736,18 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		ctx:          ctx,
 		peerNotifier: config.PeerNotifier,
 		chain:        config.Chain,
-		//txMemPool:     config.TxMemPool,
+		// txMemPool:     config.TxMemPool,
 		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](orphanEvictionDuration),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    make(map[chainhash.Hash]struct{}),
 		requestedTxns:   make(map[chainhash.Hash]struct{}),
 		requestedBlocks: make(map[chainhash.Hash]struct{}),
 		peerStates:      make(map[*peerpkg.Peer]*peerSyncState),
-		//progressLogger:  newBlockProgressLogger("Processed", log),
+		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:    make(chan interface{}, config.MaxPeers*3),
 		headerList: list.New(),
 		quit:       make(chan struct{}),
-		//feeEstimator:            config.FeeEstimator,
+		// feeEstimator:            config.FeeEstimator,
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 
 		// ubsv stores etc.
@@ -1831,24 +1831,8 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 				return
 			default:
 				// get the FSM state, only turn on the listener if we are in RUN mode
-				fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-				if err != nil {
-					sm.logger.Errorf("[Legacy Manager] failed to get current FSM state: %v", err)
-				}
-
-				if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
-					kafkaControlChan <- true // start or continue the listener
-				} else {
-					kafkaControlChan <- false // stop the listener
-				}
-
-				isState, err := sm.blockchainClient.IsFSMCurrentState(sm.ctx, ubsvblockchain.FSMStateRUNNING)
-				if err != nil {
-					sm.logger.Errorf("[Legacy Manager] failed to get current FSM state: %v", err)
-					kafkaControlChan <- false // stop the listener
-
-					continue
-				}
+				// TODO it would be better to be able to listen somehow to state changes in the FSM
+				isState, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, ubsvblockchain.FSMStateRUNNING)
 
 				if isState {
 					kafkaControlChan <- true // start or continue the listener
@@ -1857,7 +1841,6 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 				}
 
 				// wait 1 second before checking again
-				// TODO it would be better to be able to listen somehow to state changes in the FSM
 				time.Sleep(1 * time.Second)
 			}
 		}
@@ -1884,7 +1867,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go sm.startKafkaControlledListener(ctx, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
 	}
 
 	blocksFinalConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
@@ -1892,7 +1875,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go sm.startKafkaControlledListener(ctx, controlCh, blocksFinalConfigURL, sm.kafkaBlocksListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, blocksFinalConfigURL, sm.kafkaBlocksListener)
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
@@ -1900,7 +1883,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go sm.startKafkaControlledListener(ctx, controlCh, txmetaKafkaURL, sm.kafkaTXListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXListener)
 	}
 
 	go func() {
@@ -1919,7 +1902,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 }
 
 func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	sm.startKafkaListener(ctx, kafkaURL, groupID, func(msg *kafka.KafkaMessage) error {
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
 		wireInvMsg, err := sm.newInvFromBytes(msg.Value)
 		if err != nil {
 			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
@@ -1936,7 +1919,7 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 }
 
 func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	sm.startKafkaListener(ctx, kafkaURL, groupID, func(msg *kafka.KafkaMessage) error {
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
 		if msg.Key != nil {
 			hash, err := chainhash.NewHash(msg.Key)
 			if err != nil {
@@ -1953,7 +1936,7 @@ func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 }
 
 func (sm *SyncManager) kafkaTXListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	sm.startKafkaListener(ctx, kafkaURL, groupID, func(msg *kafka.KafkaMessage) error {
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
 		if msg.Key != nil {
 			hash, err := chainhash.NewHash(msg.Key)
 			if err != nil {
@@ -1967,47 +1950,4 @@ func (sm *SyncManager) kafkaTXListener(ctx context.Context, kafkaURL *url.URL, g
 
 		return nil
 	})
-}
-
-func (sm *SyncManager) startKafkaControlledListener(ctx context.Context, kafkaControlChan chan bool, kafkaConfigURL *url.URL,
-	listener func(ctx context.Context, kafkaURL *url.URL, groupID string)) {
-	var (
-		kafkaCtx    context.Context
-		kafkaCancel context.CancelFunc
-	)
-
-	for {
-		select {
-		case <-ctx.Done():
-			if kafkaCancel != nil {
-				kafkaCancel()
-			}
-		case control := <-kafkaControlChan:
-			if control { // Start signal
-				if kafkaCancel != nil {
-					// Listener is already running, no need to start
-					continue
-				}
-
-				kafkaCtx, kafkaCancel = context.WithCancel(ctx)
-
-				sm.logger.Infof("[Legacy Manager] starting Kafka listener for %s", kafkaConfigURL.String())
-
-				go listener(kafkaCtx, kafkaConfigURL, "legacy")
-			} else if kafkaCancel != nil {
-				sm.logger.Infof("[Legacy Manager] stopping Kafka listener for %s", kafkaConfigURL.String())
-				kafkaCancel() // Stop the listener
-				kafkaCancel = nil
-			}
-		}
-	}
-}
-
-func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerFn func(msg *kafka.KafkaMessage) error) {
-	client, err := kafka.NewKafkaConsumerGroupFromURL(sm.logger, kafkaURL, groupID, true)
-	if err != nil {
-		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
-	}
-
-	client.Start(ctx, consumerFn)
 }
