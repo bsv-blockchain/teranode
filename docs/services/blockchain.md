@@ -491,7 +491,6 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 - **Blockchain Store URL (`blockchain_store`)**: The URL for connecting to the blockchain data store. Essential for the service's ability to access and store block data.
 - **gRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the address and port the blockchain service's gRPC server listens on, enabling RPC calls for blockchain operations.
 - **Kafka Brokers URL (`kafka_blocksFinalConfig`)**: Configuration for connecting to Kafka brokers, used for publishing new block notifications.
-- **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments, allowing for a static difficulty for networks that do not require frequent adjustments.
 
 ### Operational Settings
 - **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to connect to the blockchain service, ensuring resilience against temporary connectivity issues.

@@ -374,7 +374,6 @@ The Block Assembly service uses the following configuration options:
 ## Mining and Difficulty
 
 20. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for response when submitting mining solutions. Default: true.
-21. **`difficulty_adjustment`**: Boolean flag for difficulty adjustment. Default: false.
 
 ## Service Control
 

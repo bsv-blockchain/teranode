@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,7 +47,6 @@ type BlockAssembler struct {
 	currentChainMapIDs       map[uint32]struct{}
 	currentChainMapMu        sync.RWMutex
 	blockchainSubscriptionCh chan *blockchain.Notification
-	difficultyAdjustment     bool
 	currentDifficulty        *model.NBit
 	defaultMiningNBits       *model.NBit
 	resetCh                  chan struct{}
@@ -61,8 +59,6 @@ const DifficultyAdjustmentWindow = 144
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
-	// TODO: remove this
-	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
 	bytesLittleEndian := make([]byte, 4)
 
@@ -76,22 +72,21 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
-		logger:               logger,
-		stats:                stats.NewStat("BlockAssembler"),
-		settings:             tSettings,
-		utxoStore:            utxoStore,
-		subtreeStore:         subtreeStore,
-		blockchainClient:     blockchainClient,
-		subtreeProcessor:     subtreeProcessor,
-		miningCandidateCh:    make(chan chan *miningCandidateResponse),
-		currentChainMap:      make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
-		currentChainMapIDs:   make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
-		difficultyAdjustment: difficultyAdjustment,
-		defaultMiningNBits:   defaultMiningBits,
-		resetCh:              make(chan struct{}, 2),
-		resetWaitCount:       atomic.Int32{},
-		resetWaitTime:        atomic.Int32{},
-		currentRunningState:  atomic.Value{},
+		logger:              logger,
+		stats:               stats.NewStat("BlockAssembler"),
+		settings:            tSettings,
+		utxoStore:           utxoStore,
+		subtreeStore:        subtreeStore,
+		blockchainClient:    blockchainClient,
+		subtreeProcessor:    subtreeProcessor,
+		miningCandidateCh:   make(chan chan *miningCandidateResponse),
+		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
+		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
+		defaultMiningNBits:  defaultMiningBits,
+		resetCh:             make(chan struct{}, 2),
+		resetWaitCount:      atomic.Int32{},
+		resetWaitTime:       atomic.Int32{},
+		currentRunningState: atomic.Value{},
 	}
 	b.currentRunningState.Store("starting")
 
@@ -736,42 +731,10 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 }
 
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
-	// use difficulty
-	if b.difficultyAdjustment {
-		nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
-		if err != nil {
-			return nil, errors.NewProcessingError("error getting next work required", err)
-		}
-
-		return nbit, nil
+	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
+	if err != nil {
+		return nil, errors.NewProcessingError("error getting next work required", err)
 	}
 
-	now := time.Now()
-	thresholdSeconds := 2 * uint32(b.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
-
-	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	randomOffset := rand.Int31n(21) - 10
-
-	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Load().Timestamp
-
-	b.logger.Debugf("timeDifference: %d", timeDifference)
-	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Load().Hash().String())
-
-	switch {
-	case !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3):
-		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
-		return b.defaultMiningNBits, nil
-	case timeDifference > thresholdSeconds+uint32(randomOffset): // nolint: gosec
-		// If the new block's timestamp is more than 2* 10 minutes then allow mining of a min-difficulty block.
-		b.logger.Debugf("applying special difficulty rule")
-		// set to start difficulty
-		return b.defaultMiningNBits, nil
-	case b.currentDifficulty != nil:
-		b.logger.Debugf("setting difficulty to current difficulty %s", b.currentDifficulty.String())
-		return b.currentDifficulty, nil
-	default:
-		b.logger.Debugf("setting difficulty to default mining bits %s", b.defaultMiningNBits.String())
-		return b.defaultMiningNBits, nil
-	}
+	return nbit, nil
 }

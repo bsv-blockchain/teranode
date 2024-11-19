@@ -30,8 +30,7 @@ var (
 )
 
 type Difficulty struct {
-	difficultyAdjustment bool
-	powLimitnBits        *model.NBit
+	powLimitnBits *model.NBit
 	// lastSlowBlockHash    *chainhash.Hash
 	logger            ulogger.Logger
 	store             blockchain_store.Store
@@ -42,7 +41,6 @@ type Difficulty struct {
 
 func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *chaincfg.Params) (*Difficulty, error) {
 	d := &Difficulty{}
-	d.difficultyAdjustment = gocore.Config().GetBool("difficulty_adjustment", false)
 	d.chainParams = params
 
 	bytesLittleEndian := make([]byte, 4)
