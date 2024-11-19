@@ -18,14 +18,14 @@
 - [2.11. Triggering a Subscription Notification](#211-triggering-a-subscription-notification)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
-- [4.1. Blocks](#41-blocks)
-- [4.2. Block Database Data Structure](#42-block---database-data-structure)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 - [Blockchain Service Configuration](#blockchain-service-configuration)
 - [Operational Settings](#operational-settings)
+- [Mining and Difficulty Settings](#mining-and-difficulty-settings)
+9. [Other Resources](#9-other-resources)
 
 
 ## 1. Description
@@ -314,21 +314,7 @@ The Blockchain Service uses gRPC for communication between nodes. The protobuf d
 
 ## 4. Data Model
 
-### 4.1. Blocks
-
-Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
-
-| Field       | Type                  | Description                                                 |
-|-------------|-----------------------|-------------------------------------------------------------|
-| Header      | *BlockHeader          | The Block Header                                            |
-| CoinbaseTx  | *bt.Tx                | The coinbase transaction.                                   |
-| Subtrees    | []*chainhash.Hash     | An array of hashes, representing the subtrees of the block. |
-
-This table provides an overview of each field in the `Block` struct, including the data type and a brief description of its purpose or contents.
-
-More information on the block structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-### 4.2. Block - Database Data Structure
+The Blockchain works with the [Block Data Model](../topics/datamodel/block_data_model.md).
 
 The blockchain database stores the block header, coinbase TX, and block merkle root. The following is the structure of the `blocks` data:
 
@@ -390,84 +376,97 @@ The Blockchain service is located in the `./services/blockchain` directory. The 
 
 ```
 services/blockchain
-├── Client.go
-    - Implements the client-side logic for interacting with the Blockchain service.
-├── Interface.go
-    - Defines the interface for the Blockchain store, outlining required methods for implementation.
-├── LocalClient.go
-    - Provides a local client implementation for the Blockchain service, for internal or in-process use.
-├── Server.go
-    - Contains server-side logic for the Blockchain service, handling requests and processing blockchain operations.
+├── Client.go - Implements the client-side logic for interacting with the Blockchain service.
+├── Difficulty.go - Manages difficulty adjustment logic for the blockchain.
+├── Interface.go - Defines the interface for the Blockchain store, outlining required methods for implementation.
+├── LocalClient.go - Provides a local client implementation for the Blockchain service, for internal or in-process use.
+├── Server.go - Contains server-side logic for the Blockchain service, handling requests and processing blockchain operations.
 ├── blockchain_api
-    │   ├── blockchain_api.pb.go
-        - Auto-generated Go bindings from the `.proto` file, used for implementing the Blockchain service API.
-    │   ├── blockchain_api.proto
-        - The Protocol Buffers definition file for the Blockchain service API.
-    │   ├── blockchain_api_extra.go
-        - Supplemental code extending or enhancing the auto-generated API code.
-    │   └── blockchain_api_grpc.pb.go
-        - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
+│   ├── blockchain_api.pb.go - Auto-generated Go bindings from the `.proto` file, used for implementing the Blockchain service API.
+│   ├── blockchain_api.proto - The Protocol Buffers definition file for the Blockchain service API.
+│   ├── blockchain_api_extra.go - Supplemental code extending or enhancing the auto-generated API code.
+│   ├── blockchain_api_grpc.pb.go - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
+│   └── fsm_extra.go - Additional logic related to the Finite State Machine (FSM) functionality.
+├── data
+|
+├── fsm.go
+│   - Implements the Finite State Machine logic for managing blockchain states.
+│
+├── fsm_visualizer
+│   └── main.go  - A tool for visualizing the Finite State Machine structure.
+│
 ├── metrics.go
-    - Manages and implements functionality related to operational metrics of the Blockchain service.
+│   - Manages and implements functionality related to operational metrics of the Blockchain service.
+│
 └── work
-    ├── work.go
+    └── work.go
         - Used to compute the cumulative chain work.
-    └── work_test.go
-        - Contains unit tests for the `work.go` file.
 ```
 
 Further to this, the store part of the service is kept under `stores/blockchain`. The following is the directory structure of the store:
 
 
 ```
-/stores/blockchain
+stores/blockchain
 ├── Interface.go
     - Defines the interface for blockchain storage, outlining the methods for blockchain data manipulation and retrieval.
+├── README.md
+    - Contains documentation and information about the blockchain store.
+├── mock.go
+    - Likely contains mock implementations for testing purposes.
 ├── new.go
     - Contains the constructor or factory methods for creating new instances of the blockchain store.
+├── options
+│   └── Options.go
+    - Defines options or configurations for the blockchain store.
 └── sql
+    ├── CheckBlockIsInCurrentChain.go
+    ├── CheckBlockIsInCurrentChain_test.go
+    ├── ExportBlocksDB.go
     ├── GetBestBlockHeader.go
-        - Implements the retrieval of the best block header (the latest valid block header) from the blockchain database.
     ├── GetBestBlockHeader_test.go
-        - Contains tests for the `GetBestBlockHeader.go` functionality.
     ├── GetBlock.go
-        - Provides functionality to retrieve a full block from the blockchain database using its hash.
+    ├── GetBlockByHeight.go
+    ├── GetBlockByHeight_test.go
     ├── GetBlockExists.go
-        - Contains logic to check if a specific block exists in the blockchain database.
+    ├── GetBlockGraphData.go
     ├── GetBlockHeader.go
-        - Implements the retrieval of a specific block header from the blockchain database.
     ├── GetBlockHeaderIDs.go
-        - Retrieves a list of block header IDs from the blockchain database.
+    ├── GetBlockHeaderIDs_test.go
     ├── GetBlockHeaders.go
-        - Provides functionality to retrieve multiple block headers from the blockchain database.
+    ├── GetBlockHeadersByHeight.go
+    ├── GetBlockHeadersFromHeight.go
     ├── GetBlockHeaders_test.go
-        - Contains tests for the `GetBlockHeaders.go` functionality.
     ├── GetBlockHeight.go
-        - Implements the retrieval of a block's height from the blockchain database.
     ├── GetBlockHeight_test.go
-        - Contains tests for the `GetBlockHeight.go` functionality.
+    ├── GetBlockStats.go
     ├── GetBlock_test.go
-        - Contains tests for the `GetBlock.go` functionality.
+    ├── GetBlocks.go
+    ├── GetBlocksByTime.go
+    ├── GetBlocksMinedNotSet.go
+    ├── GetBlocksSubtreesNotSet.go
+    ├── GetForkedBlockHeaders.go
+    ├── GetHashOfAncestorBlock.go
+    ├── GetHashOfAncestorBlock_test.go
     ├── GetHeader.go
-        - Provides functionality to retrieve a block header from the blockchain database.
     ├── GetHeader_test.go
-        - Contains tests for the `GetHeader.go` functionality.
     ├── GetLastNBlocks.go
-        - Implements retrieval of the last N blocks from the blockchain database.
+    ├── GetSuitableBlock.go
+    ├── GetSuitableBlock_test.go
     ├── InvalidateBlock.go
-        - Provides functionality to mark a block as invalid in the blockchain database.
+    ├── InvalidateBlock_test.go
+    ├── LocateBlockHeaders.go
+    ├── LocateBlockHeaders_test.go
+    ├── RevalidateBlock.go
+    ├── RevalidateBlock_test.go
+    ├── SetBlockMinedSet.go
+    ├── SetBlockSubtreesSet.go
     ├── State.go
-        - Manages the state-related data in the blockchain database.
     ├── State_test.go
-        - Contains tests for the `State.go` functionality.
     ├── StoreBlock.go
-        - Implements storing a block in the blockchain database.
     ├── StoreBlock_test.go
-        - Contains tests for the `StoreBlock.go` functionality.
     ├── sql.go
-        - Contains common SQL-related operations or utilities used by other SQL files in this directory.
     └── sql_test.go
-        - Contains tests for the `sql.go` file.
 ```
 
 
@@ -489,16 +488,21 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 
 ### Blockchain Service Configuration
 - **Blockchain Store URL (`blockchain_store`)**: The URL for connecting to the blockchain data store. Essential for the service's ability to access and store block data.
-- **gRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the address and port the blockchain service's gRPC server listens on, enabling RPC calls for blockchain operations.
-- **Kafka Brokers URL (`kafka_blocksFinalConfig`)**: Configuration for connecting to Kafka brokers, used for publishing new block notifications.
+- **gRPC Address (`blockchain_grpcAddress`)**: Specifies the address for the blockchain service's gRPC server, enabling RPC calls for blockchain operations.
+- **HTTP Listen Address (`blockchain_httpListenAddress`)**: Specifies the address the blockchain service's HTTP server listens on.
+- **Network (`network`)**: Specifies the blockchain network (e.g., "mainnet"). Defaults to "mainnet" if not specified.
+- **Kafka Blocks Configuration (`kafka_blocksFinalConfig`)**: URL configuration for connecting to Kafka, used for publishing new block notifications.
 
 ### Operational Settings
-- **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to connect to the blockchain service, ensuring resilience against temporary connectivity issues.
-- **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time between retry attempts for connecting to the blockchain service, providing a back-off mechanism to reduce load during outages.
-- **Initial Blocks Count (`mine_initial_blocks_count`)**: Specifies the number of blocks that should be mined at the initial difficulty level, useful for network startups or testing environments.
+- **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to perform certain blockchain operations, ensuring resilience against temporary issues. Defaults to 3.
+- **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time in milliseconds between retry attempts, providing a back-off mechanism. Defaults to 1000ms.
 
-### Removed settings
-- **Difficulty Adjustment Window (`difficulty_adjustment_window`)**: Defines the number of blocks considered for calculating difficulty adjustments, impacting how the network responds to changes in block production rates.
-- **Target Time per Block (`difficulty_target_time_per_block`)**: The desired time interval between blocks, guiding the difficulty adjustment process to maintain a steady block production rate.
-- **Proof of Work Limit (`difficulty_pow_limit`)**: Sets the upper limit for the proof of work calculations, ensuring that difficulty adjustments do not make the mining process infeasibly hard.
-- **Initial Difficulty (`mining_n_bits`)**: The starting difficulty target for mining, relevant for network startups or when special difficulty rules apply.
+### Mining and Difficulty Settings
+- **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments. Defaults to false.
+- **Initial Blocks Count (`mine_initial_blocks_count`)**: Specifies the number of blocks that should be mined at the initial difficulty level. Defaults to 200.
+- **Mine Initial Blocks Flag (`mine_initial_blocks`)**: A boolean flag to determine if initial blocks should be mined under special conditions. Used in conjunction with `mine_initial_blocks_count`.
+
+
+## 9. Other Resources
+
+[Blockchain Reference](../references/services/blockchain_reference.md)

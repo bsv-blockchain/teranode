@@ -1,37 +1,40 @@
 @startuml
 participant "Client" as Client
-participant "Blockchain Service" as Blockchain
+participant "Blockchain Service" as Service
 database "Store" as Store
 
 == GetBlockHeader ==
-Client -> Blockchain: GetBlockHeader(request)
-activate Blockchain
-Blockchain -> Store: GetBlockHeader(hash)
+Client -> Service: GetBlockHeader(ctx, request)
+activate Service
+Service -> Service: chainhash.NewHash(request.BlockHash)
+Service -> Store: GetBlockHeader(ctx, hash)
 activate Store
-Store --> Blockchain: blockHeader, meta
+Store --> Service: blockHeader, meta, err
 deactivate Store
-Blockchain --> Client: GetBlockHeaderResponse
-deactivate Blockchain
+Service --> Client: GetBlockHeaderResponse
+deactivate Service
 
 == GetBlockHeaders ==
-Client -> Blockchain: GetBlockHeaders(request)
-activate Blockchain
-Blockchain -> Store: GetBlockHeaders(startHash, numberOfHeaders)
+Client -> Service: GetBlockHeaders(ctx, request)
+activate Service
+Service -> Service: chainhash.NewHash(request.StartHash)
+Service -> Store: GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
 activate Store
-Store --> Blockchain: blockHeaders, heights
+Store --> Service: blockHeaders, blockHeaderMetas, err
 deactivate Store
-Blockchain --> Client: GetBlockHeadersResponse
-deactivate Blockchain
+Service --> Client: GetBlockHeadersResponse
+deactivate Service
 
 == GetBlockHeaderIDs ==
-Client -> Blockchain: GetBlockHeaderIDs(request)
-activate Blockchain
-Blockchain -> Store: GetBlockHeaderIDs(startHash, numberOfHeaders)
+Client -> Service: GetBlockHeaderIDs(ctx, request)
+activate Service
+Service -> Service: chainhash.NewHash(request.StartHash)
+Service -> Store: GetBlockHeaderIDs(ctx, startHash, req.NumberOfHeaders)
 activate Store
-Store --> Blockchain: ids
+Store --> Service: ids, err
 deactivate Store
-Blockchain --> Client: GetBlockHeaderIDsResponse
-deactivate Blockchain
+Service --> Client: GetBlockHeaderIDsResponse
+deactivate Service
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

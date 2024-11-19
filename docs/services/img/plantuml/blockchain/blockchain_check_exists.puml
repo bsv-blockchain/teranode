@@ -6,16 +6,17 @@ database "Store" as Store
 Client -> Service: GetBlockExists(ctx, request)
 activate Service
 
-Service -> Store: GetBlockExists(ctx1, blockHash)
+Service -> Service: NewHash(request.Hash)
+
+Service -> Store: GetBlockExists(ctx, blockHash)
 activate Store
-Store --> Service: exists / Error
+Store --> Service: exists, err
 deactivate Store
 
-alt If Error in GetBlockExists
+alt If Error
     Service --> Client: Return Error
-    deactivate Service
 else If Successful
-    Service --> Client: Create & Return GetBlockExistsResponse
+    Service --> Client: GetBlockExistsResponse{Exists: exists}
 end
 
 deactivate Service
