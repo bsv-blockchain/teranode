@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -65,6 +66,7 @@ var (
 func newTx(lockTime uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = lockTime
+
 	return tx
 }
 
@@ -156,6 +158,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
+
 		bn.SetString(hashStr, 16)
 
 		compare := bn.Cmp(target)
@@ -315,6 +318,10 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	ba := NewBlockAssembler(
 		context.Background(),
 		ulogger.TestLogger{},
+		&settings.Settings{
+			ChainCfgParams: &chaincfg.RegressionNetParams,
+			Policy:         &settings.PolicySettings{},
+		},
 		stats,
 		items.utxoStore,
 		items.blobStore,
@@ -323,7 +330,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor, _ = subtreeprocessor.NewSubtreeProcessor(
+	ba.subtreeProcessor, err = subtreeprocessor.NewSubtreeProcessor(
 		context.Background(),
 		ulogger.TestLogger{},
 		nil,
@@ -331,6 +338,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		items.newSubtreeChan,
 		subtreeprocessor.WithBatcherSize(1),
 	)
+	require.NoError(t, err)
 
 	items.blockAssembler = ba
 
@@ -360,6 +368,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		var wg sync.WaitGroup
 		wg.Add(1)
+
 		go func() {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
@@ -417,6 +426,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
+
 		bn.SetString(hashStr, 16)
 
 		compare := bn.Cmp(target)
@@ -535,7 +545,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
-		testItems.blockAssembler.blockMaxSize = 15000*4 + 1000
+		testItems.blockAssembler.settings.Policy.BlockMaxSize = 15000*4 + 1000
 
 		testItems.blockAssembler.startChannelListeners(ctx)
 
@@ -578,6 +588,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 			tx := newTx(uint32(i))
 			_, err = testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
+
 			if i == 0 {
 				// first add coinbase
 				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 15000})
@@ -628,6 +639,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
+
 		bn.SetString(hashStr, 16)
 
 		compare := bn.Cmp(target)
@@ -642,7 +654,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
-		testItems.blockAssembler.blockMaxSize = 430000
+		testItems.blockAssembler.settings.Policy.BlockMaxSize = 430000
 
 		testItems.blockAssembler.startChannelListeners(ctx)
 
@@ -678,6 +690,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			tx := newTx(uint32(i))
 			_, err = testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
+
 			if i == 0 {
 				// first add coinbase
 				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 100})

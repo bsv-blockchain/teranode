@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -76,10 +77,10 @@ type TxValidatorI interface {
 
 // TxValidator implements transaction validation logic
 type TxValidator struct {
-	logger      ulogger.Logger      // Logger instance
-	policy      *PolicySettings     // Validation policy settings
-	params      *chaincfg.Params    // Network parameters
-	interpreter TxScriptInterpreter // Script interpreter implementation
+	logger      ulogger.Logger
+	policy      *settings.PolicySettings
+	params      *chaincfg.Params
+	interpreter TxScriptInterpreter
 }
 
 // TxScriptInterpreter defines the interface for script verification operations
@@ -101,7 +102,7 @@ type TxScriptInterpreter interface {
 //
 // Returns:
 //   - TxScriptInterpreter: The created script interpreter
-type TxValidatorCreator func(logger ulogger.Logger, policy *PolicySettings, params *chaincfg.Params) TxScriptInterpreter
+type TxValidatorCreator func(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) TxScriptInterpreter
 
 // ScriptVerificationFactory stores registered TxValidator creator methods
 // The factory is populated at build time based on build tags
@@ -116,7 +117,7 @@ var ScriptVerificationFactory = make(map[TxInterpreter]TxValidatorCreator)
 //
 // Returns:
 //   - TxValidatorI: The created transaction validator
-func NewTxValidator(logger ulogger.Logger, policy *PolicySettings, params *chaincfg.Params, opts ...TxValidatorOption) TxValidatorI {
+func NewTxValidator(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params, opts ...TxValidatorOption) TxValidatorI {
 	options := &TxValidatorOptions{}
 	for _, opt := range opts {
 		opt(options)

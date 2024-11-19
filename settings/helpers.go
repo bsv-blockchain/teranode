@@ -2,6 +2,7 @@ package settings
 
 import (
 	"net/url"
+	"strconv"
 
 	"github.com/ordishs/gocore"
 )
@@ -38,4 +39,15 @@ func getURL(key, defaultValue string) *url.URL {
 
 func getBool(key string, defaultValue bool) bool {
 	return gocore.Config().GetBool(key, defaultValue)
+}
+
+func getFloat64(key string, defaultValue float64) float64 {
+	strVal, found := gocore.Config().Get(key, "")
+	value, err := strconv.ParseFloat(strVal, 64)
+
+	if !found || err != nil {
+		return defaultValue
+	}
+
+	return value
 }

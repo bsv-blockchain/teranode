@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/go-sdk/transaction"
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
@@ -36,7 +37,7 @@ func init() {
 //
 // Returns:
 //   - TxScriptInterpreter: The created script interpreter
-func newScriptVerifierGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+func newScriptVerifierGoSDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script verifier with GoSDK")
 
 	return &scriptVerifierGoSDK{
@@ -49,7 +50,7 @@ func newScriptVerifierGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.P
 // scriptVerifierGoSDK implements the TxScriptInterpreter interface using Go-SDK
 type scriptVerifierGoSDK struct {
 	logger ulogger.Logger
-	policy *PolicySettings
+	policy *settings.PolicySettings
 	params *chaincfg.Params
 }
 
@@ -63,8 +64,7 @@ func (v *scriptVerifierGoSDK) Params() *chaincfg.Params {
 	return v.params
 }
 
-// PolicySettings returns the verifier's policy settings
-func (v *scriptVerifierGoSDK) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoSDK) PolicySettings() *settings.PolicySettings {
 	return v.policy
 }
 

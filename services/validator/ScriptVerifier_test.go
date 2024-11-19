@@ -32,6 +32,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -49,22 +50,22 @@ func Test_ScriptVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("GoSDK Multi Routine", func(t *testing.T) {
-		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
 		testBlockMultiRoutines(t, verifier, txs)
 	})
 
 	t.Run("GoBt Multi Routine", func(t *testing.T) {
-		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
 		testBlockMultiRoutines(t, verifier, txs)
 	})
 
 	t.Run("GoSDK Sequential", func(t *testing.T) {
-		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
 		testBlockSequential(t, verifier, txs)
 	})
 
 	t.Run("GoBt Sequential", func(t *testing.T) {
-		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
 		testBlockSequential(t, verifier, txs)
 	})
 }

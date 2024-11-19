@@ -232,6 +232,7 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 		for _, item := range batch {
 			item.done <- errors.UnwrapGRPC(err)
 		}
+
 		return
 	}
 

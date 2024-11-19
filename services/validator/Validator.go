@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -90,7 +91,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKaf
 
 	v := &Validator{
 		logger:                        logger,
-		txValidator:                   NewTxValidator(logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		txValidator:                   NewTxValidator(logger, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
 		utxoStore:                     store,
 		blockAssembler:                ba,
 		saveInParallel:                true,

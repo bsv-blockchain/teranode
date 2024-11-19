@@ -1,6 +1,11 @@
 package settings
 
-import "github.com/bitcoin-sv/ubsv/chaincfg"
+import (
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/util"
+)
 
 func NewSettings() *Settings {
 	params, err := chaincfg.GetChainParams(getString("network", "mainnet"))
@@ -8,10 +13,49 @@ func NewSettings() *Settings {
 		panic(err)
 	}
 
+	blockMaxSize, err := util.ParseMemoryUnit(getString("blockmaxsize", "0")) // default to 0 - unlimited
+	if err != nil {
+		panic(err)
+	}
+
+	subtreeTTLMinutes := getInt("blockassembly_subtreeTTL", 120)
+	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
+
 	return &Settings{
 		ClientName:     getString("clientName", "defaultClientName"),
 		DataFolder:     getString("dataFolder", "data"),
 		ChainCfgParams: params,
+		Policy: &PolicySettings{
+			ExcessiveBlockSize: getInt("excessiveblocksize", 4294967296), // 4GB
+			// TODO: change BlockMaxSize to uint64
+			//nolint:gosec // G115: integer overflow conversion uint64 -> int (gosec)
+			BlockMaxSize:    int(blockMaxSize),
+			MaxTxSizePolicy: getInt("maxtxsizepolicy", 10485760), // 10MB
+			MinMiningTxFee:  getFloat64("minminingtxfee", 0.00000500),
+			// MaxOrphanTxSize:                 getInt("maxorphantxsize", 1000000),
+			// DataCarrierSize:                 int64(getInt("datacarriersize", 1000000)),
+			MaxScriptSizePolicy: getInt("maxscriptsizepolicy", 500000), // 500KB
+			// TODO: what should this be?
+			//MaxOpsPerScriptPolicy:           int64(getInt("maxopsperscriptpolicy", 1000000)),
+			MaxScriptNumLengthPolicy:     getInt("maxscriptnumlengthpolicy", 10000),       // 10K
+			MaxPubKeysPerMultisigPolicy:  int64(getInt("maxpubkeyspermultisigpolicy", 0)), // 0 is unlimited
+			MaxTxSigopsCountsPolicy:      int64(getInt("maxtxsigopscountspolicy", 0)),     // 0 is unlimited
+			MaxStackMemoryUsagePolicy:    getInt("maxstackmemoryusagepolicy", 104857600),  // 100MB
+			MaxStackMemoryUsageConsensus: getInt("maxstackmemoryusageconsensus", 0),       // 0 is unlimited
+			// LimitAncestorCount:              getInt("limitancestorcount", 1000000),
+			// LimitCPFPGroupMembersCount:      getInt("limitcpfpgroupmemberscount", 1000000),
+			AcceptNonStdOutputs: getBool("acceptnonstdoutputs", true),
+			// DataCarrier:                     getBool("datacarrier", false),
+			// MaxStdTxValidationDuration:    getInt("maxstdtxvalidationduration", 3),       // 3ms
+			// MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000), // 1000ms
+			// MaxTxChainValidationBudget:    getInt("maxtxchainvalidationbudget", 50),      // 50ms
+			// ValidationClockCPU:              getBool("validationclockcpu", false),
+			// MinConsolidationFactor:          getInt("minconsolidationfactor", 20),
+			// MaxConsolidationInputScriptSize: getInt("maxconsolidationinputscriptsize", 1000000),
+			// MinConfConsolidationInput:       getInt("minconfconsolidationinput", 1000000),
+			// MinConsolidationInputMaturity:   getInt("minconsolidationinputmaturity", 1000000),
+			// AcceptNonStdConsolidationInput:  getBool("acceptnonstdconsolidationinput", false),
+		},
 		Kafka: KafkaSettings{
 			Blocks:            getString("KAFKA_BLOCKS", "blocks"),
 			BlocksFinal:       getString("KAFKA_BLOCKS_FINAL", "blocks-final"),
@@ -88,7 +132,10 @@ func NewSettings() *Settings {
 			SendBatchTimeout:                    getInt("blockassembly_sendBatchTimeout", 2),
 			SubtreeProcessorBatcherSize:         getInt("blockassembly_subtreeProcessorBatcherSize", 1000),
 			SubtreeProcessorConcurrentReads:     getInt("blockassembly_subtreeProcessorConcurrentReads", 375),
-			SubtreeTTL:                          getInt("blockassembly_subtreeTTL", 0),
+			SubtreeTTL:                          subtreeTTL,
+			NewSubtreeChanBuffer:                getInt("blockassembly_newSubtreeChanBuffer", 1_000),
+			SubtreeRetryChanBuffer:              getInt("blockassembly_subtreeRetryChanBuffer", 1_000),
+			SubmitMiningSolutionWaitForResponse: getBool("blockassembly_SubmitMiningSolution_waitForResponse", true),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:       getString("blockchain_grpcAddress", "localhost:8087"),
@@ -96,6 +143,7 @@ func NewSettings() *Settings {
 			HTTPListenAddress: getString("blockchain_httpListenAddress", ":8082"),
 			MaxRetries:        getInt("blockchain_maxRetries", 3),
 			StoreURL:          getURL("blockchain_store", "sqlite:///blockchain"),
+			FSMStateRestore:   getBool("fsm_state_restore", false),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                     getInt("blockValidationMaxRetries", 3),

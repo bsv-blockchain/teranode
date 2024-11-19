@@ -17,7 +17,6 @@ type BlockAssembly struct {
     subtreeTTL            time.Duration
     jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
     blockSubmissionChan   chan *BlockSubmissionRequest
-    blockAssemblyDisabled bool
 }
 ```
 
@@ -40,8 +39,6 @@ type BlockAssembler struct {
     currentChainMapIDs     map[uint32]struct{}
     currentChainMapMu      sync.RWMutex
     blockchainSubscriptionCh chan *blockchain.Notification
-    maxBlockReorgRollback  int
-    maxBlockReorgCatchup   int
     chainParams            *chaincfg.Params
     difficultyAdjustment   bool
     currentDifficulty      *model.NBit

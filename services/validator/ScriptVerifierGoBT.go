@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
@@ -27,15 +28,7 @@ func init() {
 	log.Println("Registered scriptVerifierGoBt")
 }
 
-// newScriptVerifierGoBt creates a new Go-BT script verifier instance
-// Parameters:
-//   - l: Logger instance for verification operations
-//   - po: Policy settings for validation rules
-//   - pa: Network parameters
-//
-// Returns:
-//   - TxScriptInterpreter: The created script interpreter instance
-func newScriptVerifierGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+func newScriptVerifierGoBt(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script Verifier with GoBT")
 
 	return &scriptVerifierGoBt{
@@ -48,7 +41,7 @@ func newScriptVerifierGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Pa
 // scriptVerifierGoBt implements the TxScriptInterpreter interface using Go-BT
 type scriptVerifierGoBt struct {
 	logger ulogger.Logger
-	policy *PolicySettings
+	policy *settings.PolicySettings
 	params *chaincfg.Params
 }
 
@@ -62,8 +55,7 @@ func (v *scriptVerifierGoBt) Params() *chaincfg.Params {
 	return v.params
 }
 
-// PolicySettings returns the verifier's policy settings
-func (v *scriptVerifierGoBt) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoBt) PolicySettings() *settings.PolicySettings {
 	return v.policy
 }
 

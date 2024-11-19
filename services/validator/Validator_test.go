@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/settings"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -112,7 +113,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params, WithTxValidatorInterpreter(TxInterpreterGoBT)),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params, WithTxValidatorInterpreter(TxInterpreterGoBT)),
 		utxoStore:                     utxoStore,
 		blockAssembler:                BlockAssemblyStore{},
 		saveInParallel:                true,
@@ -147,7 +148,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		saveInParallel:                true,
@@ -189,7 +190,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	v := &Validator{
 		txValidator: NewTxValidator(
 			ulogger.TestLogger{},
-			NewPolicySettings(),
+			settings.NewPolicySettings(),
 			params,
 			WithTxValidatorInterpreter(TxInterpreterGoBT),
 		),
@@ -218,7 +219,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	chainParams, _ := chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), chainParams),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), chainParams),
 	}
 
 	ctx := context.Background()
@@ -245,7 +246,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -297,7 +298,7 @@ func TestValidateTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		v := &Validator{
-			txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+			txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 		}
 
 		ctx := context.Background()
@@ -325,7 +326,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -352,7 +353,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	require.NoError(t, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 	}
 
 	ctx := context.Background()
@@ -406,7 +407,7 @@ func Benchmark_validateInternal(b *testing.B) {
 	require.NoError(b, err)
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
 	}
 
 	for i := 0; i < b.N; i++ {

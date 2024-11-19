@@ -2,6 +2,7 @@ package settings
 
 import (
 	"net/url"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 )
@@ -78,6 +79,7 @@ type BlockChainSettings struct {
 	HTTPListenAddress string
 	MaxRetries        int
 	StoreURL          *url.URL
+	FSMStateRestore   bool
 }
 
 type BlockAssemblySettings struct {
@@ -95,7 +97,10 @@ type BlockAssemblySettings struct {
 	SendBatchTimeout                    int
 	SubtreeProcessorBatcherSize         int
 	SubtreeProcessorConcurrentReads     int
-	SubtreeTTL                          int
+	SubtreeTTL                          time.Duration
+	NewSubtreeChanBuffer                int
+	SubtreeRetryChanBuffer              int
+	SubmitMiningSolutionWaitForResponse bool
 }
 
 type BlockValidationSettings struct {
@@ -153,6 +158,7 @@ type Settings struct {
 	ClientName      string
 	DataFolder      string
 	ChainCfgParams  *chaincfg.Params
+	Policy          *PolicySettings
 	Kafka           KafkaSettings
 	Aerospike       AerospikeSettings
 	Alert           AlertSettings

@@ -20,6 +20,7 @@ import (
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
@@ -78,7 +79,7 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 //
 // Returns:
 //   - TxScriptInterpreter: The created script interpreter
-func newScriptVerifierGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
+func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
 
 	// Configure BDK script verification settings
@@ -102,9 +103,9 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.P
 
 // scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
 type scriptVerifierGoBDK struct {
-	logger ulogger.Logger   // Logger instance
-	policy *PolicySettings  // Policy settings for validation
-	params *chaincfg.Params // Network parameters
+	logger ulogger.Logger
+	policy *settings.PolicySettings
+	params *chaincfg.Params
 }
 
 // Logger returns the verifier's logger instance
@@ -117,8 +118,7 @@ func (v *scriptVerifierGoBDK) Params() *chaincfg.Params {
 	return v.params
 }
 
-// PolicySettings returns the verifier's policy settings
-func (v *scriptVerifierGoBDK) PolicySettings() *PolicySettings {
+func (v *scriptVerifierGoBDK) PolicySettings() *settings.PolicySettings {
 	return v.policy
 }
 

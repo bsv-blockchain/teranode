@@ -569,6 +569,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
+				tSettings,
 				txStore,
 				utxoStore,
 				subtreeStore,
