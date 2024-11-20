@@ -131,7 +131,7 @@ Key components of the Teranode architecture include:
    - Kafka Message Broker
    - Miners
 
-![UBSV_Container_Diagram.png](img/UBSV_Container_Diagram.png)
+![TERANODE_OVERVIEW.png](img/TERANODE_OVERVIEW.png)
 
 For an introduction to each service, please check the [Teranode Microservices Overview](teranode-microservices-overview.md).
 

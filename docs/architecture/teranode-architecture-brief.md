@@ -19,12 +19,12 @@ The Teranode Project, being developed by the BSV Association, addresses the chal
 Teranode provides a robust node processing system for BSV that can consistently handle over **1 million transactions per second**, while strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of services that work together to provide a decentralized, scalable, and secure blockchain network. The node is designed to be modular, allowing for easy integration of new services and features.
 
-The diagram below shows all the different microservices, together with their interactions, that make up Teranode.
+The diagram below shows the main microservices, together with their interactions, that make up Teranode.
 
 &nbsp;
 &nbsp;
 
-![USBV_Overview_without_overlays.png](img%2FUSBV_Overview_without_overlays.png)
+![TERANODE_OVERVIEW.png](img/TERANODE_OVERVIEW.png)
 
 &nbsp;
 &nbsp;
@@ -69,15 +69,12 @@ The Teranode network behaviour is characterized by its proactive approach, with 
 - **Transaction Propagation Service**: Handles the receipt and forwarding of transactions for validation and distribution to other nodes.
 - **Transaction Validator**: Validates each transaction against network rules and updates their status in the system.
 - **Block Assembly Service**: Responsible for creating subtrees and preparing block templates for mining.
-- **Miner / Hasher**: Tasked with solving the proof of work for new blocks, a crucial part of the mining process.
 - **Subtree and Block Validator**: Plays a pivotal role in confirming the integrity and validity of both subtrees and blocks.
 - **Blockchain Service**: Manages the addition of new blocks to the blockchain and maintains the blockchain database.
 - **Asset Service**: Serves as a gateway to various data elements, facilitating interactions with transactions, UTXOs, etc.
 - **Bootstrap**: Assists new nodes in integrating into the Teranode network by discovering peers.
 - **P2P Legacy Service**: Ensures compatibility and communication between BSV nodes and Teranodes.
 - **UTXO Store**: Focuses on tracking all spendable UTXOs, essential for validating new transactions.
-- **Transaction Meta Store**: Manages transaction metadata, which is crucial for various validation and assembly processes.
-- **Banlist Service**: Maintains a list of banned entities, safeguarding the network against malicious actors.
 
 The Teranode's architecture revolutionizes Bitcoin's scalability through a combination of unbounded block size, innovative data models (such as SubTrees), and a modular node system. These advancements facilitate high transaction throughput and efficient network operations, positioning Teranode as a scalable solution for future blockchain demands.
 
