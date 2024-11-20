@@ -189,6 +189,13 @@ func (v *Server) Start(ctx context.Context) error {
 		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
 			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
+
+			currentState, err = v.blockchainClient.GetFSMCurrentState(ctx)
+			if err != nil {
+				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+
+				return err
+			}
 		}
 
 		data, err := NewTxValidationDataFromBytes(msg.Value)

@@ -299,9 +299,12 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 
 	// nodes := framework.Nodes
 
+	// Uncommenting and using either of the below methods will send transactions to all the nodes.
+	// This will result with test fail, in line 332 and 333.
 	// hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, nodes, 20)
-	// hashesNode0, err := helper.CreateAndSendTxs(framework.Context, framework.Nodes[0], 20)
-	hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, framework.Nodes, 20)
+	// hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, framework.Nodes, 20)
+
+	hashesNode0, err := helper.CreateAndSendTxs(framework.Context, framework.Nodes[0], 20)
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
