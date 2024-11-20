@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +27,7 @@ var (
 // so the candidate and block are related.
 var (
 	getMiningCandidateJSON = `{
-		"id": "ea4cb4f9-b1dc-49f7-a1c8-d850b2737846",
+		"id": "b64176f4aada053a8d22b7d2755bfcf47793dc097dd87f2a69e6c6fb98cbf2a1",
 		"prevhash": "1a270fe33eab79fef413754296ae329b4fd3979feb8b8657597c54371ae524a3",
 		"coinbase": "02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06037886000101ffffffff01a82f000000000000232103a920b957d6d2268812e02dfd8799ed2a867e2df86c4f8d1eaecb4c35266692b5ac00000000",
 		"coinbaseValue": 12200,
@@ -39,6 +41,13 @@ var (
 			"9f0a5462ca027f74b8c8e872331da1a55520197ff8734b604505c93cc7dfb968",
 			"11a375f3e547d4babb672471a167443f96077c7c9950548ce6ec460f6da37a32"
 		]
+	}`
+	submitMiningSolutionJSON = `{
+		"id": "b64176f4aada053a8d22b7d2755bfcf47793dc097dd87f2a69e6c6fb98cbf2a1",
+		"version": 536870912,
+		"time": 1731944075,
+		"coinbase": "02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06037886000101ffffffff01a82f000000000000232103a920b957d6d2268812e02dfd8799ed2a867e2df86c4f8d1eaecb4c35266692b5ac00000000",
+		"nonce": 1
 	}`
 	getBlockJSON = `{
   "tx": [
@@ -174,10 +183,10 @@ func TestGetBlockJson(t *testing.T) {
 func TestGetMiningCandidateJson(t *testing.T) {
 	var miningCandidateData map[string]interface{}
 
-	var blockData map[string]interface{}
-
 	err := json.Unmarshal([]byte(getMiningCandidateJSON), &miningCandidateData)
 	require.NoError(t, err)
+
+	var blockData map[string]interface{}
 
 	err = json.Unmarshal([]byte(getBlockJSON), &blockData)
 	require.NoError(t, err)
@@ -203,7 +212,68 @@ func TestGetMiningCandidateJson(t *testing.T) {
 	assert.Equal(t, blockBytes[:80], header.Bytes())
 }
 
+func TestSubmitMiningSolution(t *testing.T) {
+	var miningSolution bsvjson.MiningSolution
+
+	err := json.Unmarshal([]byte(submitMiningSolutionJSON), &miningSolution)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ea4cb4f9-b1dc-49f7-a1c8-d850b2737846", miningSolution.ID)
+	assert.Equal(t, uint32(1731944075), *miningSolution.Time)
+	assert.Equal(t, uint32(1), miningSolution.Nonce)
+	assert.Equal(t, uint32(536870912), *miningSolution.Version)
+
+	coinbase, err := bt.NewTxFromString(miningSolution.Coinbase)
+	require.NoError(t, err)
+
+	ms := &MiningSolution{
+		Id:       []byte(miningSolution.ID),
+		Coinbase: coinbase.Bytes(),
+		Time:     miningSolution.Time,
+		Nonce:    miningSolution.Nonce,
+		Version:  miningSolution.Version,
+	}
+
+	assert.Equal(t, ms.Id, []byte(miningSolution.ID))
+	assert.Equal(t, ms.Coinbase, coinbase)
+	assert.Equal(t, ms.Time, miningSolution.Time)
+	assert.Equal(t, ms.Nonce, miningSolution.Nonce)
+	assert.Equal(t, ms.Version, miningSolution.Version)
+}
+
+func TestBuildMerkleRootHashFromProofs(t *testing.T) {
+	var data map[string]interface{}
+
+	err := json.Unmarshal([]byte(getMiningCandidateJSON), &data)
+	require.NoError(t, err)
+
+	var miningSolution bsvjson.MiningSolution
+
+	err = json.Unmarshal([]byte(submitMiningSolutionJSON), &miningSolution)
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString(miningSolution.Coinbase)
+	require.NoError(t, err)
+
+	merkleRoot, err := buildMerkleRootHashFromProofs(data, coinbase)
+	require.NoError(t, err)
+
+	mr := (*chainhash.Hash)(merkleRoot)
+
+	assert.Equal(t, "69813d58079d5d2924cf62b9f183bc058c04a98e35e67060dcfb71ad5435cb8a", mr.String())
+}
+
 func TestCreateCoinbaseTransaction(t *testing.T) {
+	coinbaseTx, err := createCoinbaseTx()
+	require.NoError(t, err)
+
+	assert.True(t, coinbaseTx.IsCoinbase())
+
+	assert.Len(t, coinbaseTx.Inputs, 1)
+	assert.Len(t, coinbaseTx.Outputs, 1)
+}
+
+func createCoinbaseTx() (*bt.Tx, error) {
 	coinbaseTx := bt.NewTx()
 
 	height := uint32(100)
@@ -217,16 +287,63 @@ func TestCreateCoinbaseTransaction(t *testing.T) {
 	arbitraryData = append(arbitraryData, []byte("/Test miner/")...)
 
 	err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
 	coinbaseTx.Inputs[0].SequenceNumber = 0
 
 	err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 12200)
+	if err != nil {
+		return nil, err
+	}
+
+	return coinbaseTx, nil
+}
+
+func TestChainhashAssumptions(t *testing.T) {
+	s := "0000000000000000000000000000000000000000000000000000000000000001"
+
+	h1, err := chainhash.NewHashFromStr(s)
 	require.NoError(t, err)
 
-	assert.True(t, coinbaseTx.IsCoinbase())
+	b, err := utils.DecodeAndReverseHashString(s)
+	require.NoError(t, err)
 
-	assert.Len(t, coinbaseTx.Inputs, 1)
-	assert.Len(t, coinbaseTx.Outputs, 1)
+	h2 := chainhash.Hash(b)
+
+	h3, err := chainhash.NewHash(b[:])
+	require.NoError(t, err)
+
+	h4 := (*chainhash.Hash)(b[:])
+
+	t.Logf("Hash: %s", h1.String())
+	t.Logf("Hash: %s", h2.String())
+	t.Logf("Hash: %s", h3.String())
+	t.Logf("Hash: %s", h4.String())
+}
+
+func TestBlockWork(t *testing.T) {
+
+	p, err := chainhash.NewHashFromStr("5c56b3e0e4c1ea99430e989845a32adfe5e3ee479f610d71ecd7ca6286fa66a6")
+	require.NoError(t, err)
+
+	mr, err := chainhash.NewHashFromStr("9c538ddfede054c5428a848b78bee0c8d807d7b41a51e350d13074710d6ab80f")
+	require.NoError(t, err)
+
+	bh := &BlockHeader{
+		Version:        0x20000000,
+		HashPrevBlock:  p,
+		HashMerkleRoot: mr,
+		Timestamp:      1732111560,
+		Bits:           *bits,
+		Nonce:          0,
+	}
+
+	ok, hash, err := bh.HasMetTargetDifficulty()
+	require.NoError(t, err)
+
+	assert.True(t, ok)
+	assert.Equal(t, "4c74e0128fef1a01469380c05b215afaf4cfe51183461f4a7996a84295b6925a", hash.String())
 }

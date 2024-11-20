@@ -260,8 +260,11 @@ func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {
 
 	compare := bn.Cmp(target)
 	if compare <= 0 {
+		// fmt.Printf("BlockHeader SIMON DEBUG SUCCESS: %s\n", bh.StringDump())
 		return true, hash, nil
 	}
+
+	// fmt.Printf("BlockHeader SIMON DEBUG FAILED: %s\n", bh.StringDump())
 
 	return false, hash, errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }

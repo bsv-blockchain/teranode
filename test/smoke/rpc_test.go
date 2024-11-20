@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -801,27 +802,32 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 	// print the block header
 	t.Logf("Block Header: %s", blockHeader.HashMerkleRoot.String())
 
-	var validNonce uint32
-	// var hash chainhash.Hash
+	var nonce uint32
 
-	for nonce := uint32(0); nonce < math.MaxUint32; nonce++ {
+	for ; nonce < math.MaxUint32; nonce++ {
 		blockHeader.Nonce = nonce
-		headerValid, hash, _ := blockHeader.HasMetTargetDifficulty()
+
+		headerValid, hash, err := blockHeader.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
 
 		if headerValid {
-			validNonce = nonce
-			t.Logf("Found valid nonce: %d, hash: %s", validNonce, hash)
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
 			break
 		}
 	}
 	// solution = model.MiningSolution
 	solution := map[string]interface{}{
 		"id":       result.ID,
-		"nonce":    validNonce,
+		"nonce":    nonce,
 		"time":     blockHeader.Timestamp,
 		"version":  blockHeader.Version,
 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
 	}
+
+	fmt.Printf("SIMON TEST FOUND SOLUTION for id %s and nonce of %d\n", solution["id"], solution["nonce"])
 
 	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)

@@ -747,7 +747,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		Version:  c.MiningSolution.Version,
 	}
 
-	s.logger.Debugf("in handleSubmitMiningSolution: ms: %+v", ms)
+	s.logger.Debugf("in handleSubmitMiningSolution: ms: %s", ms.Stringify(true))
 
 	if err := s.blockAssemblyClient.SubmitMiningSolution(ctx, ms); err != nil {
 		return nil, err
