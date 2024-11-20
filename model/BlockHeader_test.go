@@ -2,12 +2,14 @@ package model
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -199,4 +201,32 @@ func TestGetMiningCandidateJson(t *testing.T) {
 	// t.Log(ok, hash)
 
 	assert.Equal(t, blockBytes[:80], header.Bytes())
+}
+
+func TestCreateCoinbaseTransaction(t *testing.T) {
+	coinbaseTx := bt.NewTx()
+
+	height := uint32(100)
+
+	blockHeightBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockHeightBytes, height) // Block height
+
+	arbitraryData := []byte{}
+	arbitraryData = append(arbitraryData, 0x03)
+	arbitraryData = append(arbitraryData, blockHeightBytes[:3]...)
+	arbitraryData = append(arbitraryData, []byte("/Test miner/")...)
+
+	err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	require.NoError(t, err)
+
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+	coinbaseTx.Inputs[0].SequenceNumber = 0
+
+	err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 12200)
+	require.NoError(t, err)
+
+	assert.True(t, coinbaseTx.IsCoinbase())
+
+	assert.Len(t, coinbaseTx.Inputs, 1)
+	assert.Len(t, coinbaseTx.Outputs, 1)
 }
