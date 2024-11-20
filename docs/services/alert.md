@@ -4,11 +4,19 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-3. [Data Model](#3-data-model)
-4. [Technology](#4-technology)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+- [2.1. Initialization](#21-initialization)
+- [2.2. UTXO Freezing](#22-utxo-freezing)
+- [2.3. UTXO Unfreezing](#23-utxo-unfreezing)
+- [2.4. UTXO Reassignment](#24-utxo-reassignment)
+- [2.5. Block Invalidation](#25-block-invalidation)
+3. [Technology](#3-technology)
+4. [Directory Structure and Main Files](#4-directory-structure-and-main-files)
+5. [How to run](#5-how-to-run)
+6. [Configuration options (settings flags)](#6-configuration-options-settings-flags)
+- [Alert Service Configuration](#alert-service-configuration)
+- [Network Configuration](#network-configuration)
+- [P2P Configuration](#p2p-configuration)
+7. [Other Resources](#7-other-resources)
 
 
 ## 1. Description
@@ -287,3 +295,9 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 ### P2P Configuration
 - **P2P Port (`ALERT_P2P_PORT`)**: The port used for P2P communications in the alert system. Default is 9908.
   Example: `ALERT_P2P_PORT = 9908`
+
+
+
+## 7. Other Resources
+
+[Alert Reference](../references/services/alert_reference.md)
