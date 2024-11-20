@@ -194,7 +194,11 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
-	AssetHTTPAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
+	AssetHTTPAddressURL, err, _ := gocore.Config().GetURL("asset_httpAddress")
+	if err != nil {
+		return errors.NewServiceError("error getting asset_httpAddress", err)
+	}
+
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
 	if AssetHTTPAddressURL.Scheme == "http" && securityLevel == 1 {

@@ -61,7 +61,16 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 }
 
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
+	if len(m) == 0 {
+		return errors.NewConfigurationError("no settings map provided")
+	}
+
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
+
+	b.Logger.Infof("testRunMode: %s", testRunMode)
+	b.Logger.Infof("ComposeFilePaths: %v", b.ComposeFilePaths)
+	b.Logger.Infof("m: %v", m)
+
 	if testRunMode == "ci" {
 		identifier := tc.StackIdentifier("e2e")
 
@@ -81,7 +90,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		b.Compose = compose
 
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
-		names := []string{"ubsv-1", "ubsv-2", "ubsv-3"}
+		names := []string{"ubsv1", "ubsv2", "ubsv3"}
 
 		for _, key := range order {
 			b.Nodes = append(b.Nodes, BitcoinNode{
@@ -112,12 +121,12 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		coinbaseMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(coinbaseGRPCPort))
 
 		if err != nil {
-			return errors.NewConfigurationError("error getting mapped port %w", err)
+			return errors.NewConfigurationError("error getting mapped port %v", coinbaseMappedPort, err)
 		}
 
 		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(coinbaseMappedPort.Port()))
 		if err != nil {
-			return errors.NewConfigurationError("error creating coinbase client %w", err)
+			return errors.NewConfigurationError("error creating coinbase client %v", coinbaseMappedPort, err)
 		}
 
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
@@ -130,12 +139,12 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		blockchainMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockchainGRPCPort))
 
 		if err != nil {
-			return errors.NewConfigurationError("error getting mapped port %w", err)
+			return errors.NewConfigurationError("error getting mapped port %v", blockchainMappedPort, err)
 		}
 
 		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
 		if err != nil {
-			return errors.NewConfigurationError("error creating blockchain client %w", err)
+			return errors.NewConfigurationError("error creating blockchain client %v", blockchainMappedPort, err)
 		}
 
 		b.Nodes[i].BlockchainClient = blockchainClient
@@ -149,12 +158,12 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		blockassemblyMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockassemblyGRPCPort))
 
 		if err != nil {
-			return errors.NewConfigurationError("error getting mapped port %w", err)
+			return errors.NewConfigurationError("error getting mapped port %v", blockassemblyMappedPort, err)
 		}
 
 		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
 		if err != nil {
-			return errors.NewServiceError("error creating blockassembly client %w", err)
+			return errors.NewServiceError("error creating blockassembly client %v", blockassemblyMappedPort, err)
 		}
 
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
@@ -168,12 +177,12 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		propagationMappedPort, _ := b.GetMappedPort(node.NodeName, nat.Port(propagationGRPCPort))
 
 		if err != nil {
-			return errors.NewConfigurationError("error getting mapped port %w", err)
+			return errors.NewConfigurationError("error getting mapped port %v", propagationMappedPort, err)
 		}
 
 		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, makeHostAddressFromPort(propagationMappedPort.Port()))
 		if err != nil {
-			return errors.NewConfigurationError("error creating distributor client %w", err)
+			return errors.NewConfigurationError("error creating distributor client %v", propagationMappedPort, err)
 		}
 
 		b.Nodes[i].DistributorClient = *distributorClient
@@ -201,7 +210,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SettingsContext))
 		if err != nil {
-			return errors.NewConfigurationError("error getting blockstore url %w", err)
+			return errors.NewConfigurationError("error getting blockstore url %v", blockStoreURL, err)
 		}
 
 		if !found {
@@ -210,7 +219,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		blockStore, err := blob.NewStore(logger, blockStoreURL)
 		if err != nil {
-			return errors.NewConfigurationError("error creating blockstore %w", err)
+			return errors.NewConfigurationError("error creating blockstore %v", blockStoreURL, err)
 		}
 
 		b.Nodes[i].Blockstore = blockStore
@@ -218,7 +227,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		subtreeStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.run", node.SettingsContext))
 		if err != nil {
-			return errors.NewConfigurationError("error getting subtreestore url %w", err)
+			return errors.NewConfigurationError("error getting subtreestore url %v", subtreeStoreURL, err)
 		}
 
 		if !found {
@@ -227,23 +236,23 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		subtreeStore, err := blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(2))
 		if err != nil {
-			return errors.NewConfigurationError("error creating subtreestore %w", err)
+			return errors.NewConfigurationError("error creating subtreestore %v", subtreeStoreURL, err)
 		}
 
 		b.Nodes[i].SubtreeStore = subtreeStore
 
-		logger.Infof("Settings_context: ", node.SettingsContext)
+		logger.Infof("Settings_context: %s", node.SettingsContext)
 
 		utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SettingsContext))
 		if err != nil {
-			return errors.NewConfigurationError("error creating utxostore %w", err)
+			return errors.NewConfigurationError("error creating utxostore %v", utxoStoreURL, err)
 		}
 
 		logger.Infof("utxoStoreUrl: %s", utxoStoreURL.String())
 		b.Nodes[i].UtxoStore, err = utxostore.New(b.Context, logger, utxoStoreURL)
 
 		if err != nil {
-			return errors.NewConfigurationError("error creating utxostore %w", err)
+			return errors.NewConfigurationError("error creating utxostore %v", utxoStoreURL, err)
 		}
 
 		// rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))

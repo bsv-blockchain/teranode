@@ -39,6 +39,10 @@ const (
 )
 
 func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap map[string]string, composeFiles []string) {
+	if len(settingsMap) == 0 {
+		suite.T().Fatal("must have at least one settings_context in the settings map")
+	}
+
 	var err error
 
 	suite.ComposeFiles = composeFiles

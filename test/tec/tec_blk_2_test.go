@@ -23,6 +23,7 @@ func (suite *TECBlk2TestSuite) InitSuite() {
 }
 
 func (suite *TECBlk2TestSuite) SetupTest() {
+	suite.InitSuite()
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,
 		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.utxo.override.yml"},

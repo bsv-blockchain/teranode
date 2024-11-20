@@ -17,12 +17,13 @@ type TECBlk4TestSuite struct {
 func (suite *TECBlk4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec4",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv1.tec4",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv1.tec4",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tec4",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tec4",
 	}
 }
 
 func (suite *TECBlk4TestSuite) SetupTest() {
+	suite.InitSuite()
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,
 		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml"},

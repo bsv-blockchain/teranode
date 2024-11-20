@@ -209,7 +209,9 @@ func (b *Blockchain) startHTTP() error {
 	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
-	} else {
+	}
+
+	go func() {
 		e := echo.New()
 		e.HideBanner = true
 		e.HidePort = true
@@ -224,12 +226,10 @@ func (b *Blockchain) startHTTP() error {
 		e.GET("/invalidate/:hash", b.invalidateHandler)
 		e.GET("/revalidate/:hash", b.revalidateHandler)
 
-		go func() {
-			if err := e.Start(httpAddress); err != nil {
-				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
-			}
-		}()
-	}
+		if err := e.Start(httpAddress); err != nil {
+			b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
+		}
+	}()
 
 	return nil
 }
