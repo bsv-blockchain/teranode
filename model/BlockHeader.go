@@ -108,7 +108,7 @@ func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 }
 
 // Helper function to create a BlockHeader from a json string that we get from RPC
-func NewBlockHeaderFromJSON(jsonString string) (*BlockHeader, error) {
+func NewBlockHeaderFromJSON(jsonString string, coinbaseTx ...*bt.Tx) (*BlockHeader, error) {
 	var data map[string]interface{}
 
 	if err := json.Unmarshal([]byte(jsonString), &data); err != nil {
@@ -144,8 +144,11 @@ func NewBlockHeaderFromJSON(jsonString string) (*BlockHeader, error) {
 
 		hashMerkleRoot = hash.CloneBytes()
 	} else {
+		if len(coinbaseTx) == 0 {
+			return nil, errors.NewProcessingError("error building merkle root hash from coinbase tx")
+		}
 		// try merkleProofs and build a proper merkle root hash from them
-		hashMerkleRoot, err = buildMerkleRootHashFromProofs(data)
+		hashMerkleRoot, err = buildMerkleRootHashFromProofs(data, coinbaseTx[0])
 		if err != nil {
 			return nil, errors.NewProcessingError("error building merkle root hash from merkleProofs", err)
 		}
@@ -186,18 +189,7 @@ func NewBlockHeaderFromJSON(jsonString string) (*BlockHeader, error) {
 	return bh, nil
 }
 
-func buildMerkleRootHashFromProofs(data map[string]interface{}) ([]byte, error) {
-	// Get the coinbase tx from the data
-	coinbaseTxStr, ok := data["coinbase"].(string)
-	if !ok {
-		return nil, errors.NewProcessingError("error parsing coinbase tx from json")
-	}
-
-	coinbaseTx, err := bt.NewTxFromString(coinbaseTxStr)
-	if err != nil {
-		return nil, errors.NewProcessingError("error building coinbase tx", err)
-	}
-
+func buildMerkleRootHashFromProofs(data map[string]interface{}, coinbaseTx *bt.Tx) ([]byte, error) {
 	proofs, ok := data["merkleProof"].([]interface{})
 	if !ok {
 		return nil, errors.NewProcessingError("error parsing merkle proofs from json")

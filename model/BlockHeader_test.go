@@ -3,9 +3,11 @@ package model
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,24 +151,39 @@ func Test_ToWireBlockHeader(t *testing.T) {
 }
 
 func TestGetBlockJson(t *testing.T) {
+	var blockData map[string]interface{}
+
+	err := json.Unmarshal([]byte(getBlockJSON), &blockData)
+	require.NoError(t, err)
+
 	header, err := NewBlockHeaderFromJSON(getBlockJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// t.Logf("%+x\n", header.Bytes())
-
 	ok, hash, err := header.HasMetTargetDifficulty()
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, "611fd97881064670555ac01db182c46134e770aa47d1a794b7df2767e42f3f89", hash.String())
-	// t.Log(ok, hash)
+	assert.Equal(t, blockData["hash"], hash.String())
 
 	assert.Equal(t, blockBytes[:80], header.Bytes())
 }
 
 func TestGetMiningCandidateJson(t *testing.T) {
-	header, err := NewBlockHeaderFromJSON(getMiningCandidateJSON)
+	var miningCandidateData map[string]interface{}
+
+	var blockData map[string]interface{}
+
+	err := json.Unmarshal([]byte(getMiningCandidateJSON), &miningCandidateData)
+	require.NoError(t, err)
+
+	err = json.Unmarshal([]byte(getBlockJSON), &blockData)
+	require.NoError(t, err)
+
+	coinbaseTx, err := bt.NewTxFromString(miningCandidateData["coinbase"].(string))
+	require.NoError(t, err)
+
+	header, err := NewBlockHeaderFromJSON(getMiningCandidateJSON, coinbaseTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +195,7 @@ func TestGetMiningCandidateJson(t *testing.T) {
 	ok, hash, err := header.HasMetTargetDifficulty()
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, "611fd97881064670555ac01db182c46134e770aa47d1a794b7df2767e42f3f89", hash.String())
+	assert.Equal(t, blockData["hash"], hash.String())
 	// t.Log(ok, hash)
 
 	assert.Equal(t, blockBytes[:80], header.Bytes())

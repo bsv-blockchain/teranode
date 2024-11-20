@@ -130,6 +130,7 @@ type MiningCandidate struct {
 	Result struct {
 		ID                  string   `json:"id"`
 		PreviousHash        string   `json:"prevhash"`
+		Coinbase            string   `json:"coinbase"`
 		CoinbaseValue       uint64   `json:"coinbaseValue"`
 		Version             uint32   `json:"version"`
 		NBits               string   `json:"nBits"`
