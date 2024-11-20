@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -106,11 +107,14 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	}()
 
 	batchID := s.batchID.Add(1)
-	s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends", batchID, len(batch))
 
-	defer func() {
-		s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends DONE", batchID, len(batch))
-	}()
+	if gocore.Config().GetBool("utxostore_verbose_debug") {
+		s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends", batchID, len(batch))
+
+		defer func() {
+			s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends DONE", batchID, len(batch))
+		}()
+	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
 

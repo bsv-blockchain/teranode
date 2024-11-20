@@ -224,13 +224,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
-		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txID),
 		tracing.WithTag("txid", txID),
 	)
 
 	defer func() {
 		deferFn(err)
 	}()
+
+	if gocore.Config().GetBool("validator_verbose_debug", false) {
+		v.logger.Debugf("[Validator:Validate] called for %s", txID)
+
+		defer func() {
+			v.logger.Debugf("[Validator:Validate] called for %s DONE", txID)
+		}()
+	}
 
 	var spentUtxos []*utxo.Spend
 
@@ -489,7 +496,9 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	span := tracing.Start(ctx, "sendToBlockAssembler")
 	defer span.Finish()
 
-	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
+	if gocore.Config().GetBool("validator_verbose_debug", false) {
+		v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
+	}
 
 	if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
 		e := errors.NewStorageError("error calling blockAssembler Store()", err)
