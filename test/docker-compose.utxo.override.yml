@@ -1,12 +1,12 @@
 services:
-  ubsv-1:
+  ubsv1:
     environment:
       utxostore: ""
 
-  ubsv-2:
+  ubsv2:
     environment:
       utxostore: ""
 
-  ubsv-3:
+  ubsv3:
     environment:
       utxostore: ""

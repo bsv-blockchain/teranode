@@ -17,8 +17,8 @@ type TECBlk2TestSuite struct {
 func (suite *TECBlk2TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec2",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv1.tec2",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv1.tec2",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tec2",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tec2",
 	}
 }
 

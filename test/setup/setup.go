@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -64,6 +65,10 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
+		if suite.Framework == nil {
+			panic(fmt.Sprintf("(suite.Framework is nil), Failed to set up BitcoinTestFramework: %v", err))
+		}
+
 		suite.T().Cleanup(suite.Framework.Cancel)
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
@@ -154,6 +159,11 @@ func (suite *BitcoinTestSuite) SetupTest() {
 }
 
 func (suite *BitcoinTestSuite) TearDownTest() {
+	if suite.Framework == nil {
+		suite.T().Logf("(suite.Framework is nil), Failed to tear down BitcoinTestFramework")
+		return
+	}
+
 	if err := helper.TearDownBitcoinTestFramework(suite.Framework); err != nil {
 		suite.T().Cleanup(suite.Framework.Cancel)
 	}

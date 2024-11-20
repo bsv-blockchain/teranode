@@ -282,7 +282,9 @@ func (b *BitcoinTestFramework) StopNodes() error {
 func (b *BitcoinTestFramework) StopNodesWithRmVolume() error {
 	defer func() {
 		if r := recover(); r != nil {
-			b.Logger.Errorf("Recovered from panic: %v", r)
+			if b != nil && b.Logger != nil {
+				b.Logger.Errorf("Recovered from panic: %v", r)
+			}
 		}
 	}()
 
