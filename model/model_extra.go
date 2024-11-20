@@ -3,10 +3,11 @@ package model
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/ordishs/go-utils"
 )
@@ -44,13 +45,12 @@ func (ms *MiningSolution) Stringify(long bool) string {
 	if !long {
 		sb.WriteString("Mining Solution for job ")
 		sb.WriteString(utils.ReverseAndHexEncodeSlice(ms.Id))
-
 	} else {
 		sb.WriteString("Mining Solution\n\t")
 		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", utils.ReverseAndHexEncodeSlice(ms.Id)))
 		sb.WriteString(fmt.Sprintf("Nonce:          %d\n\t", ms.Nonce))
-		sb.WriteString(fmt.Sprintf("Time:           %d\n\t", ms.Time))
-		sb.WriteString(fmt.Sprintf("Version:        %d\n\t", ms.Version))
+		sb.WriteString(fmt.Sprintf("Time:           %d\n\t", *ms.Time))
+		sb.WriteString(fmt.Sprintf("Version:        %d\n\t", *ms.Version))
 		sb.WriteString(fmt.Sprintf("CoinbaseTX:     %x\n\n", ms.Coinbase))
 	}
 
