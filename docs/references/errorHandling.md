@@ -193,6 +193,9 @@ Benefits of Wrapping Errors:
 
 Teranode follows a structured error handling strategy that combines the use of predefined error types, error wrapping, and consistent error creation patterns. This approach ensures clear, consistent, and traceable error handling throughout the application.
 
+![error_handling_flow.svg](img/plantuml/error_handling_flow.svg)
+
+
 The `errors/Error.go` file contains the core error type definition and functions for creating, wrapping, and unwrapping errors. The `errors/Error_types.go` file defines specific error types and provides functions for creating these errors.
 
 An error in Teranode is defined as a struct containing an error code, a message, an optional wrapped error, and optional extra data:

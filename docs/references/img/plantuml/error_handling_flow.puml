@@ -1,0 +1,25 @@
+@startuml
+!theme plain
+title Teranode Error Handling Flowchart
+
+start
+if (Error Occurred?) then (yes)
+  :Create Teranode Error;
+  :Add Context;
+  if (Crossing Service Boundary?) then (yes)
+    :Wrap as gRPC Error;
+    :Send gRPC Error;
+    :Receive gRPC Error;
+    :Unwrap gRPC Error;
+    :Reconstruct Teranode Error;
+    while (More Context Needed?) is (yes)
+      :Add Context;
+    endwhile (no)
+  else (no)
+  endif
+  :Handle Error;
+else (no)
+endif
+stop
+
+@enduml
