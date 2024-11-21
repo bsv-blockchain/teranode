@@ -34,16 +34,16 @@ wait_for_service() {
 }
 
 # Wait for ubsv services to be ready
-wait_for_service ubsv3 8090
-wait_for_service ubsv2 8090
-wait_for_service ubsv1 8090
+wait_for_service localhost 38090
+wait_for_service localhost 28090
+wait_for_service localhost 18090
 
 # Send gRPC requests to each ubsv container
 echo "Sending gRPC requests..."
 
 # Replace `your.package.Service/YourMethod` with the actual service and method names
-grpcurl -plaintext ubsv3:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv2:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv1:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext localhost:38087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext localhost:28087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
 
 echo "gRPC requests sent."

@@ -270,3 +270,13 @@ services:
       AGENT_BIND_PORT: "39145"
       METRIC_LABELS: "type='development',source='aerospike'"
     network_mode: "host"
+
+  grpc-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.grpc-client-host
+    depends_on:
+      - ubsv-1
+      - ubsv-2
+      - ubsv-3
+    network_mode: "host"
