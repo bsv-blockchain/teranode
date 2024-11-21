@@ -175,13 +175,13 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
-	//binary.LittleEndian.PutUint64(st.feeBytes, fee)
-	//st.feeHashBytes = append(node[:], st.feeBytes[:]...)
-	//if len(st.Nodes) == 0 {
+	// binary.LittleEndian.PutUint64(st.feeBytes, fee)
+	// st.feeHashBytes = append(node[:], st.feeBytes[:]...)
+	// if len(st.Nodes) == 0 {
 	//	st.FeeHash = chainhash.HashH(st.feeHashBytes)
-	//} else {
+	// } else {
 	//	st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
-	//}
+	// }
 
 	st.Nodes = append(st.Nodes, node)
 	st.rootHash = nil // reset rootHash
@@ -218,13 +218,13 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
-	//binary.LittleEndian.PutUint64(st.feeBytes, fee)
-	//st.feeHashBytes = append(node[:], st.feeBytes[:]...)
-	//if len(st.Nodes) == 0 {
+	// binary.LittleEndian.PutUint64(st.feeBytes, fee)
+	// st.feeHashBytes = append(node[:], st.feeBytes[:]...)
+	// if len(st.Nodes) == 0 {
 	//	st.FeeHash = chainhash.HashH(st.feeHashBytes)
-	//} else {
+	// } else {
 	//	st.FeeHash = chainhash.HashH(append(st.FeeHash[:], st.feeHashBytes...))
-	//}
+	// }
 
 	st.Nodes = append(st.Nodes, SubtreeNode{
 		Hash:        node,
@@ -234,6 +234,21 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	st.rootHash = nil // reset rootHash
 	st.Fees += fee
 	st.SizeInBytes += sizeInBytes
+
+	return nil
+}
+
+// RemoveNodeAtIndex removes a node at the given index and makes sure the subtree is still valid
+func (st *Subtree) RemoveNodeAtIndex(index int) error {
+	if index >= len(st.Nodes) {
+		return errors.NewSubtreeError("index out of range")
+	}
+
+	st.Fees -= st.Nodes[index].Fee
+	st.SizeInBytes -= st.Nodes[index].SizeInBytes
+
+	st.Nodes = append(st.Nodes[:index], st.Nodes[index+1:]...)
+	st.rootHash = nil // reset rootHash
 
 	return nil
 }
@@ -282,6 +297,16 @@ func (st *Subtree) GetMap() TxMap {
 	return m
 }
 
+func (st *Subtree) NodeIndex(hash chainhash.Hash) int {
+	for idx, node := range st.Nodes {
+		if node.Hash.Equal(hash) {
+			return idx
+		}
+	}
+
+	return -1
+}
+
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]SubtreeNode, 0, 1_000)
@@ -290,15 +315,6 @@ func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 			diff = append(diff, node)
 		}
 	}
-
-	//fmt.Printf("diff: %d\n", len(diff))
-	//for i := 0; i < len(diff); i++ {
-	//	hash, _ := chainhash.NewHash(diff[i][:])
-	//	fmt.Printf("%s\n", hash.String())
-	//	if i > 10 {
-	//		break
-	//	}
-	//}
 
 	return diff, nil
 }
@@ -489,9 +505,9 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	// calculate rootHash and compare with given rootHash
 	// we don't have to do this, because we already verified the root hash when we created the subtree
 	// this Deserialize function is only used for internally saved subtrees
-	//if !rootHash.IsEqual(st.RootHash()) {
+	// if !rootHash.IsEqual(st.RootHash()) {
 	//	return fmt.Errorf("root hash mismatch")
-	//}
+	// }
 
 	return nil
 }
@@ -594,9 +610,9 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	}
 
 	// we must be able to support incomplete subtrees
-	//if !IsPowerOfTwo(int(numLeaves)) {
+	// if !IsPowerOfTwo(int(numLeaves)) {
 	//	return fmt.Errorf("numberOfLeaves must be a power of two")
-	//}
+	// }
 
 	st.treeSize = int(numLeaves)
 	// the height of a subtree is always a power of two

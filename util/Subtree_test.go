@@ -379,6 +379,60 @@ func Test_Duplicate(t *testing.T) {
 	})
 }
 
+func TestSubtree_NodeIndex(t *testing.T) {
+	t.Run("existing node", func(t *testing.T) {
+		st, err := NewTree(4)
+		require.NoError(t, err)
+
+		_ = st.AddNode(hash1, 111, 1)
+		_ = st.AddNode(hash2, 112, 2)
+
+		index := st.NodeIndex(hash1)
+		assert.Equal(t, 0, index)
+
+		index = st.NodeIndex(hash2)
+		assert.Equal(t, 1, index)
+	})
+
+	t.Run("non-existing node", func(t *testing.T) {
+		st, err := NewTree(4)
+		require.NoError(t, err)
+
+		_ = st.AddNode(hash1, 111, 1)
+		_ = st.AddNode(hash2, 112, 2)
+
+		index := st.NodeIndex(hash3)
+		assert.Equal(t, -1, index)
+	})
+}
+
+func TestSubtree_RemoveNodeAtIndex(t *testing.T) {
+	t.Run("remove existing node", func(t *testing.T) {
+		st, err := NewTree(4)
+		require.NoError(t, err)
+
+		_ = st.AddNode(hash1, 111, 1)
+		_ = st.AddNode(hash2, 112, 2)
+
+		assert.Equal(t, 2, st.Length())
+
+		err = st.RemoveNodeAtIndex(0)
+		require.NoError(t, err)
+		assert.Equal(t, 1, st.Length())
+
+		// hash2 should now be at node 0
+		assert.Equal(t, hash2, st.Nodes[0].Hash)
+	})
+
+	t.Run("remove non-existing node", func(t *testing.T) {
+		st, err := NewTree(4)
+		require.NoError(t, err)
+
+		err = st.RemoveNodeAtIndex(0)
+		assert.Error(t, err, "index out of range")
+	})
+}
+
 func getSubtreeBytes(t *testing.T) (*Subtree, []byte) {
 	st, err := NewTree(2)
 	require.NoError(t, err)
@@ -563,7 +617,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 	})
 }
 
-//func TestSubtree_AddNode(t *testing.T) {
+// func TestSubtree_AddNode(t *testing.T) {
 //	t.Run("fee hash", func(t *testing.T) {
 //		st := NewTree(1)
 //		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", st.FeeHash.String())
@@ -586,7 +640,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 //
 //		assert.Equal(t, "e6e65a874a12c4753485b3b42d1c378b36b02196ef2b3461da1d452d7d1434fb", st.FeeHash.String())
 //	})
-//}
+// }
 
 func Test_Deserialize(t *testing.T) {
 	SkipLongTests(t)
