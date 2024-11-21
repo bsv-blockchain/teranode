@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"context"
+	"golang.org/x/sync/errgroup"
 	"sync/atomic"
 	"time"
 
@@ -283,6 +284,16 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
+func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+
+	err = t.setMinedInCacheParallel(ctx, hashes, blockID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
 	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, blockID)
 	if err != nil {
@@ -317,6 +328,41 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 
 	txMeta.Tx = nil
 	_ = t.SetCache(hash, txMeta)
+
+	return nil
+}
+
+func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	var txMeta *meta.Data
+	g := errgroup.Group{}
+	g.SetLimit(100)
+
+	for _, hash := range hashes {
+		hash := hash
+		g.Go(func() error {
+
+			txMeta, err = t.Get(ctx, hash)
+			if err != nil {
+				txMeta, err = t.utxoStore.Get(ctx, hash)
+			}
+			if err != nil {
+				return err
+			}
+
+			if txMeta.BlockIDs == nil {
+				txMeta.BlockIDs = []uint32{
+					blockID,
+				}
+			} else {
+				txMeta.BlockIDs = append(txMeta.BlockIDs, blockID)
+			}
+
+			txMeta.Tx = nil
+
+			// t.SetCache(hash, txMeta) always returns nil
+			return t.SetCache(hash, txMeta)
+		})
+	}
 
 	return nil
 }

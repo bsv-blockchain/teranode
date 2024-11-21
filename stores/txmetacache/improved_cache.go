@@ -165,6 +165,53 @@ func (c *ImprovedCache) Set(k, v []byte) error {
 	return c.buckets[idx].Set(k, v, h)
 }
 
+// SetMultiKeysSingleValue stores multiple (k, v) entries in the cache, for the same v.
+// New v is appended to the existing v, doesn't overwrite.
+//
+// Logic: decides which bucket, for lots of items. All keys are distributed to buckets. All buckets are populated via goroutines.
+// Keys: multiple byte slices containing keys.
+// Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
+// Value bytes are appended to the end of the previous value bytes.
+func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, keySize int) error {
+	if len(keys)%keySize != 0 {
+		return errors.NewProcessingError("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+	}
+
+	batchedKeys := make([][][]byte, bucketsCount)
+
+	var key []byte
+	var bucketIdx uint64
+	var h uint64
+
+	// divide keys blob into buckets
+	for i := 0; i < len(keys); i += keySize {
+		key = keys[i]
+		h = xxhash.Sum64(key)
+		bucketIdx = h % bucketsCount
+		batchedKeys[bucketIdx] = append(batchedKeys[bucketIdx], key)
+	}
+
+	g := errgroup.Group{}
+
+	for bucketIdx := range batchedKeys {
+		// if there is no key for this bucket
+		if len(batchedKeys[bucketIdx]) == 0 {
+			continue
+		}
+		bucketIdx := bucketIdx
+		g.Go(func() error {
+			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // SetMultiKeysSingleValueAppended stores multiple (k, v) entries in the cache, for the same v. New v is appended to the existing v, doesn't overwrite.
 //
 // Logic: decides which bucket, for lots of items. All keys are distributed to buckets. All buckets are populated via goroutines.
