@@ -21,6 +21,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -50,6 +51,8 @@ type RPCTestSuite struct {
 }
 
 func (suite *RPCTestSuite) SetupTest() {
+	removeDataDirectory()
+
 	if err := startKafka("kafka.log"); err != nil {
 		log.Fatalf("Failed to start Kafka: %v", err)
 	}
@@ -685,7 +688,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	require.NoError(t, err, "Failed to generate block")
 }
 
-func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
+func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromBA() {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
 
@@ -694,6 +697,9 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 	url := "http://localhost:8090"
 
 	blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+	require.NoError(t, err)
+
+	blockassemblyClient, err := ba.NewClient(ctx, logger)
 	require.NoError(t, err)
 
 	err = blockchainClient.Run(ctx, "test")
@@ -789,8 +795,15 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 
 	result := miningCandidate.Result
 	mjson, err := json.Marshal(result)
+	t.Logf("Mining candidate json from RPC: %s", mjson)
 
 	require.NoError(t, err, "Failed to create chainhash from string")
+
+	miningCandidateFromBAClient, err := blockassemblyClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate from block assembly client")
+
+	mcba := miningCandidateFromBAClient.Stringify(true)
+	t.Logf("Mining candidate from block assembly client: %s", mcba)
 
 	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
@@ -800,14 +813,16 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 	require.NoError(t, err, "Failed to create block header from json")
 
 	// print the block header
-	t.Logf("Block Header: %s", blockHeader.HashMerkleRoot.String())
+	t.Logf("Block Header Merkle Root: %s", blockHeader.HashMerkleRoot.String())
+
+	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidateFromBAClient, coinbase)
 
 	var nonce uint32
 
 	for ; nonce < math.MaxUint32; nonce++ {
-		blockHeader.Nonce = nonce
+		blockHeaderFromMC.Nonce = nonce
 
-		headerValid, hash, err := blockHeader.HasMetTargetDifficulty()
+		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
 		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
 			t.Error(err)
 			t.FailNow()
@@ -822,12 +837,10 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 	solution := map[string]interface{}{
 		"id":       result.ID,
 		"nonce":    nonce,
-		"time":     blockHeader.Timestamp,
-		"version":  blockHeader.Version,
+		"time":     blockHeaderFromMC.Timestamp,
+		"version":  blockHeaderFromMC.Version,
 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
 	}
-
-	fmt.Printf("SIMON TEST FOUND SOLUTION for id %s and nonce of %d\n", solution["id"], solution["nonce"])
 
 	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
@@ -894,6 +907,516 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolution() {
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 
+func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC() {
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+
+	ctx := context.Background()
+	t := suite.T()
+	url := "http://localhost:8090"
+
+	blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+	require.NoError(t, err)
+
+	blockassemblyClient, err := ba.NewClient(ctx, logger)
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Failed to create Blockchain client")
+
+	txDistributor, err := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+	require.NoError(t, err, "Failed to create distributor client")
+
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	if err != nil {
+		t.Errorf("Failed to generate initial blocks: %v", err)
+	}
+
+	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	var tx *bt.Tx
+
+	for attempts := 0; attempts < 5; attempts++ {
+		tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+		if err == nil {
+			break
+		}
+
+		t.Logf("Attempt %d: Failed to request funds: %v. Retrying in 1 second...", attempts+1, err)
+		time.Sleep(time.Second)
+
+		utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+		t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+	}
+
+	require.NoError(t, err, "Failed to request funds after 5 attempts")
+
+	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	require.NoError(t, err, "Failed to broadcast faucet tx")
+
+	t.Logf("Faucet Transaction sent: %s\n", tx.TxIDChainHash())
+
+	output := tx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	_ = newTx.FromUTXOs(utxo)
+	_ = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+	_ = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+
+	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+	height, _ := helper.GetBlockHeight(url)
+	fmt.Printf("Block height: %d\n", height)
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+	require.NoError(t, err, "Failed to send new tx with rpc")
+	t.Logf("Transaction sent with RPC: %s\n", resp)
+
+	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 10000)
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+
+	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{})
+	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
+	require.NoError(t, err, "Failed to get mining candidate")
+
+	var miningCandidate MiningCandidate
+
+	require.NoError(t, err, "Failed to marshal mining candidate")
+
+	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
+	require.NoError(t, err, "Failed to unmarshal mining candidate")
+
+	result := miningCandidate.Result
+	mjson, err := json.Marshal(result)
+	t.Logf("Mining candidate json from RPC: %s", mjson)
+
+	require.NoError(t, err, "Failed to create chainhash from string")
+
+	miningCandidateFromBAClient, err := blockassemblyClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate from block assembly client")
+
+	mcba := miningCandidateFromBAClient.Stringify(true)
+	t.Logf("Mining candidate from block assembly client: %s", mcba)
+
+	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	require.NoError(t, err, "Failed to create coinbase tx")
+
+	// create a block header from the mining candidate
+	blockHeader, err := model.NewBlockHeaderFromJSON(string(mjson), coinbase)
+	require.NoError(t, err, "Failed to create block header from json")
+
+	// print the block header
+	t.Logf("Block Header Merkle Root: %s", blockHeader.HashMerkleRoot.String())
+
+	_, err = model.NewBlockHeaderFromMiningCandidate(miningCandidateFromBAClient, coinbase)
+	require.NoError(t, err, "Failed to create block header from mining candidate")
+
+
+	var nonce uint32
+	var validHash *chainhash.Hash
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeader.Nonce = nonce
+
+		headerValid, hash, err := blockHeader.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			validHash = hash
+			break
+		}
+	}
+	// solution = model.MiningSolution
+	solution := map[string]interface{}{
+		"id":       result.ID,
+		"nonce":    nonce,
+		"time":     blockHeader.Timestamp,
+		"version":  blockHeader.Version,
+		"coinbase": hex.EncodeToString(coinbase.Bytes()),
+	}
+
+	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+	t.Logf("Submit solution response from rpc %v", submitSolnResp)
+	require.NoError(t, err, "Failed to submit mining solution")
+
+	var getBlockHash GetBlockHashResponse
+
+	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+	require.NoError(t, err, "Error getting best blockhash")
+
+	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
+	assert.Equal(t, getBlockHash.Result, validHash.String(), "Best block hash mismatch")
+
+	require.NoError(t, errJSON, "Error unmarshalling getblock response")
+
+	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
+	require.NoError(t, err, "Error getting blockstore url")
+
+	if !found {
+		t.Errorf("Error finding blockstore")
+	}
+
+	t.Logf("blockStoreURL: %s", blockStoreURL.String())
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	require.NoError(t, err, "Error creating blockstore")
+
+	bl := false
+
+	targetHeight := height + 1
+
+	for i := 0; i < 2; i++ {
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		if err != nil {
+			t.Errorf("Failed to wait for block height: %v", err)
+		}
+
+		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		if err != nil {
+			t.Errorf("Failed to get block headers: %v", err)
+		}
+
+		t.Logf("Testing on Best block header at height: %v %d", header[0].Hash(), meta[0].Height)
+
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, blockStoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+		if err != nil {
+			t.Errorf("error checking if tx exists in block: %v", err)
+		}
+
+		if bl {
+			break
+		}
+
+		targetHeight++
+
+		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+		require.NoError(t, err, "Failed to generate blocks")
+
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
+	}
+
+	assert.Equal(t, true, bl, "Test Tx not found in block")
+}
+
+// func (suite *RPCTestSuite) TestCompareSubmitMiningSolutionFromBAWithRPCWithoutTXs() {
+// 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+
+// 	ctx := context.Background()
+// 	t := suite.T()
+
+// 	blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+// 	require.NoError(t, err)
+
+// 	blockassemblyClient, err := ba.NewClient(ctx, logger)
+// 	require.NoError(t, err)
+
+// 	err = blockchainClient.Run(ctx, "test")
+// 	require.NoError(t, err, "Failed to create Blockchain client")
+
+// 	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{})
+// 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
+// 	require.NoError(t, err, "Failed to get mining candidate")
+
+// 	var miningCandidate MiningCandidate
+
+// 	require.NoError(t, err, "Failed to marshal mining candidate")
+
+// 	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
+// 	require.NoError(t, err, "Failed to unmarshal mining candidate")
+
+// 	result := miningCandidate.Result
+// 	mjson, err := json.Marshal(result)
+// 	t.Logf("Mining candidate json from RPC: %s", mjson)
+
+// 	require.NoError(t, err, "Failed to create chainhash from string")
+
+// 	miningCandidateFromBAClient, err := blockassemblyClient.GetMiningCandidate(ctx)
+// 	require.NoError(t, err, "Failed to get mining candidate from block assembly client")
+
+// 	mcba := miningCandidateFromBAClient.Stringify(true)
+// 	t.Logf("Mining candidate from block assembly client: %s", mcba)
+
+// 	merkleProofStrings := make([]string, len(miningCandidateFromBAClient.MerkleProof))
+
+// 	for i, hash := range miningCandidateFromBAClient.MerkleProof {
+// 		merkleProofStrings[i] = hex.EncodeToString(hash)
+// 	}
+
+// 	t.Logf("Merkle proofs from BA: %v", miningCandidateFromBAClient.GetMerkleProof())
+// 	require.Equal(t, merkleProofStrings, miningCandidate.Result.MerkleProof, "Merkle proofs mismatch")
+
+// 	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+// 	require.NoError(t, err, "Failed to create coinbase tx")
+
+// 	// create a block header from the mining candidate
+// 	blockHeader, err := model.NewBlockHeaderFromJSON(string(mjson), coinbase)
+// 	require.NoError(t, err, "Failed to create block header from json")
+
+// 	// print the block header
+// 	t.Logf("Block Header Merkle Root: %s", blockHeader.HashMerkleRoot.String())
+
+// 	blockHeaderFromBA, err := model.NewBlockHeaderFromMiningCandidate(*miningCandidateFromBAClient, coinbase)
+// 	require.NoError(t, err, "Failed to create block header from mining candidate")
+
+// 	require.Equal(t, blockHeader.HashMerkleRoot.String(), blockHeaderFromBA.HashMerkleRoot.String(), "Block header merkle root mismatch")
+// 	require.Equal(t, blockHeader.Version, blockHeaderFromBA.Version, "Block header version mismatch")
+// 	require.Equal(t, blockHeader.Bits, blockHeaderFromBA.Bits, "Block header bits mismatch")
+// 	require.Equal(t, blockHeader.HashPrevBlock.String(), blockHeaderFromBA.HashPrevBlock.String(), "Block header prev block hash mismatch")
+
+// 	var nonce uint32
+
+// 	var validHash *chainhash.Hash
+
+// 	for ; nonce < math.MaxUint32; nonce++ {
+// 		blockHeader.Nonce = nonce
+
+// 		headerValid, hash, err := blockHeader.HasMetTargetDifficulty()
+// 		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+// 			t.Error(err)
+// 			t.FailNow()
+// 		}
+
+// 		if headerValid {
+// 			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+// 			validHash = hash
+// 			break
+// 		}
+// 	}
+// 	// solution = model.MiningSolution
+// 	solution := map[string]interface{}{
+// 		"id":       result.ID,
+// 		"nonce":    nonce,
+// 		"time":     blockHeader.Timestamp,
+// 		"version":  blockHeader.Version,
+// 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
+// 	}
+
+// 	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+// 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
+// 	require.NoError(t, err, "Failed to submit mining solution")
+
+// 	var blockHash GetBlockHashResponse
+
+// 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+// 	require.NoError(t, err, "Error getting best blockhash")
+
+// 	errJSON := json.Unmarshal([]byte(resp), &blockHash)
+
+// 	require.NoError(t, errJSON, "Error unmarshalling getblock response")
+
+// 	require.Equal(t, blockHash.Result, validHash.String(), "Block hash mismatch")
+// }
+
+// func (suite *RPCTestSuite) TestCompareSubmitMiningSolutionFromBAWithRPCWithTXs() {
+// 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+
+// 	ctx := context.Background()
+// 	t := suite.T()
+
+// 	blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+// 	require.NoError(t, err)
+
+// 	blockassemblyClient, err := ba.NewClient(ctx, logger)
+// 	require.NoError(t, err)
+
+// 	err = blockchainClient.Run(ctx, "test")
+// 	require.NoError(t, err, "Failed to set Blockchain client to running state")
+
+// 	txDistributor, err := distributor.NewDistributor(ctx, logger,
+// 		distributor.WithBackoffDuration(200*time.Millisecond),
+// 		distributor.WithRetryAttempts(3),
+// 		distributor.WithFailureTolerance(0),
+// 	)
+// 	require.NoError(t, err, "Failed to create distributor client")
+
+// 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+// 	if err != nil {
+// 		t.Errorf("Failed to generate initial blocks: %v", err)
+// 	}
+
+// 	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
+// 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+// 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
+// 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+// 	privateKey, _ := bec.NewPrivateKey(bec.S256())
+// 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+// 	var tx *bt.Tx
+
+// 	for attempts := 0; attempts < 5; attempts++ {
+// 		tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+// 		if err == nil {
+// 			break
+// 		}
+
+// 		t.Logf("Attempt %d: Failed to request funds: %v. Retrying in 1 second...", attempts+1, err)
+// 		time.Sleep(time.Second)
+// 	}
+
+// 	require.NoError(t, err, "Failed to request funds after 5 attempts")
+
+// 	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
+// 	_, err = txDistributor.SendTransaction(ctx, tx)
+// 	require.NoError(t, err, "Failed to broadcast faucet tx")
+
+// 	t.Logf("Faucet Transaction sent: %s\n", tx.TxIDChainHash())
+
+// 	output := tx.Outputs[0]
+// 	utxo := &bt.UTXO{
+// 		TxIDHash:      tx.TxIDChainHash(),
+// 		Vout:          uint32(0),
+// 		LockingScript: output.LockingScript,
+// 		Satoshis:      output.Satoshis,
+// 	}
+
+// 	newTx := bt.NewTx()
+// 	_ = newTx.FromUTXOs(utxo)
+// 	_ = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+// 	_ = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+
+// 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+// 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+// 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+// 	require.NoError(t, err, "Failed to send new tx with rpc")
+// 	t.Logf("Transaction sent with RPC: %s\n", resp)
+
+// 	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 10000)
+// 	if delay != 0 {
+// 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+// 		time.Sleep(time.Duration(delay) * time.Millisecond)
+// 	}
+
+// 	// get mining candidate from RPC
+// 	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{})
+// 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
+// 	require.NoError(t, err, "Failed to get mining candidate")
+
+// 	var miningCandidate MiningCandidate
+
+// 	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
+// 	require.NoError(t, err, "Failed to unmarshal mining candidate")
+
+// 	result := miningCandidate.Result
+// 	mjson, err := json.Marshal(result)
+// 	require.NoError(t, err, "Failed to marshal mining candidate")
+// 	t.Logf("Mining candidate json from RPC: %s", mjson)
+
+// 	// get mining candidate from block assembly client
+// 	miningCandidateFromBAClient, err := blockassemblyClient.GetMiningCandidate(ctx)
+// 	require.NoError(t, err, "Failed to get mining candidate from block assembly client")
+
+// 	strMiningCandidateFromBAClient := miningCandidateFromBAClient.Stringify(true)
+// 	t.Logf("Mining candidate from block assembly client: %s", strMiningCandidateFromBAClient)
+
+// 	merkleProofStrings := make([]string, len(miningCandidateFromBAClient.MerkleProof))
+
+// 	for i, hash := range miningCandidateFromBAClient.MerkleProof {
+// 		merkleProofStrings[i] = hex.EncodeToString(hash)
+// 	}
+
+// 	require.Equal(t, merkleProofStrings, miningCandidate.Result.MerkleProof, "Merkle proofs mismatch")
+
+// 	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+// 	require.NoError(t, err, "Failed to create coinbase tx")
+
+// 	// create a block header from the mining candidate
+// 	blockHeader, err := model.NewBlockHeaderFromJSON(string(mjson), coinbase)
+// 	require.NoError(t, err, "Failed to create block header from json")
+
+// 	// print the block header merkle root
+// 	t.Logf("Block Header Merkle Root: %s", blockHeader.HashMerkleRoot.String())
+
+// 	blockHeaderFromBA, err := model.NewBlockHeaderFromMiningCandidate(*miningCandidateFromBAClient, coinbase)
+// 	require.NoError(t, err, "Failed to create block header from mining candidate")
+
+// 	require.Equal(t, blockHeader.HashMerkleRoot.String(), blockHeaderFromBA.HashMerkleRoot.String(), "Block header merkle root mismatch")
+// 	require.Equal(t, blockHeader.Version, blockHeaderFromBA.Version, "Block header version mismatch")
+// 	require.Equal(t, blockHeader.Bits, blockHeaderFromBA.Bits, "Block header bits mismatch")
+// 	require.Equal(t, blockHeader.HashPrevBlock.String(), blockHeaderFromBA.HashPrevBlock.String(), "Block header prev block hash mismatch")
+
+// 	var nonce uint32
+
+// 	var validHash *chainhash.Hash
+
+// 	for ; nonce < math.MaxUint32; nonce++ {
+// 		blockHeader.Nonce = nonce
+
+// 		headerValid, hash, err := blockHeader.HasMetTargetDifficulty()
+// 		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+// 			t.Error(err)
+// 			t.FailNow()
+// 		}
+
+// 		if headerValid {
+// 			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+// 			validHash = hash
+// 			break
+// 		}
+// 	}
+// 	// solution = model.MiningSolution
+// 	solution := map[string]interface{}{
+// 		"id":       result.ID,
+// 		"nonce":    nonce,
+// 		"time":     blockHeader.Timestamp,
+// 		"version":  blockHeader.Version,
+// 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
+// 	}
+
+
+// 	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+// 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
+// 	require.NoError(t, err, "Failed to submit mining solution")
+
+// 	var blockHash GetBlockHashResponse
+
+// 	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+// 	require.NoError(t, err, "Error getting best blockhash")
+
+// 	errJSON := json.Unmarshal([]byte(resp), &blockHash)
+
+// 	require.NoError(t, errJSON, "Error unmarshalling getblock response")
+
+// 	require.Equal(t, blockHash.Result, validHash.String(), "Block hash mismatch")
+// }
+
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
 }
@@ -925,6 +1448,13 @@ func stopUbsv() {
 
 	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
 }
+
+func removeDataDirectory() {
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
+}
+
+
 
 func newHashFromStr(hexStr string) *chainhash.Hash {
 	hash, err := chainhash.NewHashFromStr(hexStr)

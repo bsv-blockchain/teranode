@@ -518,28 +518,28 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 		return nil, err
 	}
 
-	// Create a map to hold the fields as JSON
-	pb := chainhash.Hash{}
-
-	err = pb.SetBytes(mc.PreviousHash)
+	ph, err := chainhash.NewHash(mc.PreviousHash)
 	if err != nil {
 		return nil, err
 	}
 
-	reversedBits := bt.ReverseBytes(mc.NBits)
+	nBits, err := model.NewNBitFromSlice(mc.NBits)
+	if err != nil {
+		return nil, err
+	}
 
 	merkleProofStrings := make([]string, len(mc.MerkleProof))
 
 	for i, hash := range mc.MerkleProof {
-		merkleProofStrings[i] = hex.EncodeToString(hash)
+		merkleProofStrings[i] = utils.ReverseAndHexEncodeSlice(hash)
 	}
 
 	jsonMap := map[string]interface{}{
 		"id":                  utils.ReverseAndHexEncodeSlice(mc.Id),
-		"prevhash":            pb.String(),
+		"prevhash":            ph.String(),
 		"coinbaseValue":       mc.CoinbaseValue,
 		"version":             mc.Version,
-		"nBits":               hex.EncodeToString(reversedBits),
+		"nBits":               nBits.String(),
 		"time":                mc.Time,
 		"height":              mc.Height,
 		"num_tx":              mc.NumTxs,

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/ordishs/go-utils"
 )
 
@@ -53,6 +52,14 @@ func (ms *MiningSolution) Stringify(long bool) string {
 		sb.WriteString(fmt.Sprintf("Version:        %d\n\t", *ms.Version))
 		sb.WriteString(fmt.Sprintf("CoinbaseTX:     %x\n\n", ms.Coinbase))
 	}
+
+	return sb.String()
+}
+
+func (n *Notification) Stringify() string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("Type: %s, Hash: %s", n.Type, n.Hash.String()))
 
 	return sb.String()
 }

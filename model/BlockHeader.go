@@ -189,6 +189,31 @@ func NewBlockHeaderFromJSON(jsonString string, coinbaseTx ...*bt.Tx) (*BlockHead
 	return bh, nil
 }
 
+func NewBlockHeaderFromMiningCandidate(mc *MiningCandidate, coinbaseTx ...*bt.Tx) (*BlockHeader, error) {
+	version := mc.Version
+
+	hashPrevBlock := mc.PreviousHash
+
+	hashMerkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx[0].TxIDChainHash()[:], mc.MerkleProof)
+
+	timestamp := mc.Time
+
+	bits, err := NewNBitFromSlice(mc.NBits)
+	if err != nil {
+		return nil, errors.NewProcessingError("error parsing bits from mining candidate", err)
+	}
+
+	bh := &BlockHeader{
+		Version:        version,
+		HashPrevBlock:  (*chainhash.Hash)(hashPrevBlock),
+		HashMerkleRoot: (*chainhash.Hash)(hashMerkleRoot),
+		Timestamp:      timestamp,
+		Bits:           *bits,
+	}
+
+	return bh, nil
+}
+
 func buildMerkleRootHashFromProofs(data map[string]interface{}, coinbaseTx *bt.Tx) ([]byte, error) {
 	proofs, ok := data["merkleProof"].([]interface{})
 	if !ok {

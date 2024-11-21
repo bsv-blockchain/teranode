@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"gotest.tools/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHandleGetMiningInfo(t *testing.T) {

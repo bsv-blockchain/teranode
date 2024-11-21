@@ -134,7 +134,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 					continue
 				}
 
-				c.logger.Debugf("[Blockchain] Received notification for %s: %s", source, notification.String())
+				c.logger.Debugf("[Blockchain] Received notification for %s: %s", source, notification.Stringify())
 
 				switch notification.Type {
 				case model.NotificationType_FSMState:
