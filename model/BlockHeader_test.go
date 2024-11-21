@@ -218,7 +218,7 @@ func TestSubmitMiningSolution(t *testing.T) {
 	err := json.Unmarshal([]byte(submitMiningSolutionJSON), &miningSolution)
 	require.NoError(t, err)
 
-	assert.Equal(t, "ea4cb4f9-b1dc-49f7-a1c8-d850b2737846", miningSolution.ID)
+	assert.Equal(t, "b64176f4aada053a8d22b7d2755bfcf47793dc097dd87f2a69e6c6fb98cbf2a1", miningSolution.ID)
 	assert.Equal(t, uint32(1731944075), *miningSolution.Time)
 	assert.Equal(t, uint32(1), miningSolution.Nonce)
 	assert.Equal(t, uint32(536870912), *miningSolution.Version)
@@ -235,7 +235,7 @@ func TestSubmitMiningSolution(t *testing.T) {
 	}
 
 	assert.Equal(t, ms.Id, []byte(miningSolution.ID))
-	assert.Equal(t, ms.Coinbase, coinbase)
+	assert.Equal(t, ms.Coinbase, coinbase.Bytes())
 	assert.Equal(t, ms.Time, miningSolution.Time)
 	assert.Equal(t, ms.Nonce, miningSolution.Nonce)
 	assert.Equal(t, ms.Version, miningSolution.Version)
@@ -325,25 +325,27 @@ func TestChainhashAssumptions(t *testing.T) {
 }
 
 func TestBlockWork(t *testing.T) {
-
-	p, err := chainhash.NewHashFromStr("5c56b3e0e4c1ea99430e989845a32adfe5e3ee479f610d71ecd7ca6286fa66a6")
+	p, err := chainhash.NewHashFromStr("1a270fe33eab79fef413754296ae329b4fd3979feb8b8657597c54371ae524a3")
 	require.NoError(t, err)
 
-	mr, err := chainhash.NewHashFromStr("9c538ddfede054c5428a848b78bee0c8d807d7b41a51e350d13074710d6ab80f")
+	mr, err := chainhash.NewHashFromStr("69813d58079d5d2924cf62b9f183bc058c04a98e35e67060dcfb71ad5435cb8a")
+	require.NoError(t, err)
+
+	b, err := NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
 	bh := &BlockHeader{
 		Version:        0x20000000,
 		HashPrevBlock:  p,
 		HashMerkleRoot: mr,
-		Timestamp:      1732111560,
-		Bits:           *bits,
-		Nonce:          0,
+		Timestamp:      1731944075,
+		Bits:           *b,
+		Nonce:          1,
 	}
 
 	ok, hash, err := bh.HasMetTargetDifficulty()
 	require.NoError(t, err)
 
 	assert.True(t, ok)
-	assert.Equal(t, "4c74e0128fef1a01469380c05b215afaf4cfe51183461f4a7996a84295b6925a", hash.String())
+	assert.Equal(t, "611fd97881064670555ac01db182c46134e770aa47d1a794b7df2767e42f3f89", hash.String())
 }
