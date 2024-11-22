@@ -1053,12 +1053,12 @@ func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient,
 }
 
 func GetBestBlock(ctx context.Context, node tf.BitcoinNode) (*block_model.Block, error) {
-	_, bbhmeta, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
+	bbheader, _, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
 	}
 
-	block, errblock := node.BlockchainClient.GetBlockByHeight(ctx, bbhmeta.Height)
+	block, errblock := node.BlockchainClient.GetBlock(ctx, bbheader.Hash())
 	if errblock != nil {
 		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
 	}
@@ -1067,12 +1067,12 @@ func GetBestBlock(ctx context.Context, node tf.BitcoinNode) (*block_model.Block,
 }
 
 func GetBestBlockV2(ctx context.Context, node tenv.TeranodeTestClient) (*block_model.Block, error) {
-	_, bbhmeta, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
+	bbheader, _, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
 	}
 
-	block, errblock := node.BlockchainClient.GetBlockByHeight(ctx, bbhmeta.Height)
+	block, errblock := node.BlockchainClient.GetBlock(ctx, bbheader.Hash())
 	if errblock != nil {
 		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
 	}

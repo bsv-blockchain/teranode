@@ -180,11 +180,11 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	coinbaseValueBlock := mc0.CoinbaseValue
 	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
-	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
+	bbheader, _, errbb := bc.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		t.Errorf("Error getting best block")
 	}
-	block, errblock := bc.GetBlockByHeight(ctx, bbhmeta.Height)
+	block, errblock := bc.GetBlock(ctx, bbheader.Hash())
 	if errblock != nil {
 		t.Errorf("Error getting block by height")
 	}
