@@ -180,7 +180,9 @@ func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, key
 	batchedKeys := make([][][]byte, bucketsCount)
 
 	var key []byte
+
 	var bucketIdx uint64
+
 	var h uint64
 
 	// divide keys blob into buckets
@@ -198,9 +200,11 @@ func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, key
 		if len(batchedKeys[bucketIdx]) == 0 {
 			continue
 		}
+
 		bucketIdx := bucketIdx
+
 		g.Go(func() error {
-			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value) //, hashes[bucketIdx])
+			c.buckets[bucketIdx].SetMultiKeysSingleValue(batchedKeys[bucketIdx], value)
 			return nil
 		})
 	}

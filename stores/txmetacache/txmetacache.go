@@ -2,19 +2,18 @@ package txmetacache
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 type metrics struct {
@@ -285,7 +284,6 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 }
 
 func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
-
 	err = t.setMinedInCacheParallel(ctx, hashes, blockID)
 	if err != nil {
 		return err
@@ -334,17 +332,19 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 
 func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *meta.Data
+
 	g := errgroup.Group{}
 	g.SetLimit(100)
 
 	for _, hash := range hashes {
 		hash := hash
-		g.Go(func() error {
 
+		g.Go(func() error {
 			txMeta, err = t.Get(ctx, hash)
 			if err != nil {
 				txMeta, err = t.utxoStore.Get(ctx, hash)
 			}
+
 			if err != nil {
 				return err
 			}
