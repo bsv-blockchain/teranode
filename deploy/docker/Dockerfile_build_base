@@ -4,7 +4,7 @@
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
-FROM golang:1.21.0-bullseye
+FROM golang:1.21.13-bookworm
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -21,9 +21,35 @@ RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesourc
 
 # Install packages
 RUN apt-get update && \
-    apt-get install -y ca-certificates gnupg nodejs build-essential gcc-aarch64-linux-gnu && \
+    apt-get upgrade -y && \
+    apt-get install -y ca-certificates gnupg nodejs build-essential gawk bison manpages-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+
+RUN wget https://gcc.gnu.org/pub/gcc/releases/gcc-13.2.0/gcc-13.2.0.tar.gz
+RUN tar -xvzf gcc-13.2.0.tar.gz &&\
+    cd gcc-13.2.0 &&\
+    mkdir build &&\
+    ./contrib/download_prerequisites &&\
+    cd build/ &&\
+    ../configure --disable-multilib --enable-languages=c,c++ --prefix=/opt/gcc-13.2.0 &&\
+    make -j$(nproc) &&\
+    make install &&\
+    update-alternatives --install /usr/bin/gcc gcc /opt/gcc-13.2.0/bin/gcc 60 --slave /usr/bin/g++ g++ /opt/gcc-13.2.0/bin/g++ &&\
+    update-alternatives --config gcc &&\
+    gcc --version &&\
+    g++ --version &&\
+    cd / && rm -rf gcc-13.2.0 gcc-13.2.0.tar.gz
+
+RUN wget http://ftp.gnu.org/gnu/libc/glibc-2.37.tar.gz
+RUN tar -xvzf glibc-2.37.tar.gz &&\
+    cd glibc-2.37 &&\
+    mkdir build &&\
+    cd build/ &&\
+    ../configure --disable-multilib --enable-languages=c,c++ --prefix=/opt/glibc-2.37 &&\
+    make -j$(nproc) &&\
+    make install
 
 # Add Debian ARM64 architecture
 RUN dpkg --add-architecture arm64
@@ -57,13 +83,15 @@ ENV CGO_CFLAGS="-I${BDK_INSTALL_ROOT}/include/core -I${BDK_INSTALL_ROOT}/include
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
 WORKDIR /app/ui/dashboard
 
-COPY ../../package.json package-lock.json ./
-RUN npm install && npx node-prune
+#COPY ../../package.json package-lock.json ./
+#RUN npm install && npx node-prune
 
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
-WORKDIR /app
-COPY ../../go.mod go.sum ./
-RUN go mod download
+#WORKDIR /app
+#COPY ../../go.mod go.sum ./
+
+# Go mod download disabled
+#RUN go mod download
 
 # Install Delve debugger
 RUN go install github.com/go-delve/delve/cmd/dlv@latest

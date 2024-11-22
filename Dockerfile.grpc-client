@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the version of grpcurl you want to install
-ENV GRPCURL_VERSION=1.8.8
+ENV GRPCURL_VERSION=1.9.1
 
 # Download and install grpcurl based on architecture
 RUN ARCH=$(dpkg --print-architecture) && \
