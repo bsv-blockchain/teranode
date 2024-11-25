@@ -1,0 +1,182 @@
+package state
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"syscall"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+)
+
+const maxInt = int(^uint(0) >> 1)
+
+type State struct {
+	logger   ulogger.Logger
+	filePath string
+	fileLock sync.Mutex
+}
+
+func New(logger ulogger.Logger, blocksFilePath string) *State {
+	return &State{
+		logger:   logger,
+		filePath: blocksFilePath,
+	}
+}
+
+func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
+	s.fileLock.Lock()
+	defer s.fileLock.Unlock()
+
+	// Open file for reading
+	file, err := os.Open(s.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil // Return 0 if file doesn't exist yet
+		}
+
+		return 0, errors.NewProcessingError("failed to open blocks file", err)
+	}
+	defer file.Close()
+
+	deferFn, err := s.lockFile(file, syscall.LOCK_SH)
+	if err != nil {
+		return 0, errors.NewProcessingError("could not lock file", err)
+	}
+	defer deferFn()
+
+	const maxLineLength = 80 // 8 (height) + 1 (comma) + 64 (hash) + 1 (newline) = 74 bytes
+	buf := make([]byte, maxLineLength)
+
+	// Seek from end of file
+	offset, err := file.Seek(-maxLineLength, io.SeekEnd)
+	if err != nil {
+		if errors.Is(err, syscall.EINVAL) { // File is smaller than maxLineLength
+			offset = 0
+
+			if _, err := file.Seek(0, io.SeekStart); err != nil {
+				return 0, errors.NewProcessingError("failed to seek to start", err)
+			}
+		} else {
+			return 0, errors.NewProcessingError("failed to seek from end", err)
+		}
+	}
+
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return 0, errors.NewProcessingError("failed to read file", err)
+	}
+
+	if n == 0 {
+		return 0, nil
+	}
+
+	buf = buf[:n] // Trim buffer to actual read size
+
+	var lastIndex int
+	// If there's only one newline and we're not at the start, it must be at the end
+	if offset == 0 && bytes.Count(buf, []byte{'\n'}) == 1 {
+		lastIndex = 0
+	} else {
+		// Find the second last newline by finding the last newline before the final one
+		lastNewline := bytes.LastIndex(buf, []byte{'\n'})
+		if lastNewline == -1 {
+			return 0, errors.NewProcessingError("no newline found in last chunk", nil)
+		}
+
+		// Find the second last newline
+		lastIndex = bytes.LastIndex(buf[:lastNewline], []byte{'\n'})
+		if lastIndex == -1 {
+			return 0, errors.NewProcessingError("no second newline found in last chunk", nil)
+		}
+	}
+
+	// Extract the second last line
+	var lastLine []byte
+	if lastIndex == 0 {
+		lastLine = buf
+	} else {
+		lastLine = buf[lastIndex+1:]
+	}
+
+	// Parse height from the line
+	commaIndex := bytes.IndexByte(lastLine, ',')
+	if commaIndex == -1 {
+		return 0, errors.NewProcessingError("invalid line format: no comma found", nil)
+	}
+
+	height, err := strconv.ParseUint(string(lastLine[:commaIndex]), 10, 32)
+	if err != nil {
+		return 0, errors.NewProcessingError("failed to parse block height", err)
+	}
+
+	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
+	return uint32(height), nil // nolint:gosec
+}
+
+// addBlock safely appends a block's height and hash to the blocks file
+func (s *State) AddBlock(height uint32, hash string) error {
+	s.fileLock.Lock()
+	defer s.fileLock.Unlock()
+
+	// Ensure directory exists
+	dir := filepath.Dir(s.filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.NewProcessingError("failed to create directory", err)
+	}
+
+	// Open file with O_APPEND and O_CREATE flags
+	file, err := os.OpenFile(s.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return errors.NewProcessingError("failed to open blocks file", err)
+	}
+	defer file.Close()
+
+	deferFn, err := s.lockFile(file, syscall.LOCK_EX)
+	if err != nil {
+		return errors.NewProcessingError("could not lock file", err)
+	}
+	defer deferFn()
+
+	// Write the block info with a newline
+	line := fmt.Sprintf("%d,%s\n", height, hash)
+
+	// Write in a single operation for atomicity
+	if _, err := file.WriteString(line); err != nil {
+		return errors.NewProcessingError("failed to write to blocks file", err)
+	}
+
+	// Force sync to disk
+	if err := file.Sync(); err != nil {
+		return errors.NewProcessingError("failed to sync blocks file", err)
+	}
+
+	return nil
+}
+
+func (s *State) lockFile(file *os.File, lockType int) (func(), error) {
+	// Get shared lock on the file
+	fd := file.Fd()
+	// Check if fd can fit in an int without overflow
+	if fd > uintptr(maxInt) {
+		return nil, errors.NewProcessingError("file descriptor too large", nil)
+	}
+
+	fdi := int(fd) // nolint:gosec
+
+	if err := syscall.Flock(fdi, lockType); err != nil {
+		return nil, errors.NewProcessingError("failed to lock file", err)
+	}
+
+	return func() {
+		if err := syscall.Flock(fdi, syscall.LOCK_UN); err != nil {
+			// Log error but can't return it from deferred function
+			s.logger.Errorf("failed to unlock file: %w", err)
+		}
+	}, nil
+}

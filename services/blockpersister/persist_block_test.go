@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -17,11 +16,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
-	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -176,6 +172,7 @@ func TestBlock(t *testing.T) {
 
 	// Read the transactions from the block
 	reader := bytes.NewReader(blockBytes[81:])
+
 	for i := 0; i < 4; i++ {
 		txs[i] = &bt.Tx{}
 		_, err = txs[i].ReadFrom(reader)
@@ -212,8 +209,7 @@ func TestBlock(t *testing.T) {
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	blocksFinalKafkaConsumerClient := &kafka.KafkaConsumerGroup{}
-	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient, blocksFinalKafkaConsumerClient)
+	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient)
 
 	var block model.Block
 
@@ -244,48 +240,4 @@ type mockExister struct{}
 
 func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.FileOption) (bool, error) {
 	return false, nil
-}
-
-func TestLockFile(t *testing.T) {
-	util.SkipVeryLongTests(t) // TODO TEMP fix this test
-
-	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
-
-	defer func() {
-		// remove quorum path
-		if quorumPath != "" {
-			_ = os.RemoveAll(quorumPath)
-		}
-	}()
-
-	q, err := quorum.New(ulogger.TestLogger{}, &mockExister{}, quorumPath, quorum.WithExtension("block"))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	hash := chainhash.HashH([]byte("test"))
-
-	gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, &hash)
-	require.NoError(t, err)
-	assert.True(t, gotLock)
-
-	defer releaseLockFunc()
-
-	gotLock, _, releaseLockFunc, err = q.TryLockIfNotExists(ctx, &hash)
-	require.NoError(t, err)
-	assert.False(t, gotLock)
-
-	defer releaseLockFunc()
-
-	cancel()
-
-	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel()
-
-	time.Sleep(10 * time.Millisecond) // Wait for the lock to be released
-
-	gotLock, _, releaseLockFunc, err = q.TryLockIfNotExists(ctx, &hash)
-	require.NoError(t, err)
-	assert.True(t, gotLock)
-
-	defer releaseLockFunc()
 }

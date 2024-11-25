@@ -6,25 +6,26 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister/state"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/ordishs/gocore"
 )
 
 // Server type carries the logger within it
 type Server struct {
-	ctx                            context.Context
-	logger                         ulogger.Logger
-	blockStore                     blob.Store
-	subtreeStore                   blob.Store
-	utxoStore                      utxo.Store
-	stats                          *gocore.Stat
-	blockchainClient               blockchain.ClientI
-	blocksFinalKafkaConsumerClient kafka.KafkaConsumerGroupI
+	ctx              context.Context
+	logger           ulogger.Logger
+	blockStore       blob.Store
+	subtreeStore     blob.Store
+	utxoStore        utxo.Store
+	stats            *gocore.Stat
+	blockchainClient blockchain.ClientI
+	state            *state.State
 }
 
 func New(
@@ -34,40 +35,22 @@ func New(
 	subtreeStore blob.Store,
 	utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI,
-	blocksFinalKafkaConsumerClient kafka.KafkaConsumerGroupI,
 ) *Server {
-	u := &Server{
-		ctx:                            ctx,
-		logger:                         logger,
-		blockStore:                     blockStore,
-		subtreeStore:                   subtreeStore,
-		utxoStore:                      utxoStore,
-		stats:                          gocore.NewStat("blockpersister"),
-		blockchainClient:               blockchainClient,
-		blocksFinalKafkaConsumerClient: blocksFinalKafkaConsumerClient,
-	}
+	// Get blocks file path from config, or use default
+	filePath, _ := gocore.Config().Get("blockPersister_stateFile", "./data/blockpersister_state.txt")
 
-	// clean old files from working dir
-	// dir, ok := gocore.Config().Get("blockPersister_workingDir")
-	// if ok {
-	// 	logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
-	// 	files, err := os.ReadDir(dir)
-	// 	if err != nil {
-	// 		logger.Fatalf("error reading working dir: %v", err)
-	// 	}
-	// 	for _, file := range files {
-	// 		fileInfo, err := file.Info()
-	// 		if err != nil {
-	// 			logger.Errorf("error reading file info: %v", err)
-	// 		}
-	// 		if time.Since(fileInfo.ModTime()) > 30*time.Minute {
-	// 			logger.Infof("removing old file: %s", file.Name())
-	// 			if err = os.Remove(path.Join(dir, file.Name())); err != nil {
-	// 				logger.Errorf("error removing old file: %v", err)
-	// 			}
-	// 		}
-	// 	}
-	// }
+	state := state.New(logger, filePath)
+
+	u := &Server{
+		ctx:              ctx,
+		logger:           logger,
+		blockStore:       blockStore,
+		subtreeStore:     subtreeStore,
+		utxoStore:        utxoStore,
+		stats:            gocore.NewStat("blockpersister"),
+		blockchainClient: blockchainClient,
+		state:            state,
+	}
 
 	return u
 }
@@ -80,11 +63,6 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
-	var brokersURL []string
-	if u.blocksFinalKafkaConsumerClient != nil { // tests may not set this
-		brokersURL = u.blocksFinalKafkaConsumerClient.BrokersURL()
-	}
-
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -95,7 +73,6 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -105,6 +82,30 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
 
 	return nil
+}
+
+// getNextBlockToProcess returns the next block to process
+func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
+	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to get last persisted block height", err)
+	}
+
+	_, blockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to get best block header", err)
+	}
+
+	if blockMeta.Height > lastPersistedHeight+100 {
+		block, err := u.blockchainClient.GetBlockByHeight(ctx, lastPersistedHeight+1)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to get block headers by height", err)
+		}
+
+		return block, nil
+	}
+
+	return nil, nil
 }
 
 // Start function
@@ -150,44 +151,58 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
 	}
 
-	u.blocksFinalKafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndStop(0, 1, time.Second, nil))
+	// Start the processing loop in a goroutine
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				u.logger.Infof("Shutting down block processing loop")
+				return
+			default:
+				block, err := u.getNextBlockToProcess(ctx)
+				if err != nil {
+					u.logger.Errorf("Error getting next block to process: %v", err)
+					time.Sleep(time.Minute) // Sleep after error
 
-	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
-	// 	hashStr := req.PathValue("hash")
+					continue
+				}
 
-	// 	if hashStr == "" {
-	// 		http.Error(w, "missing hash", http.StatusBadRequest)
-	// 		return
-	// 	}
+				if block == nil {
+					u.logger.Infof("No new blocks to process, waiting...")
+					time.Sleep(time.Minute) // Sleep when no blocks available
 
-	// 	hash, err := chainhash.NewHashFromStr(hashStr)
-	// 	if err != nil {
-	// 		http.Error(w, "invalid hash", http.StatusBadRequest)
-	// 		return
-	// 	}
+					continue
+				}
 
-	// 	client, err := blockchain.NewClient(req.Context(), u.logger)
-	// 	if err != nil {
-	// 		http.Error(w, "failed to create blockchain client", http.StatusInternalServerError)
-	// 		return
-	// 	}
+				// Get block bytes
+				blockBytes, err := block.Bytes()
+				if err != nil {
+					u.logger.Errorf("Failed to get block bytes: %v", err)
+					time.Sleep(time.Minute)
 
-	// 	block, err := client.GetBlock(req.Context(), hash)
-	// 	if err != nil {
-	// 		http.Error(w, "failed to get block", http.StatusInternalServerError)
-	// 		return
-	// 	}
+					continue
+				}
 
-	// 	blockBytes, err := block.Bytes()
-	// 	if err != nil {
-	// 		http.Error(w, "failed to get block bytes", http.StatusInternalServerError)
-	// 		return
-	// 	}
+				// Process the block
+				if err := u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
+					u.logger.Errorf("Failed to persist block %s: %v", block.Hash(), err)
+					time.Sleep(time.Minute)
 
-	// 	u.persistBlock(req.Context(), hash, blockBytes)
+					continue
+				}
 
-	// 	w.WriteHeader(http.StatusOK)
-	// })
+				// Add this after successful persistence
+				if err := u.state.AddBlock(block.Height, block.Hash().String()); err != nil {
+					u.logger.Errorf("Failed to record block %s: %v", block.Hash(), err)
+					time.Sleep(time.Minute)
+
+					continue
+				}
+
+				u.logger.Infof("Successfully processed block %s", block.Hash())
+			}
+		}
+	}()
 
 	<-ctx.Done()
 
@@ -195,10 +210,5 @@ func (u *Server) Start(ctx context.Context) error {
 }
 
 func (u *Server) Stop(_ context.Context) error {
-	// close the kafka consumer gracefully
-	if err := u.blocksFinalKafkaConsumerClient.Close(); err != nil {
-		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
-	}
-
 	return nil
 }

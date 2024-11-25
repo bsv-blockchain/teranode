@@ -505,18 +505,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		blocksFinalKafkaConsumerClient, err := getKafkaBlocksFinalConsumerGroup(logger, "blockpersister")
-		if err != nil {
-			return err
-		}
-
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger.New("bp"),
 			blockStore,
 			subtreeStore,
 			utxoStore,
 			blockchainClient,
-			blocksFinalKafkaConsumerClient,
 		)); err != nil {
 			return err
 

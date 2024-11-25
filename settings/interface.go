@@ -59,11 +59,10 @@ type BlockSettings struct {
 	MinedCacheMaxMB                       int
 	PersisterStore                        string
 	PersisterHTTPListenAddress            string
-	PersisterWorkingDir                   string
+	StateFile                             string
 	CheckDuplicateTransactionsConcurrency int
 	GetAndValidateSubtreesConcurrency     int
 	KafkaWorkers                          int
-	QuorumPath                            string
 	ValidOrderAndBlessedConcurrency       int
 	StoreCacheEnabled                     bool
 	MaxSize                               int
