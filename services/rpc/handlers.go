@@ -729,6 +729,8 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 
 	c := cmd.(*bsvjson.SubmitMiningSolutionCmd)
 
+	s.logger.Debugf("in handleSubmitMiningSolution: cmd: %s", c.MiningSolution.String())
+
 	id, err := utils.DecodeAndReverseHexString(c.MiningSolution.ID)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.MiningSolution.ID)
@@ -749,7 +751,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 
 	s.logger.Debugf("in handleSubmitMiningSolution: ms: %s", ms.Stringify(true))
 
-	if err := s.blockAssemblyClient.SubmitMiningSolution(ctx, ms); err != nil {
+	if err = s.blockAssemblyClient.SubmitMiningSolution(ctx, ms); err != nil {
 		return nil, err
 	}
 

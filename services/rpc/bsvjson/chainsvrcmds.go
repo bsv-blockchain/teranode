@@ -813,6 +813,20 @@ type SubmitMiningSolutionCmd struct { // This is expect 1 param, but the param s
 	MiningSolution MiningSolution
 }
 
+func (ms *MiningSolution) String() string {
+	time := "nil"
+	if ms.Time != nil {
+		time = fmt.Sprint(*ms.Time)
+	}
+
+	version := "nil"
+	if ms.Version != nil {
+		version = fmt.Sprint(*ms.Version)
+	}
+
+	return fmt.Sprintf("id: %s, coinbase: %s, time: %s, nonce: %d, version: %s", ms.ID, ms.Coinbase, time, ms.Nonce, version)
+}
+
 func init() {
 	// No special flags for commands in this file.
 	flags := UsageFlag(0)

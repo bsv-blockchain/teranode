@@ -813,7 +813,7 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 	// Read and close the JSON-RPC request body from the caller.
 	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	if err != nil {
 		errCode := http.StatusBadRequest
@@ -822,6 +822,8 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 		return
 	}
+
+	s.logger.Debugf("jsonRPCRead body: %s", body)
 
 	// Unfortunately, the http server doesn't provide the ability to
 	// change the read deadline for the new connection and having one breaks
