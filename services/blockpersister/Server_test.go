@@ -242,3 +242,12 @@ func TestTtlCache(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
 }
+
+func TestSetInitialState(t *testing.T) {
+	hash, _ := chainhash.NewHashFromStr(txIds[0])
+	bp := New(context.Background(), nil, nil, nil, nil, nil, WithSetInitialState(1, hash))
+
+	height, err := bp.state.GetLastPersistedBlockHeight()
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(1), height)
+}

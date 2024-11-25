@@ -19,6 +19,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -178,7 +179,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 
 	reader := bufio.NewReader(f)
 
-	magic, _, _, err := utxopersister.GetHeaderFromReader(reader)
+	magic, hash, height, err := utxopersister.GetHeaderFromReader(reader)
 	if err != nil {
 		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
@@ -186,6 +187,9 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 	if magic != "U-H-1.0" {
 		return errors.NewProcessingError("Invalid magic number: %s", magic)
 	}
+
+	// Write the last block height and hash to the blockpersister_state.txt file
+	_ = blockpersister.New(ctx, nil, nil, nil, nil, nil, blockpersister.WithSetInitialState(height, hash))
 
 	var (
 		headersProcessed uint64

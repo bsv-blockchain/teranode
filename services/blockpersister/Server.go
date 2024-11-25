@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -28,6 +29,16 @@ type Server struct {
 	state            *state.State
 }
 
+// WithSetInitialState is an optional configuration function that sets the initial state
+// of the block persister server.
+func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
+	return func(s *Server) {
+		if err := s.state.AddBlock(height, hash.String()); err != nil {
+			s.logger.Errorf("Failed to set initial state: %v", err)
+		}
+	}
+}
+
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -35,6 +46,7 @@ func New(
 	subtreeStore blob.Store,
 	utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI,
+	opts ...func(*Server),
 ) *Server {
 	// Get blocks file path from config, or use default
 	filePath, _ := gocore.Config().Get("blockPersister_stateFile", "./data/blockpersister_state.txt")
@@ -50,6 +62,11 @@ func New(
 		stats:            gocore.NewStat("blockpersister"),
 		blockchainClient: blockchainClient,
 		state:            state,
+	}
+
+	// Apply optional configuration functions
+	for _, opt := range opts {
+		opt(u)
 	}
 
 	return u
