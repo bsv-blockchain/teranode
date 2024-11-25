@@ -317,40 +317,6 @@ func UnwrapGRPC(err error) Interface {
 		return nil
 	}
 
-	// if castedErr, ok := err.(*Error); ok {
-	// 	st, ok := status.FromError(castedErr.wrappedErr)
-	// 	if !ok {
-	// 		return castedErr // Not a gRPC status error
-	// 	}
-
-	// 	var prevErr, currErr *Error
-	// 	// var toBeWrappedErr *Error
-
-	// 	for i := len(st.Details()) - 1; i >= 0; i-- {
-	// 		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
-	// 		detail := st.Details()[i]
-	// 		detailAny, ok := detail.(*anypb.Any)
-
-	// 		if !ok {
-	// 			fmt.Println("This should not happen, detail is not of type anypb.Any")
-	// 			continue // If the detail isn't of the expected type, skip it
-	// 		}
-
-	// 		var customDetails TError
-	// 		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
-	// 			currErr = New(customDetails.Code, customDetails.Message)
-
-	// 			// if we moved up higher in the hierarchy
-	// 			if prevErr != nil {
-	// 				currErr.wrappedErr = prevErr
-	// 			}
-
-	// 			prevErr = currErr
-	// 		}
-	// 	}
-
-	// 	return currErr
-	// }
 	// If the error is not an "*Error", but "error", unwrap details
 	st, ok := status.FromError(err)
 	if !ok {
