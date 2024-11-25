@@ -8,11 +8,10 @@ env:
 jobs:
   build-base:
     name: Build base container image
-    runs-on: ubsv-runner
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
       # Setup Docker Buildx
       - name: Set up Docker Buildx
@@ -40,15 +39,26 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      # Set metadata for tags and labels
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}
+          tags: |
+            base-build-${{ steps.vars.outputs.sha_short }}
+            base-build-latest
+
       # Build Docker image
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: ./deploy/docker/Dockerfile_build_base
           push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:base-build-${{ steps.vars.outputs.sha_short }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64

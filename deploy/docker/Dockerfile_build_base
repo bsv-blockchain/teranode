@@ -4,59 +4,19 @@
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
-FROM golang:1.21.13-bookworm
+FROM ubuntu:noble
 
 ARG TARGETOS
 ARG TARGETARCH
-
 ARG GITHUB_SHA
 
-# 18 is the latest LTS version of NodeJS
-ENV NODE_MAJOR=18
-
-# Add nodesource to apt sources
-RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list &&\
-    mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-
 # Install packages
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y ca-certificates gnupg nodejs build-essential gawk bison manpages-dev && \
+    apt-get install -y ca-certificates build-essential gawk bison manpages-dev file curl gnupg wget golang && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-
-RUN wget https://gcc.gnu.org/pub/gcc/releases/gcc-13.2.0/gcc-13.2.0.tar.gz
-RUN tar -xvzf gcc-13.2.0.tar.gz &&\
-    cd gcc-13.2.0 &&\
-    mkdir build &&\
-    ./contrib/download_prerequisites &&\
-    cd build/ &&\
-    ../configure --disable-multilib --enable-languages=c,c++ --prefix=/opt/gcc-13.2.0 &&\
-    make -j$(nproc) &&\
-    make install &&\
-    update-alternatives --install /usr/bin/gcc gcc /opt/gcc-13.2.0/bin/gcc 60 --slave /usr/bin/g++ g++ /opt/gcc-13.2.0/bin/g++ &&\
-    update-alternatives --config gcc &&\
-    gcc --version &&\
-    g++ --version &&\
-    cd / && rm -rf gcc-13.2.0 gcc-13.2.0.tar.gz
-
-RUN wget http://ftp.gnu.org/gnu/libc/glibc-2.37.tar.gz
-RUN tar -xvzf glibc-2.37.tar.gz &&\
-    cd glibc-2.37 &&\
-    mkdir build &&\
-    cd build/ &&\
-    ../configure --disable-multilib --enable-languages=c,c++ --prefix=/opt/glibc-2.37 &&\
-    make -j$(nproc) &&\
-    make install
-
-# Add Debian ARM64 architecture
-RUN dpkg --add-architecture arm64
-
-# Add cross-compilation packages
-RUN apt-get update && \
-    apt-get install -y libc6-dev-arm64-cross
 
 # Install BDK package conditionning on architecture arm or amd
 WORKDIR /download
@@ -77,24 +37,15 @@ RUN ARCH=$(uname -m) && \
     fi
 
 ENV BDK_INSTALL_ROOT=/usr/local/bdk-v1.2.1
-ENV CGO_LDFLAGS="-L${BDK_INSTALL_ROOT}/lib -L${BDK_INSTALL_ROOT}/bin ${CGO_LDFLAGS}"
-ENV CGO_CFLAGS="-I${BDK_INSTALL_ROOT}/include/core -I${BDK_INSTALL_ROOT}/include ${CGO_CFLAGS}"
+ENV CGO_LDFLAGS="-L${BDK_INSTALL_ROOT}/lib -L${BDK_INSTALL_ROOT}/bin"
+ENV CGO_CFLAGS="-I${BDK_INSTALL_ROOT}/include/core -I${BDK_INSTALL_ROOT}/include"
 
-# Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
-WORKDIR /app/ui/dashboard
+# 18 is the latest LTS version of NodeJS
+ENV NODE_MAJOR=18
 
-#COPY ../../package.json package-lock.json ./
-#RUN npm install && npx node-prune
-
-# Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
-#WORKDIR /app
-#COPY ../../go.mod go.sum ./
-
-# Go mod download disabled
-#RUN go mod download
-
-# Install Delve debugger
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
-
-# This causes issues with cross-compilation requiring the extra gcc package for alternative architectures
-ENV CGO_ENABLED=1
+# Add nodesource to apt sources and install nodejs
+RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list &&\
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+RUN apt-get update && \
+    apt-get install -y nodejs

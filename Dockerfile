@@ -1,6 +1,6 @@
 # These values should be overwritten by buildx --build-args and replaced with cluster base/run ID from repo
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v2
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-latest
+ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-latest
 ARG PLATFORM_ARCH=linux/amd64
 FROM ${BASE_IMG}
 ARG GITHUB_SHA
@@ -28,15 +28,16 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 RUN make build -j 32
 
 # This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
+ENV GOPATH=/go
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # RUN_IMG should be overritten by --build-args
-FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64
+FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 
 # Don't do anything different for ARM64 (for now)
-FROM --platform=linux/arm64 ${RUN_IMG} as linux-arm64
+FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 
