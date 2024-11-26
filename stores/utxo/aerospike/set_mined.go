@@ -102,28 +102,3 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 
 	return nil
 }
-
-// SetMined is used in tests
-func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
-	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-
-	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
-	if err != nil {
-		return errors.NewProcessingError("aerospike NewKey error", err)
-	}
-
-	_, err = s.client.Operate(policy, key, aerospike.ListAppendOp("blockIDs", blockID))
-	if err != nil {
-		return errors.NewStorageError("aerospike Operate error", err)
-	}
-
-	prometheusTxMetaAerospikeMapSetMined.Inc()
-
-	return nil
-}
-
-// SetMinedLUA is used in tests
-func (s *Store) SetMinedLUA(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
-	return s.SetMinedMulti(ctx, []*chainhash.Hash{hash}, blockID)
-}

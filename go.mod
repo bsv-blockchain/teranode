@@ -59,7 +59,7 @@ require (
 	github.com/prometheus/client_golang v1.20.2
 	github.com/quic-go/quic-go v0.45.2
 	github.com/rs/zerolog v1.32.0
-	github.com/segmentio/encoding v0.4.0
+	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.9.0
@@ -139,7 +139,6 @@ require (
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
-	gotest.tools v2.2.0+incompatible
 )
 
 require (

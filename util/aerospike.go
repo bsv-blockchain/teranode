@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+var statsMutex sync.Mutex
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
 
@@ -306,7 +307,9 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		}
 	}
 
+	statsMutex.Lock()
 	initStats(logger, client)
+	statsMutex.Unlock()
 
 	return client, nil
 }
@@ -375,6 +378,7 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						}
 					}
 				default:
+					statsMutex.Lock()
 					if _, ok := aerospikePrometheusMetrics[key]; !ok {
 						aerospikePrometheusMetrics[key] = promauto.NewCounter(
 							prometheus.CounterOpts{
@@ -385,7 +389,7 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 							},
 						)
 					}
-
+					statsMutex.Unlock()
 					switch i := s.(type) {
 					case int16:
 						aerospikePrometheusMetrics[key].Add(float64(i))
