@@ -2,14 +2,14 @@
 # in case you want to make an update to the base image, change this file, build and push.
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-FROM debian:bookworm-slim AS linux-amd64
+FROM ubuntu:noble AS linux-amd64
 RUN apt update && apt install -y wget
 RUN wget https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_x86_64.tar.gz && \
     tar -xvf grpcurl_1.9.1_linux_x86_64.tar.gz && \
     mv grpcurl /usr/local/bin && \
     rm grpcurl_1.9.1_linux_x86_64.tar.gz
 
-FROM debian:bookworm-slim AS linux-arm64
+FROM ubuntu:noble AS linux-arm64
 RUN apt update && apt install -y wget
 RUN wget https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_arm64.tar.gz && \
     tar -xvf grpcurl_1.9.1_linux_arm64.tar.gz && \
