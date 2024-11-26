@@ -142,6 +142,8 @@ func NewSettings() *Settings {
 			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "4KB"),
 			UTXOPersisterDirect:                   getBool("direct", true),
 			TxStore:                               getURL("txstore", ""),
+			BlockPersisterPersistAge:              uint32(getInt("blockpersister_persistAge", 100)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
+			BlockPersisterPersistSleep:            getDuration("blockPersister_persistSleep", time.Minute),
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                            getBool("blockassembly_disabled", false),
@@ -251,7 +253,6 @@ func NewSettings() *Settings {
 			GetBatcherSize:             getInt("utxostore_getBatcherSize", 1),
 		},
 		P2P: P2PSettings{
-
 			BestBlockTopic:     getString("p2p_bestblock_topic", ""),
 			BlockTopic:         getString("p2p_block_topic", ""),
 			BootstrapAddresses: getMultiString("p2p_bootstrapAddresses", "|", []string{}),

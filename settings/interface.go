@@ -117,6 +117,8 @@ type BlockSettings struct {
 	UTXOPersisterBufferSize               string
 	TxStore                               *url.URL
 	UTXOPersisterDirect                   bool
+	BlockPersisterPersistAge              uint32
+	BlockPersisterPersistSleep            time.Duration
 }
 
 type BlockChainSettings struct {

@@ -146,7 +146,7 @@ func NewServer(
 		StaticPeers:     staticPeers,
 	}
 
-	p2pNode, err := p2p.NewP2PNode(logger, config)
+	p2pNode, err := p2p.NewP2PNode(logger, tSettings, config)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}

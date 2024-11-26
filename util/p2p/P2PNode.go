@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -34,6 +35,7 @@ import (
 
 type P2PNode struct {
 	config            P2PConfig
+	settings          *settings.Settings
 	host              host.Host
 	pubSub            *pubsub.PubSub
 	topics            map[string]*pubsub.Topic
@@ -57,7 +59,7 @@ type P2PConfig struct {
 	StaticPeers     []string
 }
 
-func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
+func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var (
@@ -128,6 +130,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	node := &P2PNode{
 		config:            config,
 		logger:            logger,
+		settings:          tSettings,
 		host:              h,
 		bitcoinProtocolID: "ubsv/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
@@ -549,7 +552,7 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error
 }
 
 func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.IpfsDHT, error) {
-	bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
+	bootstrapAddresses := s.settings.P2P.BootstrapAddresses
 	if len(bootstrapAddresses) == 0 {
 		return nil, errors.NewServiceError("[P2PNode] bootstrapAddresses not set in config")
 	}
@@ -580,8 +583,8 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 		}
 	}
 
-	dhtProtocolIDStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
-	if !ok {
+	dhtProtocolIDStr := s.settings.P2P.DHTProtocolID
+	if dhtProtocolIDStr == "" {
 		return nil, errors.NewServiceError("[P2PNode] error getting p2p_dht_protocol_id")
 	}
 

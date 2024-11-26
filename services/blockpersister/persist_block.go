@@ -9,7 +9,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -27,7 +26,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", 8)
+	concurrency := u.settings.Block.BlockPersisterConcurrency
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	// Create a new UTXO diff
