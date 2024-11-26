@@ -22,7 +22,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1321,11 +1320,6 @@ func cleanDB(t *testing.T, client *aerospike.Client, key *aerospike.Key, txs ...
 }
 
 func TestCreateZeroSat(t *testing.T) {
-	os.Setenv("network", "regtest")
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-	t.Log(network)
-
 	client, s, ctx, deferFn := initAerospike(t)
 	defer deferFn()
 
