@@ -11,10 +11,10 @@ import (
 	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -43,6 +43,7 @@ type Blockchain struct {
 	addBlockChan                  chan *blockchain_api.AddBlockRequest
 	store                         blockchain_store.Store
 	logger                        ulogger.Logger
+	settings                      *settings.Settings
 	newSubscriptions              chan subscriber
 	deadSubscriptions             chan subscriber
 	subscribers                   map[subscriber]bool
@@ -50,7 +51,6 @@ type Blockchain struct {
 	notifications                 chan *blockchain_api.Notification
 	newBlock                      chan struct{}
 	difficulty                    *Difficulty
-	chainParams                   *chaincfg.Params
 	blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI
 	kafkaChan                     chan *kafka.Message
 	stats                         *gocore.Stat
@@ -60,17 +60,10 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
-
-	d, err := NewDifficulty(store, logger, params)
+	d, err := NewDifficulty(store, logger, tSettings)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
@@ -78,6 +71,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 	b := &Blockchain{
 		store:                         store,
 		logger:                        logger,
+		settings:                      tSettings,
 		addBlockChan:                  make(chan *blockchain_api.AddBlockRequest, 10),
 		newSubscriptions:              make(chan subscriber, 10),
 		deadSubscriptions:             make(chan subscriber, 10),
@@ -85,7 +79,6 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		notifications:                 make(chan *blockchain_api.Notification, 100),
 		newBlock:                      make(chan struct{}, 10),
 		difficulty:                    d,
-		chainParams:                   params,
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
@@ -206,8 +199,8 @@ func (b *Blockchain) Start(ctx context.Context) error {
 }
 
 func (b *Blockchain) startHTTP() error {
-	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
-	if !ok {
+	httpAddress := b.settings.BlockChain.HTTPListenAddress
+	if httpAddress == "" {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
 	}
 
@@ -569,7 +562,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	var nBits *model.NBit
 
 	bytesLittleEndian := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bytesLittleEndian, b.chainParams.PowLimitBits)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, b.settings.ChainCfgParams.PowLimitBits)
 	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 	if b.difficulty == nil {

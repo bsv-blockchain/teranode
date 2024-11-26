@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/urfave/cli/v2"
@@ -92,18 +93,24 @@ func connect(c *cli.Context) error {
 	verack = make(chan struct{})
 
 	addr := c.String("address")
+
 	var err error
-	p, err = peer.NewOutboundPeer(logger, peerCfg(), addr)
+
+	tSettings := settings.NewSettings()
+
+	p, err = peer.NewOutboundPeer(logger, tSettings, peerCfg(), addr)
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("trying to dial: %v\n", p.Addr())
+
 	conn, err = net.Dial("tcp", p.Addr())
 	if err != nil {
 		fmt.Printf("net.Dial: error %v\n", err)
 		return err
 	}
+
 	p.AssociateConnection(conn)
 	fmt.Printf("peer connected: %t\n", p.Connected())
 
@@ -114,6 +121,7 @@ func connect(c *cli.Context) error {
 	case <-time.After(time.Second * 5):
 		fmt.Println("connection: verack timeout")
 		p.Disconnect()
+
 		return errors.NewError("verack timeout")
 	}
 
@@ -142,12 +150,14 @@ func sendMessage(msgType string, args ...string) error {
 				}
 
 				invVect := wire.NewInvVect(wire.InvTypeTx, hash)
+
 				err = invMsg.AddInvVect(invVect)
 				if err != nil {
 					return err
 				}
 			}
 		}
+
 		p.QueueMessage(invMsg, nil)
 	case "getdata":
 		getDataMsg := wire.NewMsgGetData()
@@ -161,12 +171,14 @@ func sendMessage(msgType string, args ...string) error {
 				}
 
 				invVect := wire.NewInvVect(wire.InvTypeTx, hash)
+
 				err = getDataMsg.AddInvVect(invVect)
 				if err != nil {
 					return err
 				}
 			}
 		}
+
 		p.QueueMessage(getDataMsg, nil)
 	case "getaddr":
 		getAddrMsg := wire.NewMsgGetAddr()
@@ -174,24 +186,30 @@ func sendMessage(msgType string, args ...string) error {
 		p.QueueMessage(getAddrMsg, nil)
 	case "ping":
 		nonce := uint64(0)
+
 		if len(args) > 0 {
 			parsedNonce, err := strconv.ParseUint(args[0], 10, 64)
 			if err != nil {
 				return errors.NewError("invalid nonce value: %s", args[0])
 			}
+
 			nonce = parsedNonce
 		}
+
 		pingMsg := wire.NewMsgPing(nonce)
 		p.QueueMessage(pingMsg, nil)
 	case "pong":
 		nonce := uint64(0)
+
 		if len(args) > 0 {
 			parsedNonce, err := strconv.ParseUint(args[0], 10, 64)
 			if err != nil {
 				return errors.NewError("invalid nonce value: %s", args[0])
 			}
+
 			nonce = parsedNonce
 		}
+
 		pongMsg := wire.NewMsgPong(nonce)
 		p.QueueMessage(pongMsg, nil)
 	// Add other cases as needed
@@ -200,6 +218,7 @@ func sendMessage(msgType string, args ...string) error {
 	}
 
 	fmt.Printf("Message of type %s sent to Bitcoin peer\n", msgType)
+
 	return nil
 }
 
@@ -208,6 +227,7 @@ func interactiveLoop() {
 
 	for {
 		fmt.Print("bitcoin-cli> ")
+
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			log.Fatal(err)
@@ -216,9 +236,11 @@ func interactiveLoop() {
 		input = strings.TrimSpace(input)
 		if input == "exit" {
 			fmt.Println("Exiting...")
+
 			if p != nil && p.Connected() {
 				p.Disconnect()
 			}
+
 			break
 		}
 
@@ -241,6 +263,7 @@ func handleCommand(input string) {
 			fmt.Println("Usage: send <msgType> [args...]")
 			return
 		}
+
 		err := sendMessage(args[0], args[1:]...)
 		if err != nil {
 			fmt.Println("Error sending message:", err)
@@ -252,8 +275,12 @@ func handleCommand(input string) {
 
 func reconnect(addr string) error {
 	fmt.Println("Attempting to reconnect...")
+
+	tSettings := settings.NewSettings()
+
 	var err error
-	p, err = peer.NewOutboundPeer(logger, peerCfg(), addr)
+
+	p, err = peer.NewOutboundPeer(logger, tSettings, peerCfg(), addr)
 	if err != nil {
 		return err
 	}
@@ -262,7 +289,9 @@ func reconnect(addr string) error {
 	if err != nil {
 		return err
 	}
+
 	p.AssociateConnection(conn)
 	fmt.Println("Reconnected to peer")
+
 	return nil
 }

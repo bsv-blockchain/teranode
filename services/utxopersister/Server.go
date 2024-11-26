@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -25,6 +25,7 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	blockchainClient blockchain.ClientI
 	blockchainStore  blockchain_store.Store
 	blockStore       blob.Store
@@ -33,53 +34,40 @@ type Server struct {
 	mu               sync.Mutex
 	running          bool
 	triggerCh        chan string
-	chainParams      *chaincfg.Params
 }
 
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	blockStore blob.Store,
 	blockchainClient blockchain.ClientI,
 
 ) *Server {
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
-
 	return &Server{
 		logger:           logger,
+		settings:         tSettings,
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
 		stats:            gocore.NewStat("utxopersister"),
 		triggerCh:        make(chan string, 5),
-		chainParams:      params,
 	}
 }
 
 func NewDirect(
 	ctx context.Context,
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	blockStore blob.Store,
 	blockchainStore blockchain_store.Store,
 ) (*Server, error) {
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
-
 	return &Server{
 		logger:          logger,
+		settings:        tSettings,
 		blockStore:      blockStore,
 		blockchainStore: blockchainStore,
 		stats:           gocore.NewStat("utxopersister"),
 		triggerCh:       make(chan string, 5),
-		chainParams:     params,
 	}, nil
 }
 
@@ -126,8 +114,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if s.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		if err = s.blockchainClient.Restore(ctx); err != nil {
 			s.logger.Errorf("[Utxo Persister] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
@@ -278,14 +265,14 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	lastWrittenUTXOSetHash := headers[0].Hash()
 
-	if lastWrittenUTXOSetHash.String() != s.chainParams.GenesisHash.String() {
+	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() {
 		// GetStarting point
 		if err := s.verifyLastSet(ctx, lastWrittenUTXOSetHash); err != nil {
 			return 0, err
 		}
 	}
 
-	c := NewConsolidator(s.logger, s.chainParams, s.blockchainStore, s.blockchainClient, s.blockStore, lastWrittenUTXOSetHash)
+	c := NewConsolidator(s.logger, s.settings, s.blockchainStore, s.blockchainClient, s.blockStore, lastWrittenUTXOSetHash)
 
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
@@ -294,7 +281,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
-	us, err := GetUTXOSet(ctx, s.logger, s.blockStore, lastWrittenUTXOSetHash)
+	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash)
 	if err != nil {
 		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, metas[0].Height, err)
 	}
@@ -316,7 +303,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.lastHeight = c.lastBlockHeight
 
 	// Remove the previous block's UTXOSet
-	if lastWrittenUTXOSetHash.String() != s.chainParams.GenesisHash.String() && !gocore.Config().GetBool("skip_delete", false) {
+	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.Block.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}

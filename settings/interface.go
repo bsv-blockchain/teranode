@@ -7,6 +7,40 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 )
 
+type Settings struct {
+	ClientName        string
+	DataFolder        string
+	SecurityLevelHTTP int
+	ServerCertFile    string
+	ServerKeyFile     string
+	LogLevel          string
+	ProfilerAddr      string
+	StatsPrefix       string
+
+	ChainCfgParams    *chaincfg.Params
+	Policy            *PolicySettings
+	Kafka             KafkaSettings
+	Aerospike         AerospikeSettings
+	Alert             AlertSettings
+	Asset             AssetSettings
+	Block             BlockSettings
+	BlockAssembly     BlockAssemblySettings
+	BlockChain        BlockChainSettings
+	BlockValidation   BlockValidationSettings
+	Validator         ValidatorSettings
+	Redis             RedisSettings
+	Region            RegionSettings
+	Advertising       AdvertisingSettings
+	UtxoStore         UtxoStoreSettings
+	P2P               P2PSettings
+	Coinbase          CoinbaseSettings
+	SubtreeValidation SubtreeValidationSettings
+	Legacy            LegacySettings
+	Propagation       PropagationSettings
+	RPC               RPCSettings
+	Faucet            FaucetSettings
+}
+
 type KafkaSettings struct {
 	Blocks            string
 	BlocksFinal       string
@@ -21,6 +55,9 @@ type KafkaSettings struct {
 	TxMeta            string
 	UnitTest          string
 	ValidatorTxs      string
+	TxMetaConfig      *url.URL
+	LegacyInvConfig   *url.URL
+	BlocksFinalConfig *url.URL
 }
 
 type AerospikeSettings struct {
@@ -53,6 +90,8 @@ type AssetSettings struct {
 	HTTPListenAddress       string
 	HTTPPort                int
 	HTTPSPort               int
+	SignHTTPResponses       bool
+	EchoDebug               bool
 }
 
 type BlockSettings struct {
@@ -66,19 +105,29 @@ type BlockSettings struct {
 	ValidOrderAndBlessedConcurrency       int
 	StoreCacheEnabled                     bool
 	MaxSize                               int
-	StorePath                             string
+	BlockStore                            *url.URL
 	FailFastValidation                    bool
 	FinalizeBlockValidationConcurrency    int
 	GetMissingTransactions                int
+	QuorumTimeout                         time.Duration
+	BlockPersisterConcurrency             int
+	BatchMissingTransactions              bool
+	ProcessTxMetaUsingStoreBatchSize      int
+	SkipUTXODelete                        bool
+	UTXOPersisterBufferSize               string
+	TxStore                               *url.URL
+	UTXOPersisterDirect                   bool
 }
 
 type BlockChainSettings struct {
-	GRPCAddress       string
-	GRPCListenAddress string
-	HTTPListenAddress string
-	MaxRetries        int
-	StoreURL          *url.URL
-	FSMStateRestore   bool
+	GRPCAddress          string
+	GRPCListenAddress    string
+	HTTPListenAddress    string
+	MaxRetries           int
+	RetrySleep           int
+	StoreURL             *url.URL
+	FSMStateRestore      bool
+	StoreDBTimeoutMillis int
 }
 
 type BlockAssemblySettings struct {
@@ -86,7 +135,7 @@ type BlockAssemblySettings struct {
 	GRPCAddress                         string
 	GRPCListenAddress                   string
 	GRPCMaxRetries                      int
-	GRPCRetryBackoff                    string
+	GRPCRetryBackoff                    time.Duration
 	LocalTTLCache                       string
 	MaxBlockReorgCatchup                int
 	MaxBlockReorgRollback               int
@@ -100,32 +149,60 @@ type BlockAssemblySettings struct {
 	NewSubtreeChanBuffer                int
 	SubtreeRetryChanBuffer              int
 	SubmitMiningSolutionWaitForResponse bool
+	InitialMerkleItemsPerSubtree        int
+	DoubleSpendWindow                   time.Duration
+	MaxGetReorgHashes                   int
 }
 
 type BlockValidationSettings struct {
-	MaxRetries                     int
-	RetrySleep                     string
-	GRPCAddress                    string
-	GRPCListenAddress              string
-	HTTPAddress                    string
-	HTTPListenAddress              string
-	KafkaWorkers                   int
-	LocalSetTxMinedConcurrency     int
-	MaxPreviousBlockHeadersToCheck int
+	MaxRetries                                int
+	RetrySleep                                time.Duration
+	GRPCAddress                               string
+	GRPCListenAddress                         string
+	HTTPAddress                               string
+	HTTPListenAddress                         string
+	KafkaWorkers                              int
+	LocalSetTxMinedConcurrency                int
+	MaxPreviousBlockHeadersToCheck            uint64
+	MissingTransactionsBatchSize              int
+	ProcessTxMetaUsingCacheBatchSize          int
+	ProcessTxMetaUsingCacheConcurrency        int
+	ProcessTxMetaUsingCacheMissingTxThreshold int
+	ProcessTxMetaUsingStoreBatchSize          int
+	ProcessTxMetaUsingStoreConcurrency        int
+	ProcessTxMetaUsingStoreMissingTxThreshold int
+	SkipCheckParentMined                      bool
+	SubtreeFoundChConcurrency                 int
+	SubtreeTTL                                time.Duration
+	SubtreeTTLConcurrency                     int
+	SubtreeValidationAbandonThreshold         int
+	ValidateBlockSubtreesConcurrency          int
+	ValidationMaxRetries                      int
+	ValidationRetrySleep                      time.Duration
+	OptimisticMining                          bool
+	IsParentMinedRetryMaxRetry                int
+	IsParentMinedRetryBackoffMultiplier       int
+	SubtreeGroupConcurrency                   int
+	BlockFoundChBufferSize                    int
+	CatchupChBufferSize                       int
+	UseCatchupWhenBehind                      bool
+	CatchupConcurrency                        int
+	ValidationWarmupCount                     int
+	BatchMissingTransactions                  bool
 }
 
 type ValidatorSettings struct {
-	GrpcAddress               string
-	GrpcListenAddress         string
+	GRPCAddress               string
+	GRPCListenAddress         string
 	KafkaWorkers              int
 	ScriptVerificationLibrary string
 	SendBatchSize             int
 	SendBatchTimeout          int
 	SendBatchWorkers          int
-	GrpcPort                  int
 	BlockValidationDelay      int
 	BlockValidationMaxRetries int
 	BlockValidationRetrySleep string
+	VerboseDebug              bool
 }
 
 type RedisSettings struct {
@@ -143,6 +220,7 @@ type AdvertisingSettings struct {
 }
 
 type UtxoStoreSettings struct {
+	UtxoStore                  *url.URL
 	OutpointBatcherSize        int
 	SpendBatcherConcurrency    int
 	SpendBatcherDurationMillis int
@@ -151,24 +229,129 @@ type UtxoStoreSettings struct {
 	StoreBatcherDurationMillis int
 	StoreBatcherSize           int
 	UtxoBatchSize              int
+	GetBatcherSize             int
 }
 
-type Settings struct {
-	ClientName      string
-	DataFolder      string
-	ChainCfgParams  *chaincfg.Params
-	Policy          *PolicySettings
-	Kafka           KafkaSettings
-	Aerospike       AerospikeSettings
-	Alert           AlertSettings
-	Asset           AssetSettings
-	Block           BlockSettings
-	BlockAssembly   BlockAssemblySettings
-	BlockChain      BlockChainSettings
-	BlockValidation BlockValidationSettings
-	Validator       ValidatorSettings
-	Redis           RedisSettings
-	Region          RegionSettings
-	Advertising     AdvertisingSettings
-	UtxoStore       UtxoStoreSettings
+type P2PSettings struct {
+	BestBlockTopic     string
+	BlockTopic         string
+	BootstrapAddresses []string
+
+	GRPCAddress       string
+	GRPCListenAddress string
+
+	HTTPAddress       string
+	HTTPListenAddress string
+
+	IP            string
+	MiningOnTopic string
+
+	PeerID       string
+	Port         int
+	PortCoinbase int
+
+	PrivateKey      string
+	RejectedTxTopic string
+
+	SharedKey   string
+	StaticPeers []string
+
+	SubtreeTopic string
+	TopicPrefix  string
+
+	DHTProtocolID   string
+	DHTUsePrivate   bool
+	OptimiseRetries bool
+}
+
+type CoinbaseSettings struct {
+	DB                          string
+	UserPwd                     string
+	ArbitraryText               string
+	GRPCAddress                 string
+	GRPCListenAddress           string
+	NotificationThreshold       int
+	P2PPeerID                   string
+	P2PPrivateKey               string
+	P2PStaticPeers              []string
+	ShouldWait                  bool
+	Store                       *url.URL
+	StoreDBTimeoutMillis        int
+	WaitForPeers                bool
+	WaitUntilBlock              int
+	WalletPrivateKey            string
+	DistributorBackoffDuration  time.Duration
+	DistributorMaxRetries       int
+	DistributorFailureTolerance int
+	PeerStatusTimeout           time.Duration
+	SlackChannel                string
+	SlackToken                  string
+}
+
+type SubtreeValidationSettings struct {
+	QuorumPath                                string
+	QuorumAbsoluteTimeout                     time.Duration
+	SubtreeStore                              *url.URL
+	FailFastValidation                        bool
+	GetMissingTransactions                    int
+	GRPCAddress                               string
+	GRPCListenAddress                         string
+	ProcessTxMetaUsingCacheBatchSize          int
+	ProcessTxMetaUsingCacheConcurrency        int
+	ProcessTxMetaUsingCacheMissingTxThreshold int
+	ProcessTxMetaUsingStoreBatchSize          int
+	ProcessTxMetaUsingStoreConcurrency        int
+	ProcessTxMetaUsingStoreMissingTxThreshold int
+	SubtreeFoundChConcurrency                 int
+	SubtreeTTL                                time.Duration
+	SubtreeTTLConcurrency                     int
+	SubtreeValidationTimeout                  int
+	SubtreeValidationAbandonThreshold         int
+	TxMetaCacheEnabled                        bool
+	ValidationMaxRetries                      int
+	ValidationRetrySleep                      string
+	TxChanBufferSize                          int
+	BatchMissingTransactions                  bool
+	SpendBatcherSize                          int
+	MissingTransactionsBatchSize              int
+}
+
+type LegacySettings struct {
+	ListenAddresses            []string
+	ConnectPeers               []string
+	OrphanEvictionDuration     time.Duration
+	StoreBatcherSize           int
+	StoreBatcherConcurrency    int
+	SpendBatcherSize           int
+	SpendBatcherConcurrency    int
+	OutpointBatcherSize        int
+	OutpointBatcherConcurrency int
+	PrintInvMessages           bool
+	GRPCAddress                string
+}
+
+type PropagationSettings struct {
+	IPv6Addresses        string
+	IPv6Interface        string
+	QuicListenAddress    string
+	GRPCMaxConnectionAge time.Duration
+	HTTPListenAddress    string
+	SendBatchSize        int
+	SendBatchTimeout     int
+	GRPCResolver         string
+	GRPCAddresses        []string
+}
+
+type RPCSettings struct {
+	RPCUser        string
+	RPCPass        string
+	RPCLimitUser   string
+	RPCLimitPass   string
+	RPCMaxClients  int
+	RPCQuirks      bool
+	RPCListenerURL string
+}
+
+type FaucetSettings struct {
+	HTTPListenAddress string
 }

@@ -13,25 +13,24 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
-	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/gorilla/websocket"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/centrifugal/centrifuge"
+	"github.com/gorilla/websocket"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 // Centrifuge represents a Centrifuge server instance that manages real-time
 // blockchain data broadcasting and client connections.
 type Centrifuge struct {
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	repository       *repository.Repository
 	baseURL          string
 	httpServer       *http_impl.HTTP
@@ -56,19 +55,21 @@ type messageType struct {
 // Returns:
 //   - *Centrifuge: New Centrifuge server instance
 //   - error: Any error encountered during initialization
-func New(logger ulogger.Logger, repo *repository.Repository, httpServer *http_impl.HTTP) (*Centrifuge, error) {
-	u, err, found := gocore.Config().GetURL("asset_httpAddress")
-	if err != nil {
-		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", err)
-	}
-	if !found {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, httpServer *http_impl.HTTP) (*Centrifuge, error) {
+	assetHTTPAddress := tSettings.Asset.HTTPAddress
+	if assetHTTPAddress == "" {
 		return nil, errors.NewConfigurationError("asset_httpAddress not found in config")
+	}
+
+	if _, err := url.Parse(assetHTTPAddress); err != nil {
+		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", err)
 	}
 
 	c := &Centrifuge{
 		logger:     logger,
+		settings:   tSettings,
 		repository: repo,
-		baseURL:    u.String(),
+		baseURL:    assetHTTPAddress,
 		httpServer: httpServer,
 	}
 
@@ -164,6 +165,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	<-ctx.Done()
 
 	c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
+
 	if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
 		c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
 	}
@@ -180,12 +182,16 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 // Returns:
 //   - error: Any error encountered during P2P listener startup
 func (c *Centrifuge) startP2PListener(ctx context.Context) error {
-	p2pServerAddress, _ := gocore.Config().Get("p2p_httpAddress", "localhost:9906")
+	p2pServerAddress := c.settings.P2P.HTTPAddress
+	if p2pServerAddress == "" {
+		return errors.NewConfigurationError("p2p_httpAddress not found in config")
+	}
 
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
 	c.logger.Infof("[Centrifuge] connecting to p2p server on %s", u.String())
 
 	var client atomic.Pointer[websocket.Conn]
+
 	var clientConnected atomic.Bool
 
 	go c.connect(ctx, u, &client, &clientConnected)
@@ -252,11 +258,13 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					c.logger.Debugf("[Centrifuge] error reading p2p server message: %v", err)
 					time.Sleep(1 * time.Second)
 					clientConnected.Store(false)
+
 					continue
 				}
 
 				// Unmarshal the message into a messageType struct
 				var mType messageType
+
 				err = json.Unmarshal(message, &mType)
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error unmarshalling message: %s", err)
@@ -282,6 +290,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+
 	go func() {
 		for {
 			select {
@@ -294,17 +303,23 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 				}
 
 				var channel string
+
 				var data []byte
+
 				var block *model.Block
+
 				var height uint32
+
 				switch asset_api.Type(notification.Type) {
 				case asset_api.Type_Block:
 					channel = "block"
+
 					hash, err := chainhash.NewHash(notification.Hash)
 					if err != nil {
 						c.logger.Errorf("[Blockchain] failed to parse hash", err)
 						continue
 					}
+
 					block, err = c.blockchainClient.GetBlock(ctx, hash)
 					if err != nil {
 						c.logger.Errorf("[Centrifuge] error getting block header: %s", err)
@@ -381,6 +396,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 		_ = shutdownCancel
 
 		c.logger.Infof("[AssetService] Centrifuge (impl) service shutting down")
+
 		if err = c.centrifugeNode.Shutdown(shutdownContext); err != nil {
 			c.logger.Errorf("[AssetService] Centrifuge (impl) node service shutdown error: %s", err)
 		}
@@ -452,21 +468,25 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+
 		err := node.Subscribe("42", "ping", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Subscribe("42", "block", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Subscribe("42", "subtree", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Subscribe("42", "mining_on", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -497,21 +517,25 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+
 		err := node.Unsubscribe("42", "ping", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Unsubscribe("42", "block", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Unsubscribe("42", "subtree", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		err = node.Unsubscribe("42", "mining_on", centrifuge.WithUnsubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)

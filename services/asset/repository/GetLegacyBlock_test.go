@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
+	"github.com/bitcoin-sv/ubsv/settings"
 	memory_blob "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	memory_utxo "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -42,8 +43,9 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 		previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 		height:            1,
 		nonce:             2083236893,
-		timestamp:         uint32(time.Now().Unix()),
-		txs:               []*bt.Tx{coinbase, tx1},
+		//nolint:gosec
+		timestamp: uint32(time.Now().Unix()),
+		txs:       []*bt.Tx{coinbase, tx1},
 	}
 
 	block, subtree := newBlock(ctx, t, params)
@@ -57,7 +59,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	}
 
 	// create the block-store .subtree file
-	storer := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtree")
+	storer := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtree")
 
 	err := blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
 	require.NoError(t, err)
@@ -78,48 +80,57 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	// size, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	size := binary.LittleEndian.Uint32(bytes[:n])
+	//nolint:gosec
 	assert.Equal(t, uint32(block.SizeInBytes), size)
 
 	// version, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	version := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Version, version)
 
 	// hashPrevBlock, 32 bytes
 	n, err = io.ReadFull(r, bytes[:32])
 	require.NoError(t, err)
+
 	hashPrevBlock, _ := chainhash.NewHash(bytes[:n])
 	assert.Equal(t, block.Header.HashPrevBlock, hashPrevBlock)
 
 	// hashMerkleRoot, 32 bytes
 	n, err = io.ReadFull(r, bytes[:32])
 	require.NoError(t, err)
+
 	hashMerkleRoot, _ := chainhash.NewHash(bytes[:n])
 	assert.Equal(t, block.Header.HashMerkleRoot, hashMerkleRoot)
 
 	// timestamp, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	timestamp := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Timestamp, timestamp)
 
 	// difficulty, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	difficulty, _ := model.NewNBitFromSlice(bytes[:n])
 	assert.Equal(t, block.Header.Bits, *difficulty)
 
 	// nonce, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	nonce := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Nonce, nonce)
 
 	// transaction count, varint
 	n, err = r.Read(bytes[:1])
 	require.NoError(t, err)
+
 	transactionCount, _ := bt.NewVarIntFromBytes(bytes[:n])
 	assert.Equal(t, block.TransactionCount, uint64(transactionCount))
 
@@ -130,12 +141,14 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	// check the coinbase transaction
 	coinbaseTx, coinbaseSize, err := bt.NewTxFromStream(bytes)
 	require.NoError(t, err)
+
 	require.NotNil(t, coinbaseTx)
 	assert.Equal(t, block.CoinbaseTx.Size(), coinbaseSize)
 
 	// check the 2nd tx
 	tx, txSize, err := bt.NewTxFromStream(bytes[coinbaseSize:])
 	require.NoError(t, err)
+
 	require.NotNil(t, tx)
 	assert.Equal(t, tx1.Size(), txSize)
 
@@ -143,7 +156,6 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	n, err = r.Read(bytes)
 	assert.Equal(t, io.ErrClosedPipe, err)
 	assert.Equal(t, 0, n)
-
 }
 
 func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
@@ -163,8 +175,9 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 		previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 		height:            1,
 		nonce:             2083236893,
-		timestamp:         uint32(time.Now().Unix()),
-		txs:               []*bt.Tx{coinbase, tx1},
+		//nolint:gosec
+		timestamp: uint32(time.Now().Unix()),
+		txs:       []*bt.Tx{coinbase, tx1},
 	}
 
 	block, subtree := newBlock(ctx, t, params)
@@ -194,53 +207,63 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// magic, 4 bytes
 	n, err := io.ReadFull(r, bytes[:4])
 	assert.NoError(t, err)
+
 	assert.Equal(t, []byte{0xf9, 0xbe, 0xb4, 0xd9}, bytes[:n])
 
 	// size, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	size := binary.LittleEndian.Uint32(bytes[:n])
+	//nolint:gosec
 	assert.Equal(t, uint32(block.SizeInBytes), size)
 
 	// version, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	version := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Version, version)
 
 	// hashPrevBlock, 32 bytes
 	n, err = io.ReadFull(r, bytes[:32])
 	require.NoError(t, err)
+
 	hashPrevBlock, _ := chainhash.NewHash(bytes[:n])
 	assert.Equal(t, block.Header.HashPrevBlock, hashPrevBlock)
 
 	// hashMerkleRoot, 32 bytes
 	n, err = io.ReadFull(r, bytes[:32])
 	require.NoError(t, err)
+
 	hashMerkleRoot, _ := chainhash.NewHash(bytes[:n])
 	assert.Equal(t, block.Header.HashMerkleRoot, hashMerkleRoot)
 
 	// timestamp, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	timestamp := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Timestamp, timestamp)
 
 	// difficulty, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	difficulty, _ := model.NewNBitFromSlice(bytes[:n])
 	assert.Equal(t, block.Header.Bits, *difficulty)
 
 	// nonce, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
+
 	nonce := binary.LittleEndian.Uint32(bytes[:n])
 	assert.Equal(t, block.Header.Nonce, nonce)
 
 	// transaction count, varint
 	n, err = r.Read(bytes)
 	require.NoError(t, err)
+
 	transactionCount, _ := bt.NewVarIntFromBytes(bytes[:n])
 	assert.Equal(t, block.TransactionCount, uint64(transactionCount))
 
@@ -263,7 +286,6 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	n, err = r.Read(bytes)
 	assert.Equal(t, io.ErrClosedPipe, err)
 	assert.Equal(t, 0, n)
-
 }
 
 type blockInfo struct {
@@ -285,7 +307,7 @@ func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 }
 
 func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -425,8 +447,9 @@ func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
 }
 
 type testContext struct {
-	repo   *Repository
-	logger ulogger.Logger
+	repo     *Repository
+	logger   ulogger.Logger
+	settings *settings.Settings
 }
 
 func setup(t *testing.T) *testContext {
@@ -438,16 +461,20 @@ func setup(t *testing.T) *testContext {
 	blockchainClient := &mockStore{}
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
-	repo, err := NewRepository(logger, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+
+	tSettings := settings.NewSettings()
+
+	repo, err := NewRepository(logger, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	assert.NoError(t, err)
 
 	return &testContext{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		logger:   logger,
+		settings: tSettings,
 	}
 }
 
-func newBlock(ctx *testContext, t *testing.T, b blockInfo) (*model.Block, *util.Subtree) {
+func newBlock(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *util.Subtree) {
 	if len(b.txs) == 0 {
 		panic("no transactions provided")
 	}

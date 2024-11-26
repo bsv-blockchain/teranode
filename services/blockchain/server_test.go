@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -136,8 +138,10 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
+	tSettings := &settings.Settings{}
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
-	server, err := New(context.Background(), logger, &store, nil)
+	server, err := New(context.Background(), logger, tSettings, &store, nil)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}

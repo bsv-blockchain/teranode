@@ -125,7 +125,9 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	if err != nil {
 		return err
 	}
+
 	t.metrics.insertions.Add(uint64(len(keys)))
+
 	return nil
 }
 
@@ -270,7 +272,6 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	//if err != nil {
 	//	return err
 	//}
-
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {

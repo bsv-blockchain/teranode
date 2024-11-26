@@ -28,6 +28,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -58,6 +59,7 @@ var (
 type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
 	logger                       ulogger.Logger
+	settings                     *settings.Settings
 	stats                        *gocore.Stat
 	txStore                      blob.Store
 	validator                    validator.Interface
@@ -77,11 +79,12 @@ type PropagationServer struct {
 //
 // Returns:
 //   - *PropagationServer: configured server instance
-func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer {
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
 		logger:                       logger,
+		settings:                     tSettings,
 		stats:                        gocore.NewStat("propagation"),
 		txStore:                      txStore,
 		validator:                    validatorClient,
@@ -188,8 +191,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if ps.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		if err = ps.blockchainClient.Restore(ctx); err != nil {
 			ps.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
@@ -203,8 +205,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		ps.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
 	}
 
-	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
-	if ok {
+	ipv6Addresses := ps.settings.Propagation.IPv6Addresses
+	if ipv6Addresses != "" {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)
 		if err != nil {
 			return errors.NewServiceError("error starting ipv6 listeners", err)
@@ -212,8 +214,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}
 
 	// Experimental QUIC server - to test throughput at scale
-	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
-	if ok && quicAddress != "" {
+	quicAddress := ps.settings.Propagation.QuicListenAddress
+	if quicAddress != "" {
 		// Create an error channel
 		errChan := make(chan error, 1) // Buffered channel
 
@@ -243,7 +245,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}
 
 	// this will block
-	maxConnectionAge, _, _ := gocore.Config().GetDuration("propagation_grpcMaxConnectionAge", 90*time.Second)
+	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}, maxConnectionAge); err != nil {
@@ -266,8 +268,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error {
 	ps.logger.Infof("Starting UDP6 listeners on %s", ipv6Addresses)
 
-	ipv6Interface, ok := gocore.Config().Get("ipv6_interface", "en0")
-	if !ok {
+	ipv6Interface := ps.settings.Propagation.IPv6Interface
+	if ipv6Interface == "" {
 		// default to en0
 		ipv6Interface = "en0"
 	}
@@ -320,6 +322,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 				ps.logger.Infof("read %d bytes into wire message from %s", len(b), src.String())
 				// ps.logger.Infof("wire message type: %v", msg)
+				var ok bool
 
 				msgTx, ok = msg.(*wire.MsgExtendedTx)
 				if ok {

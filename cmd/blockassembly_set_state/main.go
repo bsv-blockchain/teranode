@@ -7,14 +7,16 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 func main() {
 	ctx := context.Background()
 	logger := ulogger.New("blockassembly_set_state")
+	tSettings := settings.NewSettings()
 
-	blockchainClient, err := blockchain.NewClient(ctx, logger, "cmd/blockassembly_set_state")
+	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "cmd/blockassembly_set_state")
 	if err != nil {
 		panic(err)
 	}

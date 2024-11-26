@@ -3,12 +3,10 @@ package model_test
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
-
-	"encoding/binary"
-
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,9 +25,12 @@ func TestNewUTXOKeyFromBytes(t *testing.T) {
 	// Create a valid byte slice
 	hashBytes, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
+
 	indexBytes := make([]byte, 4)
+
 	binary.LittleEndian.PutUint32(indexBytes, uint32(1))
-	b := append(hashBytes[:], indexBytes...)
+
+	b := append(hashBytes[:], indexBytes...) //nolint:gocritic
 
 	key, err := model.NewUTXOKeyFromBytes(b)
 	require.NoError(t, err, "NewUTXOKeyFromBytes() failed: %v", err)
@@ -38,7 +39,8 @@ func TestNewUTXOKeyFromBytes(t *testing.T) {
 	assert.Equal(t, uint32(1), key.Index, "NewUTXOKeyFromBytes() failed, expected %v:%d, got %v:%d", 1)
 
 	// Test invalid length
-	invalidB := append(b, 0x00)
+	invalidB := append(b, 0x00) //nolint:gocritic
+
 	_, err = model.NewUTXOKeyFromBytes(invalidB)
 	require.Error(t, err, "Expected error for invalid slice length, got none")
 }
@@ -53,7 +55,7 @@ func TestUTXOKeyBytes(t *testing.T) {
 	// Create a valid byte slice
 	indexBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(indexBytes, uint32(1))
-	expected := append(hash[:], indexBytes...)
+	expected := append(hash[:], indexBytes...) //nolint:gocritic
 
 	result := key.Bytes()
 	assert.Len(t, result, 36, "Bytes() failed, expected length 36, got %d", len(result))
@@ -92,6 +94,7 @@ func TestUTXOKeyString(t *testing.T) {
 	require.NoError(t, err)
 
 	op := model.NewUTXOKey(*hash, 1)
+
 	expected := "0000000000000000000000000000000000000000000000000000000000000001:       1"
 	if op.String() != expected {
 		t.Errorf("String() failed, expected %s, got %s", expected, op.String())

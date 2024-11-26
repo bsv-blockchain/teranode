@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -301,16 +302,18 @@ func TestServer_processBlockFound(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, utxoStore)
 
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
-	s := New(ulogger.TestLogger{}, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
-	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
+
+	tSettings := settings.NewSettings()
+	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
 	require.NoError(t, err)
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {
-	useCatchupWhenBehind := gocore.Config().GetBool("blockvalidation_useCatchupWhenBehind", false)
-	if !useCatchupWhenBehind {
+	tSettings := settings.NewSettings()
+	if !tSettings.BlockValidation.UseCatchupWhenBehind {
 		t.Skip("Skipping test as blockvalidation_useCatchupWhenBehind is false")
 	}
 
@@ -330,6 +333,7 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 
 	s := &Server{
 		logger:       ulogger.TestLogger{},
+		settings:     tSettings,
 		catchupCh:    make(chan processBlockCatchup, 1),
 		blockFoundCh: make(chan processBlockFound, 100),
 		stats:        gocore.NewStat("test"),

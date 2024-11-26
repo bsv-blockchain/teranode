@@ -49,7 +49,7 @@ func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 		Topic:     k.Topic,
 		Key:       sarama.ByteEncoder(key),
 		Value:     sarama.ByteEncoder(data),
-		Partition: int32(partition),
+		Partition: int32(partition), //nolint:gosec
 	})
 
 	return err
@@ -74,8 +74,8 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 	topic := kafkaURL.Path[1:]
 
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-		NumPartitions:     int32(partitions),
-		ReplicationFactor: int16(replicationFactor),
+		NumPartitions:     int32(partitions),        //nolint:gosec
+		ReplicationFactor: int16(replicationFactor), //nolint:gosec
 		ConfigEntries: map[string]*string{
 			"retention.ms":        &retentionPeriod, // Set the retention period
 			"delete.retention.ms": &retentionPeriod,
@@ -90,7 +90,7 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	flushBytes := util.GetQueryParamInt(kafkaURL, "flush_bytes", 1024)
 
-	producer, err := ConnectProducer(brokersURL, topic, int32(partitions), flushBytes)
+	producer, err := ConnectProducer(brokersURL, topic, int32(partitions), flushBytes) //nolint:gosec
 	if err != nil {
 		return nil, nil, errors.NewServiceError("unable to connect to kafka", err)
 	}

@@ -274,6 +274,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 					k.ConsumerGroup = nil
 
 					_ = c.Close()
+
 					panic("error processing kafka message, with no stop function provided")
 				}
 			}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,8 +84,8 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
 	log := false
 
-	utxoStoreURL, ok := gocore.Config().Get("utxostore")
-	if ok && strings.Contains(utxoStoreURL, "logging=true") {
+	utxoStoreURL := u.settings.UtxoStore.UtxoStore
+	if strings.Contains(utxoStoreURL.String(), "logging=true") {
 		// we are logging every utxostore create/spend/delete so we need to log every tx request here too for easier debugging
 		log = true
 	}
@@ -278,17 +277,14 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)
 
-	failFastValidation := gocore.Config().GetBool("blockvalidation_fail_fast_validation", false)
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
-	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
+	failFastValidation := u.settings.Block.FailFastValidation
+	abandonTxThreshold := u.settings.BlockValidation.SubtreeValidationAbandonThreshold
+	maxRetries := u.settings.BlockValidation.ValidationMaxRetries
 
-	retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
-	if err != nil {
-		return errors.NewConfigurationError("invalid value for blockvalidation_validation_retry_sleep", err)
-	}
+	retrySleepDuration := u.settings.BlockValidation.RetrySleep
 
 	// TODO document, what does this do?
-	subtreeWarmupCount, _ := gocore.Config().GetInt("blockvalidation_validation_warmup_count", 128)
+	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
 	// TODO document, what is the logic here?
 	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > int32(subtreeWarmupCount)
@@ -343,7 +339,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if missed > 0 {
-			batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
+			batched := u.settings.SubtreeValidation.BatchMissingTransactions
 
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched, failFast)
@@ -449,7 +445,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[validateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.settings.BlockAssembly.SubtreeTTL), options.WithFileExtension("meta"))
 
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 
@@ -476,7 +472,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("subtree"))
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.settings.BlockAssembly.SubtreeTTL), options.WithFileExtension("subtree"))
 
 	stat.NewStat("8. storeSubtree").AddTime(start)
 
@@ -516,7 +512,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 
 	start = gocore.CurrentTime()
-	txHashes := make([]chainhash.Hash, 0, u.maxMerkleItemsPerSubtree)
+	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
 	buffer := make([]byte, chainhash.HashSize)
 	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
 
@@ -596,11 +592,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	// process the transactions in parallel, based on the number of parents in the list
 	maxLevel, txsPerLevel := u.prepareTxsPerLevel(ctx, missingTxs)
 
-	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
-
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(spendBatcherSize * 2)
+		g.SetLimit(u.settings.SubtreeValidation.SpendBatcherSize * 2)
 
 		for _, mTx = range txsPerLevel[level] {
 			mTx := mTx
@@ -782,13 +776,13 @@ func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainh
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
 
-	getMissingTransactionsConcurrency, _ := gocore.Config().GetInt("blockvalidation_getMissingTransactions", util.Max(4, runtime.NumCPU()/2))
+	getMissingTransactionsConcurrency := u.settings.SubtreeValidation.GetMissingTransactions
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
+	batchSize := u.settings.SubtreeValidation.MissingTransactionsBatchSize
 
 	for i := 0; i < len(missingTxHashes); i += batchSize {
 		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]

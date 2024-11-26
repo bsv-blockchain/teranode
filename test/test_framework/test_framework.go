@@ -11,6 +11,7 @@ import (
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -106,7 +107,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 // nolint: gocognit
 func (b *BitcoinTestFramework) GetClientHandles() error {
 	logger := b.Logger
-
+	tSettings := settings.NewSettings()
 	logger.Infof("nodes: %v", b.Nodes)
 
 	for i, node := range b.Nodes {
@@ -142,7 +143,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 			return errors.NewConfigurationError("error getting mapped port %v", blockchainMappedPort, err)
 		}
 
-		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
+		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, tSettings, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockchain client %v", blockchainMappedPort, err)
 		}
@@ -161,7 +162,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 			return errors.NewConfigurationError("error getting mapped port %v", blockassemblyMappedPort, err)
 		}
 
-		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
+		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, tSettings, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
 		if err != nil {
 			return errors.NewServiceError("error creating blockassembly client %v", blockassemblyMappedPort, err)
 		}
@@ -180,7 +181,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 			return errors.NewConfigurationError("error getting mapped port %v", propagationMappedPort, err)
 		}
 
-		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, makeHostAddressFromPort(propagationMappedPort.Port()))
+		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, tSettings, makeHostAddressFromPort(propagationMappedPort.Port()))
 		if err != nil {
 			return errors.NewConfigurationError("error creating distributor client %v", propagationMappedPort, err)
 		}

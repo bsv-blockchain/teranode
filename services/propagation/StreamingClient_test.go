@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +14,8 @@ import (
 
 func TestStreamingClient(t *testing.T) {
 	logger := ulogger.New("test")
-	sc, err := propagation.NewStreamingClient(context.Background(), logger, 0, true)
+	tSettings := settings.NewSettings()
+	sc, err := propagation.NewStreamingClient(context.Background(), logger, tSettings, 0, true)
 	require.NoError(t, err)
 
 	numberOfIterations := 100

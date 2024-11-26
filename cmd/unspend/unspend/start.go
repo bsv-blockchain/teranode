@@ -6,18 +6,18 @@ import (
 	"os"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func Start() {
 	logger := ulogger.New("unspend")
 	ctx := context.Background()
-
+	tSettings := settings.NewSettings()
 	fmt.Println()
 
 	if len(os.Args) != 2 {
@@ -36,18 +36,7 @@ func Start() {
 		os.Exit(1)
 	}
 
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		fmt.Printf("error reading utxostore setting: %s\n", err)
-		os.Exit(1)
-	}
-
-	if !found {
-		fmt.Printf("no utxostore setting found\n")
-		os.Exit(1)
-	}
-
-	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "main", false)
+	utxoStore, err := utxofactory.NewStore(ctx, logger, tSettings, "main", false)
 	if err != nil {
 		fmt.Printf("error creating utxostore: %s\n", err)
 		os.Exit(1)

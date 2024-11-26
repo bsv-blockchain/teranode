@@ -30,11 +30,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver"
@@ -85,8 +85,8 @@ type Client struct {
 // Returns:
 //   - *Client: Initialized client instance
 //   - error: Any error encountered during initialization
-func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
-	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*Client, error) {
+	grpcResolver := tSettings.Propagation.GRPCResolver
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
 		resolver.SetDefaultScheme("k8s")
@@ -95,7 +95,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
-	validatorGrpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
+	validatorGrpcAddress := tSettings.Validator.GRPCAddress
+	if validatorGrpcAddress == "" {
+		return nil, errors.NewConfigurationError("missing validator_grpcAddress")
+	}
+
 	conn, err := util.GetGRPCClient(ctx, validatorGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
@@ -106,8 +110,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	grpcClient := validator_api.NewValidatorAPIClient(conn)
 
-	sendBatchSize, _ := gocore.Config().GetInt("validator_sendBatchSize", 0)
-	sendBatchTimeout, _ := gocore.Config().GetInt("validator_sendBatchTimeout", 100)
+	sendBatchSize := tSettings.Validator.SendBatchSize
+	sendBatchTimeout := tSettings.Validator.SendBatchTimeout
 
 	running := atomic.Bool{}
 	running.Store(true)

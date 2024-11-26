@@ -2,7 +2,6 @@ package blockvalidation
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -38,6 +38,7 @@ type revalidateBlockData struct {
 
 type BlockValidation struct {
 	logger                             ulogger.Logger
+	settings                           *settings.Settings
 	blockchainClient                   blockchain.ClientI
 	subtreeStore                       blob.Store
 	subtreeTTL                         time.Duration
@@ -49,7 +50,6 @@ type BlockValidation struct {
 	validatorClient                    validator.Interface
 	subtreeValidationClient            subtreevalidation.Interface
 	subtreeDeDuplicator                *deduplicator.DeDuplicator
-	optimisticMining                   bool
 	lastValidatedBlocks                *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
 	blockExists                        *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
 	subtreeExists                      *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
@@ -60,36 +60,25 @@ type BlockValidation struct {
 	setMinedChan                       chan *chainhash.Hash
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
-	excessiveBlockSize                 int
 	lastUsedBaseURL                    string
-	maxPreviousBlockHeadersToCheck     uint64
 }
 
-func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
+func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
-
-	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
-	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
-
-	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
-	logger.Infof("optimisticMining = %v", optimisticMining)
-
-	excessiveblocksize, _ := gocore.Config().GetInt("excessiveblocksize", 0)
-	maxPreviousBlockHeadersToCheck, _ := gocore.Config().GetInt("blockvalidation_maxPreviousBlockHeadersToCheck", 100)
-
+	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	bv := &BlockValidation{
 		logger:                             logger,
+		settings:                           tSettings,
 		blockchainClient:                   blockchainClient,
 		subtreeStore:                       subtreeStore,
-		subtreeTTL:                         subtreeTTL,
+		subtreeTTL:                         tSettings.BlockValidation.SubtreeTTL,
 		txStore:                            txStore,
 		utxoStore:                          txMetaStore,
 		recentBlocksBloomFilters:           make([]*model.BlockBloomFilter, 0),
 		recentBlocksBloomFiltersExpiration: bloomExpiration,
 		validatorClient:                    validatorClient,
 		subtreeValidationClient:            subtreeValidationClient,
-		subtreeDeDuplicator:                deduplicator.New(subtreeTTL),
-		optimisticMining:                   optimisticMining,
+		subtreeDeDuplicator:                deduplicator.New(tSettings.BlockValidation.SubtreeTTL),
 		lastValidatedBlocks:                expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                        expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:                      expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
@@ -100,9 +89,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
-		excessiveBlockSize:                 excessiveblocksize,
 		lastUsedBaseURL:                    "",
-		maxPreviousBlockHeadersToCheck:     uint64(maxPreviousBlockHeadersToCheck),
 	}
 
 	go func() {
@@ -322,12 +309,12 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	}
 
 	// get all 100 previous block headers on the main chain
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 	if err != nil {
 		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block headers", block.String(), err)
 	}
 
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 	if err != nil {
 		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block header ids", block.String(), err)
 	}
@@ -434,6 +421,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return u.subtreeValidationClient.CheckSubtree(ctx, subtreeHash, u.lastUsedBaseURL, block.Height, block.Hash())
 	}
+
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
 	if err != nil {
 		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
@@ -563,9 +551,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	// check the size of the block
 	// 0 is unlimited so don't check the size
-	if u.excessiveBlockSize > 0 {
-		if block.SizeInBytes > uint64(u.excessiveBlockSize) {
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveBlockSize)
+	if u.settings.Policy.ExcessiveBlockSize > 0 {
+		//nolint
+		if block.SizeInBytes > uint64(u.settings.Policy.ExcessiveBlockSize) {
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
 	}
 
@@ -589,7 +578,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
-	useOptimisticMining := u.optimisticMining
+	useOptimisticMining := u.settings.BlockValidation.OptimisticMining
 	if len(disableOptimisticMining) > 0 {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
@@ -635,7 +624,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			// get all 100 previous block headers on the main chain
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
 
-			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(callerSpan.Ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
+			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(callerSpan.Ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
@@ -643,7 +632,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				return
 			}
 
-			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 
@@ -708,7 +697,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 				return true
 			})
-
 		}()
 	} else {
 		// get all 100 previous block headers on the main chain
@@ -821,9 +809,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *model.Block) error {
 	// Caution, in regtest, when mining initial blocks, this logic wants to retry over and over as fast as possible to ensure it keeps up
-	backOffMultiplier, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_backoff_multiplier", 30)
-	retryCount, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_max_retry", 60)
-
 	checkParentBlock := func() (bool, error) {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
 		if err != nil {
@@ -842,8 +827,8 @@ func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *mod
 		u.logger,
 		checkParentBlock,
 		retry.WithBackoffDurationType(time.Millisecond),
-		retry.WithBackoffMultiplier(backOffMultiplier),
-		retry.WithRetryCount(retryCount),
+		retry.WithBackoffMultiplier(u.settings.BlockValidation.IsParentMinedRetryBackoffMultiplier),
+		retry.WithRetryCount(u.settings.BlockValidation.IsParentMinedRetryMaxRetry),
 	)
 
 	return err
@@ -959,11 +944,9 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesTTL")
 	defer deferFn()
 
-	subtreeTTLConcurrency, _ := gocore.Config().GetInt("blockvalidation_subtreeTTLConcurrency", 32)
-
 	// update the subtree TTLs
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(subtreeTTLConcurrency)
+	g.SetLimit(u.settings.BlockValidation.SubtreeTTLConcurrency)
 
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
@@ -995,11 +978,9 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 	u.lastUsedBaseURL = baseURL
 
-	validateBlockSubtreesConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateBlockSubtreesConcurrency", util.Max(4, runtime.NumCPU()/2))
-
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
+	g.SetLimit(u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	blockHeight := block.Height
 	if blockHeight == 0 && block.Header.Version > 1 {

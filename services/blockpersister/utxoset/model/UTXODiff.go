@@ -106,6 +106,7 @@ func (ud *UTXODiff) Trim() {
 		if ud.Removed.Exists(uk) {
 			keysToDelete = append(keysToDelete, uk)
 		}
+
 		return false
 	})
 

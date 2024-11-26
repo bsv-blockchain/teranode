@@ -93,8 +93,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
@@ -131,8 +129,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
@@ -169,8 +165,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
@@ -205,8 +199,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      mine_initial_blocks: true
-      mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
@@ -240,7 +232,6 @@ services:
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       startTxMetaStore: "false"
       startTxStore: "false"
-      mine_initial_blocks_count: 200
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
       startBootstrap: false
@@ -277,7 +268,6 @@ services:
       feature_bootstrap: false
       startP2P: true
       feature_libP2P: true
-      mine_initial_blocks: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-2:8087"
@@ -404,7 +394,6 @@ services:
       feature_bootstrap: false
       startP2P: true
       feature_libP2P: true
-      mine_initial_blocks: false
       securityLevelGRPC: 0
       securityLevelHTTP: 0
       blockchain_grpcAddress: "ubsv-3:8087"

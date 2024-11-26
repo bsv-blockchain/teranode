@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 type UTXOValue struct {
@@ -117,6 +118,7 @@ func (u *UTXOValue) Write(w io.Writer) error {
 		if _, err := w.Write([]byte{0x00}); err != nil {
 			return errors.NewProcessingError("error writing nil marker", err)
 		}
+
 		return nil
 	}
 

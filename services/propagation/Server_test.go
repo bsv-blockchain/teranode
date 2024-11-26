@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -18,8 +19,9 @@ import (
 func TestValidatorErrors(t *testing.T) {
 	tracing.SetGlobalMockTracer()
 	tx := bt.NewTx()
+	tSettings := settings.NewSettings()
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), nil, nil)
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)
 	err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
 	require.Error(t, err)

@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	// utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -76,18 +75,6 @@ func Start() {
 		panic(err)
 	}
 
-	// utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// if !found {
-	// 	panic("utxostore config not found")
-	// }
-	// utxoStore, err := utxostore_factory.NewStore(context.Background(), logger, utxoStoreURL, "main", false)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	// ------------------------------------------------------------------------------------------------
 	// start the actual tests
 	// ------------------------------------------------------------------------------------------------
@@ -126,38 +113,37 @@ func Start() {
 			logger.Errorf("failed to process block %s: %s\n", blockHeaders[i].Hash(), err)
 		}
 	}
-
-	// check all the transactions in tx blaster log
-	// logger.Infof("checking transactions from tx blaster log\n")
-	// txLog, err := os.OpenFile("data/txblaster.log", os.O_RDONLY, 0644)
-	// if err != nil {
-	// 	logger.Errorf("failed to open txblaster.log: %s\n", err)
-	// } else {
-	// 	fileScanner := bufio.NewScanner(txLog)
-	// 	fileScanner.Split(bufio.ScanLines)
-
-	// 	var txHash *chainhash.Hash
-	// 	for fileScanner.Scan() {
-	// 		txId := fileScanner.Text()
-	// 		txHash, err = chainhash.NewHashFromStr(txId)
-	// 		if err != nil {
-	// 			logger.Errorf("failed to parse tx id %s: %s\n", txId, err)
-	// 			continue
-	// 		}
-
-	// 		_, ok := transactionMap[*txHash]
-	// 		if !ok {
-	// 			logger.Errorf("transaction %s does not exist in any subtree in any block\n", txHash)
-	// 		}
-	// 	}
-	// 	_ = txLog.Close()
-	// }
 }
+
+// check all the transactions in tx blaster log
+// logger.Infof("checking transactions from tx blaster log\n")
+// txLog, err := os.OpenFile("data/txblaster.log", os.O_RDONLY, 0644)
+// if err != nil {
+// 	logger.Errorf("failed to open txblaster.log: %s\n", err)
+// } else {
+// 	fileScanner := bufio.NewScanner(txLog)
+// 	fileScanner.Split(bufio.ScanLines)
+// 	var txHash *chainhash.Hash
+// 	for fileScanner.Scan() {
+// 		txId := fileScanner.Text()
+// 		txHash, err = chainhash.NewHashFromStr(txId)
+// 		if err != nil {
+// 			logger.Errorf("failed to parse tx id %s: %s\n", txId, err)
+// 			continue
+// 		}
+// 		_, ok := transactionMap[*txHash]
+// 		if !ok {
+// 			logger.Errorf("transaction %s does not exist in any subtree in any block\n", txHash)
+// 		}
+// 	}
+// 	_ = txLog.Close()
+// }
 
 func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
+
 	fmt.Printf("Usage: blockpersisterintegrity [-verbose] -d <postgres-URL> -s3 <block-store-URL>\n\n")
 	os.Exit(1)
 }

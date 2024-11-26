@@ -6,13 +6,12 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/exp/rand"
 )
 
@@ -34,17 +33,17 @@ type Difficulty struct {
 	// lastSlowBlockHash    *chainhash.Hash
 	logger            ulogger.Logger
 	store             blockchain_store.Store
-	chainParams       *chaincfg.Params
+	settings          *settings.Settings
 	bestBlockHash     *chainhash.Hash
 	lastComputednBits *model.NBit
 }
 
-func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *chaincfg.Params) (*Difficulty, error) {
+func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSettings *settings.Settings) (*Difficulty, error) {
 	d := &Difficulty{}
-	d.chainParams = params
+	d.settings = tSettings
 
 	bytesLittleEndian := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bytesLittleEndian, params.PowLimitBits)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, tSettings.ChainCfgParams.PowLimitBits)
 	d.powLimitnBits, _ = model.NewNBitFromSlice(bytesLittleEndian)
 
 	d.logger = logger
@@ -54,18 +53,8 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *
 }
 
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
-	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
-
-	//nolint:gosec // Ignore G115: integer overflow conversion
-	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
-		// set to start difficulty
-		d.logger.Debugf("mining initial blocks")
-
-		return d.powLimitnBits, nil
-	}
-
 	// If regest or simnet we don't adjust the difficulty
-	if d.chainParams.NoDifficultyAdjustment {
+	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &bestBlockHeader.Bits, nil
 	}
 
@@ -92,10 +81,10 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	// For networks that support it, allow special reduction of the
 	// required difficulty once too much time has elapsed without
 	// mining a block.
-	if d.chainParams.ReduceMinDifficulty {
+	if d.settings.ChainCfgParams.ReduceMinDifficulty {
 		// Return minimum difficulty when more than the desired
 		// amount of time has elapsed without mining a block.
-		reductionTime := d.chainParams.MinDiffReductionTime.Seconds()
+		reductionTime := d.settings.ChainCfgParams.MinDiffReductionTime.Seconds()
 
 		// Add a random additional time of +/- 1 minute
 		// this is to prevent testnet nodes all mining their own blocks at the same time
@@ -106,7 +95,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		allowMinTime := bestBlockHeader.Timestamp + uint32(reductionTime)
 		if now.Unix() > int64(allowMinTime) {
 			bytesLittleEndian := make([]byte, 4)
-			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
+			binary.LittleEndian.PutUint32(bytesLittleEndian, d.settings.ChainCfgParams.PowLimitBits)
 			nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 			return nBits, nil
@@ -158,7 +147,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regest or simnet we don't adjust the difficulty
-	if d.chainParams.NoDifficultyAdjustment {
+	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
@@ -166,19 +155,19 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	// For networks that support it, allow special reduction of the
 	// required difficulty once too much time has elapsed without
 	// mining a block.
-	if d.chainParams.ReduceMinDifficulty {
+	if d.settings.ChainCfgParams.ReduceMinDifficulty {
 		// Return minimum difficulty when more than the desired
 		// amount of time has elapsed without mining a block.
-		reductionTime := int64(d.chainParams.MinDiffReductionTime /
+		reductionTime := int64(d.settings.ChainCfgParams.MinDiffReductionTime /
 			time.Second)
 		allowMinTime := int64(suitableLastBlock.Time) + reductionTime
 		elapsedTime := time.Now().Unix() - int64(suitableLastBlock.Time)
 
 		if elapsedTime > allowMinTime {
-			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.chainParams.MinDiffReductionTime)
+			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.settings.ChainCfgParams.MinDiffReductionTime)
 
 			bytesLittleEndian := make([]byte, 4)
-			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
+			binary.LittleEndian.PutUint32(bytesLittleEndian, d.settings.ChainCfgParams.PowLimitBits)
 			powLimitBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 			return powLimitBits, nil
@@ -213,16 +202,16 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	d.logger.Debugf("suitableLastBlock.Time: %d, suitableFirstBlock.Time: %d", suitableLastBlock.Time, suitableFirstBlock.Time)
 
 	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
-	if duration > 288*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is greater than 288 * target time per block %d - setting to 288 * target time per block", duration, d.chainParams.TargetTimePerBlock.Seconds())
-		duration = 288 * int64(d.chainParams.TargetTimePerBlock.Seconds())
-	} else if duration < 72*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is less than 72 * target time per block %d - setting to 72 * target time per block", duration, d.chainParams.TargetTimePerBlock.Seconds())
-		duration = 72 * int64(d.chainParams.TargetTimePerBlock.Seconds())
+	if duration > 288*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
+		d.logger.Debugf("duration %d is greater than 288 * target time per block %d - setting to 288 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+		duration = 288 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+	} else if duration < 72*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
+		d.logger.Debugf("duration %d is less than 72 * target time per block %d - setting to 72 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+		duration = 72 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 	}
 
 	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
-	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.chainParams.TargetTimePerBlock.Seconds())))
+	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())))
 	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
 	// check if duration is zero
 	if duration == 0 {
@@ -245,9 +234,9 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	newTarget := new(big.Int).Div(nt, pw)
 
 	// clip again if above minimum target (too easy)
-	if newTarget.Cmp(d.chainParams.PowLimit) > 0 {
+	if newTarget.Cmp(d.settings.ChainCfgParams.PowLimit) > 0 {
 		d.logger.Debugf("new target would be above pow limit, set to pow limit")
-		newTarget.Set(d.chainParams.PowLimit)
+		newTarget.Set(d.settings.ChainCfgParams.PowLimit)
 	}
 
 	nBitsUint := BigToCompact(newTarget)

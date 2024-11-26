@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
@@ -21,7 +23,7 @@ import (
 func Test_NewFiniteStateMachine(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
-	blockchainClient, err := New(ctx, logger, nil, nil)
+	blockchainClient, err := New(ctx, logger, getTestSettings(), nil, nil)
 	require.NoError(t, err)
 
 	fsm := blockchainClient.NewFiniteStateMachine()
@@ -94,7 +96,7 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
 
-	blockchainClient, err := New(ctx, logger, blockchainStore, nil)
+	blockchainClient, err := New(ctx, logger, getTestSettings(), blockchainStore, nil)
 	require.NoError(t, err)
 
 	err = blockchainClient.Init(ctx)
@@ -206,4 +208,9 @@ func SetupPostgresContainer() (string, func() error, error) {
 	}
 
 	return connStr, teardown, nil
+}
+func getTestSettings() *settings.Settings {
+	return &settings.Settings{
+		ChainCfgParams: &chaincfg.RegressionNetParams,
+	}
 }

@@ -14,9 +14,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -60,6 +60,7 @@ type ResetResponse struct {
 }
 
 type SubtreeProcessor struct {
+	settings                  *settings.Settings
 	currentItemsPerFile       int
 	txChan                    chan *[]txIDAndFee
 	getSubtreesChan           chan chan []*util.Subtree
@@ -74,27 +75,26 @@ type SubtreeProcessor struct {
 	currentSubtree            *util.Subtree
 	currentBlockHeader        *model.BlockHeader
 	sync.Mutex
-	txCount                   atomic.Uint64
-	batcher                   *txIDAndFeeBatch
-	queue                     *LockFreeQueue
-	removeMap                 *util.SwissMap
-	doubleSpendWindowDuration time.Duration
-	subtreeStore              blob.Store
-	utxoStore                 utxostore.Store
-	logger                    ulogger.Logger
-	stats                     *gocore.Stat
-	currentRunningState       atomic.Value
+	txCount             atomic.Uint64
+	batcher             *txIDAndFeeBatch
+	queue               *LockFreeQueue
+	removeMap           *util.SwissMap
+	subtreeStore        blob.Store
+	utxoStore           utxostore.Store
+	logger              ulogger.Logger
+	stats               *gocore.Stat
+	currentRunningState atomic.Value
 }
 
 var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Store,
+func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, utxoStore utxostore.Store,
 	newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
 	initPrometheusMetrics()
 
-	initialItemsPerFile, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1_048_576)
+	initialItemsPerFile := tSettings.BlockAssembly.InitialMerkleItemsPerSubtree
 
 	firstSubtree, err := util.NewTreeByLeafCount(initialItemsPerFile)
 	if err != nil {
@@ -105,23 +105,12 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
-	txChanBufferSize := 100_000
-	if settingsBufferSize, ok := gocore.Config().GetInt("tx_chan_buffer_size", 0); ok {
-		txChanBufferSize = settingsBufferSize
-	}
-
-	batcherSize := 1000
-	if settingsBufferSize, ok := gocore.Config().GetInt("blockassembly_subtreeProcessorBatcherSize", 1000); ok {
-		batcherSize = settingsBufferSize
-	}
-
-	doubleSpendWindowMillis, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
-
 	queue := NewLockFreeQueue()
 
 	stp := &SubtreeProcessor{
+		settings:                  tSettings,
 		currentItemsPerFile:       initialItemsPerFile,
-		txChan:                    make(chan *[]txIDAndFee, txChanBufferSize),
+		txChan:                    make(chan *[]txIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
 		getSubtreesChan:           make(chan chan []*util.Subtree),
 		moveUpBlockChan:           make(chan moveBlockRequest),
 		reorgBlockChan:            make(chan reorgBlocksRequest),
@@ -132,10 +121,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
 		currentSubtree:            firstSubtree,
-		batcher:                   newTxIDAndFeeBatch(batcherSize),
+		batcher:                   newTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 		queue:                     queue,
 		removeMap:                 util.NewSwissMap(0),
-		doubleSpendWindowDuration: time.Duration(doubleSpendWindowMillis) * time.Millisecond,
 		subtreeStore:              subtreeStore,
 		utxoStore:                 utxoStore,
 		logger:                    logger,
@@ -257,7 +245,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				nrProcessed := 0
 				mapLength := stp.removeMap.Length()
 				// set the validFromMillis to the current time minus the double spend window - so in the past
-				validFromMillis := time.Now().Add(-1 * stp.doubleSpendWindowDuration).UnixMilli()
+				validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 
 				for {
 					txReq = stp.queue.dequeue(validFromMillis)
@@ -289,7 +277,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 					stp.txCount.Add(1)
 
 					nrProcessed++
-					if nrProcessed > batcherSize {
+					if nrProcessed > stp.settings.BlockAssembly.SubtreeProcessorBatcherSize {
 						break
 					}
 				}
@@ -695,8 +683,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
-	g.SetLimit(moveDownBlockConcurrency)
+	g.SetLimit(stp.settings.BlockAssembly.MoveDownBlockConcurrency)
 
 	// get all the subtrees in parallel
 	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
@@ -810,8 +797,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
-	g.SetLimit(moveDownBlockConcurrency)
+	g.SetLimit(stp.settings.BlockAssembly.MoveDownBlockConcurrency)
 
 	var block *model.Block
 
@@ -1103,7 +1089,7 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap, skipN
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrProcessed := int64(0)
-		validFromMillis := time.Now().Add(-1 * stp.doubleSpendWindowDuration).UnixMilli()
+		validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 
 		for {
 			// TODO make sure to add the time delay here when activated
@@ -1194,7 +1180,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return nil
 	}
 
-	utxos, err := utxo.GetUtxoHashes(block.CoinbaseTx)
+	utxos, err := utxostore.GetUtxoHashes(block.CoinbaseTx)
 	if err != nil {
 		return errors.NewProcessingError("[SubtreeProcessor][coinbase:%s] error extracting coinbase utxos", block.CoinbaseTx.TxIDChainHash(), err)
 	}
@@ -1217,7 +1203,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	stp.logger.Debugf("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s blockID %d", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String(), block.ID)
 	// we pass in the block height we are working on here, since the utxo store will recognize the tx as
 	// a coinbase and add the correct spending height, which should be + 99
-	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight, utxo.WithBlockIDs(block.ID)); err != nil {
+	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight, utxostore.WithBlockIDs(block.ID)); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// This will also be called for the 2 coinbase transactions that are duplicated on the network
 			// These transactions were created twice:
@@ -1241,8 +1227,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	g, _ := errgroup.WithContext(ctx)
-	processRemainderTxHashesConcurrency, _ := gocore.Config().GetInt("blockassembly_processRemainderTxHashesConcurrency", 64)
-	g.SetLimit(processRemainderTxHashesConcurrency)
+	g.SetLimit(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
 	remainderSubtrees := make([][]util.SubtreeNode, len(chainedSubtrees))
@@ -1297,7 +1282,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
-	concurrentSubtreeReads, _ := gocore.Config().GetInt("blockassembly_subtreeProcessorConcurrentReads", 4)
+	concurrentSubtreeReads := stp.settings.BlockAssembly.SubtreeProcessorConcurrentReads
 
 	// TODO this bit is slow !
 	stp.logger.Infof("createTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)

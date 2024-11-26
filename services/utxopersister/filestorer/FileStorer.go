@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/bytesize"
 	"github.com/libsv/go-bt"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type FileStorer struct {
@@ -32,12 +32,12 @@ type FileStorer struct {
 	mu             sync.Mutex
 }
 
-func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store, key []byte, extension string) *FileStorer {
+func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
 	hasher := sha256.New()
 
 	reader, writer := io.Pipe()
 
-	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {

@@ -50,7 +50,4 @@ func TestReadWrite(t *testing.T) {
 	require.Equal(t, bi.BlockHeader.Timestamp, bi2.BlockHeader.Timestamp)
 	require.Equal(t, bi.BlockHeader.Bits, bi2.BlockHeader.Bits)
 	require.Equal(t, bi.BlockHeader.Nonce, bi2.BlockHeader.Nonce)
-
-	// t.Log(bi.String())
-	// t.Log(bi2.String())
 }

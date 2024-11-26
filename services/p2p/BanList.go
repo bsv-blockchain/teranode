@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
-	"github.com/ordishs/gocore"
 )
 
 var (
@@ -42,13 +42,13 @@ type BanList struct {
 	mu sync.RWMutex
 }
 
-func GetBanList(ctx context.Context, logger ulogger.Logger) (*BanList, chan BanEvent, error) {
+func GetBanList(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*BanList, chan BanEvent, error) {
 	var eventChan chan BanEvent
 
 	banListOnce.Do(func() {
 		var err error
 
-		banListInstance, err = newBanList(logger)
+		banListInstance, err = newBanList(logger, tSettings)
 		if err != nil {
 			logger.Errorf("Failed to create BanList: %v", err)
 
@@ -74,13 +74,9 @@ func GetBanList(ctx context.Context, logger ulogger.Logger) (*BanList, chan BanE
 	return banListInstance, eventChan, nil
 }
 
-func newBanList(logger ulogger.Logger) (*BanList, error) {
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get blockchain_store setting", err)
-	}
-
-	if !found {
+func newBanList(logger ulogger.Logger, tSettings *settings.Settings) (*BanList, error) {
+	blockchainStoreURL := tSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
 		return nil, errors.NewConfigurationError("no blockchain_store setting found")
 	}
 

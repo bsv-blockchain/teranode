@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -28,20 +29,12 @@ var (
 	mainBlockValidationClient   blockvalidation.Interface
 )
 
-func getUtxoStore(ctx context.Context, logger ulogger.Logger) (utxostore.Store, error) {
+func getUtxoStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (utxostore.Store, error) {
 	if mainUtxoStore != nil {
 		return mainUtxoStore, nil
 	}
 
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, errors.NewConfigurationError("no utxostore setting found")
-	}
-
-	mainUtxoStore, err = utxofactory.NewStore(ctx, logger, utxoStoreURL, "main")
+	mainUtxoStore, err := utxofactory.NewStore(ctx, logger, tSettings, "main")
 	if err != nil {
 		return nil, err
 	}
@@ -49,34 +42,34 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) (utxostore.Store, 
 	return mainUtxoStore, nil
 }
 
-func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) (subtreevalidation.Interface, error) {
+func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (subtreevalidation.Interface, error) {
 	if mainSubtreeValidationClient != nil {
 		return mainSubtreeValidationClient, nil
 	}
 
 	var err error
-	mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, "main_stores")
+	mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, tSettings, "main_stores")
 
 	return mainSubtreeValidationClient, err
 }
 
-func getBlockValidationClient(ctx context.Context, logger ulogger.Logger) (blockvalidation.Interface, error) {
+func getBlockValidationClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (blockvalidation.Interface, error) {
 	if mainBlockValidationClient != nil {
 		return mainBlockValidationClient, nil
 	}
 
 	var err error
-	mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, "main_stores")
+	mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, tSettings, "main_stores")
 
 	return mainBlockValidationClient, err
 }
 
-func getBlockchainClient(ctx context.Context, logger ulogger.Logger, source string) (blockchain.ClientI, error) {
+func getBlockchainClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (blockchain.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
-	return blockchain.NewClient(ctx, logger, source)
+	return blockchain.NewClient(ctx, logger, tSettings, source)
 }
 
-func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.Interface, error) {
+func getValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (validator.Interface, error) {
 	if mainValidatorClient != nil {
 		return mainValidatorClient, nil
 	}
@@ -85,7 +78,7 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 	if localValidator {
 		logger.Infof("[Validator] Using local validator")
-		utxoStore, err := getUtxoStore(ctx, logger)
+		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
@@ -102,6 +95,7 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 
 		mainValidatorClient, err = validator.New(ctx,
 			logger,
+			tSettings,
 			utxoStore,
 			txMetaKafkaProducerClient,
 			rejectedTxKafkaProducerClient,
@@ -111,7 +105,7 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 		}
 
 	} else {
-		mainValidatorClient, err = validator.NewClient(ctx, logger)
+		mainValidatorClient, err = validator.NewClient(ctx, logger, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create validator client", err)
 		}

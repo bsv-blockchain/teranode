@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -52,6 +52,7 @@ type processBlockCatchup struct {
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger              ulogger.Logger
+	settings            *settings.Settings
 	blockchainClient    blockchain.ClientI
 	subtreeStore        blob.Store
 	txStore             blob.Store
@@ -72,6 +73,7 @@ type Server struct {
 // New will return a server instance with the logger stored within it
 func New(
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	subtreeStore blob.Store,
 	txStore blob.Store,
 	utxoStore utxo.Store,
@@ -82,23 +84,19 @@ func New(
 	initPrometheusMetrics()
 
 	// TEMP limit to 1, to prevent multiple subtrees processing at the same time
-	subtreeGroupConcurrency, _ := gocore.Config().GetInt("blockvalidation_subtreeGroupConcurrency", 1)
-
 	subtreeGroup := errgroup.Group{}
-	subtreeGroup.SetLimit(subtreeGroupConcurrency)
-
-	blockFoundChBuffer, _ := gocore.Config().GetInt("blockvalidation_blockFoundCh_buffer_size", 1000) // during testing often mine 1000 blocks to begin with
-	catchupChBuffer, _ := gocore.Config().GetInt("blockvalidation_catchupCh_buffer_size", 10)
+	subtreeGroup.SetLimit(tSettings.BlockValidation.SubtreeGroupConcurrency)
 
 	bVal := &Server{
 		logger:               logger,
+		settings:             tSettings,
 		subtreeStore:         subtreeStore,
 		blockchainClient:     blockchainClient,
 		txStore:              txStore,
 		utxoStore:            utxoStore,
 		validatorClient:      validatorClient,
-		blockFoundCh:         make(chan processBlockFound, blockFoundChBuffer),
-		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
+		blockFoundCh:         make(chan processBlockFound, tSettings.BlockValidation.BlockFoundChBufferSize),
+		catchupCh:            make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 		stats:                gocore.NewStat("blockvalidation"),
@@ -155,13 +153,13 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
-	subtreeValidationClient, err := subtreevalidation.NewClient(ctx, u.logger, "blockvalidation")
+	subtreeValidationClient, err := subtreevalidation.NewClient(ctx, u.logger, u.settings, "blockvalidation")
 	if err != nil {
 		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
 	}
 
-	storeURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil || !found {
+	storeURL := u.settings.UtxoStore.UtxoStore
+	if storeURL == nil {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
@@ -185,7 +183,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, expiration)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, expiration)
 
 	go u.processSubtreeNotify.Start()
 
@@ -315,6 +313,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
+	//nolint
 	var baseUrl string
 
 	if len(msg.Value) > 32 {
@@ -361,11 +360,11 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 }
 
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
-	useCatchupWhenBehind := gocore.Config().GetBool("blockvalidation_useCatchupWhenBehind", false)
 	// TODO GOKHAN: parameterize this
-	if useCatchupWhenBehind && len(u.blockFoundCh) > 3 {
+	if u.settings.BlockValidation.UseCatchupWhenBehind && len(u.blockFoundCh) > 3 {
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
 		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())
+
 		peerBlocks := make(map[string]processBlockFound)
 		peerBlocks[blockFound.baseURL] = blockFound
 		// get the newest block per peer, emptying the block found channel
@@ -399,6 +398,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 	// TODO optimize this for the valid chain, not processing everything ???
 	u.logger.Infof("[Init] processing block found on channel [%s]", blockFound.hash.String())
+
 	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL)
 	if err != nil {
 		if blockFound.errCh != nil {
@@ -420,15 +420,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-
 	// start blocks kafka consumer
 	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if u.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := u.blockchainClient.Restore(ctx)
 		if err != nil {
@@ -443,8 +441,8 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("[Block Validation] Node finished restoring and has transitioned to Running state, continuing to start Block Validation service")
 	}
 
-	httpAddress, ok := gocore.Config().Get("blockvalidation_httpListenAddress")
-	if ok {
+	httpAddress := u.settings.BlockValidation.HTTPListenAddress
+	if httpAddress != "" {
 		err := u.httpServer(ctx, httpAddress)
 		if err != nil {
 			u.logger.Errorf("[BlockValidation] failed to start http server: %v", err)
@@ -484,10 +482,12 @@ func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 	})
 	e.GET("/subtree/:hash", func(c echo.Context) error {
 		hashStr := c.Param("hash")
+
 		hash, err := chainhash.NewHashFromStr(hashStr)
 		if err != nil {
 			return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
 		}
+
 		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), hash[:], options.WithFileExtension("subtree"))
 		if err != nil {
 			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to get subtree: %v", err))
@@ -506,6 +506,7 @@ func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 		<-ctx.Done()
 
 		u.logger.Infof("[Block Validation] Shutting down block validation http server")
+
 		if err := e.Shutdown(ctx); err != nil {
 			u.logger.Errorf("[Block Validation] failed to shutdown http server: %v", err)
 		}
@@ -545,6 +546,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		return nil, errors.WrapGRPC(
 			errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err))
 	}
+
 	if exists {
 		u.logger.Infof("[BlockFound][%s] already validated, skipping", utils.ReverseAndHexEncodeSlice(req.Hash))
 		return &blockvalidation_api.EmptyMessage{}, nil
@@ -620,11 +622,11 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
-		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseURL),
 	)
 	defer deferFn()
 
@@ -633,6 +635,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if err != nil {
 		return errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err)
 	}
+
 	if exists {
 		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
 		return nil
@@ -642,13 +645,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.getBlock(ctx, hash, baseUrl)
+		block, err = u.getBlock(ctx, hash, baseURL)
 		if err != nil {
 			return err
 		}
 	}
 
-	u.checkParentProcessingComplete(ctx, block, baseUrl)
+	u.checkParentProcessingComplete(ctx, block, baseURL)
 
 	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
@@ -662,7 +665,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
-				baseURL: baseUrl,
+				baseURL: baseURL,
 			}
 			prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 		}()
@@ -671,13 +674,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 
 	// validate the block
-	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseUrl)
+	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
 	// this is a bit of a hack, but we need to turn off optimistic mining when in legacy mode
-	if baseUrl == "legacy" {
-		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, true)
+	if baseURL == "legacy" {
+		err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats, true)
 	} else {
-		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
+		err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats)
 	}
 
 	if err != nil {
@@ -687,10 +690,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	return nil
 }
 
-func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseUrl string) {
+func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseURL string) {
 	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
-		tracing.WithDebugLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseURL),
 	)
 	defer deferFn()
 
@@ -730,12 +733,14 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 			}
 
 			time.Sleep(delay)
+
 			delay *= 2
 			if delay > maxDelay {
 				delay = maxDelay
 			}
 
 			time.Sleep(delay)
+
 			delay *= 2
 			if delay > maxDelay {
 				delay = maxDelay
@@ -746,13 +751,13 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 	}
 }
 
-func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
+func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseURL string) (*model.Block, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlock",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseURL, hash.String()))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlock][%s] failed to get block from peer", hash.String(), err)
 	}
@@ -769,13 +774,13 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 	return block, nil
 }
 
-func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
+func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseURL string) ([]*model.Block, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlocks",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlocks][%s] failed to get blocks from peer", hash.String(), err)
 	}
@@ -801,13 +806,13 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	return blocks, nil
 }
 
-func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
+func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseURL string) ([]*model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s?n=200", baseUrl, hash.String()))
+	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s?n=200", baseURL, hash.String()))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
 	}
@@ -912,14 +917,12 @@ LOOP:
 
 	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
 
-	catchupConcurrency, _ := gocore.Config().GetInt("blockvalidation_catchupConcurrency", util.Max(4, runtime.NumCPU()/2))
-
 	size := atomic.Uint32{}
 
 	// process the catchup block headers in reverse order and put them on the channel
 	// this will allow the blocks to be validated while getting them from the other node
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(catchupConcurrency)
+	g.SetLimit(u.settings.BlockValidation.CatchupConcurrency)
 	g.Go(func() error {
 		slices.Reverse(catchupBlockHeaders)
 		batches := getBlockBatchGets(catchupBlockHeaders, 100)
@@ -945,6 +948,7 @@ LOOP:
 				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
 				return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
 			}
+			//nolint
 			if uint32(len(blocks)) != batch.size {
 				u.logger.Warnf("[catchup][%s] got %d blocks, expected %d", fromBlock.Hash().String(), len(blocks), batch.size)
 			}
@@ -953,6 +957,7 @@ LOOP:
 
 			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
 			slices.Reverse(blocks)
+
 			for _, block := range blocks {
 				blockCount++
 				validateBlocksChan <- block
@@ -997,8 +1002,10 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 	batches := make([]blockBatchGet, 0)
 
 	var useBlockHeaders []*model.BlockHeader
+
 	for i := 0; i < len(catchupBlockHeaders); i += batchSize {
 		start := i
+
 		end := i + batchSize
 		if end > len(catchupBlockHeaders)-1 {
 			useBlockHeaders = catchupBlockHeaders[start:]
@@ -1009,6 +1016,7 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
 		batches = append(batches, blockBatchGet{
 			hash: *lastHash,
+			//nolint
 			size: uint32(len(useBlockHeaders)),
 		})
 	}
@@ -1018,17 +1026,14 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 
 func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	// TODO - Delete or resurrect...
-
 	// subtreeHash, err := chainhash.NewHash(req.Hash)
 	// if err != nil {
 	// 	return nil, errors.NewError("[SubtreeFound][%s] failed to create subtree hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	// }
-
 	// u.subtreeFoundQueue.enqueue(&queueItem{
 	// 	hash:    *subtreeHash,
 	// 	baseURL: req.GetBaseUrl(),
 	// })
-
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
@@ -1055,6 +1060,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 	}()
 
 	hash := chainhash.Hash(request.Hash)
+
 	exists, err := u.blockValidation.GetSubtreeExists(ctx, &hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("failed to check if subtree exists: %s", hash.String(), err))
@@ -1092,7 +1098,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 
 	prometheusBlockValidationSetTXMetaCacheDel.Inc()
 
-	hash, err := chainhash.NewHash(request.Hash[:])
+	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create hash from bytes", err))
 	}
@@ -1122,6 +1128,7 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	}
 
 	prometheusBlockValidationSetMinedMulti.Inc()
+
 	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data: %v", err))

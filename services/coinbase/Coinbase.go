@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -44,6 +45,7 @@ type processBlockCatchup struct {
 
 type Coinbase struct {
 	db               *usql.DB
+	settings         *settings.Settings
 	engine           util.SQLEngine
 	blockchainClient bc.ClientI
 	store            blockchain.Store
@@ -56,7 +58,6 @@ type Coinbase struct {
 	address          string
 	dbTimeout        time.Duration
 	peerSync         *p2p.PeerHeight
-	waitForPeers     bool
 	g                *errgroup.Group
 	gCtx             context.Context
 	stats            *gocore.Stat
@@ -65,14 +66,16 @@ type Coinbase struct {
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
 // Only SQL databases are supported
-func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store blockchain.Store) (*Coinbase, error) {
+func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient bc.ClientI, store blockchain.Store) (*Coinbase, error) {
+	tSettings.Policy.MinMiningTxFee = 0
+
 	engine := store.GetDBEngine()
 	if engine != util.Postgres && engine != util.Sqlite && engine != util.SqliteMemory {
 		return nil, errors.NewStorageError("unsupported database engine: %s", engine)
 	}
 
-	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_private_key")
-	if !found {
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
+	if coinbasePrivKey == "" {
 		return nil, errors.NewConfigurationError("coinbase_wallet_private_key not found in config")
 	}
 
@@ -86,36 +89,29 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 		return nil, errors.NewConfigurationError("can't create coinbase address: %v", err)
 	}
 
-	backoffDuration, err, _ := gocore.Config().GetDuration("distributor_backoff_duration", 1*time.Second)
-	if err != nil {
-		return nil, errors.NewConfigurationError("could not parse distributor_backoff_duration: %v", err)
-	}
+	backoffDuration := tSettings.Coinbase.DistributorBackoffDuration
 
-	maxRetries, _ := gocore.Config().GetInt("distributor_max_retries", 3)
+	maxRetries := tSettings.Coinbase.DistributorMaxRetries
 
-	failureTolerance, _ := gocore.Config().GetInt("distributor_failure_tolerance", 0)
+	failureTolerance := tSettings.Coinbase.DistributorFailureTolerance
 
-	d, err := distributor.NewDistributor(context.Background(), logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
+	d, err := distributor.NewDistributor(context.Background(), logger, tSettings, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance)) //nolint:gosec
 	if err != nil {
 		return nil, errors.NewServiceError("could not create distributor", err)
 	}
 
-	dbTimeoutMillis, _ := gocore.Config().GetInt("blockchain_store_dbTimeoutMillis", 5000)
+	dbTimeoutMillis := tSettings.BlockChain.StoreDBTimeoutMillis
 
-	addresses, ok := gocore.Config().Get("propagation_grpcAddresses")
-	if !ok {
+	addresses := tSettings.Propagation.GRPCAddresses
+	if len(addresses) == 0 {
 		return nil, errors.NewConfigurationError("[PeerStatus] propagation_grpcAddresses not found")
 	}
-	numberOfExpectedPeers := 1 + strings.Count(addresses, "|") // each | is a ip:port separator
 
-	peerStatusTimeout, err, _ := gocore.Config().GetDuration("peerStatus_timeout", 30*time.Second)
-	if err != nil {
-		return nil, errors.NewConfigurationError("[PeerStatus] failed to parse peerStatus_timeout", err)
-	}
+	numberOfExpectedPeers := len(addresses)
 
-	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
+	peerStatusTimeout := tSettings.Coinbase.PeerStatusTimeout
 
-	minConfirmations, _ := gocore.Config().GetInt("blockvalidation_maxPreviousBlockHeadersToCheck", 100)
+	minConfirmations := tSettings.BlockValidation.MaxPreviousBlockHeadersToCheck
 
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
@@ -124,8 +120,10 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 	if err != nil {
 		return nil, errors.NewServiceError("could not create peer sync service", err)
 	}
+
 	c := &Coinbase{
 		blockchainClient: blockchainClient,
+		settings:         tSettings,
 		store:            store,
 		db:               store.GetDB(),
 		engine:           engine,
@@ -137,15 +135,14 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 		address:          coinbaseAddr.AddressString,
 		dbTimeout:        time.Duration(dbTimeoutMillis) * time.Millisecond,
 		peerSync:         peerSync,
-		waitForPeers:     waitForPeers,
 		g:                g,
 		gCtx:             gCtx,
 		stats:            gocore.NewStat("coinbase"),
-		minConfirmations: uint64(minConfirmations),
+		minConfirmations: minConfirmations,
 	}
 
-	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
-	if found {
+	threshold := tSettings.Coinbase.NotificationThreshold
+	if threshold > 0 {
 		go c.monitorSpendableUTXOs(uint64(threshold))
 	}
 
@@ -220,8 +217,8 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 }
 
 func (c *Coinbase) createTables(ctx context.Context) error {
-
 	var idType string
+
 	var bType string
 
 	switch c.engine {
@@ -262,10 +259,9 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		`, idType, bType, bType)); err != nil {
 		return err
 	}
-
+	//nolint:gocritic
 	switch c.engine {
 	case util.Postgres:
-
 		if _, err := c.db.ExecContext(ctx, `
 			CREATE TABLE IF NOT EXISTS spendable_utxos_log (
 				id BIGSERIAL PRIMARY KEY,
@@ -290,10 +286,10 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 			INSERT INTO spendable_utxos_balance (
 				 utxo_count
 				,total_satoshis
-			) SELECT 
+			) SELECT
 					 COALESCE(COUNT(*), 0)
 					,COALESCE(SUM(satoshis), 0)
-				FROM 
+				FROM
 					spendable_utxos;
 		`); err != nil {
 			return err
@@ -316,7 +312,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 								INSERT INTO spendable_utxos_log (change_type, utxo_count_change, satoshis_change)
 								VALUES ('U', 0, NEW.satoshis - OLD.satoshis);
 						END IF;
-				
+
 						RETURN NULL;
 				END;
 				$$ LANGUAGE plpgsql;
@@ -364,7 +360,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 				RETURNS TABLE (utxo_count BIGINT, total_satoshis BIGINT) AS $$
 				BEGIN
 					RETURN QUERY
-	
+
 					SELECT
 						 sb.utxo_count + CAST(sl.utxo_count_change AS BIGINT) AS utxo_count
 						,sb.total_satoshis + CAST(sl.satoshis_change AS BIGINT) AS total_satoshis
@@ -382,7 +378,6 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 			`); err != nil {
 			return err
 		}
-
 	} // end switch
 
 	if _, err := c.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
@@ -412,6 +407,7 @@ func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseUR
 	c.logger.Infof("catching up from %s on server %s", fromBlock.Hash().String(), baseURL)
 
 	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
+
 	var exists bool
 
 	fromBlockHeaderHash := fromBlock.Header.HashPrevBlock
@@ -467,7 +463,7 @@ LOOP:
 	return nil
 }
 
-func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash, baseUrl string) (*model.Block, error) {
+func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash, baseURL string) (*model.Block, error) {
 	start, stat, ctx := tracing.NewStatFromContext(cntxt, "processBlock", coinbaseStat)
 	defer func() {
 		stat.AddTime(start)
@@ -479,6 +475,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 	if err != nil {
 		return nil, errors.NewStorageError("could not check whether block exists", err)
 	}
+
 	if exists {
 		c.logger.Debugf("skipping block that already exists: %s", blockHash.String())
 		return nil, nil
@@ -494,13 +491,15 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 	if err != nil {
 		return nil, errors.NewStorageError("could not check whether block exists", err)
 	}
+
 	if !exists {
 		go func() {
 			c.catchupCh <- processBlockCatchup{
 				block:   block,
-				baseURL: baseUrl,
+				baseURL: baseURL,
 			}
 		}()
+
 		return nil, nil
 	}
 
@@ -516,15 +515,15 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "storeBlock")
 	defer deferFn()
 
-	//ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	//defer cancelTimeout()
+	// ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	// defer cancelTimeout()
 
-	blockId, height, err := c.store.StoreBlock(ctx, block, "")
+	blockId, height, err := c.store.StoreBlock(ctx, block, "") //nolint:stylecheck
 	if err != nil {
 		return errors.NewStorageError("could not store block", err)
 	}
 
-	if c.waitForPeers {
+	if c.settings.Coinbase.WaitForPeers {
 		/* Wait until all nodes are at least on same block height as this coinbase block */
 		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
 		err = c.peerSync.WaitForAllPeers(ctx, height, true)
@@ -541,12 +540,12 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	return nil
 }
 
-func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
+func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error { //nolint:stylecheck
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "processCoinbase")
 	defer deferFn()
 
-	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	//defer cancelTimeout()
+	// ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	// defer cancelTimeout()
 
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
@@ -608,8 +607,8 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 	ctx, _, deferFn := tracing.StartTracing(ctx, "createSpendingUtxos")
 	defer deferFn()
 
-	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	//defer cancelTimeout()
+	// ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
+	// defer cancelTimeout()
 
 	q := `
 	  SELECT
@@ -629,10 +628,14 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 	defer rows.Close()
 
 	utxos := make([]*bt.UTXO, 0)
+
 	for rows.Next() {
 		var txid []byte
+
 		var vout uint32
+
 		var lockingScript bscript.Script
+
 		var satoshis uint64
 
 		if err = rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
@@ -664,6 +667,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 			if err := c.aggregateBalance(ctx); err != nil {
 				return errors.NewProcessingError("could not aggregate balance", err)
 			}
+
 			return nil
 		})
 	}
@@ -682,10 +686,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 	}
 
 	var splitSatoshis = uint64(10_000_000)
+
 	amountRemaining := utxo.Satoshis
 
 	for amountRemaining > splitSatoshis {
-
 		select {
 		case <-ctx.Done():
 			return errors.NewContextCanceledError("timeout splitting the satoshis")
@@ -721,6 +725,7 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error) {
 	var utxo *bt.UTXO
+
 	var err error
 
 	switch c.engine {
@@ -748,11 +753,13 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 	sats := utxo.Satoshis / splits
 	remainder := utxo.Satoshis % splits
 
+	//nolint:gosec
 	for i := 0; i < int(splits); i++ {
 		if i == 0 && remainder > 0 {
 			if err = tx.PayToAddress(address, sats+remainder); err != nil {
 				return nil, errors.NewProcessingError("error paying to address", err)
 			}
+
 			continue
 		}
 
@@ -781,11 +788,14 @@ func (c *Coinbase) DistributeTransaction(ctx context.Context, tx *bt.Tx) ([]*dis
 	return c.distributor.SendTransaction(ctx, tx)
 }
 
-func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*bt.UTXO, error) {
+func (c *Coinbase) requestFundsPostgres(ctx context.Context, _ string) (*bt.UTXO, error) {
 	// Get the oldest spendable utxo
 	var txid []byte
+
 	var vout uint32
+
 	var lockingScript bscript.Script
+
 	var satoshis uint64
 
 	if err := c.db.QueryRowContext(ctx, `
@@ -816,12 +826,11 @@ func (c *Coinbase) requestFundsPostgres(ctx context.Context, address string) (*b
 
 	return utxo, nil
 }
-func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.UTXO, error) {
-	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	//defer cancelTimeout()
-
+func (c *Coinbase) requestFundsSqlite(ctx context.Context, _ string) (*bt.UTXO, error) {
+	// ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
+	// defer cancelTimeout()
 	txn, err := c.db.BeginTx(ctx, &sql.TxOptions{
-		Isolation: sql.IsolationLevel(sql.LevelWriteCommitted),
+		Isolation: sql.LevelWriteCommitted,
 	})
 	if err != nil {
 		return nil, err
@@ -833,8 +842,11 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 
 	// Get the oldest spendable utxo
 	var txid []byte
+
 	var vout uint32
+
 	var lockingScript bscript.Script
+
 	var satoshis uint64
 
 	if err := txn.QueryRowContext(ctx, `
@@ -869,12 +881,14 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 	return utxo, nil
 }
 
-func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
+func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error { //nolint:stylecheck
 	ctx, _, deferFn := tracing.StartTracing(ctx, "insertCoinbaseUTXOs")
 	defer deferFn()
 
 	var txn *sql.Tx
+
 	var stmt *sql.Stmt
+
 	var err error
 
 	hash := tx.TxIDChainHash()[:]
@@ -938,6 +952,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 		if err := stmt.Close(); err != nil {
 			return err
 		}
+
 		if err := txn.Commit(); err != nil {
 			return err
 		}
@@ -951,7 +966,9 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 	defer deferFn()
 
 	var txn *sql.Tx
+
 	var stmt *sql.Stmt
+
 	var err error
 
 	hash := tx.TxIDChainHash()[:]
@@ -1009,6 +1026,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		if err := stmt.Close(); err != nil {
 			return err
 		}
+
 		if err := txn.Commit(); err != nil {
 			return err
 		}
@@ -1028,7 +1046,7 @@ until this is a proven solution.
 func (c *Coinbase) aggregateBalance(ctx context.Context) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "aggregateBalance")
 	defer deferFn()
-
+	//nolint:gocritic
 	switch c.engine {
 	case util.Postgres:
 		if _, err := c.db.ExecContext(ctx, `
@@ -1041,12 +1059,12 @@ func (c *Coinbase) aggregateBalance(ctx context.Context) error {
 						,COALESCE(SUM(satoshis_change), 0) AS total_satoshis
 					INTO total_changes
 					FROM spendable_utxos_log;
-			
+
 					UPDATE spendable_utxos_balance
 					SET
 						 utxo_count = utxo_count + total_changes.total_utxo_count
 						,total_satoshis = total_satoshis + total_changes.total_satoshis;
-		
+
 					DELETE FROM spendable_utxos_log;
 				END;
 				$$;
@@ -1080,7 +1098,8 @@ func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResp
 		`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
 			return nil, err
 		}
-	} //switch
+	} // switch
+
 	return res, nil
 }
 
@@ -1088,8 +1107,8 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 	ticker := time.NewTicker(1 * time.Minute)
 	alreadyNotified := false
 
-	channel, _ := gocore.Config().Get("slack_channel")
-	clientName, _ := gocore.Config().Get("clientName")
+	channel := c.settings.Coinbase.SlackChannel
+	clientName := c.settings.ClientName
 
 	for range ticker.C {
 		func() {
@@ -1106,11 +1125,13 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 
 			if availableUtxos < threshold && !alreadyNotified {
 				c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
+
 				if channel != "" {
-					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))); err != nil {
+					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)), c.settings.Coinbase.SlackToken); err != nil {
 						c.logger.Warnf("could not post to slack: %v", err)
 					}
 				}
+
 				alreadyNotified = true
 			} else if availableUtxos >= threshold && alreadyNotified {
 				alreadyNotified = false
@@ -1122,16 +1143,20 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 func comma(value uint64) string {
 	str := fmt.Sprintf("%d", value)
 	n := len(str)
+
 	if n <= 3 {
 		return str
 	}
 
 	var b strings.Builder
+
 	for i, c := range str {
 		if i > 0 && (n-i)%3 == 0 {
 			b.WriteRune(',')
 		}
+
 		b.WriteRune(c)
 	}
+
 	return b.String()
 }

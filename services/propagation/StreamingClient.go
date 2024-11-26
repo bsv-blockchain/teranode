@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"google.golang.org/grpc"
 )
@@ -26,14 +27,15 @@ type transaction struct {
 // It maintains a persistent connection to the propagation server and
 // provides methods for submitting transactions and tracking metrics.
 type StreamingClient struct {
-	logger        ulogger.Logger                                                // Logger for client operations
-	transactionCh chan *transaction                                             // Channel for incoming transactions
-	timingsCh     chan chan timing                                              // Channel for timing requests
-	conn          *grpc.ClientConn                                              // gRPC connection
-	stream        propagation_api.PropagationAPI_ProcessTransactionStreamClient // Transaction stream
-	totalTime     time.Duration                                                 // Total processing time
-	count         int                                                           // Total transactions processed
-	testMode      bool                                                          // Flag for test mode operation
+	logger        ulogger.Logger
+	settings      *settings.Settings
+	transactionCh chan *transaction
+	timingsCh     chan chan timing
+	conn          *grpc.ClientConn
+	stream        propagation_api.PropagationAPI_ProcessTransactionStreamClient
+	totalTime     time.Duration
+	count         int  // Total transactions processed
+	testMode      bool // Flag for test mode operation
 }
 
 // NewStreamingClient creates a new StreamingClient instance with the specified buffer size.
@@ -48,9 +50,10 @@ type StreamingClient struct {
 // Returns:
 //   - *StreamingClient: New client instance
 //   - error: Error if client creation fails
-func NewStreamingClient(ctx context.Context, logger ulogger.Logger, bufferSize int, testMode ...bool) (*StreamingClient, error) {
+func NewStreamingClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, bufferSize int, testMode ...bool) (*StreamingClient, error) {
 	sc := &StreamingClient{
 		logger:        logger,
+		settings:      tSettings,
 		transactionCh: make(chan *transaction, bufferSize),
 		timingsCh:     make(chan chan timing),
 	}
@@ -59,7 +62,7 @@ func NewStreamingClient(ctx context.Context, logger ulogger.Logger, bufferSize i
 		sc.testMode = testMode[0]
 	}
 
-	initResolver(logger)
+	initResolver(logger, tSettings.Propagation.GRPCResolver)
 
 	go sc.handler(ctx)
 
@@ -203,7 +206,7 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
-	conn, err := getClientConn(ctx)
+	conn, err := getClientConn(ctx, sc.settings.Propagation.GRPCAddresses)
 	if err != nil {
 		return err
 	}

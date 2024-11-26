@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -13,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
@@ -25,7 +27,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -46,6 +47,7 @@ type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
 	P2PNode                       *p2p.P2PNode
 	logger                        ulogger.Logger
+	settings                      *settings.Settings
 	bitcoinProtocolID             string
 	blockchainClient              blockchain.ClientI
 	blockValidationClient         *blockvalidation.Client
@@ -62,6 +64,7 @@ type Server struct {
 func NewServer(
 	ctx context.Context,
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
@@ -69,58 +72,58 @@ func NewServer(
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
-	p2pIP, ok := gocore.Config().Get("p2p_ip")
-	if !ok {
+	p2pIP := tSettings.P2P.IP
+	if p2pIP == "" {
 		return nil, errors.NewConfigurationError("p2p_ip not set in config")
 	}
 
-	p2pPort, ok := gocore.Config().GetInt("p2p_port")
-	if !ok {
+	p2pPort := tSettings.P2P.Port
+	if p2pPort == 0 {
 		return nil, errors.NewConfigurationError("p2p_port not set in config")
 	}
 
-	topicPrefix, ok := gocore.Config().Get("p2p_topic_prefix")
-	if !ok {
+	topicPrefix := tSettings.P2P.TopicPrefix
+	if topicPrefix == "" {
 		return nil, errors.NewConfigurationError("p2p_topic_prefix not set in config")
 	}
 
-	btn, ok := gocore.Config().Get("p2p_block_topic")
-	if !ok {
+	btn := tSettings.P2P.BlockTopic
+	if btn == "" {
 		return nil, errors.NewConfigurationError("p2p_block_topic not set in config")
 	}
 
-	stn, ok := gocore.Config().Get("p2p_subtree_topic")
-	if !ok {
+	stn := tSettings.P2P.SubtreeTopic
+	if stn == "" {
 		return nil, errors.NewConfigurationError("p2p_subtree_topic not set in config")
 	}
 
-	bbtn, ok := gocore.Config().Get("p2p_bestblock_topic")
-	if !ok {
+	bbtn := tSettings.P2P.BestBlockTopic
+	if bbtn == "" {
 		return nil, errors.NewConfigurationError("p2p_bestblock_topic not set in config")
 	}
 
-	miningOntn, ok := gocore.Config().Get("p2p_mining_on_topic")
-	if !ok {
+	miningOntn := tSettings.P2P.MiningOnTopic
+	if miningOntn == "" {
 		return nil, errors.NewConfigurationError("p2p_mining_on_topic not set in config")
 	}
 
-	rtn, ok := gocore.Config().Get("p2p_rejected_tx_topic")
-	if !ok {
+	rtn := tSettings.P2P.RejectedTxTopic
+	if rtn == "" {
 		return nil, errors.NewConfigurationError("p2p_rejected_tx_topic not set in config")
 	}
 
-	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
-	if !ok {
+	sharedKey := tSettings.P2P.SharedKey
+	if sharedKey == "" {
 		return nil, errors.NewConfigurationError("error getting p2p_shared_key")
 	}
 
-	banlist, banChan, err := GetBanList(ctx, logger)
+	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("error getting banlist", err)
 	}
 
-	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
-	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
+	usePrivateDht := tSettings.P2P.DHTUsePrivate
+	optimiseRetries := tSettings.P2P.OptimiseRetries
 
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
 	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
@@ -128,8 +131,8 @@ func NewServer(
 	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
 	rejectedTxTopicName = fmt.Sprintf("%s-%s", topicPrefix, rtn)
 
-	staticPeers, _ := gocore.Config().GetMulti("p2p_static_peers", "|")
-	privateKey, _ := gocore.Config().Get("p2p_private_key")
+	staticPeers := tSettings.P2P.StaticPeers
+	privateKey := tSettings.P2P.PrivateKey
 
 	config := p2p.P2PConfig{
 		ProcessName:     "peer",
@@ -151,6 +154,7 @@ func NewServer(
 	p2pServer := &Server{
 		P2PNode:                       p2pNode,
 		logger:                        logger,
+		settings:                      tSettings,
 		bitcoinProtocolID:             "ubsv/bitcoin/1.0.0",
 		notificationCh:                make(chan *notificationMsg),
 		blockchainClient:              blockchainClient,
@@ -194,18 +198,18 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
-	AssetHTTPAddressURL, err, _ := gocore.Config().GetURL("asset_httpAddress")
+	AssetHTTPAddressURLString := s.settings.Asset.HTTPAddress
+
+	AssetHTTPAddressURL, err := url.Parse(AssetHTTPAddressURLString)
 	if err != nil {
-		return errors.NewServiceError("error getting asset_httpAddress", err)
+		return errors.NewServiceError("error parsing asset_httpAddress", err)
 	}
 
-	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
-
-	if AssetHTTPAddressURL.Scheme == "http" && securityLevel == 1 {
+	if AssetHTTPAddressURL.Scheme == "http" && s.settings.SecurityLevelHTTP == 1 {
 		AssetHTTPAddressURL.Scheme = "https"
 
 		s.logger.Warnf("[Init] asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-	} else if AssetHTTPAddressURL.Scheme == "https" && securityLevel == 0 {
+	} else if AssetHTTPAddressURL.Scheme == "https" && s.settings.SecurityLevelHTTP == 0 {
 		AssetHTTPAddressURL.Scheme = "http"
 
 		s.logger.Warnf("[Init] asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
@@ -264,8 +268,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if s.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		if err = s.blockchainClient.Restore(ctx); err != nil {
 			s.logger.Errorf("[Start] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
@@ -279,7 +282,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Infof("[Start] Node finished restoring and has transitioned to Running state, continuing to start p2p service")
 	}
 
-	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, "p2p")
+	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, s.settings, "p2p")
 	if err != nil {
 		return errors.NewServiceError("could not create block validation client [%w]", err)
 	}
@@ -474,8 +477,11 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 }
 
 func (s *Server) StartHTTP(ctx context.Context) error {
-	addr, _ := gocore.Config().Get("p2p_httpListenAddress")
-	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
+	addr := s.settings.P2P.HTTPListenAddress
+	if addr == "" {
+		s.logger.Errorf("[StartHTTP] p2p HTTP listen address is not set")
+		return errors.NewConfigurationError("p2p HTTP listen address is not set")
+	}
 
 	s.logger.Infof("[StartHTTP] p2p service listening on %s", addr)
 
@@ -495,17 +501,17 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 
 	var err error
 
-	if securityLevel == 0 {
+	if s.settings.SecurityLevelHTTP == 0 {
 		servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", addr))
 		err = s.e.Start(addr)
 	} else {
-		certFile, found := gocore.Config().Get("server_certFile")
-		if !found {
+		certFile := s.settings.ServerCertFile
+		if certFile == "" {
 			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
 
-		keyFile, found := gocore.Config().Get("server_keyFile")
-		if !found {
+		keyFile := s.settings.ServerKeyFile
+		if keyFile == "" {
 			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 

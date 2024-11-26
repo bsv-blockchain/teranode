@@ -45,7 +45,11 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := testEnv.Nodes[0].Settings.Coinbase.WalletPrivateKey
+	if coinbasePrivKey == "" {
+		t.Errorf("Coinbase private key is not set")
+	}
+
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
@@ -123,7 +127,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 	const ubsv1RPCEndpoint = "http://localhost:11292"
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	// wait for the blocks to be generated
+	time.Sleep(30 * time.Second)
 	require.NoError(t, err, "Failed to generate blocks")
 
 	blockStore := testEnv.Nodes[0].Blockstore
@@ -144,6 +150,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
 
+		t.Logf("Testing on Best block meta: %v", meta[0].Height)
+		t.Logf("Testing on BlockstoreURL: %v", testEnv.Nodes[0].BlockstoreURL)
 		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
@@ -154,8 +162,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		}
 
 		targetHeight++
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
-		require.NoError(t, err, "Failed to generate blocks")
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")

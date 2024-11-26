@@ -105,11 +105,13 @@ func (ssm *splitMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V])
 	// compare contents of ssm with other
 	different := false
 	var difference string
+
 	ssm.Iter(func(k K, v V) bool {
 		otherV, ok := other.Get(k)
 		if !ok || !fn(v, otherV) {
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+
 			return false // stop iterating
 		}
 
@@ -180,6 +182,7 @@ func (s *swissMap[K, V]) Exists(k K) bool {
 	defer s.mu.RUnlock()
 
 	_, ok := s.m.Get(k)
+
 	return ok
 }
 
@@ -197,12 +200,15 @@ func (ssm *swissMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V])
 
 	// compare contents of ssm with other
 	different := false
+
 	var difference string
+
 	ssm.Iter(func(k K, v V) bool {
 		otherV, ok := other.Get(k)
 		if !ok || !fn(v, otherV) {
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+
 			return false // stop iterating
 		}
 
@@ -239,6 +245,7 @@ func (s *goMap[K, V]) Get(k K) (V, bool) {
 	defer s.mu.RUnlock()
 
 	v, ok := s.m[k]
+
 	return v, ok
 }
 
@@ -247,6 +254,7 @@ func (s *goMap[K, V]) Delete(k K) bool {
 	defer s.mu.Unlock()
 
 	delete(s.m, k)
+
 	return true
 }
 
@@ -266,6 +274,7 @@ func (s *goMap[K, V]) Exists(k K) bool {
 	defer s.mu.RUnlock()
 
 	_, ok := s.m[k]
+
 	return ok
 }
 
@@ -283,12 +292,15 @@ func (ssm *goMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (b
 
 	// compare contents of ssm with other
 	different := false
+
 	var difference string
+
 	ssm.Iter(func(k K, v V) bool {
 		otherV, ok := other.Get(k)
 		if !ok || !fn(v, otherV) {
 			different = true
 			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+
 			return false // stop iterating
 		}
 

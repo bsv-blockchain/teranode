@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -13,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -26,10 +26,10 @@ import (
 
 type Server struct {
 	peer_api.UnimplementedPeerServiceServer
-	logger ulogger.Logger
-	stats  *gocore.Stat
-	server *server
-	// tb        *TeranodeBridge
+	logger   ulogger.Logger
+	settings *settings.Settings
+	stats    *gocore.Stat
+	server   *server
 	lastHash *chainhash.Hash
 	height   uint32
 
@@ -46,6 +46,7 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger,
+	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
 	validationClient validator.Interface,
 	subtreeStore blob.Store,
@@ -60,6 +61,7 @@ func New(logger ulogger.Logger,
 
 	return &Server{
 		logger:            logger,
+		settings:          tSettings,
 		stats:             gocore.NewStat("legacy"),
 		blockchainClient:  blockchainClient,
 		validationClient:  validationClient,
@@ -100,17 +102,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
-	// Create a new Teranode bridge
-	// if !gocore.Config().GetBool("legacy_direct", true) {
-	//	s.tb, err = NewTeranodeBridge(ctx, s.logger)
-	//	if err != nil {
-	//		s.logger.Fatalf("Failed to create Teranode bridge: %v", err)
-	//	}
-	// }
 	wire.SetLimits(4000000000)
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-	chainParams, err := chaincfg.GetChainParams(network)
 
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
@@ -119,14 +111,17 @@ func (s *Server) Init(ctx context.Context) error {
 	}
 	defaultListenAddresses := []string{ip.String() + ":8333"}
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
-	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
+	listenAddresses := s.settings.Legacy.ListenAddresses
+	if len(listenAddresses) == 0 {
+		listenAddresses = defaultListenAddresses
+	}
 
-	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
-	if !ok {
+	assetHTTPAddress := s.settings.Asset.HTTPAddress
+	if assetHTTPAddress == "" {
 		return errors.NewConfigurationError("missing setting: asset_httpAddress")
 	}
 
-	s.server, err = newServer(ctx, s.logger, gocore.Config(),
+	s.server, err = newServer(ctx, s.logger, s.settings, gocore.Config(),
 		s.blockchainClient,
 		s.validationClient,
 		s.utxoStore,
@@ -136,15 +131,15 @@ func (s *Server) Init(ctx context.Context) error {
 		s.blockValidation,
 		s.blockAssembly,
 		listenAddresses,
-		chainParams,
-		assetHttpAddress,
+		assetHTTPAddress,
 	)
 	if err != nil {
 		return err
 	}
 
 	// TODO: is this still needed? Also defined in services/legacy/peer_server.go:2271
-	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{})
+	connectAddresses := s.settings.Legacy.ConnectPeers
+
 	for _, addr := range connectAddresses {
 		_ = s.server.addrManager.AddAddressByIP(addr)
 	}
@@ -204,8 +199,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if s.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := s.blockchainClient.Restore(ctx)
 		if err != nil {

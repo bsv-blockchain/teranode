@@ -16,7 +16,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
-	"github.com/ordishs/gocore"
 )
 
 var (
@@ -78,8 +77,7 @@ type TxValidatorI interface {
 // TxValidator implements transaction validation logic
 type TxValidator struct {
 	logger      ulogger.Logger
-	policy      *settings.PolicySettings
-	params      *chaincfg.Params
+	settings    *settings.Settings
 	interpreter TxScriptInterpreter
 }
 
@@ -117,7 +115,7 @@ var ScriptVerificationFactory = make(map[TxInterpreter]TxValidatorCreator)
 //
 // Returns:
 //   - TxValidatorI: The created transaction validator
-func NewTxValidator(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params, opts ...TxValidatorOption) TxValidatorI {
+func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) TxValidatorI {
 	options := &TxValidatorOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -129,8 +127,8 @@ func NewTxValidator(logger ulogger.Logger, policy *settings.PolicySettings, para
 		scriptInterpreter = options.scriptInterpreter
 	} else {
 		// Get the type of verifier from config
-		scriptValidatorStr, ok := gocore.Config().Get("validator_scriptVerificationLibrary", string(defaultTxVerifier))
-		if ok {
+		scriptValidatorStr := tSettings.Validator.ScriptVerificationLibrary
+		if scriptValidatorStr != "" {
 			scriptInterpreter = TxInterpreter(scriptValidatorStr)
 		} else {
 			scriptInterpreter = defaultTxVerifier
@@ -141,16 +139,15 @@ func NewTxValidator(logger ulogger.Logger, policy *settings.PolicySettings, para
 
 	// If a creator was not registered to the factory, then return nil
 	if createTxScriptInterpreter, ok := ScriptVerificationFactory[scriptInterpreter]; ok {
-		txScriptInterpreter = createTxScriptInterpreter(logger, policy, params)
+		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
 	} else {
 		// default to GoSDK
-		txScriptInterpreter = ScriptVerificationFactory[defaultTxVerifier](logger, policy, params)
+		txScriptInterpreter = ScriptVerificationFactory[defaultTxVerifier](logger, tSettings.Policy, tSettings.ChainCfgParams)
 	}
 
 	return &TxValidator{
 		logger:      logger,
-		policy:      policy,
-		params:      params,
+		settings:    tSettings,
 		interpreter: txScriptInterpreter,
 	}
 }
@@ -219,7 +216,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
 	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
 	//       and therefore let's not enforce this check until then.
-	if blockHeight > tv.params.UahfForkHeight {
+	if blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
 		// 9) The unlocking script (scriptSig) can only push numbers on the stack
 		if err := tv.pushDataCheck(tx); err != nil {
 			return err
@@ -228,7 +225,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if err := tv.checkFees(tx, feesToBtFeeQuote(tv.policy.GetMinMiningTxFee())); err != nil {
+	if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
 		return err
 	}
 
@@ -244,6 +241,8 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 
+	// blockHeight is not used, but it is required by the interface
+	_ = blockHeight
 	// minOutput := uint64(0)
 	// if blockHeight >= tv.Params().GenesisActivationHeight {
 	//	minOutput = bt.DustLimit
@@ -266,6 +265,9 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 
 func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
+
+	// blockHeight is not used, but it is required by the interface
+	_ = blockHeight
 
 	for index, input := range tx.Inputs {
 		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
@@ -300,7 +302,7 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 }
 
 func (tv *TxValidator) checkTxSize(txSize int) error {
-	maxTxSizePolicy := tv.policy.GetMaxTxSizePolicy()
+	maxTxSizePolicy := tv.settings.Policy.GetMaxTxSizePolicy()
 	if maxTxSizePolicy == 0 {
 		// no policy found for tx size, use max block size
 		maxTxSizePolicy = MaxBlockSize
@@ -327,7 +329,7 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 }
 
 func (tv *TxValidator) sigOpsCheck(tx *bt.Tx) error {
-	maxSigOps := tv.policy.GetMaxTxSigopsCountsPolicy()
+	maxSigOps := tv.settings.Policy.GetMaxTxSigopsCountsPolicy()
 
 	if maxSigOps == 0 {
 		maxSigOps = int64(MaxTxSigopsCountPolicyAfterGenesis)

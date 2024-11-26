@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/state"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -21,6 +22,7 @@ import (
 type Server struct {
 	ctx              context.Context
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	blockStore       blob.Store
 	subtreeStore     blob.Store
 	utxoStore        utxo.Store
@@ -42,6 +44,7 @@ func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	blockStore blob.Store,
 	subtreeStore blob.Store,
 	utxoStore utxo.Store,
@@ -49,13 +52,12 @@ func New(
 	opts ...func(*Server),
 ) *Server {
 	// Get blocks file path from config, or use default
-	filePath, _ := gocore.Config().Get("blockPersister_stateFile", "./data/blockpersister_state.txt")
-
-	state := state.New(logger, filePath)
+	state := state.New(logger, tSettings.Block.StateFile)
 
 	u := &Server{
 		ctx:              ctx,
 		logger:           logger,
+		settings:         tSettings,
 		blockStore:       blockStore,
 		subtreeStore:     subtreeStore,
 		utxoStore:        utxoStore,
@@ -129,16 +131,12 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-	blockPersisterHTTPListenAddress, addressFound := gocore.Config().Get("blockPersister_httpListenAddress")
+	blockPersisterHTTPListenAddress := u.settings.Block.PersisterHTTPListenAddress
 
-	if addressFound {
-		blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
-		if err != nil {
-			return errors.NewConfigurationError("blockstore setting error", err)
-		}
-
-		if !found {
-			return errors.NewConfigurationError("blockstore config not found")
+	if blockPersisterHTTPListenAddress == "" {
+		blockStoreURL := u.settings.Block.BlockStore
+		if blockStoreURL == nil {
+			return errors.NewConfigurationError("blockstore setting error")
 		}
 
 		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL)
@@ -154,8 +152,7 @@ func (u *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if u.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := u.blockchainClient.Restore(ctx)
 		if err != nil {

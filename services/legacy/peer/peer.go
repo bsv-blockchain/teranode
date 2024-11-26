@@ -21,11 +21,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 const (
@@ -485,7 +485,8 @@ type Peer struct {
 	quit          chan struct{}
 
 	// ubsv specific fields
-	logger ulogger.Logger
+	logger   ulogger.Logger
+	settings *settings.Settings
 }
 
 // String returns the peer's address and directionality as a human-readable
@@ -1054,7 +1055,7 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 			msg.Command(), summary, p)
 	}))
 
-	if gocore.Config().GetBool("legacy_printInvMessages", false) {
+	if p.settings.Legacy.PrintInvMessages {
 		p.logger.Debugf("[readMessage][%s] %v", p, newLogClosure(func() string {
 			return spew.Sdump(msg)
 		}))
@@ -1085,7 +1086,7 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 			summary, p)
 	}))
 
-	if gocore.Config().GetBool("legacy_printInvMessages", false) {
+	if p.settings.Legacy.PrintInvMessages {
 		p.logger.Debugf("[writeMessage][%s] %v", p, newLogClosure(func() string {
 			return spew.Sdump(msg)
 		}))
@@ -2162,7 +2163,7 @@ func (p *Peer) WaitForDisconnect() {
 // newPeerBase returns a new base bitcoin peer based on the inbound flag.  This
 // is used by the NewInboundPeer and NewOutboundPeer functions to perform base
 // setup needed by both types of peers.
-func newPeerBase(logger ulogger.Logger, origCfg *Config, inbound bool) *Peer {
+func newPeerBase(logger ulogger.Logger, tSettings *settings.Settings, origCfg *Config, inbound bool) *Peer {
 	// Default to the max supported protocol version if not specified by the
 	// caller.
 	cfg := *origCfg // Copy to avoid mutating caller.
@@ -2198,19 +2199,20 @@ func newPeerBase(logger ulogger.Logger, origCfg *Config, inbound bool) *Peer {
 		protocolVersion: cfg.ProtocolVersion,
 		syncPeer:        false,
 		logger:          logger,
+		settings:        tSettings,
 	}
 	return &p
 }
 
 // NewInboundPeer returns a new inbound bitcoin peer. Use Start to begin
 // processing incoming and outgoing messages.
-func NewInboundPeer(logger ulogger.Logger, cfg *Config) *Peer {
-	return newPeerBase(logger, cfg, true)
+func NewInboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *Config) *Peer {
+	return newPeerBase(logger, tSettings, cfg, true)
 }
 
 // NewOutboundPeer returns a new outbound bitcoin peer.
-func NewOutboundPeer(logger ulogger.Logger, cfg *Config, addr string) (*Peer, error) {
-	p := newPeerBase(logger, cfg, false)
+func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *Config, addr string) (*Peer, error) {
+	p := newPeerBase(logger, tSettings, cfg, false)
 	p.addr = addr
 
 	host, portStr, err := net.SplitHostPort(addr)

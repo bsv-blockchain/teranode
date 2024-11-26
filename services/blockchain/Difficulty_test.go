@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -46,12 +47,9 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	// expected from block 826224 - 180a39ef
 	expectedNbits, _ := model.NewNBitFromString("180a2268")
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	if err != nil {
-		t.Fatal("Unknown network: mainnet")
-	}
-
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, params)
+	settings := &settings.Settings{}
+	settings.ChainCfgParams = &chaincfg.MainNetParams
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, settings)
 	require.NoError(t, err)
 
 	nbits, err := d.computeTarget(firstBlockHeader, lastBlockHeader)
@@ -106,14 +104,14 @@ func TestCalculateDifficulty(t *testing.T) {
 		}, expected: *eBits}, // 826768
 	}
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	if err != nil {
-		t.Fatal("Unknown network: mainnet")
-	}
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, params)
+	settings := &settings.Settings{}
+	settings.ChainCfgParams = &chaincfg.MainNetParams
+
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, settings)
 	require.NoError(t, err)
+
 	for name, tc := range tests {
-		tc := tc
+
 		t.Run(name, func(t *testing.T) {
 			got, err := d.computeTarget(&tc.firstBlockHeader, &tc.lastBlockHeader)
 			require.NoError(t, err)

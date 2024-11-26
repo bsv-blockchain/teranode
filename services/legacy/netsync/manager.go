@@ -28,6 +28,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -38,7 +39,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
-	"github.com/ordishs/gocore"
 )
 
 const (
@@ -221,6 +221,7 @@ func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
 type SyncManager struct {
 	ctx          context.Context
 	logger       ulogger.Logger
+	settings     *settings.Settings
 	peerNotifier PeerNotifier
 	started      int32
 	shutdown     int32
@@ -1777,23 +1778,19 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient ubsvblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
-	orphanEvictionDuration, err, _ := gocore.Config().GetDuration("legacy_orphanEvictionDuration", 10*time.Minute)
-	if err != nil {
-		return nil, err
-	}
-
 	sm := SyncManager{
 		ctx:          ctx,
+		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		chain:        config.Chain,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](orphanEvictionDuration),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    make(map[chainhash.Hash]struct{}),
 		requestedTxns:   make(map[chainhash.Hash]struct{}),
@@ -1831,7 +1828,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
 		// try to process one last time
 		// nolint:gosec
-		if err = sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
+		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
 			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
@@ -1906,8 +1903,8 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 	var kafkaControlListenersCh []chan bool
 
 	// Kafka for INV messages
-	legacyInvConfigURL, err, ok := gocore.Config().GetURL("kafka_legacyInvConfig")
-	if err == nil && ok {
+	legacyInvConfigURL := sm.settings.Kafka.LegacyInvConfig
+	if legacyInvConfigURL != nil {
 		sm.legacyKafkaInvCh = make(chan *kafka.Message, 10_000)
 
 		// start a go routine to start the kafka producer
@@ -1927,16 +1924,16 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
 	}
 
-	blocksFinalConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-	if err == nil && ok {
+	blocksFinalConfigURL := sm.settings.Kafka.BlocksFinalConfig
+	if blocksFinalConfigURL != nil {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, blocksFinalConfigURL, sm.kafkaBlocksListener)
 	}
 
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-	if err == nil && ok {
+	txmetaKafkaURL := sm.settings.Kafka.TxMetaConfig
+	if txmetaKafkaURL != nil {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 

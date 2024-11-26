@@ -446,7 +446,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
-	d, err := distributor.NewDistributor(context.Background(), s.logger)
+	d, err := distributor.NewDistributor(context.Background(), s.logger, s.settings)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create distributor", err)
 	}
@@ -475,13 +475,13 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	// Respond with an error if there's virtually 0 chance of mining a block
 	// with the CPU.
-	if !s.chainParams.GenerateSupported {
+	if !s.settings.ChainCfgParams.GenerateSupported {
 		return nil, &bsvjson.RPCError{
 			Code: bsvjson.ErrRPCDifficulty,
 			Message: fmt.Sprintf("No support for `generate` on "+
 				"the current network, %s, as it's unlikely to "+
 				"be possible to mine a block with the CPU.",
-				s.chainParams.Net),
+				s.settings.ChainCfgParams.Net),
 		}
 	}
 
@@ -671,7 +671,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 
 	jsonMap := map[string]interface{}{
-		"chain":                s.chainParams.Name,
+		"chain":                s.settings.ChainCfgParams.Name,
 		"blocks":               bestBlockMeta.Height,
 		"headers":              863341,
 		"bestblockhash":        bestBlockHeader.Hash().String(),
@@ -703,16 +703,16 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	jsonMap := map[string]interface{}{
-		"version":         1,                                 // the version of the server
-		"protocolversion": wire.ProtocolVersion,              // the latest supported protocol version
-		"blocks":          height,                            // the number of blocks processed
-		"timeoffset":      1,                                 // the time offset
-		"connections":     1,                                 // the number of connected peers
-		"proxy":           "host:port",                       // the proxy used by the server
-		"difficulty":      1,                                 // the current target difficulty
-		"testnet":         s.chainParams.Net == wire.TestNet, // whether or not server is using testnet
-		"stn":             s.chainParams.Net == wire.STN,     // whether or not server is using stn
-		"relayfee":        100,                               // the minimum relay fee for non-free transactions in BSV/KB
+		"version":         1,                                             // the version of the server
+		"protocolversion": wire.ProtocolVersion,                          // the latest supported protocol version
+		"blocks":          height,                                        // the number of blocks processed
+		"timeoffset":      1,                                             // the time offset
+		"connections":     1,                                             // the number of connected peers
+		"proxy":           "host:port",                                   // the proxy used by the server
+		"difficulty":      1,                                             // the current target difficulty
+		"testnet":         s.settings.ChainCfgParams.Net == wire.TestNet, // whether or not server is using testnet
+		"stn":             s.settings.ChainCfgParams.Net == wire.STN,     // whether or not server is using stn
+		"relayfee":        100,                                           // the minimum relay fee for non-free transactions in BSV/KB
 
 	}
 
@@ -863,7 +863,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	)
 	defer deferFn()
 
-	banList, _, err := p2p.GetBanList(ctx, s.logger)
+	banList, _, err := p2p.GetBanList(ctx, s.logger, s.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -949,14 +949,14 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	difficulty, _ := bestBlockHeader.Bits.CalculateDifficulty().Float64()
 
 	return &bsvjson.GetMiningInfoResult{
-		Blocks:           int64(bestBlockMeta.Height),                                               // The current block
-		CurrentBlockSize: bestBlockMeta.SizeInBytes,                                                 // The last block size
-		CurrentBlockTx:   bestBlockMeta.TxCount,                                                     // The last block transaction
-		Difficulty:       difficulty,                                                                // The current difficulty
-		Errors:           "",                                                                        // Current errors
-		NetworkHashPS:    calculateHashRate(difficulty, s.chainParams.TargetTimePerBlock.Seconds()), // The network hashes per second
+		Blocks:           int64(bestBlockMeta.Height),                                                           // The current block
+		CurrentBlockSize: bestBlockMeta.SizeInBytes,                                                             // The last block size
+		CurrentBlockTx:   bestBlockMeta.TxCount,                                                                 // The last block transaction
+		Difficulty:       difficulty,                                                                            // The current difficulty
+		Errors:           "",                                                                                    // Current errors
+		NetworkHashPS:    calculateHashRate(difficulty, s.settings.ChainCfgParams.TargetTimePerBlock.Seconds()), // The network hashes per second
 		// PooledTx:      0,                           // The size of the mempool - we don't have a mempool
-		Chain: s.chainParams.Name, // current network name as defined in BIP70 (main, test, regtest)
+		Chain: s.settings.ChainCfgParams.Name, // current network name as defined in BIP70 (main, test, regtest)
 	}, nil
 }
 

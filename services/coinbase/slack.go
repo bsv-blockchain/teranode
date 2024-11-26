@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-
-	"github.com/ordishs/gocore"
 )
 
 type slackPayload struct {
@@ -14,7 +12,7 @@ type slackPayload struct {
 	Text    string `json:"text"`
 }
 
-func postMessageToSlack(channel, text string) error {
+func postMessageToSlack(channel, text string, slackToken string) error {
 	payload := slackPayload{
 		Channel: channel,
 		Text:    text,
@@ -26,14 +24,14 @@ func postMessageToSlack(channel, text string) error {
 	}
 
 	body := bytes.NewReader(payloadBytes)
+
 	req, err := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", body)
 	if err != nil {
 		return err
 	}
 
-	token, found := gocore.Config().Get("slack_token")
-	if found {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if slackToken != "" {
+		req.Header.Set("Authorization", "Bearer "+slackToken)
 	}
 
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")

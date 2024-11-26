@@ -6,10 +6,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type Client struct {
@@ -17,9 +17,9 @@ type Client struct {
 	logger    ulogger.Logger
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger, source string) (Interface, error) {
-	subtreeValidationGrpcAddress, ok := gocore.Config().Get("subtreevalidation_grpcAddress")
-	if !ok {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (Interface, error) {
+	subtreeValidationGrpcAddress := tSettings.SubtreeValidation.GRPCAddress
+	if subtreeValidationGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no subtreevalidation_grpcAddress setting found")
 	}
 

@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
@@ -44,6 +46,7 @@ type TeranodeTestClient struct {
 	SubtreesKafkaURL    *url.URL
 	RPCURL              string
 	IPAddress           string
+	Settings            *settings.Settings
 }
 
 // NewTeraNodeTestEnv creates a new test environment with the provided Compose file paths.
@@ -83,10 +86,14 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 
 		for _, key := range order {
+			os.Setenv("SETTINGS_CONTEXT", envSettings[key])
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
 				SettingsContext: envSettings[key],
 				Name:            nodeNames[len(t.Nodes)],
+				Settings:        settings.NewSettings(),
 			})
+
+			os.Setenv("SETTINGS_CONTEXT", "")
 		}
 	}
 
@@ -97,6 +104,8 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
+		t.Logger.Infof("Initializing node %s", node.Name)
+		t.Logger.Infof("Settings context: %s", node.SettingsContext)
 
 		if err := t.GetContainerIPAddress(node); err != nil {
 			return err
@@ -170,8 +179,8 @@ func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
 
 func (t *TeranodeTestEnv) setupCoinbaseClient(node *TeranodeTestClient) error {
 	coinbaseGRPCPort := "8093/tcp"
-	coinbaseMappedPort, err := t.GetMappedPort(node.Name, nat.Port(coinbaseGRPCPort))
 
+	coinbaseMappedPort, err := t.GetMappedPort(node.Name, nat.Port(coinbaseGRPCPort))
 	if err != nil {
 		return errors.NewConfigurationError("error getting coinbase mapped port: %w", err)
 	}
@@ -194,7 +203,7 @@ func (t *TeranodeTestEnv) setupBlockchainClient(node *TeranodeTestClient) error 
 		return errors.NewConfigurationError("error getting blockchain mapped port: %w", err)
 	}
 
-	blockchainClient, err := bc.NewClientWithAddress(t.Context, t.Logger, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
+	blockchainClient, err := bc.NewClientWithAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
 	if err != nil {
 		return errors.NewConfigurationError("error creating blockchain client: %w", err)
 	}
@@ -212,7 +221,7 @@ func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) err
 		return errors.NewConfigurationError("error getting blockassembly mapped port: %w", err)
 	}
 
-	blockassemblyClient, err := ba.NewClientWithAddress(t.Context, t.Logger, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
+	blockassemblyClient, err := ba.NewClientWithAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
 	if err != nil {
 		return errors.NewConfigurationError("error creating blockassembly client: %w", err)
 	}
@@ -230,7 +239,7 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 		return errors.NewConfigurationError("error getting distributor mapped port: %w", err)
 	}
 
-	distributorClient, err := distributor.NewDistributorFromAddress(t.Context, t.Logger, makeHostAddressFromPort(distributorMappedPort.Port()))
+	distributorClient, err := distributor.NewDistributorFromAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(distributorMappedPort.Port()))
 	if err != nil {
 		return errors.NewConfigurationError("error creating distributor client: %w", err)
 	}

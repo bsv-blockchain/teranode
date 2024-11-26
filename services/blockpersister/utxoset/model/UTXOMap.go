@@ -2,8 +2,9 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 // UTXOMap represents a bitcoin transaction outpoint, i.e. the transaction ID and the output index.
@@ -66,6 +67,7 @@ func (um *UTXOMap) Write(w io.Writer) error {
 		}
 
 		count++
+
 		return
 	})
 

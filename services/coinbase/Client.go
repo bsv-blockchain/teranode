@@ -5,12 +5,11 @@ import (
 	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -22,11 +21,12 @@ type Client struct {
 	conn    *grpc.ClientConn
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
-	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
-	if !ok {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*Client, error) {
+	coinbaseGrpcAddress := tSettings.Coinbase.GRPCAddress
+	if coinbaseGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 	}
+
 	baConn, err := util.GetGRPCClient(ctx, coinbaseGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})

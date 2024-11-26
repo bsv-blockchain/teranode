@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -23,8 +22,8 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processTxMetaUsingStore")
 	defer deferFn()
 
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
-	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))
+	batchSize := u.settings.Block.ProcessTxMetaUsingStoreBatchSize
+	validateSubtreeInternalConcurrency := util.Max(4, runtime.NumCPU()/2)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
@@ -46,7 +45,6 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						return gCtx.Err() // Return the error that caused the cancellation
 
 					default:
-
 						if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue

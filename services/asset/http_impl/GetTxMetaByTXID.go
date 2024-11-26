@@ -3,13 +3,14 @@ package http_impl
 
 import (
 	"encoding/hex"
+	"net/http"
+
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/util"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	"net/http"
 )
 
 type aerospikeRecord struct {
@@ -100,7 +101,6 @@ type aerospikeRecord struct {
 //   - Binary data in JSON response is hex-encoded
 //   - Direct access to underlying storage system
 func (h *HTTP) GetTxMetaByTXID(mode ReadMode) func(c echo.Context) error {
-
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
 		defer func() {
@@ -108,12 +108,8 @@ func (h *HTTP) GetTxMetaByTXID(mode ReadMode) func(c echo.Context) error {
 		}()
 
 		// get
-		storeURL, err, found := gocore.Config().GetURL("utxostore")
-		if err != nil {
-			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		if !found {
+		storeURL := h.settings.UtxoStore.UtxoStore
+		if storeURL == nil {
 			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: no utxostore setting found")
 			return echo.NewHTTPError(http.StatusInternalServerError, "no utxostore setting found")
 		}

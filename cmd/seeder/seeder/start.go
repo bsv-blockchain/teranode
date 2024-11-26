@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -92,6 +93,7 @@ func Start() {
 	}
 
 	logger := ulogger.NewGoCoreLogger("seed")
+	tSettings := settings.NewSettings()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -123,7 +125,7 @@ func Start() {
 			logger.Infof("Processing headers...")
 
 			// Process the headers
-			if err := processHeaders(ctx, logger, headerFile); err != nil {
+			if err := processHeaders(ctx, logger, tSettings, headerFile); err != nil {
 				logger.Errorf("Failed to process headers: %v", err)
 				return
 			}
@@ -141,7 +143,7 @@ func Start() {
 			logger.Infof("Processing UTXOs...")
 
 			// Process the UTXOs
-			if err := processUTXOs(ctx, logger, utxoFile); err != nil {
+			if err := processUTXOs(ctx, logger, tSettings, utxoFile); err != nil {
 				logger.Errorf("Failed to process UTXOs: %v", err)
 				return
 			}
@@ -153,7 +155,7 @@ func Start() {
 	wg.Wait()
 }
 
-func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile string) error {
+func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, headersFile string) error {
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil || !found {
 		logger.Fatalf("Failed to get blockchain store URL")
@@ -189,7 +191,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 	}
 
 	// Write the last block height and hash to the blockpersister_state.txt file
-	_ = blockpersister.New(ctx, nil, nil, nil, nil, nil, blockpersister.WithSetInitialState(height, hash))
+	_ = blockpersister.New(ctx, nil, tSettings, nil, nil, nil, nil, blockpersister.WithSetInitialState(height, hash))
 
 	var (
 		headersProcessed uint64
@@ -247,7 +249,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 	return nil
 }
 
-func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) error {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string) error {
 	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
 	if err != nil || !found {
 		return errors.NewConfigurationError("blockstore URL not found in config", err)
@@ -270,14 +272,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) e
 		return nil
 	}
 
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil || !found {
-		return errors.NewConfigurationError("utxostore URL not found in config", err)
-	}
+	logger.Infof("Using utxostore at %s", tSettings.UtxoStore.UtxoStore)
 
-	logger.Infof("Using utxostore at %s", utxoStoreURL)
-
-	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
+	utxoStore, err := utxo_factory.NewStore(ctx, logger, tSettings, "seeder", false)
 	if err != nil {
 		return errors.NewStorageError("Failed to create utxostore", err)
 	}

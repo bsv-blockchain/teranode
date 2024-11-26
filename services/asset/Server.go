@@ -12,11 +12,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -25,6 +25,7 @@ import (
 // for accessing blockchain data.
 type Server struct {
 	logger              ulogger.Logger
+	settings            *settings.Settings
 	utxoStore           utxo.Store
 	txStore             blob.Store
 	subtreeStore        blob.Store
@@ -50,9 +51,10 @@ type Server struct {
 //
 // Returns:
 //   - *Server: Newly created server instance
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server {
 	s := &Server{
 		logger:              logger,
+		settings:            tSettings,
 		utxoStore:           utxoStore,
 		txStore:             txStore,
 		subtreeStore:        subtreeStore,
@@ -106,35 +108,31 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - error: Any error encountered during initialization
 func (v *Server) Init(ctx context.Context) (err error) {
-	var httpOk, centrifugeOk bool
-	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
-	if !httpOk {
+	v.httpAddr = v.settings.Asset.HTTPListenAddress
+	if v.httpAddr == "" {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockPersisterStore)
-
+	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockPersisterStore)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	if httpOk {
-		v.httpServer, err = http_impl.New(v.logger, repo)
-		if err != nil {
-			return errors.NewServiceError("error creating http server", err)
-		}
-
-		err = v.httpServer.Init(ctx)
-		if err != nil {
-			return errors.NewServiceError("error initializing http server", err)
-		}
+	v.httpServer, err = http_impl.New(v.logger, v.settings, repo)
+	if err != nil {
+		return errors.NewServiceError("error creating http server", err)
 	}
 
-	if !gocore.Config().GetBool("asset_centrifuge_disable", false) {
-		v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
-		if centrifugeOk && v.httpServer != nil {
-			v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
+	err = v.httpServer.Init(ctx)
+	if err != nil {
+		return errors.NewServiceError("error initializing http server", err)
+	}
+
+	if !v.settings.Asset.CentrifugeDisable {
+		v.centrifugeAddr = v.settings.Asset.CentrifugeListenAddress
+		if v.centrifugeAddr != "" && v.httpServer != nil {
+			v.centrifugeServer, err = centrifuge_impl.New(v.logger, v.settings, repo, v.httpServer)
 			if err != nil {
 				return errors.NewServiceError("error creating centrifuge server: %s", err)
 			}
@@ -163,8 +161,7 @@ func (v *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if v.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := v.blockchainClient.Restore(ctx)
 		if err != nil {

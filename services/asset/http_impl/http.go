@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libp2p/go-libp2p/core/crypto"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/ordishs/gocore"
 )
 
@@ -28,6 +29,7 @@ var AssetStat = gocore.NewStat("Asset")
 // It handles routing, middleware, and request processing for all blockchain data endpoints.
 type HTTP struct {
 	logger     ulogger.Logger
+	settings   *settings.Settings
 	repository *repository.Repository
 	e          *echo.Echo
 	startTime  time.Time
@@ -94,7 +96,7 @@ type HTTP struct {
 //   - Custom request logging in debug mode
 //   - Prometheus metrics
 //   - Statistical tracking with reset capability
-func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -103,7 +105,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	e := echo.New()
 	// Check if the ECHO_DEBUG environment variable is set to "true"
 
-	if gocore.Config().GetBool("ECHO_DEBUG", false) {
+	if tSettings.Asset.EchoDebug {
 		e.Debug = true
 	}
 
@@ -125,14 +127,15 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 
 	h := &HTTP{
 		logger:     logger,
+		settings:   tSettings,
 		repository: repo,
 		e:          e,
 		startTime:  time.Now(),
 	}
 
 	// add the private key for signing responses
-	if gocore.Config().GetBool("http_sign_response", false) {
-		privateKey, _ := gocore.Config().Get("p2p_private_key")
+	if tSettings.Asset.SignHTTPResponses {
+		privateKey := tSettings.P2P.PrivateKey
 		if privateKey != "" {
 			privKeyBytes, err := hex.DecodeString(privateKey)
 			if err != nil {
@@ -154,6 +157,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 
 	e.GET("/health", func(c echo.Context) error {
 		_, details, err := repo.Health(c.Request().Context(), false)
+
 		logger.Debugf("[Asset_http] Health check")
 
 		if err != nil {
@@ -166,7 +170,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	apiRestGroup := e.Group("/rest")
 	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock()) // BINARY_STREAM
 
-	apiPrefix, _ := gocore.Config().Get("asset_apiPrefix", "/api/v1")
+	apiPrefix := tSettings.Asset.APIPrefix
 	apiGroup := e.Group(apiPrefix)
 
 	apiGroup.GET("/tx/:hash", h.GetTransaction(BINARY_STREAM))
@@ -234,7 +238,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	e.GET(prefix+"reset", AdaptStdHandler(gocore.ResetStats))
 	e.GET(prefix+"*", AdaptStdHandler(gocore.HandleOther))
 
-	e.GET("*", func(c echo.Context) error {
+	e.GET("*", func(c echo.Context) error { //nolint
 		return dashboard.AppHandler(c)
 	})
 
@@ -254,7 +258,7 @@ func (h *HTTP) Init(_ context.Context) error {
 
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	mode := "HTTPS"
-	if level, _ := gocore.Config().GetInt("securityLevelHTTP", 0); level == 0 {
+	if level := h.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
 	}
 
@@ -279,15 +283,14 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTP listening on %s", addr))
 		err = h.e.Start(addr)
-
 	} else {
-
-		certFile, found := gocore.Config().Get("server_certFile")
-		if !found {
+		certFile := h.settings.ServerCertFile
+		if certFile == "" {
 			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
-		keyFile, found := gocore.Config().Get("server_keyFile")
-		if !found {
+
+		keyFile := h.settings.ServerKeyFile
+		if keyFile == "" {
 			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 

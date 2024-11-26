@@ -16,6 +16,7 @@ import (
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/wif"
@@ -109,6 +110,8 @@ func Start() {
 
 	logger := ulogger.New("propagation_blaster")
 
+	tSettings := settings.NewSettings()
+
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
@@ -161,13 +164,13 @@ func Start() {
 	}
 
 	for i := 0; i < workerCount; i++ {
-		go worker(logger)
+		go worker(logger, tSettings)
 	}
 
 	<-make(chan struct{})
 }
 
-func worker(logger ulogger.Logger) {
+func worker(logger ulogger.Logger, tSettings *settings.Settings) {
 	prometheusWorkers.Inc()
 	defer func() {
 		prometheusWorkers.Dec()
@@ -177,7 +180,7 @@ func worker(logger ulogger.Logger) {
 	if broadcastProtocol == "stream" {
 		var err error
 		ctx := context.Background()
-		streamingClient, err = propagation.NewStreamingClient(ctx, logger, bufferSize)
+		streamingClient, err = propagation.NewStreamingClient(ctx, logger, tSettings, bufferSize)
 		if err != nil {
 			panic(err)
 		}

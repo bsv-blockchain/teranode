@@ -7,13 +7,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -21,11 +20,12 @@ import (
 // DumbPropagationServer type carries the logger within it
 type DumbPropagationServer struct {
 	propagation_api.UnimplementedPropagationAPIServer
-	logger ulogger.Logger
+	logger   ulogger.Logger
+	settings *settings.Settings
 }
 
 // NewDumbPropagationServer will return a server instance with the logger stored within it
-func NewDumbPropagationServer() *DumbPropagationServer {
+func NewDumbPropagationServer(tSettings *settings.Settings) *DumbPropagationServer {
 	initPrometheusMetrics()
 
 	logger := ulogger.New("dumbPS")
@@ -33,7 +33,8 @@ func NewDumbPropagationServer() *DumbPropagationServer {
 	logger.Warnf("Using DumbPropagationServer (for testing only)")
 
 	return &DumbPropagationServer{
-		logger: logger,
+		logger:   logger,
+		settings: tSettings,
 	}
 }
 
@@ -47,8 +48,8 @@ func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
-	httpAddress, ok := gocore.Config().Get("propagation_httpListenAddress")
-	if ok {
+	httpAddress := ps.settings.Propagation.HTTPListenAddress
+	if httpAddress != "" {
 		err = ps.startHTTPServer(ctx, httpAddress)
 		if err != nil {
 			return errors.NewServiceError("HTTP server failed", err)

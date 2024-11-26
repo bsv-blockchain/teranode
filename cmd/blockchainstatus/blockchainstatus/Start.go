@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/olekukonko/tablewriter"
 	"github.com/ordishs/gocore"
@@ -27,6 +28,7 @@ var commit string
 
 func Init() {
 	gocore.SetInfo(progname, version, commit)
+
 	logger = ulogger.TestLogger{}
 }
 
@@ -47,12 +49,16 @@ func Start() {
 
 	minerList := strings.Split(*clients, ",")
 
+	tSettings := settings.NewSettings()
+
 	miners := make(map[string]blockchain.ClientI)
+
 	for _, minerAddress := range minerList {
-		client, err := blockchain.NewClientWithAddress(context.Background(), logger, minerAddress, "cmd/blockchainstatus")
+		client, err := blockchain.NewClientWithAddress(context.Background(), logger, tSettings, minerAddress, "cmd/blockchainstatus")
 		if err != nil {
 			logger.Fatalf("error connecting to minerAddress %s: %s", minerAddress, err)
 		}
+
 		miners[minerAddress] = client
 	}
 
@@ -72,6 +78,7 @@ func Start() {
 
 				for _, minerAddress := range minerList {
 					miner := miners[minerAddress]
+
 					blockHeader, meta, err := miner.GetBestBlockHeader(ctx)
 					if err != nil {
 						table.Append([]string{
@@ -103,6 +110,7 @@ func Start() {
 	case <-ctx.Done():
 		logger.Errorf("context cancelled: %v", ctx.Err())
 		cancel()
+
 		break
 	}
 }

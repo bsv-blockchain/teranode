@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -133,9 +134,12 @@ func main() {
 
 	logger := ulogger.New("sim")
 
+	tSettings := settings.NewSettings()
+
 	sm, err := netsync.New(
 		ctx,
 		logger,
+		tSettings,
 		nil, // blockchain.ClientI,
 		nil, // validator.Interface,
 		nil, // utxo.Store,

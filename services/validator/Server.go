@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -39,6 +40,7 @@ type Server struct {
 	validator_api.UnsafeValidatorAPIServer
 	validator                     Interface
 	logger                        ulogger.Logger
+	settings                      *settings.Settings
 	utxoStore                     utxo.Store
 	kafkaSignal                   chan os.Signal
 	stats                         *gocore.Stat
@@ -60,11 +62,12 @@ type Server struct {
 //
 // Returns:
 //   - *Server: Initialized server instance
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:                        logger,
+		settings:                      tSettings,
 		utxoStore:                     utxoStore,
 		stats:                         gocore.NewStat("validator"),
 		blockchainClient:              blockchainClient,
@@ -144,7 +147,7 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
-	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient)
+	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient)
 	if err != nil {
 		return errors.NewServiceError("could not create validator", err)
 	}
@@ -162,8 +165,7 @@ func (v *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if v.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := v.blockchainClient.Restore(ctx)
 		if err != nil {
@@ -214,7 +216,7 @@ func (v *Server) Start(ctx context.Context) error {
 			return err
 		}
 
-		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil { //nolint:gosec
+		if err = v.validator.Validate(ctx, tx, data.Height); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 

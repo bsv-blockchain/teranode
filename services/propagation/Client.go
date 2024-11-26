@@ -4,16 +4,16 @@ package propagation
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver"
@@ -49,25 +49,25 @@ type Client struct {
 // Returns:
 //   - *Client: New client instance
 //   - error: Error if client creation fails
-func NewClient(ctx context.Context, logger ulogger.Logger, conn ...*grpc.ClientConn) (*Client, error) {
-
-	initResolver(logger)
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, conn ...*grpc.ClientConn) (*Client, error) {
+	initResolver(logger, tSettings.Propagation.GRPCResolver)
 
 	var useConn *grpc.ClientConn
 	if len(conn) > 0 {
 		useConn = conn[0]
 	} else {
-		localConn, err := getClientConn(ctx)
+		localConn, err := getClientConn(ctx, tSettings.Propagation.GRPCAddresses)
 		if err != nil {
 			return nil, err
 		}
+
 		useConn = localConn
 	}
 
 	client := propagation_api.NewPropagationAPIClient(useConn)
 
-	batchSize, _ := gocore.Config().GetInt("propagation_sendBatchSize", 100)
-	sendBatchTimeout, _ := gocore.Config().GetInt("propagation_sendBatchTimeout", 5)
+	batchSize := tSettings.Propagation.SendBatchSize
+	sendBatchTimeout := tSettings.Propagation.SendBatchTimeout
 
 	if batchSize > 0 {
 		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %d", batchSize, sendBatchTimeout)
@@ -116,6 +116,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		done := make(chan error)
 		c.batcher.Put(&batchItem{tx: tx, done: done})
 		err := <-done
+
 		return err
 	}
 
@@ -158,6 +159,7 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		for _, tx := range batch {
 			tx.done <- err
 		}
+
 		return err
 	}
 
@@ -180,8 +182,7 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 //
 // Parameters:
 //   - logger: Logger for resolver configuration messages
-func initResolver(logger ulogger.Logger) {
-	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+func initResolver(logger ulogger.Logger, grpcResolver string) {
 	switch grpcResolver {
 	case "k8s":
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
@@ -203,9 +204,8 @@ func initResolver(logger ulogger.Logger) {
 // Returns:
 //   - *grpc.ClientConn: Established gRPC connection
 //   - error: Error if connection fails
-func getClientConn(ctx context.Context) (*grpc.ClientConn, error) {
-	propagation_grpcAddresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-	conn, err := util.GetGRPCClient(ctx, propagation_grpcAddresses[0], &util.ConnectionOptions{
+func getClientConn(ctx context.Context, propagationGrpcAddresses []string) (*grpc.ClientConn, error) {
+	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {

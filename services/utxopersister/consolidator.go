@@ -5,8 +5,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -18,7 +18,7 @@ type headerIfc interface {
 
 type consolidator struct {
 	logger           ulogger.Logger
-	chainParams      *chaincfg.Params
+	settings         *settings.Settings
 	blockchainStore  headerIfc
 	blockchainClient headerIfc
 	blockStore       blob.Store
@@ -41,10 +41,10 @@ type Addition struct {
 	Coinbase bool
 }
 
-func NewConsolidator(logger ulogger.Logger, chainParams *chaincfg.Params, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
+func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
 	return &consolidator{
 		logger:                 logger,
-		chainParams:            chainParams,
+		settings:               tSettings,
 		blockchainStore:        blockchainStore,
 		blockchainClient:       blockchainClient,
 		blockStore:             blockStore,
@@ -83,12 +83,12 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 
 		c.logger.Infof("Processing header at height %d", height)
 
-		if hash.String() == c.chainParams.GenesisHash.String() {
+		if hash.String() == c.settings.ChainCfgParams.GenesisHash.String() {
 			continue
 		}
 
 		// Get the last 2 block headers from this last processed height
-		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.blockStore, hash)
+		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash)
 		if err != nil {
 			return err
 		}

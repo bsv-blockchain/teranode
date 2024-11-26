@@ -50,7 +50,9 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil)
+	tSettings := settings.NewSettings()
+
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -78,7 +80,9 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// delete spends set to false
 	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, utxoStore, nil, nil)
+	tSettings := settings.NewSettings()
+
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -102,18 +106,19 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 
 	utxoStore, _ := nullstore.NewNullStore()
 	_ = utxoStore.SetBlockHeight(123)
+	//nolint:gosec
 	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	initPrometheusMetrics()
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params, WithTxValidatorInterpreter(TxInterpreterGoBT)),
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings, WithTxValidatorInterpreter(TxInterpreterGoBT)),
 		utxoStore:                     utxoStore,
 		blockAssembler:                BlockAssemblyStore{},
 		saveInParallel:                true,
@@ -143,12 +148,13 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		saveInParallel:                true,
@@ -184,14 +190,13 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	var height uint32 = 257727
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
 		txValidator: NewTxValidator(
 			ulogger.TestLogger{},
-			settings.NewPolicySettings(),
-			params,
+			tSettings,
 			WithTxValidatorInterpreter(TxInterpreterGoBT),
 		),
 	}
@@ -216,10 +221,11 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	var height uint32 = 249976
 
-	chainParams, _ := chaincfg.GetChainParams("mainnet")
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), chainParams),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
 	ctx := context.Background()
@@ -242,11 +248,12 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+	tSettings.Policy.MinMiningTxFee = 0
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
 	ctx := context.Background()
@@ -294,11 +301,11 @@ func TestValidateTransactions(t *testing.T) {
 		tx, err := bt.NewTxFromString(txHex)
 		require.NoError(t, err)
 
-		params, err := chaincfg.GetChainParams("mainnet")
-		require.NoError(t, err)
+		tSettings := settings.NewSettings()
+		tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 		v := &Validator{
-			txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+			txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 		}
 
 		ctx := context.Background()
@@ -322,11 +329,11 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	var height uint32 = 249976
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
 	ctx := context.Background()
@@ -349,11 +356,11 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	var height uint32 = 478631
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(t, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
 	ctx := context.Background()
@@ -403,11 +410,11 @@ func Benchmark_validateInternal(b *testing.B) {
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
 
-	params, err := chaincfg.GetChainParams("mainnet")
-	require.NoError(b, err)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, settings.NewPolicySettings(), params),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
 	for i := 0; i < b.N; i++ {

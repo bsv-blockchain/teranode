@@ -5,8 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ordishs/gocore"
-
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
@@ -24,7 +23,9 @@ func (m MockExister) Exists(ctx context.Context, key []byte, opts ...options.Fil
 func TestLock(t *testing.T) {
 	exister := MockExister{}
 
-	quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
+	tSettings := settings.NewSettings()
+
+	quorumPath := tSettings.SubtreeValidation.QuorumPath
 
 	defer func() {
 		// remove quorum path
@@ -52,5 +53,4 @@ func TestLock(t *testing.T) {
 	assert.False(t, gotLock)
 
 	defer releaseFn()
-
 }

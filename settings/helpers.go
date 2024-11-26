@@ -3,6 +3,7 @@ package settings
 import (
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/ordishs/gocore"
 )
@@ -16,8 +17,8 @@ func getString(key, defaultValue string) string {
 	return value
 }
 
-func getMultiString(key, defaultValue string) []string {
-	value, _ := gocore.Config().GetMulti(key, defaultValue)
+func getMultiString(key, sep string, defaultValues []string) []string {
+	value, _ := gocore.Config().GetMulti(key, sep, defaultValues)
 
 	return value
 }
@@ -50,4 +51,22 @@ func getFloat64(key string, defaultValue float64) float64 {
 	}
 
 	return value
+}
+
+func getDuration(key string, defaultValue ...time.Duration) time.Duration {
+	str, ok := gocore.Config().Get(key)
+	if str == "" || !ok {
+		if len(defaultValue) > 0 {
+			return defaultValue[0]
+		}
+
+		return 0
+	}
+
+	d, err := time.ParseDuration(str)
+	if err != nil {
+		return 0
+	}
+
+	return d
 }

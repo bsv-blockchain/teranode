@@ -175,9 +175,10 @@ func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
 
 // policy settings tests
 func TestMaxTxSizePolicy(t *testing.T) {
-	policySettings := settings.NewPolicySettings()
-	policySettings.MaxTxSizePolicy = 10 // insanely low
-	txValidator := NewTxValidator(ulogger.TestLogger{}, policySettings, chaincfg.GetChainParamsFromConfig())
+	tSettings := settings.NewSettings()
+
+	tSettings.Policy.MaxTxSizePolicy = 10 // insanely low
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
 	err := txValidator.ValidateTransaction(largeTx, 10000000)
 	if assert.Error(t, err) {

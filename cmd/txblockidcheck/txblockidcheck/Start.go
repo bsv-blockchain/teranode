@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -18,12 +19,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func Start() {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
+	tSettings := settings.NewSettings()
 
 	if path, err := os.Getwd(); err != nil {
 		panic(err)
@@ -39,38 +40,16 @@ func Start() {
 	txHashString := flag.String("txhash", "", "transaction hash")
 	flag.Parse()
 
-	var (
-		ok              bool
-		utxoStoreString string
-	)
-
 	if *utxoStoreFlag != "" {
-		utxoStoreString = *utxoStoreFlag
-	} else {
-		utxoStoreString, ok = gocore.Config().Get("utxostore")
-		if !ok {
-			usage("utxo store URL required: provide via -utxostore flag or configuration")
-		}
+		tSettings.UtxoStore.UtxoStore = parseURL(*utxoStoreFlag)
 	}
 
-	var blockchainStoreString string
 	if *blockchainStoreFlag != "" {
-		blockchainStoreString = *blockchainStoreFlag
-	} else {
-		blockchainStoreString, ok = gocore.Config().Get("blockchain_store")
-		if !ok {
-			usage("blockchain store URL required: provide via -blockchainstore flag or configuration")
-		}
+		tSettings.BlockChain.StoreURL = parseURL(*blockchainStoreFlag)
 	}
 
-	var subtreeStoreString string
 	if *subtreeStoreFlag != "" {
-		subtreeStoreString = *subtreeStoreFlag
-	} else {
-		subtreeStoreString, ok = gocore.Config().Get("subtreestore")
-		if !ok {
-			usage("subtree store URL required: provide via -subtreestore flag or configuration")
-		}
+		tSettings.SubtreeValidation.SubtreeStore = parseURL(*subtreeStoreFlag)
 	}
 
 	if *txHashString == "" {
@@ -82,17 +61,17 @@ func Start() {
 		utxoStore utxo.Store
 	)
 
-	utxoStore, err = utxofactory.NewStore(ctx, logger, parseURL(utxoStoreString), "main", false)
+	utxoStore, err = utxofactory.NewStore(ctx, logger, tSettings, "main", false)
 	if err != nil {
 		usage(err.Error())
 	}
 
-	blockchainStore, err := blockchain.NewStore(logger, parseURL(blockchainStoreString))
+	blockchainStore, err := blockchain.NewStore(logger, tSettings.BlockChain.StoreURL)
 	if err != nil {
 		usage(err.Error())
 	}
 
-	subtreeStore, err := blob.NewStore(logger, parseURL(subtreeStoreString), options.WithHashPrefix(2))
+	subtreeStore, err := blob.NewStore(logger, tSettings.SubtreeValidation.SubtreeStore, options.WithHashPrefix(2))
 	if err != nil {
 		usage(err.Error())
 	}

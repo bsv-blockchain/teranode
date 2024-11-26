@@ -7,28 +7,29 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 type Client struct {
 	apiClient   blockvalidation_api.BlockValidationAPIClient
 	httpAddress string
 	logger      ulogger.Logger
+	settings    *settings.Settings
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger, source string) (*Client, error) {
-	blockValidationGrpcAddress, ok := gocore.Config().Get("blockvalidation_grpcAddress")
-	if !ok {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (*Client, error) {
+	blockValidationGrpcAddress := tSettings.BlockValidation.GRPCAddress
+	if blockValidationGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no blockvalidation_grpcAddress setting found")
 	}
+
 	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
@@ -39,10 +40,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger, source string) (*Clie
 	client := &Client{
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
 		logger:    logger,
+		settings:  tSettings,
 	}
 
-	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
-	if ok {
+	httpAddress := tSettings.BlockValidation.HTTPAddress
+	if httpAddress != "" {
 		client.httpAddress = httpAddress
 	}
 
@@ -69,10 +71,10 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, resp.Details, nil
 }
 
-func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string, waitToComplete bool) error {
+func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error {
 	req := &blockvalidation_api.BlockFoundRequest{
 		Hash:           blockHash.CloneBytes(),
-		BaseUrl:        baseUrl,
+		BaseUrl:        baseURL,
 		WaitToComplete: waitToComplete,
 	}
 
@@ -105,10 +107,10 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 	return nil
 }
 
-func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error {
+func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) error {
 	req := &blockvalidation_api.SubtreeFoundRequest{
 		Hash:    subtreeHash.CloneBytes(),
-		BaseUrl: baseUrl,
+		BaseUrl: baseURL,
 	}
 
 	_, err := s.apiClient.SubtreeFound(ctx, req)

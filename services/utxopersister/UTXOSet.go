@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -59,6 +60,7 @@ const (
 type UTXOSet struct {
 	ctx             context.Context
 	logger          ulogger.Logger
+	settings        *settings.Settings
 	blockHash       chainhash.Hash
 	blockHeight     uint32
 	additionsStorer *filestorer.FileStorer
@@ -72,12 +74,12 @@ type UTXOSet struct {
 	mu              sync.Mutex // Add this line
 }
 
-func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
+func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
 	// Now, write the block file
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
 
-	additionsStorer := filestorer.NewFileStorer(ctx, logger, store, blockHash[:], additionsExtension)
-	deletionsStorer := filestorer.NewFileStorer(ctx, logger, store, blockHash[:], deletionsExtension)
+	additionsStorer := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], additionsExtension)
+	deletionsStorer := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], deletionsExtension)
 
 	// Write the headers
 	additionsHeader, err := BuildHeaderBytes("U-A-1.0", blockHash, blockHeight)
@@ -101,6 +103,7 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 	return &UTXOSet{
 		ctx:             ctx,
 		logger:          logger,
+		settings:        tSettings,
 		blockHash:       *blockHash,
 		blockHeight:     blockHeight,
 		additionsStorer: additionsStorer,
@@ -110,19 +113,21 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 	}, nil
 }
 
-func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
 	return &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
+		settings:  tSettings,
 		blockHash: *blockHash,
 		store:     store,
 	}, nil
 }
 
-func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
+func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
+		settings:  tSettings,
 		blockHash: *blockHash,
 		store:     store,
 	}
@@ -353,7 +358,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
-	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
@@ -378,7 +383,7 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
 
-	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
@@ -408,7 +413,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 	us.logger.Infof("[CreateUTXOSet] Creating UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
-	storer := filestorer.NewFileStorer(ctx, us.logger, us.store, c.lastBlockHash[:], utxosetExtension)
+	storer := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], utxosetExtension)
 
 	b, err := BuildHeaderBytes("U-S-1.0", c.lastBlockHash, c.lastBlockHeight, c.previousBlockHash)
 	if err != nil {
@@ -428,14 +433,14 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		utxoCount  uint64
 	)
 
-	if c.firstPreviousBlockHash.String() != c.chainParams.GenesisHash.String() {
+	if c.firstPreviousBlockHash.String() != c.settings.ChainCfgParams.GenesisHash.String() {
 		// Open the previous UTXOSet for the previous block
 		previousUTXOSetReader, err := us.store.GetIoReader(ctx, c.firstPreviousBlockHash[:], options.WithFileExtension(utxosetExtension))
 		if err != nil {
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", c.firstPreviousBlockHash, err)
 		}
 
-		utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+		utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
 
 		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 		if err != nil {

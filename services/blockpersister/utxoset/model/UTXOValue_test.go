@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

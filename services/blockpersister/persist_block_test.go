@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -209,7 +210,9 @@ func TestBlock(t *testing.T) {
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient)
+	tSettings := settings.NewSettings()
+
+	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockStore, blockchainClient)
 
 	var block model.Block
 

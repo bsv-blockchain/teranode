@@ -5,9 +5,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -16,11 +16,11 @@ type Client struct {
 	logger ulogger.Logger
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (ClientI, error) {
 	logger = logger.New("blkcC")
 
-	legacyGrpcAddress, ok := gocore.Config().Get("legacy_grpcAddress")
-	if !ok {
+	legacyGrpcAddress := tSettings.Legacy.GRPCAddress
+	if legacyGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no legacy_grpcAddress setting found")
 	}
 

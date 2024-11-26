@@ -59,18 +59,18 @@ const DifficultyAdjustmentWindow = 144
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
-
 	bytesLittleEndian := make([]byte, 4)
 
 	if tSettings.ChainCfgParams == nil {
 		logger.Errorf("[BlockAssembler] chain cfg params are nil")
 		return nil
 	}
+
 	binary.LittleEndian.PutUint32(bytesLittleEndian, tSettings.ChainCfgParams.PowLimitBits)
 
 	defaultMiningBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
-	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
+	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
 		logger:              logger,
 		stats:               stats.NewStat("BlockAssembler"),
@@ -486,6 +486,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
+
 	var txCount uint32
 
 	var sizeWithoutCoinbase uint32
@@ -661,10 +662,8 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 	// allow this to get up to 10,000 hashes
 	// this is needed for large resets of the block assembly
 	// the maxBlockReorgCatchup is used to limit the number of blocks we can catch up to in the subtree processor
-	maxGetReorgHashes, _ := gocore.Config().GetInt("blockassembly_maxGetReorgHashes", 10_000)
-
 	// nolint:gosec
-	maxGetHashes := uint64(maxGetReorgHashes)
+	maxGetHashes := uint64(b.settings.BlockAssembly.MaxGetReorgHashes)
 
 	// get a much larger chain map from the current chain to determine the common ancestor
 	currentChainMap := make(map[chainhash.Hash]uint32, maxGetHashes)

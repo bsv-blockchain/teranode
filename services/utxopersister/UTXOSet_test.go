@@ -5,6 +5,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
@@ -74,7 +75,8 @@ func TestNewUTXOSet(t *testing.T) {
 
 	ctx := context.Background()
 
-	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, store, &hash1, 0)
+	tSettings := settings.NewSettings()
+	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 0)
 	require.NoError(t, err)
 
 	ud1.blockHeight = 10

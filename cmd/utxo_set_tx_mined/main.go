@@ -5,15 +5,16 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func main() {
 	ctx := context.Background()
 	logger := ulogger.New("utxo_set_tx_mined")
+	tSettings := settings.NewSettings()
 
 	if len(os.Args) < 3 {
 		panic("Usage: utxo_set_tx_mined <txid> <blockID>")
@@ -38,23 +39,15 @@ func main() {
 		panic("blockID must be greater than 0")
 	}
 
-	storeUrl, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-
-	if !found {
-		panic("utxo_store not found in config")
-	}
-
-	utxoStore, err := _factory.NewStore(ctx, logger, storeUrl, "utxo_set_tx_mined", false)
+	utxoStore, err := _factory.NewStore(ctx, logger, tSettings, "utxo_set_tx_mined", false)
 	if err != nil {
 		panic(err)
 	}
 
 	logger.Infof("Setting mined state for tx %s: %d", hash.String(), blockID)
 
-	if err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, uint32(blockID)); err != nil {
+	//nolint:gose
+	if err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, uint32(blockID)); err != nil { //nolint:gosec
 		panic(err)
 	}
 

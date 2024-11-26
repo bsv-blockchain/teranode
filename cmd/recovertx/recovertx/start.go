@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -42,7 +43,7 @@ func Start() {
 
 	ctx := context.Background()
 	logger := ulogger.New("recover_tx")
-
+	tSettings := settings.NewSettings()
 	blockHeightStr := args[1]
 
 	blockHeight64, err := strconv.ParseUint(blockHeightStr, 10, 32)
@@ -93,18 +94,7 @@ func Start() {
 		}
 	}
 
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		fmt.Println("error reading utxostore setting: ", err.Error())
-		os.Exit(1)
-	}
-
-	if !found {
-		fmt.Println("no utxostore setting found")
-		os.Exit(1)
-	}
-
-	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "main", false)
+	utxoStore, err := utxofactory.NewStore(ctx, logger, tSettings, "main", false)
 	if err != nil {
 		fmt.Println("error creating utxostore: ", err.Error())
 		os.Exit(1)

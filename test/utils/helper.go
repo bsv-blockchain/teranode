@@ -27,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -888,11 +889,11 @@ func UseCoinbaseUtxo(ctx context.Context, node tf.BitcoinNode, coinbaseTx *bt.Tx
 // tx := response.Tx
 
 // TODO: Use tenv
-func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger, fees uint64) (bool, error) {
+func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000
 
 	// Send transactions
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+	txDistributor, _ := distributor.NewDistributor(ctx, logger, tSettings,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
@@ -970,11 +971,11 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	return true, nil
 }
 
-func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient, logger ulogger.Logger, fees uint64) (bool, error) {
+func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000
 
 	// Send transactions
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+	txDistributor, _ := distributor.NewDistributor(ctx, logger, tSettings,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),

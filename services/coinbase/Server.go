@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -23,6 +24,7 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	coinbase_api.UnimplementedCoinbaseAPIServer
+	settings         *settings.Settings
 	blockchainClient bc.ClientI
 	coinbase         *Coinbase
 	logger           ulogger.Logger
@@ -30,11 +32,12 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, blockchainClient bc.ClientI) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient bc.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:           logger,
+		settings:         tSettings,
 		blockchainClient: blockchainClient,
 		stats:            gocore.NewStat("coinbase"),
 	}
@@ -78,12 +81,9 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*coinbase_ap
 }
 
 func (s *Server) Init(ctx context.Context) error {
-	coinbaseStoreURL, err, found := gocore.Config().GetURL("coinbase_store")
-	if err != nil {
-		return errors.NewConfigurationError("failed to get coinbase_store setting", err)
-	}
-	if !found {
-		return errors.NewConfigurationError("no coinbase_store setting found")
+	coinbaseStoreURL := s.settings.Coinbase.Store
+	if coinbaseStoreURL == nil {
+		return errors.NewConfigurationError("failed to get coinbase_store setting")
 	}
 
 	// We will reuse the blockchain service here to store the coinbase UTXOs
@@ -93,7 +93,7 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewStorageError("failed to create coinbase store: %s", err)
 	}
 
-	s.coinbase, err = NewCoinbase(s.logger, s.blockchainClient, store)
+	s.coinbase, err = NewCoinbase(s.logger, s.settings, s.blockchainClient, store)
 	if err != nil {
 		return errors.NewServiceError("failed to create new coinbase: %s", err)
 	}
@@ -107,12 +107,10 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
-
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if s.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := s.blockchainClient.Restore(ctx)
 		if err != nil {
@@ -203,6 +201,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 		if response.Error != nil {
 			wrapper.Error = response.Error.Error()
 		}
+
 		resp.Responses = append(resp.Responses, wrapper)
 	}
 

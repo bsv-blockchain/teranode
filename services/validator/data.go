@@ -79,7 +79,7 @@ func (d *TxValidationData) Bytes() []byte {
 
 	// Write height (4 bytes) in little-endian format
 	b32 := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b32, uint32(d.Height))
+	binary.LittleEndian.PutUint32(b32, d.Height)
 	bytes = append(bytes, b32...)
 
 	// Append transaction data

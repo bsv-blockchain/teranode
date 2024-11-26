@@ -17,13 +17,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/ordishs/gocore"
@@ -529,6 +529,7 @@ func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <
 
 // RPCServer provides a concurrent safe RPC server to a chain server.
 type RPCServer struct {
+	settings               *settings.Settings
 	started                int32
 	shutdown               int32
 	authsha                [sha256.Size]byte
@@ -548,7 +549,6 @@ type RPCServer struct {
 	peerClient             peer.ClientI
 	p2pClient              p2p.ClientI
 	assetHTTPURL           *url.URL
-	chainParams            *chaincfg.Params
 	helpCacher             *helpCacher
 }
 
@@ -978,8 +978,7 @@ func (s *RPCServer) Start(ctx context.Context) error {
 		// Check if we need to Restore. If so, move FSM to the Restore state
 		// Restore will block and wait for RUN event to be manually sent
 		// TODO: think if we can automate transition to RUN state after restore is complete.
-		fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-		if fsmStateRestore {
+		if s.settings.BlockChain.FSMStateRestore {
 			// Send Restore event to FSM
 			_, err := s.blockchainClient.Restore(ctx, &emptypb.Empty{})
 			if err != nil {
@@ -1067,11 +1066,11 @@ func (s *RPCServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
-	assetHTTPAddress, ok := gocore.Config().Get("asset_httpAddress", "")
-	if !ok {
+	assetHTTPAddress := tSettings.Asset.HTTPAddress
+	if assetHTTPAddress == "" {
 		return nil, errors.NewConfigurationError("missing setting: asset_httpAddress")
 	}
 
@@ -1084,30 +1083,30 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPC
 		statusLines:            make(map[int]string),
 		requestProcessShutdown: make(chan struct{}),
 		logger:                 logger,
+		settings:               tSettings,
 		quit:                   make(chan int),
 		blockchainClient:       blockchainClient,
 		assetHTTPURL:           parsedURL,
 		helpCacher:             newHelpCacher(),
 	}
 
-	rpcUser, ok := gocore.Config().Get("rpc_user")
-	if !ok {
+	rpcUser := tSettings.RPC.RPCUser
+	if rpcUser == "" {
 		logger.Warnf("rpc_user not set in config")
 	}
 
-	rpcPass, ok := gocore.Config().Get("rpc_pass")
-
-	if !ok {
+	rpcPass := tSettings.RPC.RPCPass
+	if rpcPass == "" {
 		logger.Warnf("rpc_pass not set in config")
 	}
 
-	rpcLimitUser, ok := gocore.Config().Get("rpc_limit_user")
-	if !ok {
+	rpcLimitUser := tSettings.RPC.RPCLimitUser
+	if rpcLimitUser == "" {
 		logger.Warnf("rpc_limit_user not set in config")
 	}
 
-	rpcLimitPass, ok := gocore.Config().Get("rpc_limit_pass")
-	if !ok {
+	rpcLimitPass := tSettings.RPC.RPCLimitPass
+	if rpcLimitPass == "" {
 		logger.Warnf("rpc_limit_pass not set in config")
 	}
 
@@ -1124,15 +1123,12 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPC
 	}
 	// rpc.cfg.Chain.Subscribe(rpc.handleBlockchainNotification)
 
-	rpc.rpcMaxClients, ok = gocore.Config().GetInt("rpc_max_clients", 1)
-	if !ok {
-		logger.Warnf("rpc_max_clients not set in config")
-	}
+	rpc.rpcMaxClients = tSettings.RPC.RPCMaxClients
 
-	rpc.rpcQuirks = gocore.Config().GetBool("rpc_quirks", true)
+	rpc.rpcQuirks = tSettings.RPC.RPCQuirks
 
-	rpcListenerURL, ok := gocore.Config().Get("rpc_listener_url")
-	if !ok {
+	rpcListenerURL := tSettings.RPC.RPCListenerURL
+	if rpcListenerURL == "" {
 		return nil, errors.NewConfigurationError("rpc_listener_url not set in config")
 	}
 
@@ -1150,26 +1146,19 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPC
 func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
-	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
+	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger, s.settings)
 	if err != nil {
 		return
 	}
 
-	s.peerClient, err = peer.NewClient(ctx, s.logger)
+	s.peerClient, err = peer.NewClient(ctx, s.logger, s.settings)
 	if err != nil {
 		s.logger.Errorf("error initializing peer client: %v", err)
 	}
 
-	s.p2pClient, err = p2p.NewClient(ctx, s.logger)
+	s.p2pClient, err = p2p.NewClient(ctx, s.logger, s.settings)
 	if err != nil {
 		s.logger.Errorf("error initializing p2p client: %v", err)
-	}
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	s.chainParams, err = chaincfg.GetChainParams(network)
-	if err != nil {
-		s.logger.Fatalf("Unknown network: %s", network)
 	}
 
 	return nil

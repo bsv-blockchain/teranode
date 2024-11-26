@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -61,7 +62,10 @@ func TestConsolidateBlockRange(t *testing.T) {
 	blockStore, err := blob.NewStore(logger, storeURL)
 	require.NoError(t, err)
 
-	consolidator := NewConsolidator(logger, &chaincfg.MainNetParams, &mockHeaderIfc{}, nil, blockStore, nil)
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	consolidator := NewConsolidator(logger, tSettings, &mockHeaderIfc{}, nil, blockStore, nil)
 
 	err = consolidator.ConsolidateBlockRange(ctx, 169, 170)
 	require.NoError(t, err)

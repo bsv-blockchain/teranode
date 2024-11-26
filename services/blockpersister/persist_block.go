@@ -31,7 +31,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	// Create a new UTXO diff
-	utxoDiff, err := utxopersister.NewUTXOSet(ctx, u.logger, u.blockStore, block.Header.Hash(), block.Height)
+	utxoDiff, err := utxopersister.NewUTXOSet(ctx, u.logger, u.settings, u.blockStore, block.Header.Hash(), block.Height)
 	if err != nil {
 		return errors.NewProcessingError("error creating utxo diff", err)
 	}
@@ -72,7 +72,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
-	storer := filestorer.NewFileStorer(ctx, u.logger, u.blockStore, hash[:], "block")
+	storer := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], "block")
 
 	if _, err = storer.Write(blockBytes); err != nil {
 		return errors.NewStorageError("error writing block to disk", err)

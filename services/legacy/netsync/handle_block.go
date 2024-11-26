@@ -20,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -378,8 +377,8 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 		deferFn(err)
 	}()
 
-	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
-	storeBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_storeBatcherConcurrency", 32)
+	storeBatcherSize := sm.settings.Legacy.StoreBatcherSize
+	storeBatcherConcurrency := sm.settings.Legacy.StoreBatcherConcurrency
 
 	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
 	g.SetLimit(storeBatcherSize * storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
@@ -425,9 +424,8 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 		deferFn(err)
 	}()
 
-	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
-
-	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
+	spendBatcherSize := sm.settings.Legacy.SpendBatcherSize
+	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 
 	// validate all the transactions in parallel
 	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
@@ -475,8 +473,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		deferFn(err)
 	}()
 
-	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
-	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
+	spendBatcherSize := sm.settings.Legacy.SpendBatcherSize
+	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 
 	var timeStart time.Time
 
@@ -540,8 +538,8 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 		deferFn(err)
 	}()
 
-	outpointBatcherSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 1024)
-	outpointBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_outpointBatcherConcurrency", 32)
+	outpointBatcherSize := sm.settings.Legacy.OutpointBatcherSize
+	outpointBatcherConcurrency := sm.settings.Legacy.OutpointBatcherConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)                         // we don't want the tracing to be linked to these calls
 	g.SetLimit(outpointBatcherSize * outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike

@@ -101,14 +101,16 @@ func getTxs(testBlockID string) ([]*bt.Tx, error) {
 
 	maxNbTx := 44_407 // nb tx at block 000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9
 	txs := make([]*bt.Tx, 0)
+
 	for {
 		tx := &bt.Tx{}
+
 		_, err = tx.ReadFrom(reader)
 		if err != nil {
 			if len(txs) == maxNbTx {
 				break
 			} else {
-				return nil, fmt.Errorf("error reading data, read %v txs, error : %v", len(txs), err)
+				return nil, errors.NewError("error reading data, read %v txs, error : %v", len(txs), err)
 			}
 		}
 
@@ -120,6 +122,7 @@ func getTxs(testBlockID string) ([]*bt.Tx, error) {
 
 func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
 	blockFilename := fmt.Sprintf("testdata/%s.extended.bin", testBlockID)
+
 	exists, err := os.Stat(blockFilename)
 	if err != nil {
 		if !errors.Is(err, syscall.Errno(2)) {
@@ -134,6 +137,7 @@ func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
 
 	// get the block from the test store
 	URL := fmt.Sprintf("%s/%s.extended.bin", testStoreURL, testBlockID)
+
 	req, err := http.NewRequest("GET", URL, nil)
 	if err != nil {
 		return nil, err

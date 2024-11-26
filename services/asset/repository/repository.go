@@ -10,20 +10,19 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/health"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -32,6 +31,7 @@ import (
 // blockchain clients.
 type Repository struct {
 	logger              ulogger.Logger
+	settings            *settings.Settings
 	UtxoStore           utxo.Store
 	TxStore             blob.Store
 	SubtreeStore        blob.Store
@@ -56,12 +56,12 @@ type Repository struct {
 // Returns:
 //   - *Repository: Newly created repository instance
 //   - error: Any error encountered during creation
-func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store,
+func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
 	var cbc coinbase_api.CoinbaseAPIClient
 
-	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
-	if ok && len(coinbaseGrpcAddress) > 0 {
+	coinbaseGrpcAddress := tSettings.Coinbase.GRPCAddress
+	if len(coinbaseGrpcAddress) > 0 {
 		baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
 			MaxRetries: 3,
 		})
@@ -74,6 +74,7 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 
 	return &Repository{
 		logger:              logger,
+		settings:            tSettings,
 		BlockchainClient:    blockchainClient,
 		CoinbaseProvider:    cbc,
 		UtxoStore:           utxoStore,

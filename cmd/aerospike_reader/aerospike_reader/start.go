@@ -6,15 +6,16 @@ import (
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func Start() {
 	logger := ulogger.NewGoCoreLogger("aerospike_reader", ulogger.WithLevel("WARN"))
+	tSettings := settings.NewSettings()
 
 	fmt.Println()
 
@@ -34,14 +35,9 @@ func Start() {
 		os.Exit(1)
 	}
 
-	storeURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		fmt.Printf("error reading utxostore setting: %s\n", err)
-		os.Exit(1)
-	}
-
-	if !found {
-		fmt.Printf("missing utxostore setting\n")
+	storeURL := tSettings.UtxoStore.UtxoStore
+	if storeURL == nil {
+		fmt.Printf("error reading utxostore setting\n")
 		os.Exit(1)
 	}
 

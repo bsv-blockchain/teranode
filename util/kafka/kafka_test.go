@@ -174,7 +174,6 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 
 func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	// t.Parallel()
-
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
@@ -300,7 +299,6 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t *testing.T) {
 	// t.Parallel()
-
 	// logger := ulogger.NewZeroLogger("test")
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
@@ -400,7 +398,6 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 
 func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *testing.T) {
 	// t.Parallel()
-
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -506,7 +503,6 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 
 func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T) {
 	// t.Parallel()
-
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -607,7 +603,6 @@ and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	// t.Parallel()
-
 	logger := ulogger.NewZeroLogger("test")
 
 	ctx, cancel := context.WithCancel(context.Background())

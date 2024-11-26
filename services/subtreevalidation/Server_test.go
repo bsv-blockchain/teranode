@@ -54,6 +54,7 @@ func TestOneTransaction(t *testing.T) {
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -110,10 +111,12 @@ func TestTwoTransactions(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
+
 	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -186,13 +189,16 @@ func TestMerkleRoot(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
+
 	require.NoError(t, err)
+
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -228,15 +234,17 @@ func TestMerkleRoot(t *testing.T) {
 }
 
 func TestTtlCache(t *testing.T) {
-
 	cache := ttlcache.New[chainhash.Hash, bool](
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
 	)
-	for _, txId := range txIds {
+
+	for _, txId := range txIds { //nolint:stylecheck
 		hash, _ := chainhash.NewHashFromStr(txId)
 		cache.Set(*hash, true, 1*time.Second)
 	}
+
 	go cache.Start()
+
 	assert.Equal(t, 4, cache.Len())
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
@@ -268,13 +276,13 @@ func TestTtlCache(t *testing.T) {
 // 		logger           = ulogger.NewVerboseTestLogger(t)
 // 	)
 
-// 	subtreeStoreURL, err, _ := gocore.Config().GetURL("subtreestore")
+// 	subtreeStoreURL,  use settings
 // 	require.NoError(t, err)
 
 // 	subtreeStore, err := blob.NewStore(logger, subtreeStoreURL)
 // 	require.NoError(t, err)
 
-// 	utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
+// 	utxoStoreURL use settings
 // 	require.NoError(t, err)
 
 // 	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "legacy", false)

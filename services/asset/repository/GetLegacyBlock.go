@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"runtime"
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -19,7 +18,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -246,8 +244,8 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Repository:getTxs")
 	defer deferFn()
 
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
-	processSubtreeConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))
+	batchSize := repo.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize
+	processSubtreeConcurrency := repo.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(processSubtreeConcurrency)
@@ -268,7 +266,6 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 					return gCtx.Err() // Return the error that caused the cancellation
 
 				default:
-
 					if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
 						// coinbase placeholder is not in the store
 						continue
@@ -311,5 +308,4 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 	}
 
 	return int(missed.Load()), nil
-
 }

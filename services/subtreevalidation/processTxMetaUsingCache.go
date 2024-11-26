@@ -2,7 +2,6 @@ package subtreevalidation
 
 import (
 	"context"
-	"runtime"
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -11,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -23,9 +21,9 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processTxMetaUsingCache")
 	defer deferFn()
 
-	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_BatchSize", 1024)
-	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_Concurrency", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_MissingTxThreshold", 1)
+	batchSize := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheBatchSize
+	validateSubtreeInternalConcurrency := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheConcurrency
+	missingTxThreshold := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)

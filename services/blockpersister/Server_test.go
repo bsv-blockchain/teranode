@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -94,7 +94,9 @@ func TestTwoTransactions(t *testing.T) {
 	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
 	var err error
+
 	subtrees := make([]*util.Subtree, 1)
+
 	subtrees[0], err = util.NewTree(1)
 	require.NoError(t, err)
 
@@ -112,9 +114,11 @@ func TestTwoTransactions(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 	require.NoError(t, err)
+
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -147,6 +151,7 @@ func TestTwoTransactions(t *testing.T) {
 
 func TestMerkleRoot(t *testing.T) {
 	var err error
+
 	subtrees := make([]*util.Subtree, 2)
 
 	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1
@@ -229,14 +234,15 @@ func TestMerkleRoot(t *testing.T) {
 }
 
 func TestTtlCache(t *testing.T) {
-
 	cache := ttlcache.New[chainhash.Hash, bool](
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
 	)
-	for _, txId := range txIds {
+
+	for _, txId := range txIds { //nolint:stylecheck
 		hash, _ := chainhash.NewHashFromStr(txId)
 		cache.Set(*hash, true, 1*time.Second)
 	}
+
 	go cache.Start()
 	assert.Equal(t, 4, cache.Len())
 	time.Sleep(2 * time.Second)
@@ -245,7 +251,8 @@ func TestTtlCache(t *testing.T) {
 
 func TestSetInitialState(t *testing.T) {
 	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	bp := New(context.Background(), nil, nil, nil, nil, nil, WithSetInitialState(1, hash))
+	tSettings := settings.NewSettings()
+	bp := New(context.Background(), nil, tSettings, nil, nil, nil, nil, WithSetInitialState(1, hash))
 
 	height, err := bp.state.GetLastPersistedBlockHeight()
 	assert.NoError(t, err)

@@ -3,9 +3,9 @@ package model
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -74,6 +74,7 @@ func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 
 func (k *UTXOKey) Write(w io.Writer) error {
 	var n int
+
 	var err error
 
 	if n, err = w.Write(k.TxID[:]); err != nil {

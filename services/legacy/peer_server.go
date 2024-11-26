@@ -41,13 +41,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 const (
@@ -216,7 +216,8 @@ type cfHeaderKV struct {
 // server provides a bitcoin server for handling communications to and from
 // bitcoin peers.
 type server struct {
-	ctx context.Context
+	ctx      context.Context
+	settings *settings.Settings
 	// The following variables must only be used atomically.
 	// Putting the uint64s first makes them 64-bit aligned for 32-bit systems.
 	bytesReceived uint64 // Total bytes received from all peers since start.
@@ -226,7 +227,6 @@ type server struct {
 	shutdownSched int32
 	startupTime   int64
 
-	chainParams          *chaincfg.Params
 	addrManager          *addrmgr.AddrManager
 	connManager          *connmgr.ConnManager
 	sigCache             *txscript.SigCache
@@ -1239,7 +1239,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 // the connected peer.  Since a merkle block requires the peer to have a filter
 // loaded, this call will simply be ignored if there is no filter loaded.  An
 // error is returned if the block hash is not known.
-func (s *server) pushMerkleBlockMsg(sp *serverPeer, hash *chainhash.Hash,
+func (s *server) pushMerkleBlockMsg(sp *serverPeer, _ *chainhash.Hash,
 	doneChan chan<- struct{}, waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
 	// Do not send a response if the peer doesn't have a filter loaded.
@@ -1769,7 +1769,6 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		UserAgentName:     userAgentName,
 		UserAgentVersion:  userAgentVersion,
 		UserAgentComments: cfg.UserAgentComments,
-		ChainParams:       sp.server.chainParams,
 		Services:          sp.server.services,
 		DisableRelayTx:    cfg.BlocksOnly,
 		ProtocolVersion:   peer.MaxProtocolVersion,
@@ -1797,7 +1796,7 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 		s.logger.Warnf("Cannot whitelist peer %v: %v", conn.RemoteAddr(), err)
 	}
 
-	sp.Peer = peer.NewInboundPeer(s.logger, newPeerConfig(sp))
+	sp.Peer = peer.NewInboundPeer(s.logger, s.settings, newPeerConfig(sp))
 	sp.AssociateConnection(conn)
 	go s.peerDoneHandler(sp)
 }
@@ -1818,7 +1817,7 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 		return
 	}
 
-	p, err := peer.NewOutboundPeer(s.logger, newPeerConfig(sp), c.GetAddr().String())
+	p, err := peer.NewOutboundPeer(s.logger, s.settings, newPeerConfig(sp), c.GetAddr().String())
 	if err != nil {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
 		s.connManager.Disconnect(c.ID())
@@ -2149,7 +2148,7 @@ func (s *server) ScheduleShutdown(duration time.Duration) {
 				s.Stop()
 				break out
 			case <-ticker.C:
-				remaining = remaining - tickDuration
+				remaining -= tickDuration
 				if remaining < time.Second {
 					continue
 				}
@@ -2286,12 +2285,11 @@ out:
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
+func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, config Config, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	blockAssembly *blockassembly.Client,
-	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
-
+	listenAddrs []string, assetHTTPAddress string) (*server, error) {
 	// init config
 	c, _, err := loadConfig(logger)
 	if err != nil {
@@ -2302,11 +2300,10 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	cfg = c
 
 	// This is normally only done from file in bsvd, but we need to do it here, also happens inside loadConfig
-	network, _ := gocore.Config().Get("network", "mainnet")
 
-	if network == "testnet" {
+	if tSettings.ChainCfgParams.Name == "testnet" {
 		activeNetParams = &testNetParams
-	} else if network == "regtest" {
+	} else if tSettings.ChainCfgParams.Name == "regtest" {
 		activeNetParams = &regressionNetParams
 	}
 
@@ -2345,6 +2342,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	var listeners []net.Listener
 	var nat NAT
+
 	if !cfg.DisableListen {
 		var err error
 		listeners, nat, err = initListeners(logger, amgr, listenAddrs, services)
@@ -2355,15 +2353,16 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 			return nil, errors.New("no valid listen address")
 		}
 	}
-	banList, banChan, err := p2p.GetBanList(ctx, logger)
+
+	banList, banChan, err := p2p.GetBanList(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.New("can't get banList")
 	}
 
 	s := server{
 		ctx:                  ctx,
+		settings:             tSettings,
 		startupTime:          time.Now().Unix(),
-		chainParams:          chainParams,
 		addrManager:          amgr,
 		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
 		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
@@ -2387,7 +2386,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
 		blockAssembly:        blockAssembly,
-		assetHTTPAddress:     assetHttpAddress,
+		assetHTTPAddress:     assetHTTPAddress,
 		banList:              banList,
 		banChan:              banChan,
 	}
@@ -2395,6 +2394,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	s.syncManager, err = netsync.New(
 		ctx,
 		logger,
+		tSettings,
 		blockchainClient,
 		validationClient,
 		utxoStore,
@@ -2405,7 +2405,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		blockAssembly,
 		&netsync.Config{
 			PeerNotifier:            &s,
-			ChainParams:             s.chainParams,
+			ChainParams:             s.settings.ChainCfgParams,
 			DisableCheckpoints:      cfg.DisableCheckpoints,
 			MaxPeers:                cfg.MaxPeers,
 			MinSyncPeerNetworkSpeed: cfg.MinSyncPeerNetworkSpeed,
@@ -2417,8 +2417,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	// Add the peers that are defined in teranode settings...
 	// also retrieved in services/legacy/Server.go:118
-	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
-	if found && len(addresses) > 0 {
+	addresses := s.settings.Legacy.ConnectPeers
+	if len(addresses) > 0 {
 		c.ConnectPeers = append(c.ConnectPeers, addresses...)
 		// set max peers to the number of connect peers
 		// this forces the server to only connect to the peers defined in the settings
@@ -2833,7 +2833,7 @@ func (s *server) listenForBanEvents(ctx context.Context) {
 	}
 }
 
-func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
+func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
 	if event.Action != "add" {
 		return // We only care about new bans
 	}

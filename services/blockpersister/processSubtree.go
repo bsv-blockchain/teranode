@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
@@ -29,11 +28,13 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	if err != nil {
 		return errors.NewStorageError("[BlockPersister] error getting subtree %s from store", subtreeHash.String(), err)
 	}
+
 	defer func() {
 		_ = subtreeReader.Close()
 	}()
 
 	subtree := util.Subtree{}
+
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
 		return errors.NewProcessingError("[BlockPersister] error deserializing subtree", err)
@@ -55,7 +56,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
-	batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
+	batched := u.settings.Block.BatchMissingTransactions
 
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 	missed, err := u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched)
@@ -67,7 +68,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
-	storer := filestorer.NewFileStorer(context.Background(), u.logger, u.blockStore, subtreeHash[:], "subtree")
+	storer := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], "subtree")
 	defer storer.Close(context.Background())
 
 	if err := WriteTxs(context.Background(), u.logger, storer, txMetaSlice, utxoDiff); err != nil {

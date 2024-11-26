@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/health"
@@ -20,7 +21,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 )
 
 //go:embed all:public/*
@@ -28,13 +28,14 @@ var embeddedFiles embed.FS
 
 type Faucet struct {
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	e                *echo.Echo
 	coinbaseClient   coinbase.ClientI
 	distributor      *distributor.Distributor
 	blockchainClient blockchain.ClientI
 }
 
-func New(logger ulogger.Logger, blockchainClient blockchain.ClientI) *Faucet {
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) *Faucet {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -48,6 +49,7 @@ func New(logger ulogger.Logger, blockchainClient blockchain.ClientI) *Faucet {
 
 	f := &Faucet{
 		logger:           logger,
+		settings:         tSettings,
 		e:                e,
 		blockchainClient: blockchainClient,
 	}
@@ -79,12 +81,12 @@ func (f *Faucet) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (f *Faucet) Init(ctx context.Context) error {
 	var err error
 
-	f.coinbaseClient, err = coinbase.NewClient(ctx, f.logger)
+	f.coinbaseClient, err = coinbase.NewClient(ctx, f.logger, f.settings)
 	if err != nil {
 		return errors.NewProcessingError("could not create coinbase client: %v", err)
 	}
 
-	f.distributor, err = distributor.NewDistributor(ctx, f.logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
+	f.distributor, err = distributor.NewDistributor(ctx, f.logger, f.settings, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
 	if err != nil {
 		return errors.NewServiceError("could not create distributor: %v", err)
 	}
@@ -99,12 +101,10 @@ func (f *Faucet) Init(ctx context.Context) error {
 }
 
 func (f *Faucet) Start(ctx context.Context) error {
-
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+	if f.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := f.blockchainClient.Restore(ctx)
 		if err != nil {
@@ -119,13 +119,13 @@ func (f *Faucet) Start(ctx context.Context) error {
 		f.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
 	}
 
-	addr, ok := gocore.Config().Get("faucet_httpListenAddress")
-	if !ok {
+	addr := f.settings.Faucet.HTTPListenAddress
+	if addr == "" {
 		return errors.NewConfigurationError("faucet_httpListenAddress is required")
 	}
 
 	mode := "HTTPS"
-	if level, _ := gocore.Config().GetInt("securityLevelHTTP", 0); level == 0 {
+	if level := f.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
 	}
 
@@ -134,6 +134,7 @@ func (f *Faucet) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		f.logger.Infof("[Faucet] %s service shutting down", mode)
+
 		err := f.e.Shutdown(ctx)
 		if err != nil {
 			f.logger.Errorf("[Faucet] %s service shutdown error: %s", mode, err)
@@ -145,15 +146,14 @@ func (f *Faucet) Start(ctx context.Context) error {
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTP listening on %s", addr))
 		err = f.e.Start(addr)
-
 	} else {
-
-		certFile, found := gocore.Config().Get("server_certFile")
-		if !found {
+		certFile := f.settings.ServerCertFile
+		if certFile == "" {
 			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
-		keyFile, found := gocore.Config().Get("server_keyFile")
-		if !found {
+
+		keyFile := f.settings.ServerKeyFile
+		if keyFile == "" {
 			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
@@ -235,7 +235,6 @@ func (f *Faucet) submitHandler(c echo.Context) error {
 }
 
 func (f *Faucet) staticHandler(c echo.Context) error {
-
 	var resource string
 
 	path := c.Request().URL.Path
@@ -253,9 +252,11 @@ func (f *Faucet) staticHandler(c echo.Context) error {
 	if err != nil {
 		// Just in case we're missing the /index.html, add it and try again...
 		resource += "/index.html"
+
 		b, err = embeddedFiles.ReadFile(resource)
 		if err != nil {
 			resource = "public/index.html"
+
 			b, err = embeddedFiles.ReadFile(resource)
 			if err != nil {
 				return c.String(http.StatusNotFound, "Not found")
@@ -280,5 +281,4 @@ func (f *Faucet) staticHandler(c echo.Context) error {
 	}
 
 	return c.Blob(http.StatusOK, mimeType, b)
-
 }

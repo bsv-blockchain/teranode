@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	utxopersister_service "github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -22,18 +23,19 @@ func Start() {
 	)
 	defer deferFn()
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("utxopd", ulogger.WithLevel(logLevelStr))
+	tSettings := settings.NewSettings()
 
-	profilerAddr, found := gocore.Config().Get("profilerAddr")
-	if !found {
+	logger := ulogger.New("utxopd", ulogger.WithLevel(tSettings.LogLevel))
+
+	profilerAddr := tSettings.ProfilerAddr
+	if profilerAddr == "" {
 		logger.Warnf("profilerAddr not found in config")
 	} else {
 		logger.Infof("Profiler available at http://%s/debug/pprof", profilerAddr)
 
 		gocore.RegisterStatsHandlers()
-		prefix, _ := gocore.Config().Get("stats_prefix")
-		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, tSettings.StatsPrefix)
 
 		http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 		logger.Infof("FGProf available at http://%s/debug/fgprof", profilerAddr)
@@ -45,9 +47,9 @@ func Start() {
 		}()
 	}
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil || !found {
-		logger.Errorf("blockstore URL not found in config: %v", err)
+	blockStoreURL := tSettings.Block.BlockStore
+	if blockStoreURL == nil {
+		logger.Errorf("blockstore URL not found in config")
 		return
 	}
 
@@ -61,10 +63,10 @@ func Start() {
 
 	var service *utxopersister_service.Server
 
-	if gocore.Config().GetBool("direct", true) {
-		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-		if err != nil || !found {
-			logger.Errorf("blockchain_store URL not found in config: %v", err)
+	if tSettings.Block.UTXOPersisterDirect {
+		blockchainStoreURL := tSettings.BlockChain.StoreURL
+		if blockchainStoreURL == nil {
+			logger.Errorf("blockchain_store URL not found in config")
 			return
 		}
 
@@ -76,13 +78,13 @@ func Start() {
 			return
 		}
 
-		service, err = utxopersister_service.NewDirect(ctx, logger, blockStore, blockchainStore)
+		service, err = utxopersister_service.NewDirect(ctx, logger, tSettings, blockStore, blockchainStore)
 		if err != nil {
 			logger.Errorf("Failed to create utxopersister service: %v", err)
 			return
 		}
 	} else {
-		blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+		blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
 		if err != nil {
 			logger.Errorf("Failed to create blockchainClient: %v", err)
 			return
@@ -90,7 +92,7 @@ func Start() {
 
 		logger.Infof("Creating utxopersister service")
 
-		service = utxopersister_service.New(ctx, logger, blockStore, blockchainClient)
+		service = utxopersister_service.New(ctx, logger, tSettings, blockStore, blockchainClient)
 	}
 
 	logger.Infof("Starting utxopersister service")

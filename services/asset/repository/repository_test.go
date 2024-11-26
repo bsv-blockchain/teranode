@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -32,6 +33,7 @@ func getMemoryStore(t *testing.T) blob.Store {
 
 func TestTransaction(t *testing.T) {
 	var subtreeStore blob.Store
+
 	var blockStore blob.Store
 
 	txStore := getMemoryStore(t)
@@ -51,8 +53,10 @@ func TestTransaction(t *testing.T) {
 	err = txStore.Set(context.Background(), txHash.CloneBytes(), tx.Bytes())
 	require.NoError(t, err)
 
+	settings := &settings.Settings{}
+
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -82,6 +86,7 @@ func TestSubtree(t *testing.T) {
 
 	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
 	require.NoError(t, err)
+
 	for _, hash := range subtreeNodes {
 		err = subtree2.AddNode(hash, 0, 0)
 		require.NoError(t, err)
@@ -108,6 +113,7 @@ func TestSubtreeReader(t *testing.T) {
 
 	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
 	require.NoError(t, err)
+
 	for _, hash := range subtreeNodes {
 		err = subtree2.AddNode(hash, 0, 0)
 		require.NoError(t, err)
@@ -158,8 +164,10 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
+	settings := &settings.Settings{}
+
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	return txns, key, repo

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/settings"
@@ -53,6 +52,8 @@ type Validator struct {
 	// logger handles structured logging for the validator
 	logger ulogger.Logger
 
+	settings *settings.Settings
+
 	// txValidator performs transaction-specific validation checks
 	txValidator TxValidatorI
 
@@ -64,9 +65,6 @@ type Validator struct {
 
 	// saveInParallel indicates if UTXOs should be saved concurrently
 	saveInParallel bool
-
-	// blockAssemblyDisabled toggles whether validated transactions are sent to block assembly
-	blockAssemblyDisabled bool
 
 	// stats tracks validator performance metrics
 	stats *gocore.Stat
@@ -81,17 +79,18 @@ type Validator struct {
 // New creates a new Validator instance with the provided configuration.
 // It initializes the validator with the given logger, UTXO store, and Kafka producers.
 // Returns an error if initialization fails.
-func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
 	initPrometheusMetrics()
 
-	ba, err := blockassembly.NewClient(ctx, logger)
+	ba, err := blockassembly.NewClient(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to create block assembly client", err)
 	}
 
 	v := &Validator{
 		logger:                        logger,
-		txValidator:                   NewTxValidator(logger, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     store,
 		blockAssembler:                ba,
 		saveInParallel:                true,
@@ -100,14 +99,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKaf
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	v.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
-
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get Kafka URL for txmeta: %v", err)
-	}
-
-	if !ok || txmetaKafkaURL == nil {
+	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
+	if txmetaKafkaURL == nil {
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta")
 	}
 
@@ -231,7 +224,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		deferFn(err)
 	}()
 
-	if gocore.Config().GetBool("validator_verbose_debug", false) {
+	if v.settings.Validator.VerboseDebug {
 		v.logger.Debugf("[Validator:Validate] called for %s", txID)
 
 		defer func() {
@@ -337,7 +330,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	// the option blockAssemblyDisabled is false by default
-	blockAssemblyEnabled := !v.blockAssemblyDisabled
+	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 
 	if blockAssemblyEnabled && validationOptions.addTXToBlockAssembly {
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
@@ -501,10 +494,12 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	)
 	defer deferFn()
 
+	_ = reservedUtxos
+
 	span := tracing.Start(ctx, "sendToBlockAssembler")
 	defer span.Finish()
 
-	if gocore.Config().GetBool("validator_verbose_debug", false) {
+	if v.settings.Validator.VerboseDebug {
 		v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	}
 

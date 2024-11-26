@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -88,9 +89,12 @@ func TestHandleBlockDirect(t *testing.T) {
 	err = blockchainClient.AddBlock(ctx, mBlock, "test")
 	require.NoError(t, err)
 
+	tSettings := &settings.Settings{}
+
 	sm, err := New(
 		ctx,
 		logger,
+		tSettings,
 		blockchainClient,
 		validator,
 		utxoStore,

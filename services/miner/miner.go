@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -25,10 +26,10 @@ import (
 
 type Miner struct {
 	logger                           ulogger.Logger
+	settings                         *settings.Settings
 	blockchainClient                 blockchain.ClientI
 	blockAssemblyClient              *blockassembly.Client
 	candidateTimer                   *time.Timer
-	timeMining                       bool
 	waitSeconds                      int
 	MineBlocksNImmediatelyChan       chan int
 	MineBlocksNImmediatelyCancelChan chan bool
@@ -43,14 +44,11 @@ const (
 	blockFoundInterval = 100
 )
 
-var generateBlocks = false
-
-func NewMiner(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Miner, error) {
+func NewMiner(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*Miner, error) {
 	initPrometheusMetrics()
 
 	// The number of seconds to wait before requesting a new mining candidate
 	candidateRequestInterval, _ := gocore.Config().GetInt("mine_candidate_request_interval", 10)
-	timeMining := gocore.Config().GetBool("miner_time_mining", false)
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
 	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
@@ -59,16 +57,16 @@ func NewMiner(ctx context.Context, logger ulogger.Logger, blockchainClient block
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
-	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger)
+	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("[NewMiner] failed to create block assembly client", err)
 	}
 
 	return &Miner{
 		logger:                   logger,
+		settings:                 tSettings,
 		blockAssemblyClient:      blockAssemblyClient,
 		candidateRequestInterval: time.Duration(candidateRequestInterval),
-		timeMining:               timeMining,
 		maxSubtreeCount:          maxSubtreeCount,
 		blockchainClient:         blockchainClient,
 	}, nil
@@ -258,39 +256,9 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 		return errors.NewProcessingError("mine: no solution found for %s", candidateID)
 	}
 
-	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
-
-	if gocore.Config().GetBool("mine_initial_blocks", false) && candidate.Height <= uint32(initialBlockCount) { //nolint:gosec
-		generateBlocks = true
-	} else {
-		generateBlocks = false
-	}
-
 	blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
-	if !generateBlocks && m.timeMining { // SAO - Mine the first <initialBlockCount> blocks without delay
-		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
-		r := rand.New(rand.NewSource(time.Now().UnixNano()))
-		randWait := r.Intn(waitSeconds)
-
-		m.logger.Infof("[Miner] Found block solution %s, waiting %ds before submitting", blockHash.String(), randWait)
-
-	MineWait:
-		for {
-			select {
-			case <-ctx.Done():
-				return context.Canceled
-			default:
-				time.Sleep(1 * time.Second)
-				randWait--
-				if randWait <= 0 {
-					break MineWait
-				}
-			}
-		}
-	} else {
-		m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
-	}
+	m.logger.Infof("[Miner] Found block solution %s, submitting", blockHash.String())
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {

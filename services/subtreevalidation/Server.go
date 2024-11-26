@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -32,13 +33,12 @@ import (
 type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
 	logger                            ulogger.Logger
+	settings                          *settings.Settings
 	subtreeStore                      blob.Store
-	subtreeTTL                        time.Duration
 	txStore                           blob.Store
 	utxoStore                         utxo.Store
 	validatorClient                   validator.Interface
 	subtreeCount                      atomic.Int32
-	maxMerkleItemsPerSubtree          int
 	stats                             *gocore.Stat
 	prioritySubtreeCheckActiveMap     map[string]bool
 	prioritySubtreeCheckActiveMapLock sync.Mutex
@@ -55,6 +55,7 @@ var (
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
+	tSettings *settings.Settings,
 	subtreeStore blob.Store,
 	txStore blob.Store,
 	utxoStore utxo.Store,
@@ -63,19 +64,14 @@ func New(
 	subtreeConsumerClient kafka.KafkaConsumerGroupI,
 	txmetaConsumerClient kafka.KafkaConsumerGroupI,
 ) (*Server, error) {
-	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
-	subtreeTTLMinutes, _ := gocore.Config().GetInt("subtreevalidation_subtreeTTL", 120)
-	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
-
 	u := &Server{
 		logger:                            logger,
+		settings:                          tSettings,
 		subtreeStore:                      subtreeStore,
-		subtreeTTL:                        subtreeTTL,
 		txStore:                           txStore,
 		utxoStore:                         utxoStore,
 		validatorClient:                   validatorClient,
 		subtreeCount:                      atomic.Int32{},
-		maxMerkleItemsPerSubtree:          maxMerkleItemsPerSubtree,
 		stats:                             gocore.NewStat("subtreevalidation"),
 		prioritySubtreeCheckActiveMap:     map[string]bool{},
 		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
@@ -87,7 +83,7 @@ func New(
 	var err error
 
 	once.Do(func() {
-		quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
+		quorumPath := tSettings.SubtreeValidation.QuorumPath
 		if quorumPath == "" {
 			err = errors.NewConfigurationError("No subtree_quorum_path specified")
 			return
@@ -95,11 +91,7 @@ func New(
 
 		var absoluteQuorumTimeout time.Duration
 
-		absoluteQuorumTimeout, err, _ = gocore.Config().GetDuration("subtree_quorum_absolute_timeout")
-		if err != nil {
-			err = errors.NewConfigurationError("Bad subtree_quorum_absolute_timeout specified", err)
-			return
-		}
+		absoluteQuorumTimeout = tSettings.SubtreeValidation.QuorumAbsoluteTimeout
 
 		q, err = quorum.New(
 			u.logger,
@@ -114,7 +106,7 @@ func New(
 	}
 
 	// create a caching tx meta store
-	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
+	if tSettings.SubtreeValidation.TxMetaCacheEnabled {
 		logger.Infof("Using cached version of tx meta store")
 
 		var err error
@@ -190,8 +182,8 @@ func (u *Server) Start(ctx context.Context) error {
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
+
+	if u.settings.BlockChain.FSMStateRestore {
 		// Send Restore event to FSM
 		err := u.blockchainClient.Restore(ctx)
 		if err != nil {

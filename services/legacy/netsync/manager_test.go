@@ -6,13 +6,13 @@ package netsync
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/errors"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/settings"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -48,35 +49,38 @@ type testContext struct {
 func (ctx *testContext) Setup(config *testConfig) error {
 	ctx.cfg = *config
 
+	tSettings := settings.NewSettings()
+
 	peerNotifier := NewMockPeerNotifier()
 
 	storeURL, _ := url.Parse("sqlitememory://")
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
 	if err != nil {
-		return fmt.Errorf("failed to create blockchain store: %v", err)
+		return errors.NewServiceError("failed to create blockchain store", err)
 	}
 	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create blockchain client: %v", err)
+		return errors.NewServiceError("failed to create blockchain client", err)
 	}
 
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, nil, nil)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create validator client: %v", err)
+		return errors.NewServiceError("failed to create validator client", err)
 	}
 
 	subtreeStore := blob_memory.New()
 
 	subtreeValidation := &subtreevalidation.MockSubtreeValidation{}
 
-	blockvalidationClient, err := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{}, "manager_test")
+	blockvalidationClient, err := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{}, tSettings, "manager_test")
 	if err != nil {
-		return fmt.Errorf("failed to create block validation client: %v", err)
+		return errors.NewServiceError("failed to create block validation client", err)
 	}
 
 	syncMgr, err := New(context.Background(),
 		ulogger.TestLogger{},
+		tSettings,
 		blockchainClient,
 		validatorClient,
 		utxoStore,
@@ -91,7 +95,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 			MaxPeers:     8,
 		})
 	if err != nil {
-		return fmt.Errorf("failed to create SyncManager: %v", err)
+		return errors.NewServiceError("failed to create SyncManager", err)
 	}
 
 	ctx.syncManager = syncMgr
@@ -115,6 +119,7 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer ctx.Teardown()
 
 	syncMgr := ctx.syncManager
@@ -144,6 +149,7 @@ func TestPeerConnections(t *testing.T) {
 		t.Fatalf("Timeout waiting for sync manager to register peer %d",
 			localNode1.ID())
 	}
+
 	if syncMgr.SyncPeerID() != 0 {
 		t.Fatalf("Sync manager is syncing from an unexpected peer %d",
 			syncMgr.SyncPeerID())
@@ -156,6 +162,7 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	syncMgr.NewPeer(localNode2, syncChan)
 	select {
 	case <-syncChan:
@@ -163,6 +170,7 @@ func TestPeerConnections(t *testing.T) {
 		t.Fatalf("Timeout waiting for sync manager to register peer %d",
 			localNode2.ID())
 	}
+
 	if syncMgr.SyncPeerID() != localNode2.ID() {
 		t.Fatalf("Expected sync manager to be syncing from peer %d got %d",
 			localNode2.ID(), syncMgr.SyncPeerID())
@@ -174,6 +182,7 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	syncMgr.NewPeer(localNode3, syncChan)
 	select {
 	case <-syncChan:
@@ -181,6 +190,7 @@ func TestPeerConnections(t *testing.T) {
 		t.Fatalf("Timeout waiting for sync manager to register peer %d",
 			localNode3.ID())
 	}
+
 	if syncMgr.SyncPeerID() != localNode2.ID() {
 		t.Fatalf("Sync manager is syncing from an unexpected peer %d; "+
 			"expected %d", syncMgr.SyncPeerID(), localNode2.ID())
@@ -195,6 +205,7 @@ func TestPeerConnections(t *testing.T) {
 		t.Fatalf("Timeout waiting for sync manager to unregister peer %d",
 			localNode2.ID())
 	}
+
 	if syncMgr.SyncPeerID() != localNode3.ID() {
 		t.Fatalf("Expected sync manager to be syncing from peer %d",
 			localNode3.ID())
@@ -208,6 +219,7 @@ func TestPeerConnections(t *testing.T) {
 		t.Fatalf("Timeout waiting for sync manager to unregister peer %d",
 			localNode3.ID())
 	}
+
 	if syncMgr.SyncPeerID() != 0 {
 		t.Fatalf("Expected sync manager to stop syncing after peer disconnect")
 	}
@@ -369,6 +381,7 @@ func xTestBlockchainSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer ctx.Teardown()
 
 	syncMgr := ctx.syncManager
@@ -410,6 +423,7 @@ func xTestBlockchainSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	syncMgr.NewPeer(localNode, nil)
 
 	// SyncManager should send a getblocks message to start block download
@@ -418,6 +432,7 @@ func xTestBlockchainSync(t *testing.T) {
 		if msg.HashStop != zeroHash {
 			t.Fatalf("Expected no hash stop in getblocks, got %v", msg.HashStop)
 		}
+
 		if len(msg.BlockLocatorHashes) != 1 ||
 			*msg.BlockLocatorHashes[0] != *chainParams.GenesisHash {
 			t.Fatal("Received unexpected block locator in getblocks message")
@@ -444,16 +459,20 @@ func xTestBlockchainSync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to generate block: %v", err)
 		}
+
 		blocks = append(blocks, block)
 		prevBlock = block
 	}
 
 	// Remote node replies to getblocks with an inv
 	invMsg := wire.NewMsgInv()
+
 	for _, block := range blocks {
 		invVect := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
-		invMsg.AddInvVect(invVect)
+		err := invMsg.AddInvVect(invVect)
+		require.NoError(t, err)
 	}
+
 	syncMgr.QueueInv(invMsg, localNode)
 
 	// SyncManager should send a getdata message requesting blocks
@@ -653,10 +672,12 @@ func newMessageChans() *msgChans {
 
 func buildBlockInv(blocks ...*bsvutil.Block) *wire.MsgInv {
 	msg := wire.NewMsgInv()
+
 	for _, block := range blocks {
 		invVect := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 		_ = msg.AddInvVect(invVect)
 	}
+
 	return msg
 }
 

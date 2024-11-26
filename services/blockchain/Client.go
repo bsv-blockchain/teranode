@@ -11,13 +11,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/google/uuid"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -31,6 +31,7 @@ type clientSubscriber struct {
 type Client struct {
 	client        blockchain_api.BlockchainAPIClient
 	logger        ulogger.Logger
+	settings      *settings.Settings
 	running       *atomic.Bool
 	conn          *grpc.ClientConn
 	fmsState      atomic.Pointer[FSMStateType]
@@ -59,27 +60,30 @@ const (
 	FSMStateUNAVAILABLE    = blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE
 )
 
-func NewClient(ctx context.Context, logger ulogger.Logger, source string) (ClientI, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (ClientI, error) {
 	logger = logger.New("blkcC")
 
-	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
-	if !ok {
+	blockchainGrpcAddress := tSettings.BlockChain.GRPCAddress
+	if blockchainGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no blockchain_grpcAddress setting found")
 	}
 
-	return NewClientWithAddress(ctx, logger, blockchainGrpcAddress, source)
+	return NewClientWithAddress(ctx, logger, tSettings, blockchainGrpcAddress, source)
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string, source string) (ClientI, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string, source string) (ClientI, error) {
 	var err error
+
 	var baConn *grpc.ClientConn
+
 	var baClient blockchain_api.BlockchainAPIClient
 
 	// retry a few times to connect to the blockchain service
-	maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries", 3)
-	retrySleep, _ := gocore.Config().GetInt("blockchain_retrySleep", 1000)
+	maxRetries := tSettings.BlockChain.MaxRetries
+	retrySleep := tSettings.BlockChain.RetrySleep
 
 	retries := 0
+
 	for {
 		baConn, err = util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 			MaxRetries: 3,
@@ -97,12 +101,15 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 				backoff := time.Duration(retries*retrySleep) * time.Millisecond
 				logger.Debugf("[Blockchain] failed to connect to blockchain service for '%s', retrying %d in %s: %v", source, retries, backoff, err)
 				time.Sleep(backoff)
+
 				continue
 			}
 
 			logger.Errorf("[Blockchain] failed to connect to blockchain service for '%s', retried %d times: %v", source, maxRetries, err)
+
 			return nil, err
 		}
+
 		break
 	}
 
@@ -112,6 +119,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	c := &Client{
 		client:      blockchain_api.NewBlockchainAPIClient(baConn),
 		logger:      logger,
+		settings:    tSettings,
 		running:     &running,
 		conn:        baConn,
 		subscribers: make([]clientSubscriber, 0),
@@ -229,11 +237,13 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 	}
 
 	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
+
 	for _, subtreeHash := range resp.SubtreeHashes {
 		hash, err := chainhash.NewHash(subtreeHash)
 		if err != nil {
 			return nil, err
 		}
+
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
@@ -250,11 +260,13 @@ func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numbe
 	}
 
 	blocks := make([]*model.Block, 0, len(resp.Blocks))
+
 	for _, blockBytes := range resp.Blocks {
 		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
+
 		blocks = append(blocks, block)
 	}
 
@@ -280,11 +292,13 @@ func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Bl
 	}
 
 	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
+
 	for _, subtreeHash := range resp.SubtreeHashes {
 		hash, err := chainhash.NewHash(subtreeHash)
 		if err != nil {
 			return nil, err
 		}
+
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
@@ -341,16 +355,19 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
-		Hash:  blockHash[:],
+		Hash: blockHash[:],
+		//nolint:gosec // Ignore G115: integer overflow conversion
 		Depth: uint32(depth),
 	})
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)
 	}
+
 	hash, err := chainhash.NewHash(resp.Hash)
 	if err != nil {
 		return nil, err
 	}
+
 	return hash, nil
 }
 
@@ -361,6 +378,7 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 	if err != nil {
 		return nil, err
 	}
+
 	bits, err := model.NewNBitFromSlice(resp.Bits)
 
 	return bits, err
@@ -467,20 +485,24 @@ func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *cha
 
 func (c *Client) returnBlockHeaders(resp *blockchain_api.GetBlockHeadersResponse) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
 	for _, headerBytes := range resp.BlockHeaders {
 		header, err := model.NewBlockHeaderFromBytes(headerBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		headers = append(headers, header)
 	}
 
 	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+
 	for _, metaBytes := range resp.Metas {
 		header, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		metas = append(metas, header)
 	}
 
@@ -497,20 +519,24 @@ func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit ui
 	}
 
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
 	for _, headerBytes := range resp.BlockHeaders {
 		header, err := model.NewBlockHeaderFromBytes(headerBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		headers = append(headers, header)
 	}
 
 	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+
 	for _, metaBytes := range resp.Metas {
 		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		metas = append(metas, meta)
 	}
 
@@ -527,20 +553,24 @@ func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHe
 	}
 
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
 	for _, headerBytes := range resp.BlockHeaders {
 		header, err := model.NewBlockHeaderFromBytes(headerBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		headers = append(headers, header)
 	}
 
 	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+
 	for _, metaBytes := range resp.Metas {
 		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		metas = append(metas, meta)
 	}
 
@@ -638,6 +668,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 		<-ctx.Done()
 		c.logger.Infof("[Blockchain] server context done, closing subscription: %s", source)
 		c.running.Store(false)
+
 		err := c.conn.Close()
 		if err != nil {
 			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
@@ -662,8 +693,11 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
 						c.logger.Warnf("[Blockchain] failed to receive notification: %v", err)
 					}
+
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
+
 					time.Sleep(1 * time.Second)
+
 					break
 				}
 
@@ -727,11 +761,13 @@ func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, erro
 	}
 
 	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
+
 	for _, blockBytes := range resp.BlockBytes {
 		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
+
 		blocks = append(blocks, block)
 	}
 
@@ -756,11 +792,13 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	}
 
 	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
+
 	for _, blockBytes := range resp.BlockBytes {
 		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
+
 		blocks = append(blocks, block)
 	}
 
@@ -968,11 +1006,13 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	}
 
 	locator := make([]*chainhash.Hash, 0, len(resp.Locator))
+
 	for _, hash := range resp.Locator {
 		h, err := chainhash.NewHash(hash)
 		if err != nil {
 			return nil, err
 		}
+
 		locator = append(locator, h)
 	}
 
@@ -997,11 +1037,13 @@ func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Ha
 	}
 
 	blockHeaders := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
 	for _, blockHeaderBytes := range resp.BlockHeaders {
 		blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			return nil, err
 		}
+
 		blockHeaders = append(blockHeaders, blockHeader)
 	}
 
@@ -1026,12 +1068,15 @@ var log2FloorMasks = []uint32{0xffff0000, 0xff00, 0xf0, 0xc, 0x2}
 func fastLog2Floor(n uint32) uint8 {
 	rv := uint8(0)
 	exponent := uint8(16)
+
 	for i := 0; i < 5; i++ {
 		if n&log2FloorMasks[i] != 0 {
 			rv += exponent
 			n >>= exponent
 		}
+
 		exponent >>= 1
 	}
+
 	return rv
 }

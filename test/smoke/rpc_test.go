@@ -1037,7 +1037,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	_, err = model.NewBlockHeaderFromMiningCandidate(miningCandidateFromBAClient, coinbase)
 	require.NoError(t, err, "Failed to create block header from mining candidate")
 
-
 	var nonce uint32
 	var validHash *chainhash.Hash
 
@@ -1399,7 +1398,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 // 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
 // 	}
 
-
 // 	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
 // 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
 // 	require.NoError(t, err, "Failed to submit mining solution")
@@ -1453,8 +1451,6 @@ func removeDataDirectory() {
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
 }
-
-
 
 func newHashFromStr(hexStr string) *chainhash.Hash {
 	hash, err := chainhash.NewHashFromStr(hexStr)

@@ -8,11 +8,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type batchItem struct {
@@ -23,22 +23,23 @@ type batchItem struct {
 type Client struct {
 	client    blockassembly_api.BlockAssemblyAPIClient
 	logger    ulogger.Logger
+	settings  *settings.Settings
 	batchSize int
 	batchCh   chan []*batchItem
 	batcher   batcher.Batcher2[batchItem]
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
-	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
-	if !ok {
+func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*Client, error) {
+	blockAssemblyGrpcAddress := tSettings.BlockAssembly.GRPCAddress
+	if blockAssemblyGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 	}
 
-	maxRetries, _ := gocore.Config().GetInt("blockassembly_grpcMaxRetries", 3)
+	maxRetries := tSettings.BlockAssembly.GRPCMaxRetries
 
-	retryBackoff, err, _ := gocore.Config().GetDuration("blockassembly_grpcRetryBackoff", 2*time.Second)
-	if err != nil {
-		return nil, errors.NewConfigurationError("blockassembly_grpcRetryBackoff setting error", err)
+	retryBackoff := tSettings.BlockAssembly.GRPCRetryBackoff
+	if retryBackoff == 0 {
+		return nil, errors.NewConfigurationError("blockassembly_grpcRetryBackoff setting error")
 	}
 
 	baConn, err := util.GetGRPCClient(
@@ -53,8 +54,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)
 	}
 
-	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
-	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
+	batchSize := tSettings.BlockAssembly.SendBatchSize
+	sendBatchTimeout := tSettings.BlockAssembly.SendBatchTimeout
 
 	if batchSize > 0 {
 		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %d", batchSize, sendBatchTimeout)
@@ -65,6 +66,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	client := &Client{
 		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
 		logger:    logger,
+		settings:  tSettings,
 		batchSize: batchSize,
 		batchCh:   make(chan []*batchItem),
 	}
@@ -77,7 +79,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	return client, nil
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssemblyGrpcAddress string) (*Client, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockAssemblyGrpcAddress string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
@@ -85,8 +87,8 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssem
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)
 	}
 
-	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
-	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
+	batchSize := tSettings.BlockAssembly.SendBatchSize
+	sendBatchTimeout := tSettings.BlockAssembly.SendBatchTimeout
 
 	if batchSize > 0 {
 		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %dms", batchSize, sendBatchTimeout)
@@ -97,6 +99,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssem
 	client := &Client{
 		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
 		logger:    logger,
+		settings:  tSettings,
 		batchSize: batchSize,
 		batchCh:   make(chan []*batchItem),
 	}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"math/big"
 	"net/url"
-	"os"
 	"sync"
 	"testing"
 
@@ -300,7 +299,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items.blobStore = memory.New()                        // blob memory store
 	items.txStore = memory.New()                          // tx memory store
 
-	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
 
 	storeURL, err := url.Parse("sqlitememory://")
@@ -314,14 +312,14 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 
 	stats := gocore.NewStat("test")
 
+	settings := settings.NewSettings()
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
 	// we cannot rely on the settings to be set in the test environment
 	ba := NewBlockAssembler(
 		context.Background(),
 		ulogger.TestLogger{},
-		&settings.Settings{
-			ChainCfgParams: &chaincfg.RegressionNetParams,
-			Policy:         &settings.PolicySettings{},
-		},
+		settings,
 		stats,
 		items.utxoStore,
 		items.blobStore,
@@ -333,6 +331,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	ba.subtreeProcessor, err = subtreeprocessor.NewSubtreeProcessor(
 		context.Background(),
 		ulogger.TestLogger{},
+		ba.settings,
 		nil,
 		nil,
 		items.newSubtreeChan,
@@ -367,6 +366,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
+
 		wg.Add(1)
 
 		go func() {
