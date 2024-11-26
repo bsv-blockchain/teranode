@@ -20,6 +20,8 @@ var (
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration    prometheus.Histogram
 	prometheusSubtreeProcessorCreateTransactionMap         prometheus.Counter
 	prometheusSubtreeProcessorCreateTransactionMapDuration prometheus.Histogram
+	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
+	prometheusSubtreeProcessorReset                        prometheus.Histogram
 )
 
 var (
@@ -130,6 +132,26 @@ func _initPrometheusMetrics() {
 			Name:      "transaction_map_duration",
 			Help:      "Duration of creating transaction map in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorRemoveTx = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "remove_tx",
+			Help:      "Duration of removing tx in subtree processor",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorReset = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reset",
+			Help:      "Duration of resetting subtree processor",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 }

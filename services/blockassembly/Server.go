@@ -883,7 +883,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	}, nil
 }
 
-func (ba *BlockAssembly) GetCurrentDifficulty(ctx context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
+func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
 	cd := ba.blockAssembler.currentDifficulty
 	dif := cd.CalculateDifficulty()
 	f, _ := dif.Float64()
@@ -893,7 +893,7 @@ func (ba *BlockAssembly) GetCurrentDifficulty(ctx context.Context, _ *blockassem
 	}, nil
 }
 
-// generate blocks
+// GenerateBlocks generates the given number of blocks
 func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "generateBlocks",
 		tracing.WithParentStat(ba.stats),

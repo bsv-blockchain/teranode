@@ -119,17 +119,100 @@ func TestRotate(t *testing.T) {
 	assert.Equal(t, 1, len(stp.chainedSubtrees))
 
 	// Add one more txid to trigger the rotate
-	//hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-	//require.NoError(t, err)
+	// hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	// require.NoError(t, err)
 
 	// TODO there is a race condition here (only in the test) that needs to be fixed, but don't want to change the code
 	// in the subtree processor, because this is a performance issue
-	//stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
-	//time.Sleep(100 * time.Millisecond)
-	//assert.Equal(t, 1, stp.currentSubtree.Length())
+	// stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
+	// time.Sleep(100 * time.Millisecond)
+	// assert.Equal(t, 1, stp.currentSubtree.Length())
 
 	// Still 1 because the tree is not yet complete
 	assert.Equal(t, 1, len(stp.chainedSubtrees))
+}
+
+func Test_RemoveTxFromSubtrees(t *testing.T) {
+	t.Run("remove transaction from subtrees", func(t *testing.T) {
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+		newSubtreeChan := make(chan NewSubtreeRequest)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+
+		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+
+		// add some random nodes to the subtrees
+		for i := uint64(0); i < 42; i++ {
+			_ = stp.addNode(util.SubtreeNode{Hash: chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i))), Fee: i}, true)
+		}
+
+		// check the length of the subtrees
+		assert.Len(t, stp.chainedSubtrees, 10)
+		assert.Len(t, stp.currentSubtree.Nodes, 3)
+
+		// get the middle transaction from the middle subtree
+		txHash := stp.chainedSubtrees[5].Nodes[2].Hash
+
+		// Remove a transaction from the subtree
+		err := stp.removeTxFromSubtrees(context.Background(), txHash)
+		require.NoError(t, err)
+
+		// check that the txHash node has been replaced
+		assert.NotEqual(t, stp.chainedSubtrees[5].Nodes[2].Hash, txHash)
+
+		// check the length of the subtrees again
+		assert.Len(t, stp.chainedSubtrees, 10)
+		assert.Len(t, stp.currentSubtree.Nodes, 2)
+	})
+}
+
+func TestReChainSubtrees(t *testing.T) {
+	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+	// Create a SubtreeProcessor
+	newSubtreeChan := make(chan NewSubtreeRequest)
+	subtreeStore, _ := null.New(ulogger.TestLogger{})
+	utxosStore := memory.New(ulogger.TestLogger{})
+
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+
+	// add some random nodes to the subtrees
+	for i := uint64(0); i < 42; i++ {
+		_ = stp.addNode(util.SubtreeNode{Hash: chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i))), Fee: i}, true)
+	}
+
+	assert.Len(t, stp.chainedSubtrees, 10)
+	assert.Len(t, stp.currentSubtree.Nodes, 3)
+
+	// check the fee in the middle node the middle subtree
+	assert.Len(t, stp.chainedSubtrees[5].Nodes, 4)
+	assert.Equal(t, uint64(21), stp.chainedSubtrees[5].Nodes[2].Fee)
+
+	// remove this node
+	err := stp.chainedSubtrees[5].RemoveNodeAtIndex(2)
+	require.NoError(t, err)
+
+	// check the fee in the middle node the middle subtree, should be different
+	assert.Equal(t, uint64(22), stp.chainedSubtrees[5].Nodes[2].Fee)
+
+	// chainedSubtrees[5] should have 3 nodes, instead of 4
+	assert.Len(t, stp.chainedSubtrees[5].Nodes, 3)
+
+	// Call reChainSubtrees
+	err = stp.reChainSubtrees(5)
+	require.NoError(t, err)
+
+	// chainedSubtrees[5] should have 4 nodes again
+	assert.Len(t, stp.chainedSubtrees[5].Nodes, 4)
+
+	// currentSubtree should have 2 nodes
+	assert.Len(t, stp.currentSubtree.Nodes, 2)
+
+	// all chainedSubtrees should have 4 nodes
+	for i := 0; i < 10; i++ {
+		assert.Len(t, stp.chainedSubtrees[i].Nodes, 4)
+	}
 }
 
 func TestGetMerkleProofForCoinbase(t *testing.T) {
@@ -301,7 +384,7 @@ func TestMoveUpBlock(t *testing.T) {
 		CoinbaseTx: coinbaseTx,
 	})
 	require.NoError(t, err)
-	//wg.Wait()
+	// wg.Wait()
 
 	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
@@ -733,19 +816,19 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
 			"1c518b6671f8d349e96c56d4e7fe831a46f398c4bb46ca7778b2152ee6ba6f27",
 			"1e7aa360e3e84aff86515e66976b5b12e622c134b776242927e62de7effdc989",
-			//"344efe10fa4084c7f4f17c91bf3da72b9139c342aea074d75d8656a99ac3693f",
+			// "344efe10fa4084c7f4f17c91bf3da72b9139c342aea074d75d8656a99ac3693f",
 			"59814dce8ee8f9149074da4d0528fd3593b418b36b73ffafc15436646aa23c26",
 			"687ea838f8b8d2924ff99859c37edd33dcd8069bfd5e92aca66734580aa29c94",
 			"9f312fb2b31b6b511fabe0934a98c4d5ac4421b4bc99312f25e6c104912d9159",
-			//"c1d3a483ff04b90ab103d62afb3423447981d59f8e96b29022bc39c62ed9d9ab",
+			// "c1d3a483ff04b90ab103d62afb3423447981d59f8e96b29022bc39c62ed9d9ab",
 			"c467b87936d3ffd5b2e03a4dbde5cd66910a245b56c8cddff7eafa776ba39bbf",
 			"07c09335f887a2da94efbc9730106abb1b50cc63a95b24edc9f8bb3e63c380c7",
 			"1bb1b0ffdd0fa0450f900f647e713855e76e2b17683372741b6ef29575ddc99b",
-			//"6a613e159f1a9dbfa0321b657103f55dc28ecee201a2a43ab833c2e0c95117db",
+			// "6a613e159f1a9dbfa0321b657103f55dc28ecee201a2a43ab833c2e0c95117db",
 			"fe1345fb6b3efe6225e95dc9324f6d21ddb304ad76d92381d999abec07161c7f",
 			"e61cb73244eba0b774e640fef50818322842b41d89f7daa0c771b6e9fc2c6c34",
 			"2a73facff0bc80e1b32d9dc6ff24fa75b711de5987eb30bbd34109bfa06de352",
-			//"f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
+			// "f923a14068167a9107a0b7cd6102bfa5c0a4c8a72726a82f12e91009fd7e33be",
 		}
 
 		subtreeProcessor.currentSubtree, err = util.NewTree(4)
@@ -835,7 +918,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 			}
 
 			txHashes[i] = txHash
-			//fmt.Printf("created txHash: %s\n", txHash.String())
+			// fmt.Printf("created txHash: %s\n", txHash.String())
 		}
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
@@ -948,7 +1031,7 @@ func TestMoveDownBlocks(t *testing.T) {
 		go func() {
 			for {
 				<-newSubtreeChan
-				//fmt.Println("subtreee", subtreee.Subtree.Length())
+				// fmt.Println("subtreee", subtreee.Subtree.Length())
 				wg.Done()
 			}
 		}()

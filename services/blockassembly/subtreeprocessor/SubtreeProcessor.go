@@ -67,6 +67,7 @@ type SubtreeProcessor struct {
 	reorgBlockChan            chan reorgBlocksRequest
 	deDuplicateTransactionsCh chan struct{}
 	resetCh                   chan *resetBlocks
+	removeTxCh                chan chainhash.Hash
 	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
 	chainedSubtrees           []*util.Subtree        // TODO change this to use badger under the hood, so we can scale beyond RAM
 	chainedSubtreeCount       atomic.Int32
@@ -126,6 +127,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		reorgBlockChan:            make(chan reorgBlocksRequest),
 		deDuplicateTransactionsCh: make(chan struct{}),
 		resetCh:                   make(chan *resetBlocks),
+		removeTxCh:                make(chan chainhash.Hash),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
@@ -239,6 +241,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 				stp.currentRunningState.Store("running")
 
+			case removeTxHash := <-stp.removeTxCh:
+				// remove the given transaction from the subtrees
+				stp.currentRunningState.Store("removingTx")
+
+				if err = stp.removeTxFromSubtrees(ctx, removeTxHash); err != nil {
+					stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", err.Error())
+				}
+
+				stp.currentRunningState.Store("running")
+
 			default:
 				stp.currentRunningState.Store("dequeue")
 
@@ -311,7 +323,14 @@ func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlock
 }
 
 func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, isLegacySync bool) error {
-	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
+	_, _, deferFn := tracing.StartTracing(context.Background(), "reset",
+		tracing.WithParentStat(stp.stats),
+		tracing.WithHistogram(prometheusSubtreeProcessorReset),
+		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reset][%s] Resetting subtree processor with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks)),
+	)
+
+	defer deferFn()
+
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
@@ -385,10 +404,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 		}
 	}
 
-	// we do not clear the removeMap, this will always be valid
-	// stp.removeMap = util.NewSwissMap(0)
-	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor DONE")
-
 	return nil
 }
 
@@ -426,9 +441,12 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 	}
 
 	if stp.currentSubtree.IsComplete() {
+		if !skipNotification {
+			stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
+		}
+
 		// Add the subtree to the chain
 		// this needs to happen here, so we can wait for the append action to complete
-		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 		stp.chainedSubtreeCount.Add(1)
 
@@ -458,8 +476,92 @@ func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
 // Remove prevents a tx to be processed from the queue into a subtree
 // this needs to happen before the delay time in the queue has passed
 func (stp *SubtreeProcessor) Remove(hash chainhash.Hash) error {
+	// add to the removeMap to make sure it gets removed if processing
+	// or if it comes in later after cleaning the subtrees
 	if err := stp.removeMap.Put(hash); err != nil {
 		return errors.NewProcessingError("error adding tx to remove map", err)
+	}
+
+	// send a remove request to the subtree processor, making sure it does not block
+	go func() {
+		stp.removeTxCh <- hash
+	}()
+
+	return nil
+}
+
+func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chainhash.Hash) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "removeTxFromSubtrees",
+		tracing.WithParentStat(stp.stats),
+		tracing.WithHistogram(prometheusSubtreeProcessorRemoveTx),
+		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][removeTxFromSubtrees][%s] removing transaction from subtrees", hash),
+	)
+
+	defer deferFn()
+
+	// find the transaction in the current and all chained subtrees
+	foundIndex := stp.currentSubtree.NodeIndex(hash)
+	foundSubtreeIndex := -1
+
+	if foundIndex == -1 {
+		// not found in the current subtree, check chained subtrees
+		for subtreeIndex, subtree := range stp.chainedSubtrees {
+			idx := subtree.NodeIndex(hash)
+			if idx >= 0 {
+				foundSubtreeIndex = subtreeIndex
+				foundIndex = idx
+			}
+		}
+	}
+
+	if foundIndex >= 0 {
+		// we found the transaction in a subtree
+		if foundSubtreeIndex == -1 {
+			// it was found in the current tree, remove it from there
+			// further processing is not needed, as the subtrees in the chainedSubtrees are older than the current subtree
+			return stp.currentSubtree.RemoveNodeAtIndex(foundIndex)
+		}
+
+		// it was found in a chained subtree, remove it from there and chain the subtrees again from the point it was removed
+		// this is a bit more complex, as we need to remove the transaction from the subtree it is in and then make sure
+		// the subtrees are chained correctly again
+		if err := stp.chainedSubtrees[foundSubtreeIndex].RemoveNodeAtIndex(foundIndex); err != nil {
+			return errors.NewProcessingError("error removing node from subtree", err)
+		}
+
+		// all the chained subtrees should be complete, as we now have a hole in the one we just removed from
+		// we need to fill them up all again, including the current subtree
+		if err := stp.reChainSubtrees(foundSubtreeIndex); err != nil {
+			return errors.NewProcessingError("error rechaining subtrees", err)
+		}
+	}
+
+	return nil
+}
+
+// reChainSubtrees will cycle through all subtrees from the given index and create new subtrees from the nodes
+// in the same order as they were before
+func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
+	// copy the original subtrees from the given index into a new structure
+	originalSubtrees := stp.chainedSubtrees[fromIndex:]
+	originalSubtrees = append(originalSubtrees, stp.currentSubtree)
+
+	// reset the chained subtrees and the current subtree
+	stp.chainedSubtrees = stp.chainedSubtrees[:fromIndex]
+
+	//nolint:gosec
+	stp.chainedSubtreeCount.Store(int32(len(stp.chainedSubtrees)))
+
+	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+
+	// add the nodes from the original subtrees to the new subtrees
+	for _, subtree := range originalSubtrees {
+		for _, node := range subtree.Nodes {
+			// this adds to the current subtree
+			if err := stp.addNode(node, true); err != nil {
+				return errors.NewProcessingError("error adding node to subtree", err)
+			}
+		}
 	}
 
 	return nil
@@ -1094,7 +1196,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 
 	utxos, err := utxo.GetUtxoHashes(block.CoinbaseTx)
 	if err != nil {
-		return errors.NewProcessingError("[SubtreeProcessor][coinbase:%s]error extracting coinbase utxos", block.CoinbaseTx.TxIDChainHash(), err)
+		return errors.NewProcessingError("[SubtreeProcessor][coinbase:%s] error extracting coinbase utxos", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
 	for _, u := range utxos {
