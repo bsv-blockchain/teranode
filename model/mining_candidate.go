@@ -11,7 +11,9 @@ import (
 )
 
 // CreateCoinbaseTxCandidate creates a coinbase transaction for the mining candidate
-func (mc *MiningCandidate) CreateCoinbaseTxCandidate() (*bt.Tx, error) {
+// p2pk is an optional parameter to specify if the coinbase output should be a pay to public key
+// instead of a pay to public key hash
+func (mc *MiningCandidate) CreateCoinbaseTxCandidate(p2pk ...bool) (*bt.Tx, error) {
 	// Create a new coinbase transaction
 	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
 
@@ -50,6 +52,28 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate() (*bt.Tx, error) {
 	coinbaseTx, err := bt.NewTxFromBytes(a)
 	if err != nil {
 		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
+	}
+
+	if len(p2pk) > 0 && p2pk[0] {
+		coinbaseTx.Version = 2
+
+		// reset outputs
+		coinbaseTx.Outputs = []*bt.Output{}
+
+		// Add 1 coinbase output as a pay to public key
+		privateKey, err := wif.DecodeWIF(coinbasePrivKeys[0])
+		if err != nil {
+			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
+		}
+
+		lockingScript := &bscript.Script{} // NewFromBytes(append(privateKey.SerialisePubKey(), bscript.OpCHECKSIG))
+		_ = lockingScript.AppendPushData(privateKey.SerialisePubKey())
+		_ = lockingScript.AppendOpcodes(bscript.OpCHECKSIG)
+
+		coinbaseTx.AddOutput(&bt.Output{
+			Satoshis:      mc.CoinbaseValue,
+			LockingScript: lockingScript,
+		})
 	}
 
 	return coinbaseTx, nil

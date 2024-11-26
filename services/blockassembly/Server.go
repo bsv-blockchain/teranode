@@ -565,13 +565,36 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID))
 	}
 
-	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
-	}
+	var coinbaseTx *bt.Tx
 
-	if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID))
+	if req.CoinbaseTx != nil {
+		coinbaseTx, err = bt.NewTxFromBytes(req.CoinbaseTx)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
+		}
+
+		if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID))
+		}
+	} else {
+		// recreate coinbase tx here, nothing was passed in
+		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate()
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err))
+		}
+
+		// set the new mining parameters on the coinbase (nonce)
+		if req.Version != nil {
+			coinbaseTx.Version = *req.Version
+		}
+
+		if req.Time != nil {
+			coinbaseTx.LockTime = *req.Time
+		}
+
+		if req.Nonce != 0 {
+			coinbaseTx.Inputs[0].SequenceNumber = req.Nonce
+		}
 	}
 
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
