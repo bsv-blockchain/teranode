@@ -380,9 +380,9 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 // disconnected.
 func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	// No warning is logged and no score is calculated if banning is disabled.
-	//if cfg.DisableBanning {
+	// if cfg.DisableBanning {
 	//	return
-	//}
+	// }
 	if sp.isWhitelisted {
 		sp.server.logger.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return
@@ -776,7 +776,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 			sp.continueHash = &continueHash
 		}
 		sp.QueueMessage(invMsg, nil)
-	} else { //if sp.server.chain.PruneMode() {
+	} else { // if sp.server.chain.PruneMode() {
 		// Typically nodes will just not respond to a GetBlocks message
 		// if they don't have any blocks. However, since we are implementing
 		// NodeNetworkLimited we need a better way to communicate to the remote
@@ -1251,8 +1251,8 @@ func (s *server) pushMerkleBlockMsg(sp *serverPeer, hash *chainhash.Hash,
 	}
 
 	// Fetch the raw block bytes from the database.
-	//blk, err := sp.server.chain.BlockByHash(hash)
-	//if err != nil {
+	// blk, err := sp.server.chain.BlockByHash(hash)
+	// if err != nil {
 	//	sp.server.logger.Infof("Unable to fetch requested block hash %v: %v",
 	//		hash, err)
 	//
@@ -1260,7 +1260,7 @@ func (s *server) pushMerkleBlockMsg(sp *serverPeer, hash *chainhash.Hash,
 	//		doneChan <- struct{}{}
 	//	}
 	//	return err
-	//}
+	// }
 	blk := &bsvutil.Block{}
 
 	// Generate a merkle block by filtering the requested block according
@@ -1507,28 +1507,28 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 				return
 			}
 
-			//txD, ok := msg.data.(*mempool.TxDesc)
-			//if !ok {
+			// txD, ok := msg.data.(*mempool.TxDesc)
+			// if !ok {
 			//	sp.server.logger.Warnf("Underlying data for tx inv "+
 			//		"relay is not a *mempool.TxDesc: %T",
 			//		msg.data)
 			//	return
-			//}
+			// }
 
 			// Don't relay the transaction if the transaction fee-per-kb
 			// is less than the peer's feefilter.
-			//feeFilter := atomic.LoadInt64(&sp.feeFilter)
-			//if feeFilter > 0 && txD.FeePerKB < feeFilter {
+			// feeFilter := atomic.LoadInt64(&sp.feeFilter)
+			// if feeFilter > 0 && txD.FeePerKB < feeFilter {
 			//	return
-			//}
+			// }
 
 			// Don't relay the transaction if there is a bloom
 			// filter loaded and the transaction doesn't match it.
-			//if sp.filter.IsLoaded() {
+			// if sp.filter.IsLoaded() {
 			//	if !sp.filter.MatchTxAndUpdate(txD.Tx) {
 			//		return
 			//	}
-			//}
+			// }
 		}
 
 		// Queue the inventory to be relayed with the next batch.
@@ -1846,12 +1846,12 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 		s.syncManager.DonePeer(sp.Peer, nil)
 
 		// Evict any remaining orphans that were sent by the peer.
-		//numEvicted := s.txMemPool.RemoveOrphansByTag(mempool.Tag(sp.ID()))
-		//if numEvicted > 0 {
+		// numEvicted := s.txMemPool.RemoveOrphansByTag(mempool.Tag(sp.ID()))
+		// if numEvicted > 0 {
 		//	s.logger.Debugf("Evicted %d %s from peer %v (id %d)",
 		//		numEvicted, pickNoun(numEvicted, "orphan",
 		//			"orphans"), sp, sp.ID())
-		//}
+		// }
 	}
 	close(sp.quit)
 }
@@ -2287,7 +2287,7 @@ out:
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	blockAssembly *blockassembly.Client,
 	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
@@ -2297,7 +2297,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	if err != nil {
 		return nil, err
 	}
-	//c.Upnp = true // TODO set from settings
+	// c.Upnp = true // TODO set from settings
 
 	cfg = c
 
@@ -2399,6 +2399,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		validationClient,
 		utxoStore,
 		subtreeStore,
+		tempStore,
 		subtreeValidation,
 		blockValidation,
 		blockAssembly,

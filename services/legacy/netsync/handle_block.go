@@ -24,12 +24,43 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash) (err error) {
 	// Make sure we have the correct height for this block before continuing
 	var (
 		blockHeight             uint32
 		previousBlockHeaderMeta *model.BlockHeaderMeta
 	)
+
+	// check whether this block already exists
+	blockExists, err := sm.blockchainClient.GetBlockExists(ctx, &blockHash)
+	if err != nil {
+		return errors.NewProcessingError("failed to check if block exists", err)
+	}
+
+	if blockExists {
+		sm.logger.Warnf("[HandleBlockDirect][%s] block already exists", blockHash.String())
+		return nil
+	}
+
+	// read block from disk
+	blockReader, err := sm.tempStore.GetIoReader(ctx,
+		blockHash.CloneBytes(),
+		options.WithFileExtension("msgBlock"),
+		options.WithSubDirectory("blocks"),
+	)
+	if err != nil {
+		return errors.NewStorageError("failed to get block reader from disk", err)
+	}
+
+	block, err := bsvutil.NewBlockFromReader(blockReader)
+	if err != nil {
+		return errors.NewProcessingError("failed to read block from disk", err)
+	}
+
+	// close the reader
+	if err = blockReader.Close(); err != nil {
+		return errors.NewStorageError("failed to close block reader", err)
+	}
 
 	if block.Height() <= 0 {
 		// Lookup block height from blockchain
@@ -146,6 +177,15 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 	}()
 
+	// delete the temporarily saved block from disk
+	if err = sm.tempStore.Del(ctx,
+		blockHash.CloneBytes(),
+		options.WithFileExtension("msgBlock"),
+		options.WithSubDirectory("blocks"),
+	); err != nil {
+		sm.logger.Errorf("failed to delete block from disk: %v", err)
+	}
+
 	return nil
 }
 
@@ -239,15 +279,10 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
-		var currentState *blockchain_api.FSMStateType
-
-		currentState, err = sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+		legacyMode, err := sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_LEGACYSYNCING)
 		if err != nil {
 			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 		}
-
-		// if we couldn't get the currentState, we assume we are not in legacy mode, that is the safer option
-		legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
 
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
@@ -269,7 +304,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to serialize subtree", err)
 		}
 
-		if err = sm.subtreeStore.Set(ctx,
+		if err = sm.tempStore.Set(ctx,
 			subtree.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension("subtree"),
@@ -285,7 +320,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to serialize subtree data", err)
 		}
 
-		if err = sm.subtreeStore.Set(ctx,
+		if err = sm.tempStore.Set(ctx,
 			subtreeData.RootHash()[:],
 			subtreeDataBytes,
 			options.WithFileExtension("subtreeData"),

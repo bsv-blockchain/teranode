@@ -227,7 +227,7 @@ func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 
 		subDir := "subDir"
 
-		f, err := New(ulogger.TestLogger{}, u, options.WithSubDirectory(subDir))
+		f, err := New(ulogger.TestLogger{}, u, options.WithDefaultSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -258,7 +258,7 @@ func TestFileSetWithSubdirectoryOption(t *testing.T) {
 
 		subDir := "subDir"
 
-		f, err := New(ulogger.TestLogger{}, u, options.WithSubDirectory(subDir))
+		f, err := New(ulogger.TestLogger{}, u, options.WithDefaultSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")

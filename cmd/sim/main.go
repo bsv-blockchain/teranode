@@ -140,6 +140,7 @@ func main() {
 		nil, // validator.Interface,
 		nil, // utxo.Store,
 		nil, // subtree store blob.Store,
+		nil, // temp store blob.Store,
 		nil, // subtreeValidation subtreevalidation.Interface,
 		nil, // blockValidation blockvalidation.Interface,
 		nil, // config *netsync.Config

@@ -78,7 +78,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S
 	subDirectory := s3URL.Query().Get("subDirectory")
 
 	if len(subDirectory) > 0 {
-		opts = append(opts, options.WithSubDirectory(subDirectory))
+		opts = append(opts, options.WithDefaultSubDirectory(subDirectory))
 	}
 
 	config, _ := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))

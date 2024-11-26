@@ -19,6 +19,7 @@ import (
 var (
 	mainTxstore                 blob.Store
 	mainSubtreestore            blob.Store
+	mainTempStore               blob.Store
 	mainBlockStore              blob.Store
 	mainBlockPersisterStore     blob.Store
 	mainUtxoStore               utxostore.Store
@@ -159,6 +160,28 @@ func getSubtreeStore(logger ulogger.Logger) (blob.Store, error) {
 	}
 
 	return mainSubtreestore, nil
+}
+
+func getTempStore(logger ulogger.Logger) (blob.Store, error) {
+	if mainTempStore != nil {
+		return mainTempStore, nil
+	}
+
+	tempStoreURL, err, found := gocore.Config().GetURL("tempStore", "file://./tmp")
+	if err != nil {
+		return nil, errors.NewConfigurationError("tempStore setting error", err)
+	}
+
+	if !found {
+		return nil, errors.NewConfigurationError("tempStore config not found")
+	}
+
+	mainTempStore, err = blob.NewStore(logger, tempStoreURL)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create tempStore", err)
+	}
+
+	return mainTempStore, nil
 }
 
 func getBlockStore(logger ulogger.Logger) (blob.Store, error) {

@@ -81,6 +81,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		subtreeStore, // tempStore
 		subtreeValidation,
 		blockvalidationClient,
 		nil,

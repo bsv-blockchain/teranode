@@ -4,13 +4,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -18,8 +23,6 @@ import (
 )
 
 func TestHandleBlockDirect(t *testing.T) {
-	t.SkipNow()
-
 	// Load the block
 	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin")
 	require.NoError(t, err)
@@ -34,12 +37,48 @@ func TestHandleBlockDirect(t *testing.T) {
 		subtreeStore      = memory.New()
 		subtreeValidation = &subtreevalidation.MockSubtreeValidation{}
 		blockValidation   = &blockvalidation.MockBlockValidation{}
-		config            = &Config{}
+		blockAssembly     = blockassembly.Mock{}
+		config            = &Config{
+			ChainParams: &chaincfg.MainNetParams,
+		}
 	)
+
+	_ = blockchainClient.AddBlock(ctx, &model.Block{
+		Header:           nil,
+		CoinbaseTx:       nil,
+		TransactionCount: 0,
+		SizeInBytes:      0,
+		Subtrees:         nil,
+		SubtreeSlices:    nil,
+		Height:           0,
+		ID:               0,
+	}, "test")
+
+	blockchainClient.CurrentState = blockchain.FSMStateRUNNING
+
+	blockAssembly.State = &blockassembly_api.StateMessage{
+		BlockAssemblyState:    "",
+		SubtreeProcessorState: "",
+		ResetWaitCount:        0,
+		ResetWaitTime:         0,
+		SubtreeCount:          0,
+		TxCount:               0,
+		QueueCount:            0,
+		CurrentHeight:         0,
+		CurrentHash:           "",
+	}
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
 	assert.Len(t, blockBytes, 335942)
+
+	err = subtreeStore.Set(ctx,
+		block.Hash().CloneBytes(),
+		blockBytes,
+		options.WithFileExtension("msgBlock"),
+		options.WithSubDirectory("blocks"),
+	)
+	require.NoError(t, err)
 
 	mBlock, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
@@ -56,13 +95,14 @@ func TestHandleBlockDirect(t *testing.T) {
 		validator,
 		utxoStore,
 		subtreeStore,
+		subtreeStore, // tempStore
 		subtreeValidation,
 		blockValidation,
-		nil,
+		blockAssembly,
 		config,
 	)
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(context.Background(), nil, block)
+	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash())
 	require.NoError(t, err)
 }

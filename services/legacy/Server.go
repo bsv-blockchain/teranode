@@ -29,7 +29,7 @@ type Server struct {
 	logger ulogger.Logger
 	stats  *gocore.Stat
 	server *server
-	//tb        *TeranodeBridge
+	// tb        *TeranodeBridge
 	lastHash *chainhash.Hash
 	height   uint32
 
@@ -37,6 +37,7 @@ type Server struct {
 	blockchainClient  blockchain.ClientI
 	validationClient  validator.Interface
 	subtreeStore      blob.Store
+	tempStore         blob.Store
 	utxoStore         utxo.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
@@ -48,6 +49,7 @@ func New(logger ulogger.Logger,
 	blockchainClient blockchain.ClientI,
 	validationClient validator.Interface,
 	subtreeStore blob.Store,
+	tempStore blob.Store,
 	utxoStore utxo.Store,
 	subtreeValidation subtreevalidation.Interface,
 	blockValidation blockvalidation.Interface,
@@ -62,6 +64,7 @@ func New(logger ulogger.Logger,
 		blockchainClient:  blockchainClient,
 		validationClient:  validationClient,
 		subtreeStore:      subtreeStore,
+		tempStore:         tempStore,
 		utxoStore:         utxoStore,
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
@@ -98,12 +101,12 @@ func (s *Server) Init(ctx context.Context) error {
 	var err error
 
 	// Create a new Teranode bridge
-	//if !gocore.Config().GetBool("legacy_direct", true) {
+	// if !gocore.Config().GetBool("legacy_direct", true) {
 	//	s.tb, err = NewTeranodeBridge(ctx, s.logger)
 	//	if err != nil {
 	//		s.logger.Fatalf("Failed to create Teranode bridge: %v", err)
 	//	}
-	//}
+	// }
 	wire.SetLimits(4000000000)
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -128,6 +131,7 @@ func (s *Server) Init(ctx context.Context) error {
 		s.validationClient,
 		s.utxoStore,
 		s.subtreeStore,
+		s.tempStore,
 		s.subtreeValidation,
 		s.blockValidation,
 		s.blockAssembly,

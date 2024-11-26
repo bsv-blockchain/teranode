@@ -153,6 +153,11 @@ func (mu *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSl
 
 }
 func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	for _, outpoint := range outpoints {
+		outpoint.LockingScript = []byte{}
+		outpoint.Satoshis = 32_280_613_550
+	}
+
 	return nil
 }
 

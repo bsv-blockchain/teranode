@@ -67,21 +67,21 @@ func TestOptionsConstructFilename(t *testing.T) {
 		{
 			name:         "With SubDirectory",
 			key:          []byte("key"),
-			storeOptions: []StoreOption{WithSubDirectory("./data/")},
+			storeOptions: []StoreOption{WithDefaultSubDirectory("./data/")},
 			fileOptions:  nil,
 			expected:     tempDir + "/data/79656b",
 		},
 		{
 			name:         "With FileName and SubDirectory",
 			key:          []byte("key"),
-			storeOptions: []StoreOption{WithSubDirectory("./data2/")},
+			storeOptions: []StoreOption{WithDefaultSubDirectory("./data2/")},
 			fileOptions:  []FileOption{WithFilename("filename-5678")},
 			expected:     tempDir + "/data2/filename-5678",
 		},
 		{
 			name:         "With Absolute SubDirectory",
 			key:          []byte("key"),
-			storeOptions: []StoreOption{WithSubDirectory("/data3/")},
+			storeOptions: []StoreOption{WithDefaultSubDirectory("/data3/")},
 			fileOptions:  nil,
 			expected:     tempDir + "/data3/79656b",
 		},
@@ -94,7 +94,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 		{
 			name:         "With FileName and FileExtension",
 			key:          []byte("key"),
-			storeOptions: []StoreOption{WithSubDirectory("./data4/")},
+			storeOptions: []StoreOption{WithDefaultSubDirectory("./data4/")},
 			fileOptions:  []FileOption{WithFilename("filename-1234"), WithFileExtension("meta")},
 			expected:     tempDir + "/data4/filename-1234.meta",
 		},
@@ -109,7 +109,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 		{
 			name:         "WithHashPrefix and SubDirectory",
 			key:          []byte("key"),
-			storeOptions: []StoreOption{WithSubDirectory("./data5/"), WithHashPrefix(2)},
+			storeOptions: []StoreOption{WithDefaultSubDirectory("./data5/"), WithHashPrefix(2)},
 			fileOptions:  nil,
 			expected:     tempDir + "/data5/79/79656b",
 		},

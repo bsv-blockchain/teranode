@@ -32,7 +32,7 @@ func TestServerOperations(t *testing.T) {
 	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
-		options.WithSubDirectory("sub"),
+		options.WithDefaultSubDirectory("sub"),
 	)
 	require.NoError(t, err)
 

@@ -70,5 +70,5 @@ func (sm *SyncManager) newInvFromBytes(invMsgBytes []byte) (*invMsg, error) {
 		}
 	}
 
-	return nil, errors.NewProcessingError("peer could not found in peer list")
+	return nil, errors.NewProcessingError("peer could not be found in peer list: %s", peerAddr)
 }

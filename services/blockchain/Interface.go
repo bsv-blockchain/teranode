@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -60,30 +61,31 @@ type ClientI interface {
 	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)
 }
 
-//// LocateBlocks returns the hashes of the blocks after the first known block in
-//// the locator until the provided stop hash is reached, or up to the provided
-//// max number of block hashes.
-////
-//// In addition, there are two special cases:
-////
-////   - When no locators are provided, the stop hash is treated as a request for
-////     that block, so it will either return the stop hash itself if it is known,
-////     or nil if it is unknown
-////   - When locators are provided, but none of them are known, hashes starting
-////     after the genesis block will be returned
-////
-//// This function is safe for concurrent access.
-//func (b *BlockChain) LocateBlocks(locator BlockLocator, hashStop *chainhash.Hash, maxHashes uint32) []chainhash.Hash {
+// // LocateBlocks returns the hashes of the blocks after the first known Block in
+// // the locator until the provided stop hash is reached, or up to the provided
+// // max number of Block hashes.
+// //
+// // In addition, there are two special cases:
+// //
+// //   - When no locators are provided, the stop hash is treated as a request for
+// //     that Block, so it will either return the stop hash itself if it is known,
+// //     or nil if it is unknown
+// //   - When locators are provided, but none of them are known, hashes starting
+// //     after the genesis Block will be returned
+// //
+// // This function is safe for concurrent access.
+// func (b *BlockChain) LocateBlocks(locator BlockLocator, hashStop *chainhash.Hash, maxHashes uint32) []chainhash.Hash {
 //	b.chainLock.RLock()
 //	hashes := b.locateBlocks(locator, hashStop, maxHashes)
 //	b.chainLock.RUnlock()
 //	return hashes
-//}
+// }
 
 var _ ClientI = &MockBlockchain{}
 
 type MockBlockchain struct {
-	block *model.Block
+	Block        *model.Block
+	CurrentState FSMStateType
 }
 
 // --------------------------------------------
@@ -93,30 +95,30 @@ func (s *MockBlockchain) Health(ctx context.Context, checkLiveness bool) (int, s
 	return http.StatusOK, "OK", nil
 }
 func (s *MockBlockchain) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	s.block = block
+	s.Block = block
 	return nil
 }
 func (s *MockBlockchain) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	return nil
 }
 func (s *MockBlockchain) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	return s.block, nil
+	return s.Block, nil
 }
 func (s *MockBlockchain) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
-	return []*model.Block{s.block}, nil
+	return []*model.Block{s.Block}, nil
 }
 func (s *MockBlockchain) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	return s.block, nil
+	return s.Block, nil
 }
 func (s *MockBlockchain) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return &model.BlockStats{
 		BlockCount:         1,
-		TxCount:            s.block.TransactionCount,
-		MaxHeight:          uint64(s.block.Height),
-		AvgBlockSize:       float64(s.block.SizeInBytes),
-		AvgTxCountPerBlock: float64(s.block.TransactionCount),
-		FirstBlockTime:     s.block.Header.Timestamp,
-		LastBlockTime:      s.block.Header.Timestamp,
+		TxCount:            s.Block.TransactionCount,
+		MaxHeight:          uint64(s.Block.Height),
+		AvgBlockSize:       float64(s.Block.SizeInBytes),
+		AvgTxCountPerBlock: float64(s.Block.TransactionCount),
+		FirstBlockTime:     s.Block.Header.Timestamp,
+		LastBlockTime:      s.Block.Header.Timestamp,
 	}, nil
 }
 func (s *MockBlockchain) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
@@ -135,29 +137,51 @@ func (s *MockBlockchain) GetNextWorkRequired(ctx context.Context, hash *chainhas
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	if s.block == nil {
+	if s.Block == nil {
 		return false, nil
 	}
 
-	return *s.block.Hash() == *blockHash, nil
+	return *s.Block.Hash() == *blockHash, nil
 }
 func (s *MockBlockchain) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return s.block.Header, nil, nil
+	return s.Block.Header, &model.BlockHeaderMeta{
+		ID:          1,
+		Height:      s.Block.Height,
+		TxCount:     s.Block.TransactionCount,
+		SizeInBytes: s.Block.SizeInBytes,
+		Miner:       "test",
+		//nolint:gosec
+		BlockTime: uint32(time.Now().Unix()),
+		//nolint:gosec
+		Timestamp: uint32(time.Now().Unix()),
+		ChainWork: nil,
+	}, nil
 }
 func (s *MockBlockchain) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return s.block.Header, nil, nil
+	return s.Block.Header, &model.BlockHeaderMeta{
+		ID:          1,
+		Height:      s.Block.Height,
+		TxCount:     s.Block.TransactionCount,
+		SizeInBytes: s.Block.SizeInBytes,
+		Miner:       "test",
+		//nolint:gosec
+		BlockTime: uint32(time.Now().Unix()),
+		//nolint:gosec
+		Timestamp: uint32(time.Now().Unix()),
+		ChainWork: nil,
+	}, nil
 }
 func (s *MockBlockchain) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{s.block.Header}, nil, nil
+	return []*model.BlockHeader{s.Block.Header}, nil, nil
 }
 func (s *MockBlockchain) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{s.block.Header}, nil, nil
+	return []*model.BlockHeader{s.Block.Header}, nil, nil
 }
 func (s *MockBlockchain) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{s.block.Header}, nil, nil
+	return []*model.BlockHeader{s.Block.Header}, nil, nil
 }
 func (s *MockBlockchain) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return []*model.BlockHeader{s.block.Header}, nil, nil
+	return []*model.BlockHeader{s.Block.Header}, nil, nil
 }
 func (s *MockBlockchain) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	return nil
@@ -192,8 +216,8 @@ func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
-func (s *MockBlockchain) IsFSMCurrentState(_ context.Context, _ FSMStateType) (bool, error) {
-	panic("not implemented")
+func (s *MockBlockchain) IsFSMCurrentState(_ context.Context, state FSMStateType) (bool, error) {
+	return s.CurrentState == state, nil
 }
 func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
 	panic("not implemented")

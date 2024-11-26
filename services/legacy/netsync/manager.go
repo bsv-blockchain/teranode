@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -28,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -234,9 +236,10 @@ type SyncManager struct {
 	validationClient  validator.Interface
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
+	tempStore         blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
-	blockAssembly     *blockassembly.Client
+	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
 	txAnnounceBatcher *batcher.Batcher2[chainhash.Hash]
 
@@ -854,8 +857,8 @@ func (sm *SyncManager) current() bool {
 }
 
 // handleBlockMsg handles block messages from all peers.
-func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
-	sm.logger.Debugf("[handleBlockMsg][%s] received block from %s", bmsg.block.Hash(), bmsg.peer)
+func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
+	sm.logger.Debugf("[handleBlockMsg][%s] received block from %s", bmsg.blockHash, bmsg.peer)
 	peer := bmsg.peer
 
 	state, exists := sm.peerStates[peer]
@@ -873,8 +876,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
-	blockHash := bmsg.block.Hash()
-	if _, exists = state.requestedBlocks[*blockHash]; !exists {
+	if _, exists = state.requestedBlocks[bmsg.blockHash]; !exists {
 		// The regression test intentionally sends some blocks twice
 		// to test duplicate block insertion fails.  Don't disconnect
 		// the peer or ignore the block when we're in regression test
@@ -882,7 +884,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		// duplicate blocks.
 		if sm.chainParams != &chaincfg.RegressionNetParams {
 			peer.Disconnect()
-			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", blockHash, peer)
+			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", bmsg.blockHash, peer)
 		}
 	}
 
@@ -901,7 +903,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		if firstNodeEl != nil {
 			firstNode := firstNodeEl.Value.(*headerNode)
 
-			if blockHash.IsEqual(firstNode.hash) {
+			if bmsg.blockHash.IsEqual(firstNode.hash) {
 				behaviorFlags |= blockchain.BFFastAdd
 
 				if firstNode.hash.IsEqual(sm.nextCheckpoint.Hash) {
@@ -916,21 +918,21 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// Remove block from request maps. Either chain will know about it and
 	// so we shouldn't have any more instances of trying to fetch it, or we
 	// will fail the insert, and thus we'll retry next time we get an inv.
-	delete(state.requestedBlocks, *blockHash)
-	delete(sm.requestedBlocks, *blockHash)
+	delete(state.requestedBlocks, bmsg.blockHash)
+	delete(sm.requestedBlocks, bmsg.blockHash)
 
 	// TODO: this should be only done when Legacy Sync mode is active
 	// if not in Legacy Sync mode, we need to potentially download the block,
 	// promote block to the block validation via kafka (p2p -> blockvalidation message),
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash); err != nil {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
-			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", blockHash, err)
+			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
 		} else {
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !serviceError {
-				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
 
 			// TODO TEMPORARY: we should not panic here, but return the error
@@ -938,7 +940,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			// return err
 		}
 	} else {
-		sm.logger.Infof("accepted block %v", blockHash)
+		sm.logger.Infof("accepted block %v", bmsg.blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -967,8 +969,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	//	return errors.NewServiceError("failed to get best block header", err)
 	// }
 
-	heightUpdate = bmsg.block.Height()
-	blkHashUpdate = bmsg.block.Hash()
+	heightUpdate = bmsg.blockHeight
+	blkHashUpdate = &bmsg.blockHash
 
 	// Clear the rejected transactions.
 	sm.rejectedTxns = make(map[chainhash.Hash]struct{})
@@ -1050,7 +1052,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	sm.headerList.Init()
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
-	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
+	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
 	}
@@ -1462,6 +1464,13 @@ func (sm *SyncManager) limitMap(m map[chainhash.Hash]struct{}, limit int) {
 	}
 }
 
+type blockQueueMsg struct {
+	blockHash   chainhash.Hash
+	blockHeight int32
+	peer        *peerpkg.Peer
+	reply       chan error
+}
+
 // blockHandler is the main handler for the sync manager.  It must be run as a
 // goroutine.  It processes block and inv messages in a separate goroutine
 // from the peer handlers so the block (MsgBlock) messages are handled by a
@@ -1471,6 +1480,12 @@ func (sm *SyncManager) limitMap(m map[chainhash.Hash]struct{}, limit int) {
 func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
+
+	// TODO make this configurable
+	maxBlockQueue := 10_000
+
+	// create a block queue to handle block messages in a separate goroutine, in order
+	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
 
 out:
 	for {
@@ -1502,17 +1517,44 @@ out:
 				}
 
 			case *txMsg:
-				// TODO - if we are in Legacy Sync mode, should we ignore this message?
 				sm.handleTxMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}
 				}
 
 			case *blockMsg:
-				err := sm.handleBlockMsg(msg)
-				if msg.reply != nil {
-					msg.reply <- err
+				// write the block directly to disk and queue for validation in a reader pipe
+				reader, writer := io.Pipe()
+				if err := sm.tempStore.SetFromReader(sm.ctx,
+					msg.block.Hash().CloneBytes(),
+					reader,
+					options.WithTTL(90*time.Minute),
+					options.WithFileExtension("msgBlock"),
+					options.WithSubDirectory("blocks"),
+				); err != nil {
+					sm.logger.Errorf("failed to write block to disk: %v", err)
+					continue
 				}
+
+				if err := msg.block.MsgBlock().Serialize(writer); err != nil {
+					sm.logger.Errorf("failed to serialize block: %v", err)
+					continue
+				}
+
+				// close the writer to signal the end of the block
+				if err := writer.Close(); err != nil {
+					sm.logger.Errorf("failed to close writer: %v", err)
+				}
+
+				blockQueue <- &blockQueueMsg{
+					blockHash:   *msg.block.Hash(),
+					blockHeight: msg.block.Height(),
+					peer:        msg.peer,
+					reply:       msg.reply,
+				}
+
+				// clear the block from memory
+				msg.block = nil
 
 			case *invMsg:
 				sm.handleInvMsg(msg)
@@ -1549,6 +1591,20 @@ out:
 			break out
 		}
 	}
+
+	go func() {
+		for {
+			select {
+			case <-sm.quit:
+				return
+			case msg := <-blockQueue:
+				err := sm.handleBlockMsg(msg)
+				if msg.reply != nil {
+					msg.reply <- err
+				}
+			}
+		}
+	}()
 
 	sm.wg.Done()
 	sm.logger.Infof("Block handler done")
@@ -1722,9 +1778,9 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	blockAssembly *blockassembly.Client, config *Config) (*SyncManager, error) {
+	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
 	orphanEvictionDuration, err, _ := gocore.Config().GetDuration("legacy_orphanEvictionDuration", 10*time.Minute)
@@ -1756,6 +1812,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		validationClient:  validationClient,
 		utxoStore:         utxoStore,
 		subtreeStore:      subtreeStore,
+		tempStore:         tempStore,
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,

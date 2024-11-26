@@ -48,7 +48,7 @@ func WithDefaultTTL(ttl time.Duration) StoreOption {
 	}
 }
 
-func WithSubDirectory(subDirectory string) StoreOption {
+func WithDefaultSubDirectory(subDirectory string) StoreOption {
 	return func(s *Options) {
 		s.SubDirectory = subDirectory
 	}
@@ -84,6 +84,12 @@ func WithFilename(name string) FileOption {
 func WithFileExtension(extension string) FileOption {
 	return func(s *Options) {
 		s.Extension = extension
+	}
+}
+
+func WithSubDirectory(subDirectory string) FileOption {
+	return func(s *Options) {
+		s.SubDirectory = subDirectory
 	}
 }
 

@@ -248,8 +248,6 @@ func (s *File) Close(_ context.Context) error {
 }
 
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
-	defer reader.Close()
-
 	filename, err := s.constructFilenameWithTTL(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)

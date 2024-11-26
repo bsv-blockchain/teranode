@@ -797,6 +797,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
+		tempStore, err := getTempStore(logger)
+		if err != nil {
+			return err
+		}
+
 		utxoStore, err := getUtxoStore(ctx, logger)
 		if err != nil {
 			return err
@@ -832,6 +837,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			blockchainClient,
 			validatorClient,
 			subtreeStore,
+			tempStore,
 			utxoStore,
 			subtreeValidationClient,
 			blockValidationClient,

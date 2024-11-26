@@ -358,7 +358,7 @@ func TestFileNameForPersist(t *testing.T) {
 	url, err := url.ParseRequestURI("lustre://s3.com/ubsv")
 	require.NoError(t, err)
 
-	store, err := New(ulogger.TestLogger{}, url, "data", "persist", options.WithHashPrefix(2), options.WithSubDirectory("sub"))
+	store, err := New(ulogger.TestLogger{}, url, "data", "persist", options.WithHashPrefix(2), options.WithDefaultSubDirectory("sub"))
 	require.NoError(t, err)
 	require.NotNil(t, store)
 
