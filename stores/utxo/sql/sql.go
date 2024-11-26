@@ -576,7 +576,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			// Check if the utxo is already spent
 			if len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
-				return errors.NewUtxoSpentError("[Spend] utxo already spent for %s:%d", spend.TxID, spend.Vout)
+				return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
 			}
 
 			// Check the utxo hash is correct

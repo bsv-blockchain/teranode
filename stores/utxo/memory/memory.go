@@ -180,7 +180,7 @@ func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint
 
 		if spendTxID != nil {
 			if *spendTxID != *spend.SpendingTxID {
-				return utxo.NewErrSpent(spendTxID, spend.Vout, spend.UTXOHash, spend.UTXOHash)
+				return errors.NewUtxoSpentError(*spendTxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
 			}
 			// same spend tx ID, just ignore and continue
 			continue

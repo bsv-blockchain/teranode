@@ -250,11 +250,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						}
 
 					case LuaSpent:
-						// TODO we need to be able to send the spending TX ID in the error down the line
-						//      this is very indiscriminate, we need to know which output was spent by which tx
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].done <- utxo.NewErrSpent(batch[idx].spend.TxID, batch[idx].spend.Vout, batch[idx].spend.UTXOHash, res.spendingTxID)
+							batch[idx].done <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.spendingTxID)
 						}
 					case LuaError:
 						if res.signal == LuaTxNotFound {

@@ -13,15 +13,11 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-type ErrData interface {
-	Error() string
-}
-
 type Error struct {
 	code       ERR
 	message    string
 	wrappedErr error
-	data       ErrData
+	data       ErrDataI
 }
 
 type Interface interface {
@@ -33,7 +29,7 @@ type Interface interface {
 	Code() ERR
 	Message() string
 	WrappedErr() error
-	Data() ErrData
+	Data() ErrDataI
 }
 
 func (e *Error) Error() string {
@@ -44,7 +40,7 @@ func (e *Error) Error() string {
 
 	dataMsg := ""
 	if e.Data() != nil {
-		dataMsg = e.data.Error() // Call Error() on the ErrorData
+		dataMsg = e.data.Error()
 	}
 
 	if e.WrappedErr() == nil {
@@ -58,6 +54,7 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
 	}
 
+	fmt.Println("Returning: ", fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg))
 	return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
 }
 
@@ -155,11 +152,30 @@ func (e *Error) WrappedErr() error {
 	return e.wrappedErr
 }
 
-func (e *Error) Data() ErrData {
+func (e *Error) Data() ErrDataI {
 	if e == nil {
 		return nil
 	}
 	return e.data
+}
+
+func (e *Error) SetData(key string, value interface{}) {
+	if e.data == nil {
+		e.data = &ErrData{}
+	}
+
+	var data *ErrData
+	if errors.As(e.data, &data) {
+		data.SetData(key, value)
+	}
+}
+
+func (e *Error) GetData(key string) interface{} {
+	if e.data == nil {
+		return nil
+	}
+
+	return e.data.GetData(key)
 }
 
 func New(code ERR, message string, params ...interface{}) *Error {
@@ -201,7 +217,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	returnErr := &Error{
 		code:    code,
 		message: message,
-		//WrappedErr: wErr,
+		// WrappedErr: wErr,
 	}
 	if wErr != nil {
 		returnErr.wrappedErr = wErr
@@ -210,6 +226,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	return returnErr
 }
 
+// WrapGRPC wraps an error with gRPC status details.
 // NOTE: GRPC generated code expects this to return error or nil - *Error seems to not evaluate to nil?
 // returning *Error seemed to break asset service endpoints that try to delegate to blockchain service
 // which in turn breaks the dashboard homepage
@@ -228,11 +245,24 @@ func WrapGRPC(err error) error {
 		}
 
 		var wrappedErrDetails []protoadapt.MessageV1
+
+		var pbError error
+
 		// If the error is already an *Error, wrap it with gRPC details
-		details, pbError := anypb.New(&TError{
-			Code:    castedErr.code,
-			Message: castedErr.message,
-		})
+		var details protoadapt.MessageV1
+		if castedErr.data != nil {
+			details, pbError = anypb.New(&TError{
+				Code:    castedErr.code,
+				Message: castedErr.message,
+				Data:    castedErr.data.EncodeErrorData(),
+			})
+		} else {
+			details, pbError = anypb.New(&TError{
+				Code:    castedErr.code,
+				Message: castedErr.message,
+			})
+		}
+
 		if pbError != nil {
 			err2 := &Error{
 				// TODO: add grpc construction error type
@@ -249,11 +279,33 @@ func WrapGRPC(err error) error {
 			currWrappedErr := castedErr.wrappedErr
 			for currWrappedErr != nil {
 				if err, ok := currWrappedErr.(*Error); ok {
+					var details protoadapt.MessageV1
 
-					details, _ := anypb.New(&TError{
-						Code:    err.code,
-						Message: err.message,
-					})
+					var pbError error
+
+					if err.data != nil {
+						details, pbError = anypb.New(&TError{
+							Code:    err.code,
+							Message: err.message,
+							Data:    err.data.EncodeErrorData(),
+						})
+					} else {
+						details, pbError = anypb.New(&TError{
+							Code:    err.code,
+							Message: err.message,
+						})
+					}
+
+					if pbError != nil {
+						err2 := &Error{
+							// TODO: add grpc construction error type
+							code:       ERR_ERROR,
+							message:    "error serializing TError to protobuf Any",
+							wrappedErr: err,
+						}
+
+						return err2
+					}
 
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.wrappedErr
@@ -312,7 +364,7 @@ func WrapGRPC(err error) error {
 	}
 }
 
-func UnwrapGRPC(err error) Interface {
+func UnwrapGRPC(err error) *Error {
 	if err == nil {
 		return nil
 	}
@@ -350,6 +402,17 @@ func UnwrapGRPC(err error) Interface {
 		var customDetails TError
 		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
 			currErr = New(customDetails.Code, customDetails.Message)
+
+			if customDetails.Data != nil {
+				// get the data
+				data, errorGettingData := GetErrorData(customDetails.Code, customDetails.Data)
+				if errorGettingData != nil {
+					// TODO (GOKHAN) CHECK OPTION OF LOGGING / PRINTING HERE
+					currErr.data = nil
+				} else {
+					currErr.data = data
+				}
+			}
 
 			// if we moved up higher in the hierarchy
 			if prevErr != nil {
@@ -401,9 +464,39 @@ func Is(err, target error) bool {
 	return errors.Is(err, target)
 }
 
+func AsData(err error, target interface{}) bool {
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
+	// cycle through the wrapped errors and check if any of them match the target
+	if castedErr, ok := err.(*Error); ok {
+		if errors.As(castedErr.data, target) {
+			return true
+		}
+
+		if castedErr.wrappedErr != nil {
+			return AsData(castedErr.wrappedErr, target)
+		}
+	}
+
+	return false
+}
+
 func As(err error, target any) bool {
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
+	}
+
+	// cycle through the wrapped errors and check if any of them match the target
+	if castedErr, ok := err.(*Error); ok {
+		if castedErr.As(target) {
+			return true
+		}
+
+		if castedErr.wrappedErr != nil {
+			return errors.As(castedErr.wrappedErr, target)
+		}
 	}
 
 	return errors.As(err, target)

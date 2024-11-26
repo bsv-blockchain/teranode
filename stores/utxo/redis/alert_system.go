@@ -71,7 +71,7 @@ func (s *Store) freezeUnfreeze(ctx context.Context, utxos []*utxo.Spend, fn stri
 			case LuaOk:
 				continue
 			case LuaSpent:
-				return utxo.NewErrSpent(u.TxID, u.Vout, u.UTXOHash, res.spendingTxID)
+				return errors.NewUtxoSpentError(*u.TxID, u.Vout, *u.UTXOHash, *res.spendingTxID)
 			case LuaFrozen:
 				return errors.NewUtxoFrozenError("utxo already frozen: %s", text)
 			default:

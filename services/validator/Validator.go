@@ -283,7 +283,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
-		if errors.Is(err, errors.ErrTxNotFound) {
+		if errors.Is(err, errors.ErrSpent) {
+			// get the data from the spend
+			var errData *errors.UtxoSpentErrData
+			if errors.AsData(err, &errData) {
+				s := errData.SpendingTxHash
+				// freeze both transactions and remove from block assembly
+				_ = s
+			}
+		} else if errors.Is(err, errors.ErrTxNotFound) {
 			// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
 			// blessed. In this case we can just return early.

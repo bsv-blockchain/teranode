@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
@@ -30,7 +31,7 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) erro
 		}
 
 		if spendingTxID != nil {
-			return errors.NewUtxoSpentError("transaction %s:%d already spent by %s", spend.SpendingTxID, spend.Vout, spendingTxID)
+			return errors.NewUtxoSpentError(*spend.SpendingTxID, spend.Vout, *spend.UTXOHash, chainhash.Hash(spendingTxID))
 		}
 
 		if frozen {

@@ -5,30 +5,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
 	isoFormat = "2006-01-02T15:04:05Z"
 )
-
-func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chainhash.Hash, optionalErrs ...error) error {
-	txIDString := "nil"
-	if txID != nil {
-		txIDString = txID.String()
-	}
-	utxoHashString := "nil"
-	if utxoHash != nil {
-		utxoHashString = utxoHash.String()
-	}
-	spendingTxString := "nil"
-	if spendingTxID != nil {
-		spendingTxString = spendingTxID.String()
-	}
-
-	// TODO add the spendingTxID to the error data
-	return errors.NewUtxoSpentError("%s:$%d utxo %s already spent by txid %s", txIDString, vOut, utxoHashString, spendingTxString)
-}
 
 func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
 

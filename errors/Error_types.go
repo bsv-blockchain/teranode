@@ -1,9 +1,9 @@
 package errors
 
-/// Error type usage guidelines:
-/// storage error -> error returned from processing a file on s3, aerospike.
-///	service error -> error when performing an operation with one of the services, i.e. if it is using our GRPC of one of our services, error when
-/// processing error -> error when manipulating data, i.e. when processing a block, a transaction, etc., inside the method/function.
+// / Error type usage guidelines:
+// / storage error -> error returned from processing a file on s3, aerospike.
+// /	service error -> error when performing an operation with one of the services, i.e. if it is using our GRPC of one of our services, error when
+// / processing error -> error when manipulating data, i.e. when processing a block, a transaction, etc., inside the method/function.
 
 var (
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
@@ -149,9 +149,6 @@ func NewBlockCoinbaseMissingHeightError(message string, params ...interface{}) *
 }
 func NewBlockAssemblyResetError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_ASSEMBLY_RESET, message, params...)
-}
-func NewUtxoSpentError(message string, params ...interface{}) *Error {
-	return New(ERR_UTXO_SPENT, message, params...)
 }
 func NewUtxoNonFinalError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_NON_FINAL, message, params...)

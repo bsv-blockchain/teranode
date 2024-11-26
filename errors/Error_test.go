@@ -237,25 +237,97 @@ func createGRPCError(code ERR, msg string) *Error {
 }
 
 func Test_UtxoSpentError(t *testing.T) {
-	baseErr := New(ERR_ERROR, "storage error")
-	require.NotNil(t, baseErr)
-	require.Equal(t, ERR_ERROR, baseErr.code)
+	t.Run("UtxoSpentError", func(t *testing.T) {
+		txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
 
-	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
-	require.NotNil(t, utxoSpentError)
-	require.True(t, utxoSpentError.Is(ErrTxExists), "expected error to be of type ERR_TX_EXISTS")
-	require.True(t, utxoSpentError.Is(baseErr), "expected error to be of type baseErr")
-	require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
+		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, chainhash.Hash{})
+		require.NotNil(t, utxoSpentError)
+		require.True(t, utxoSpentError.Is(ErrSpent), "expected error to be of type ERR_SPENT")
+		require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
 
-	var spentErr *UtxoSpentErrData
-	require.True(t, utxoSpentError.As(&spentErr))
+		var spentErr *Error
 
-	// wrap utxospent
-	wrappedUtxoSpent := New(ERR_BLOCK_INVALID, "utxoSpentErrStruct.Error()", utxoSpentError)
-	require.True(t, wrappedUtxoSpent.As(&spentErr))
+		require.True(t, utxoSpentError.As(&spentErr))
 
-	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
-	require.False(t, anotherErr.As(&spentErr))
+		// check the data in the error
+		require.NotNil(t, spentErr.data)
+
+		// check hash
+		assert.Equal(t, txID, spentErr.data.(*UtxoSpentErrData).Hash)
+
+		hash := spentErr.GetData("hash")
+		assert.Equal(t, txID, hash)
+
+		// check spending tx hash
+		assert.Equal(t, chainhash.Hash{}, spentErr.data.(*UtxoSpentErrData).SpendingTxHash)
+
+		spendingTxHash := spentErr.GetData("spending_tx_hash")
+		assert.Equal(t, chainhash.Hash{}, spendingTxHash)
+	})
+
+	t.Run("UtxoSpentErrorData grpc", func(t *testing.T) {
+		txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
+		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, chainhash.Hash{})
+
+		// wrap the error in a gRPC error
+		grpcErr := WrapGRPC(utxoSpentError)
+		require.NotNil(t, grpcErr)
+
+		// unwrap the gRPC error
+		unwrappedErr := UnwrapGRPC(grpcErr)
+		require.NotNil(t, unwrappedErr)
+
+		// check unwrapped error is the same as the original error
+		require.True(t, unwrappedErr.Is(utxoSpentError))
+
+		// TODO wrapped error does not persist the data
+
+		// check the data in the error
+		require.NotNil(t, unwrappedErr.Data())
+
+		var err *Error
+
+		require.True(t, unwrappedErr.As(&err))
+
+		// check hash
+		assert.Equal(t, txID, unwrappedErr.Data().(*UtxoSpentErrData).Hash)
+
+		hash := unwrappedErr.Data().GetData("hash")
+		assert.Equal(t, txID, hash)
+
+		// check spending tx hash
+		assert.Equal(t, chainhash.Hash{}, unwrappedErr.Data().(*UtxoSpentErrData).SpendingTxHash)
+
+		spendingTxHash := unwrappedErr.Data().GetData("spending_tx_hash")
+		assert.Equal(t, chainhash.Hash{}, spendingTxHash)
+
+		fmt.Println(unwrappedErr.Error())
+
+		contains := "60: Error UTXO_SPENT, (error code: 60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx id 0000000000000000000000000000000000000000000000000000000000000000, data: utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000000000000000000000"
+		assert.Contains(t, unwrappedErr.Error(), contains)
+	})
+
+	t.Run("Set data for invalid block error", func(t *testing.T) {
+		invalidBlockError := NewBlockInvalidError("block is invalid")
+		require.NotNil(t, invalidBlockError)
+		require.True(t, invalidBlockError.Is(ErrBlockInvalid))
+
+		invalidBlockError.SetData("key", "value")
+		data := invalidBlockError.GetData("key")
+		assert.Equal(t, "value", data)
+
+		wrappedErr := WrapGRPC(invalidBlockError)
+		require.NotNil(t, wrappedErr)
+
+		unwrappedErr := UnwrapGRPC(wrappedErr)
+		require.NotNil(t, unwrappedErr)
+
+		require.True(t, unwrappedErr.Is(invalidBlockError))
+
+		// check the data in the error
+		require.NotNil(t, unwrappedErr.Data())
+		require.Equal(t, "value", unwrappedErr.Data().GetData("key"))
+	})
 }
 
 func Test_JoinWithMultipleErrs(t *testing.T) {
@@ -345,25 +417,6 @@ func ReturnSpecialErrorFromStandardErrorWithModification(error error) *Error {
 	return NewError("error on the top", error)
 }
 
-// An error scenario, from top to down:
-// handle_block.go: errors.NewProcessingError("failed to process block", err)
-// in blockvalidation/Client.go: errors.UnwrapGRPC(err)
-// blockvalidation/Server.go: ProcessBlock returns error, Let's assume it is an error returned by blockchain service: 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
-//	if err != nil {
-//		return false, err
-//	}
-// 	blockvalidation/Server.go:  processBlockFound returns: parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
-//	if err != nil {
-//		return errors.WrapGRPC(
-//			errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err))
-//	}
-//  blockhain/Client.go:  unwrap
-// blockchain/Server.go: 	exists, err := b.store.GetBlockExists(ctx, blockHash)
-//	if err != nil {
-//		return nil, errors.WrapGRPC(err)
-//	}
-// store/sql/GetBlockExists.go: error is returned from Query Row Content
-
 func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	blockHash := chainhash.Hash{'1', '2', '3', '4'}
 
@@ -398,6 +451,50 @@ func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	// replicate handle_block.go:
 	processingError = NewProcessingError("failed to process block", unwrappedServiceError)
 	// fmt.Println("Scenario 2 error:\n", processingError)
+}
+
+func Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer(t *testing.T) {
+	// Set up the server
+	lis, err := net.Listen("tcp", "localhost:0") // Use port 0 for an available port
+	require.NoError(t, err)
+
+	serverAddr := lis.Addr().String()
+
+	// create a gRPC server and register the service
+	grpcServer := grpc.NewServer()
+	grpctest.RegisterTestServiceServer(grpcServer, &server{})
+
+	go func() {
+		err := grpcServer.Serve(lis)
+		require.NoError(t, err)
+	}()
+
+	defer grpcServer.Stop()
+
+	// Allow some time for the server to start
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientConn, err := grpc.NewClient("dns:///"+serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+
+	defer clientConn.Close()
+
+	// Use the client connection (e.g., to make a gRPC request)
+	client := grpctest.NewTestServiceClient(clientConn)
+
+	// Make the gRPC call
+	req := &grpctest.TestRequest{
+		Message: "Hello",
+	}
+
+	_, err = client.TestMethod(ctx, req)
+	require.Error(t, err)
+
+	unwrappedUtxoSpentError := UnwrapGRPC(err)
+	require.NotNil(t, unwrappedUtxoSpentError)
 }
 
 func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *testing.T) {
@@ -549,7 +646,11 @@ type server struct {
 
 func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*grpctest.TestResponse, error) {
 	// Simulate an error
-	baseErr := fmt.Errorf("database connection failed")
+	txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
+	utxoHash := chainhash.Hash{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
+	spendingTxID := chainhash.Hash{'1', '2', '3', '4', '5', '6', '7', '8', '9'}
+
+	baseErr := NewUtxoSpentError(txID, 10, utxoHash, spendingTxID)
 	level1Err := NewTxInvalidError("transaction invalid", baseErr)
 	level2Err := NewBlockInvalidError("block invalid", level1Err)
 	level3Err := NewServiceError("level service error", level2Err)
