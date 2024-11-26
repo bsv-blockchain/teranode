@@ -2,15 +2,12 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
-3. [Technology ](#3-technology-)
+3. [Technology](#3-technology)
 - [3.1 Overview](#31-overview)
 - [3.2 Store Options](#32-store-options)
-4. [Data Model ](#4-data-model-)
-- [4.1. Subtrees](#41-subtrees)
-- [4.2. Txs](#42-txs)
+4. [Data Model](#4-data-model)
 5. [Use Cases](#5-use-cases)
 - [5.1. Asset Server (HTTP) Get Transactions](#51-asset-server-http---get-transactions)
 - [5.2. Asset Server (HTTP) Get Subtrees](#52-asset-server-http---get-subtrees)
@@ -22,6 +19,8 @@
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 - [8.1. TX Store Configuration](#81-tx-store-configuration)
 - [8.2. SubTree Store Configuration](#82-subtree-store-configuration)
+9. [Other Resources](#9-other-resources)
+
 
 ## 1. Description
 
@@ -133,72 +132,36 @@ Key technologies involved:
 
 The Blob Server supports various backends, each suited to different storage requirements and environments.
 
-- **Badger**: A high-performance key-value store. [BadgerDB Official](https://github.com/dgraph-io/badger)
-
 - **Batcher**: Provides batch processing capabilities for storage operations.
 
 - **File**: Utilizes the local file system for storage.
 
-- **Google Cloud Storage (GCS)**: Integrates with Google Cloud Storage for cloud-based blob storage. [Google Cloud Storage](https://cloud.google.com/storage)
+- **HTTP**: Implements an HTTP client for interacting with a remote blob storage server.
 
-- **Kinesis S3**: Combines AWS Kinesis and S3 for streaming and storage solutions. [Amazon Kinesis](https://aws.amazon.com/kinesis/), [Amazon S3](https://aws.amazon.com/s3/)
+- **Local TTL**: Provides local Time-to-Live (TTL) functionality for managing data expiration.
+
+- **Lustre**: Implements storage using the Lustre distributed file system. [Lustre Official](http://lustre.org/)
 
 - **Memory**: In-memory storage for temporary and fast data access.
-
-- **MinIO**: A high-performance S3 compatible object storage service. [MinIO Official](https://min.io/)
 
 - **Null**: A no-operation store for testing or disabling storage features.
 
 - **Amazon S3**: Integration with Amazon Simple Storage Service (S3) for cloud storage. [Amazon S3](https://aws.amazon.com/s3/)
 
-- **SeaweedFS**: A simple and highly scalable distributed file system. [SeaweedFS GitHub](https://github.com/chrislusf/seaweedfs)
+Each store option is implemented in its respective subdirectory within the `stores/blob/` directory.
 
-- **SeaweedFS S3**: SeaweedFS with S3-compatible API support.
+The system also includes a main server implementation (`server.go`) that provides an HTTP interface for blob storage operations.
 
-- **SQL**: SQL-based stores include PostgreSQL. [PostgreSQL Official](https://www.postgresql.org/)
+Options for configuring these stores are managed through the `options` package.
 
-**TODO** - which one is the production candidate?
 
 ## 4. Data Model
 
-### 4.1. Subtrees
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 
-A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root. Blocks are then built from a collection of subtrees.
-
-More information on the subtree structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
-Here's a table documenting the structure of the `Subtree` type:
-
-| Field            | Type                  | Description                                                                     |
-|------------------|-----------------------|---------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                |
-| Fees             | uint64                | Total fees associated with the transactions in the subtree.                     |
-| SizeInBytes      | uint64                | The size of the subtree in bytes.                                               |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                             |
-| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree. |
-| ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
-
-Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
-
-### 4.2. Txs
-
-This refers to the extended transaction format, as seen below:
-
-| Field           | Description                                                                                            | Size                                              |
-|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Version no      | currently 2                                                                                            | 4 bytes                                           |
-| **EF marker**   | **marker for extended format**                                                                         | **0000000000EF**                                  |
-| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of inputs  | **Extended Format** transaction Input Structure                                                        | <in-counter> qty with variable length per input   |
-| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
-
-More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
-
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Use Cases
-
 
 ### 5.1. Asset Server (HTTP) - Get Transactions
 
@@ -241,40 +204,30 @@ gRPC endpoints:
 ```
 ./stores/blob/
 ├── Interface.go                # Interface definitions for the project.
-├── badger                      # BadgerDB implementation.
-│   ├── badger.go               # Main BadgerDB functionality.
-│   └── badger_test.go          # Test cases for BadgerDB.
 ├── batcher                     # Batching functionality for efficient processing.
-│   ├── batcher.go              # Main batcher functionality.
-│   ├── queue.go                # Queue implementation for batcher.
-│   └── queue_test.go           # Test cases for batcher queue.
+│   └── batcher.go              # Main batcher functionality.
 ├── factory.go                  # Factory methods for creating instances.
 ├── file                        # File system based implementations.
 │   ├── file.go                 # File system handling.
 │   └── file_test.go            # Test cases for file system functions.
-├── gcs                         # Google Cloud Storage implementation.
-│   └── gcs.go                  # GCS specific functionality.
-├── kinesiss3                   # Amazon Kinesis and S3 integration.
-│   └── kinesiss3.go            # Kinesis S3 specific functionality.
+├── http                        # HTTP client implementation for remote blob storage.
+│   └── http.go                 # HTTP specific functionality.
 ├── localttl                    # Local Time-to-Live functionality.
 │   └── localttl.go             # Local TTL handling.
+├── lustre                      # Lustre filesystem implementation.
+│   ├── lustre.go               # Lustre specific functionality.
+│   └── lustre_test.go          # Test cases for Lustre functions.
 ├── memory                      # In-memory implementation.
 │   └── memory.go               # In-memory data handling.
-├── minio                       # MinIO cloud storage implementation.
-│   └── minio.go                # MinIO specific functionality.
 ├── null                        # Null implementation (no-op).
 │   └── null.go                 # Null pattern implementation.
 ├── options                     # Options and configurations.
 │   ├── Options.go              # General options for the project.
-│   └── Reader.go               # Reader options and configurations.
+│   └── Options_test.go         # Test cases for options.
 ├── s3                          # Amazon S3 cloud storage implementation.
 │   └── s3.go                   # S3 specific functionality.
-├── seaweedfs                   # SeaweedFS filesystem implementation.
-│   └── seaweedfs-filer.go      # SeaweedFS filer specific functionality.
-├── seaweedfss3                 # SeaweedFS with S3 compatibility.
-│   └── seaweedfs-s3.go         # SeaweedFS S3 specific functionality.
-└── sql                         # SQL database implementation.
-   └── sql.go         # SQL specific functionality.
+├── server.go                   # HTTP server implementation for blob storage.
+└── server_test.go              # Test cases for the server implementation.
 ```
 
 ## 7. Locally Running the store
@@ -294,14 +247,9 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
   txstore.${YOUR_USERNAME}=null:///
   ```
 
-- **BadgerDB**
-  ```plaintext
-  txstore.${YOUR_USERNAME}=badger:///data/txstore
-  ```
-
 - **Amazon S3**
   ```plaintext
-  txstore.${YOUR_USERNAME}=s3:///eu-ubsv-txstore?region=eu-west-1&batch=true&writeKeys=true
+  txstore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&batch=true&writeKeys=true
   ```
 
 - **File System**
@@ -317,14 +265,19 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
 ### 8.2. SubTree Store Configuration
 
 
-- **SeaweedFS**
+- **Null Store (No-op)**
   ```plaintext
-  subtreestore.${YOUR_USERNAME}=seaweedfs://localhost:9333/txs?filers=http://localhost:8888
+  subtreestore.${YOUR_USERNAME}=null:///
   ```
 
 - **Amazon S3 with Local TTL Store**
   ```plaintext
-  subtreestore.${YOUR_USERNAME}=s3:///eu-ubsv-subtree-store?region=eu-west-1&localTTLStore=file&localTTLStorePath=/data/subtreestore-ttl
+  subtreestore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&localTTLStore=file&localTTLStorePath=/data/subtreestore-ttl
+  ```
+
+- **Lustre with S3 Backend**
+  ```plaintext
+  subtreestore.mainnet2=lustre://s3.${regionName}.amazonaws.com/ubsv-${clientName}-block-store?region=${regionName}&localDir=data/subtreestore&localPersist=s3
   ```
 
 - **File System with Local TTL Store**
@@ -332,22 +285,12 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
   subtreestore.${YOUR_USERNAME}=file:///data/subtreestore?localTTLStore=file&localTTLStorePath=./data/subtreestore-ttl
   ```
 
-- **BadgerDB**
-  ```plaintext
-  subtreestore.${YOUR_USERNAME}=badger:///data/subtreestore
-  ```
-
-- **MinIO**
-  ```plaintext
-  subtreestore.${YOUR_USERNAME}=minio://minio:minio123@myminio-hl.minio.svc.cluster.local:9000/subtrees-lake?objectLocking=true&tempTTL=true
-  ```
-
-- **Null Store (No-op)**
-  ```plaintext
-  subtreestore.${YOUR_USERNAME}=null:///
-  ```
-
 - **SQLite In-Memory**
   ```plaintext
   subtreestore.${YOUR_USERNAME}=sqlitememory:///subtreestore
   ```
+
+
+## 9. Other Resources
+
+[Blob Server Reference](../references/stores/blob_reference.md)

@@ -1,61 +1,38 @@
 @startuml
-participant "Block Assembly Server\n(services/blockassembly/Server.go)" as BlockAssemblyServer
-participant "Remote TTL\n(services/blockassembly/remotettl.go)" as RemoteTTL
-participant "Asset Client\n(asset/Client.go)" as AssetClient
-participant "Asset Server\n(asset/Server.go)" as AssetServer
-database "Blob Subtree Store" as BlobStore
-database "Tx Store" as TxStore
+participant "Block Assembly Server" as BlockAssemblyServer
+participant "Subtree Store" as SubtreeStore
+participant "Tx Store" as TxStore
 
-== New Subtree Scenario ==
-BlockAssemblyServer -> RemoteTTL : Set(ctx, subtree)
-activate RemoteTTL
-RemoteTTL -> AssetClient : set(ctx, subtree)
-activate AssetClient
-AssetClient -> AssetServer : Set(ctx, subtree)
-activate AssetServer
-AssetServer -> BlobStore : Set(ctx, subtree)
-activate BlobStore
-BlobStore --> AssetServer
-deactivate BlobStore
-AssetServer --> AssetClient
-deactivate AssetServer
-AssetClient --> RemoteTTL
-deactivate AssetClient
-RemoteTTL --> BlockAssemblyServer
-deactivate RemoteTTL
-
-== Submit Mining Solution Scenario ==
-BlockAssemblyServer -> BlockAssemblyServer : submitMiningSolution(ctx, block)
+== Initialize Stores ==
+BlockAssemblyServer -> BlockAssemblyServer: NewHTTPBlobServer()
 activate BlockAssemblyServer
-
-BlockAssemblyServer -> TxStore : Save Coinbase Tx Set(ctx, hash, tx)
+BlockAssemblyServer -> SubtreeStore: NewStore(logger, subtreeStoreURL, opts...)
+activate SubtreeStore
+SubtreeStore --> BlockAssemblyServer: subtreeStore
+deactivate SubtreeStore
+BlockAssemblyServer -> TxStore: NewStore(logger, txStoreURL)
 activate TxStore
-TxStore --> BlockAssemblyServer
+TxStore --> BlockAssemblyServer: txStore
 deactivate TxStore
 
-BlockAssemblyServer -> BlockAssemblyServer : removeSubtreesTTL(ctx, Block)
-activate BlockAssemblyServer
-activate BlockAssemblyServer
+== Store New Subtree ==
+BlockAssemblyServer -> SubtreeStore: Set(ctx, subtreeHash, subtreeBytes, options...)
+activate SubtreeStore
+SubtreeStore --> BlockAssemblyServer: err
+deactivate SubtreeStore
 
-loop For Each Subtree in the Block
-    BlockAssemblyServer -> RemoteTTL : SetTTL(ctx, ttl)
-    activate RemoteTTL
-    RemoteTTL -> AssetClient : SetTTL(ctx, ttl)
-    activate AssetClient
-    AssetClient -> AssetServer : SetTTL(ctx, ttl)
-    activate AssetServer
-    AssetServer -> BlobStore : SetTTL(ctx, ttl)
-    activate BlobStore
-    BlobStore --> AssetServer
-    deactivate BlobStore
-    AssetServer --> AssetClient
-    deactivate AssetServer
-    AssetClient --> RemoteTTL
-    deactivate AssetClient
-    RemoteTTL --> BlockAssemblyServer
-    deactivate RemoteTTL
-end
-deactivate BlockAssemblyServer
+== Store Coinbase Transaction ==
+BlockAssemblyServer -> TxStore: Set(ctx, coinbaseTxHash, coinbaseTxBytes)
+activate TxStore
+TxStore --> BlockAssemblyServer: err
+deactivate TxStore
+
+== Remove Subtree TTL ==
+BlockAssemblyServer -> SubtreeStore: SetTTL(ctx, subtreeHash, 0, options...)
+activate SubtreeStore
+SubtreeStore --> BlockAssemblyServer: err
+deactivate SubtreeStore
+
 deactivate BlockAssemblyServer
 
 left footer Last Modified On: %date("dd-MMM-yyyy")

@@ -1,60 +1,44 @@
 @startuml
-participant "Block Validation\n(BlockValidation.go)" as BlockValidation
+participant "Block Validation" as BlockValidation
 participant "Tx Store" as TxStore
 participant "Subtree Store" as SubtreeStore
 
-== Get Missing Transaction ==
-BlockValidation -> BlockValidation : getMissingTransactions()
+== Initialize Stores ==
+BlockValidation -> BlockValidation: New(logger, txStoreURL, subtreeStoreURL)
 activate BlockValidation
-BlockValidation -> TxStore : get(ctx, txHash)
+BlockValidation -> TxStore: NewStore(logger, txStoreURL)
 activate TxStore
-TxStore --> BlockValidation
+TxStore --> BlockValidation: txStore
 deactivate TxStore
-BlockValidation -> TxStore : set(ctx, txHash, missingTx)
+BlockValidation -> SubtreeStore: NewStore(logger, subtreeStoreURL, opts...)
+activate SubtreeStore
+SubtreeStore --> BlockValidation: subtreeStore
+deactivate SubtreeStore
+
+== Get Transaction ==
+BlockValidation -> TxStore: Get(ctx, txHash)
 activate TxStore
-TxStore --> BlockValidation
+TxStore --> BlockValidation: txBytes, err
 deactivate TxStore
-deactivate BlockValidation
 
-== Store Coinbase Transaction ==
-BlockValidation -> BlockValidation : ValidateBlock()
-activate BlockValidation
-
-BlockValidation -> TxStore : set(ctx, txHash, coinbaseTx)
+== Store Transaction ==
+BlockValidation -> TxStore: Set(ctx, txHash, txBytes)
 activate TxStore
-TxStore --> BlockValidation
+TxStore --> BlockValidation: err
 deactivate TxStore
-deactivate BlockValidation
 
-== Update Subtrees TTL After Block Validation ==
-BlockValidation -> BlockValidation : ValidateBlock()
-activate BlockValidation
-BlockValidation -> BlockValidation : finalizeBlockValidation()
-activate BlockValidation
-BlockValidation -> BlockValidation : updateSubtreesTTL()
-activate BlockValidation
-BlockValidation -> SubtreeStore : SetTTL(ctx, ttl) // ttl to 0
+== Check Subtree Exists ==
+BlockValidation -> SubtreeStore: Exists(ctx, subtreeHash)
 activate SubtreeStore
-SubtreeStore --> BlockValidation
+SubtreeStore --> BlockValidation: exists, err
 deactivate SubtreeStore
-deactivate BlockValidation
-deactivate BlockValidation
-deactivate BlockValidation
 
-== Validate Block Subtrees ==
-BlockValidation -> BlockValidation : ValidateBlock()
-activate BlockValidation
-BlockValidation -> BlockValidation : validateBlockSubtrees()
-activate BlockValidation
-BlockValidation -> SubtreeStore : Exists(ctx, hash)
+== Store Subtree ==
+BlockValidation -> SubtreeStore: Set(ctx, subtreeHash, subtreeBytes, options...)
 activate SubtreeStore
-SubtreeStore --> BlockValidation
+SubtreeStore --> BlockValidation: err
 deactivate SubtreeStore
-BlockValidation -> SubtreeStore : Set(ctx, hash, subtree, ttlOptions)
-activate SubtreeStore
-SubtreeStore --> BlockValidation
-deactivate SubtreeStore
-deactivate BlockValidation
+
 deactivate BlockValidation
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
