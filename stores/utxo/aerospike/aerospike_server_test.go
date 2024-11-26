@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"testing"
 
+	"github.com/aerospike/aerospike-client-go/v7"
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -1298,6 +1300,115 @@ func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
 			key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
 			_, err = client.Delete(policy, key)
 			require.NoError(t, err)
+		}
+	}
+}
+
+func TestCreateZeroSat(t *testing.T) {
+	client, s, ctx, deferFn := initAerospike(t)
+	defer deferFn()
+
+	// read hex file from os
+	txHex, err := os.ReadFile("testdata/a3041ffd31b46f9bb6e4cd78c89287b405fb911e893a5dead18372400832abc6.hex")
+	require.NoError(t, err)
+
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(t, err)
+
+	_, err = s.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	response, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	fmt.Printf("Digest      : %x\n", response.Key.Digest())
+	fmt.Printf("Namespace   : %s\n", response.Key.Namespace())
+	fmt.Printf("SetName     : %s\n", response.Key.SetName())
+	fmt.Printf("Node        : %s\n", response.Node.GetName())
+	fmt.Printf("Bins        :")
+
+	var indent = false
+
+	for binName := range response.Bins {
+		if indent {
+			fmt.Printf("            : %s\n", binName)
+		} else {
+			fmt.Printf(" %s\n", binName)
+		}
+
+		indent = true
+	}
+
+	fmt.Printf("Generation  : %d\n", response.Generation)
+	fmt.Printf("Expiration  : %d\n", response.Expiration)
+
+	fmt.Println()
+
+	for k, v := range response.Bins {
+		switch k {
+		case "Generation":
+			fallthrough
+		case "Expiration":
+			fallthrough
+		case "inputs":
+			fallthrough
+		case "outputs":
+			fallthrough
+		case "utxos":
+
+		default:
+			if arr, ok := v.([]interface{}); ok {
+				printArray(k, arr)
+			} else if b, ok := v.([]byte); ok {
+				fmt.Printf("%-12s: %x\n", k, b)
+			} else {
+				fmt.Printf("%-12s: %v\n", k, v)
+			}
+		}
+	}
+
+	printArray("inputs", response.Bins["inputs"])
+	printArray("outputs", response.Bins["outputs"])
+	printArray("utxos", response.Bins["utxos"])
+
+	fmt.Println()
+}
+
+func printArray(name string, ifc interface{}) {
+	fmt.Printf("%-12s:", name)
+
+	if ifc == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	arr, ok := ifc.([]interface{})
+	if !ok {
+		fmt.Printf(" <not array>\n")
+		return
+	}
+
+	if len(arr) == 0 {
+		fmt.Printf(" <empty>\n")
+		return
+	}
+
+	for i, item := range arr {
+		if b, ok := item.([]byte); ok {
+			if i == 0 {
+				fmt.Printf(" %-5d : %x\n", i, b)
+			} else {
+				fmt.Printf("            : %-5d : %x\n", i, b)
+			}
+		} else {
+			if i == 0 {
+				fmt.Printf(" %-5d : %v\n", i, item)
+			} else {
+				fmt.Printf("            : %-5d : %v\n", i, item)
+			}
 		}
 	}
 }
