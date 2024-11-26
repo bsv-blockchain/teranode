@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
@@ -21,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +32,7 @@ const (
 	aerospikePort       = 3000        // 3800
 	aerospikeNamespace  = "test"      // test
 	aerospikeSet        = "test"      // utxo-test
-	aerospikeExpiration = uint32(30)
+	aerospikeExpiration = uint32(1)
 )
 
 var (
@@ -1262,6 +1264,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *Store, context.Context, fu
 
 	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
 	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
 		require.NoError(t, err)
@@ -1269,6 +1272,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *Store, context.Context, fu
 
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
+
 	port, err := container.ServicePort(ctx)
 	require.NoError(t, err)
 
@@ -1276,7 +1280,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *Store, context.Context, fu
 	client, aeroErr := aerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
 
-	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=30&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet)
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
@@ -1317,6 +1321,11 @@ func cleanDB(t *testing.T, client *aerospike.Client, key *aerospike.Key, txs ...
 }
 
 func TestCreateZeroSat(t *testing.T) {
+	os.Setenv("network", "regtest")
+
+	network, _ := gocore.Config().Get("network", "mainnet")
+	t.Log(network)
+
 	client, s, ctx, deferFn := initAerospike(t)
 	defer deferFn()
 
@@ -1338,6 +1347,9 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err := client.Get(nil, key)
 	require.NoError(t, err)
 
+	// printResponse(response)
+
+	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 0, response.Bins["spentUtxos"])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
@@ -1361,6 +1373,23 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
 
+	// printResponse(response)
+
+	assert.NotNil(t, response)
+	assert.Equal(t, 2, response.Bins["nrUtxos"])
+	assert.Equal(t, 1, response.Bins["spentUtxos"])
+	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
+
+	// No set mined to see the TTL is set
+	err = s.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+	require.NoError(t, err)
+
+	response, err = client.Get(nil, key)
+	require.NoError(t, err)
+
+	// printResponse(response)
+
+	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 1, response.Bins["spentUtxos"])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
@@ -1381,22 +1410,22 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
 
+	// printResponse(response)
+
+	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
+	assert.Equal(t, aerospikeExpiration, response.Expiration)
 
-	// No set mined to see the TTL is set
-	err = s.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
-	require.NoError(t, err)
+	time.Sleep(2 * time.Duration(aerospikeExpiration) * time.Second)
 
 	response, err = client.Get(nil, key)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.ErrorIs(t, err, aerospike.ErrKeyNotFound)
 
-	assert.Equal(t, 2, response.Bins["nrUtxos"])
-	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, uint32(30), response.Expiration)
-
-	if testing.Verbose() {
+	if testing.Verbose() && response != nil {
+		// Normally response is nil at this point so the test will
+		// not be overly chatty.
 		printResponse(response)
 	}
 }

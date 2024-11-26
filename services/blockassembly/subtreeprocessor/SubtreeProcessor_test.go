@@ -393,7 +393,6 @@ func TestMoveUpBlock(t *testing.T) {
 }
 
 func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
-
 	n := 17
 	txIds := make([]string, n)
 

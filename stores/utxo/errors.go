@@ -9,10 +9,10 @@ import (
 
 const (
 	isoFormat = "2006-01-02T15:04:05Z"
+	nilString = "nil"
 )
 
 func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
-
 	var errorString string
 
 	switch {

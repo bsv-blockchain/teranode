@@ -100,13 +100,14 @@ func TestShouldStoreNonZeroUTXO(t *testing.T) {
 	t.Run("should return true for non-zero UTXO", func(t *testing.T) {
 		// TODO this should go when we remove the genesis activation height global variable
 		chaincfg.GenesisActivationHeight = uint32(620538)
-		assert.True(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, chaincfg.GenesisActivationHeight-1))
-		assert.False(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, chaincfg.GenesisActivationHeight+1))
+		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight-1))
+		assert.True(t, ShouldStoreOutputAsUTXO(tx.IsCoinbase(), tx.Outputs[0], chaincfg.GenesisActivationHeight+1))
 	})
 }
 
 func BenchmarkGetUtxoHashes(b *testing.B) {
 	txs := make([]*bt.Tx, b.N)
+
 	for i := 0; i < b.N; i++ {
 		tx := bt.NewTx()
 		_ = tx.From(

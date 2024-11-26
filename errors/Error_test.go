@@ -20,16 +20,15 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-// Test_NewCustomError tests the creation of custom errors.
-func Test_NewCustomError(t *testing.T) {
-
+// TestNewCustomError tests the creation of custom errors.
+func TestNewCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
 	require.Equal(t, ERR_NOT_FOUND, err.code)
 	require.Equal(t, "resource not found", err.message)
 
-	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
-	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
+	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", err)
+	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", secondErr)
 	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
 	fourthErr := New(ERR_SERVICE_ERROR, "older error: ", thirdErr)
 	fifthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", fourthErr)
@@ -47,7 +46,7 @@ func Test_NewCustomError(t *testing.T) {
 
 }
 
-func Test_FmtErrorCustomError(t *testing.T) {
+func TestFmtErrorCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
 	require.Equal(t, ERR_NOT_FOUND, err.code)
@@ -55,20 +54,20 @@ func Test_FmtErrorCustomError(t *testing.T) {
 
 	fmtError := fmt.Errorf("error: %w", err)
 	require.NotNil(t, fmtError)
-	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", fmtError)
 	require.NotNil(t, secondErr)
 
 	// If we FMT Err, then they won't be recognized as equal
 	require.False(t, secondErr.Is(err))
 
 	altErr := New(ERR_INVALID_ARGUMENT, "invalid argument", err)
-	altSecondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	altSecondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", fmtError)
 	require.True(t, altSecondErr.Is(altErr))
 }
 
 // TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
 // TestUnwrapGRPC tests unwrapping a gRPC error back to a custom error.
-func Test_WrapUnwrapGRPC(t *testing.T) {
+func TestWrapUnwrapGRPC(t *testing.T) {
 	err := NewNotFoundError("not found")
 	wrappedErr := WrapGRPC(err)
 	// Unwrap
@@ -78,7 +77,7 @@ func Test_WrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrappedErr.Is(err))
 }
 
-func Test_ErrorIs(t *testing.T) {
+func TestErrorIs(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "not found")
 	require.True(t, err.Is(ErrNotFound))
 
@@ -90,7 +89,7 @@ func ReturnsError() error {
 	return NewTxNotFoundError("Tx not found")
 }
 
-func Test_Errors_Standard_Is(t *testing.T) {
+func TestErrors_Standard_Is(t *testing.T) {
 	err := ReturnsError()
 	txNotFoundError := NewTxNotFoundError("Tx not found")
 
@@ -106,7 +105,7 @@ func Test_Errors_Standard_Is(t *testing.T) {
 	require.True(t, serviceError.Is(fmtError))
 }
 
-func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
+func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	originalErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "original error")
 	wrappedErr := New(ERR_BLOCK_INVALID, "Some more additional context", originalErr)
 
@@ -119,7 +118,7 @@ func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
 	}
 }
 
-func Test_ErrorEquality(t *testing.T) {
+func TestErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
 	err2 := New(ERR_NOT_FOUND, "resource not found")
 
@@ -188,7 +187,7 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 	}
 }
 
-func Test_UnwrapChain(t *testing.T) {
+func TestUnwrapChain(t *testing.T) {
 	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
 	wrappedOnce := fmt.Errorf("error wrapped once: %w", baseErr)
 	wrappedTwice := fmt.Errorf("error wrapped twice: %w", wrappedOnce)
@@ -203,7 +202,7 @@ func Test_UnwrapChain(t *testing.T) {
 }
 
 // TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-func Test_GRPCErrorsRoundTrip(t *testing.T) {
+func TestGRPCErrorsRoundTrip(t *testing.T) {
 	originalErr := New(ERR_BLOCK_NOT_FOUND, "not found")
 	wrappedGRPCError := WrapGRPC(originalErr)
 	unwrappedError := UnwrapGRPC(wrappedGRPCError)
@@ -330,7 +329,7 @@ func Test_UtxoSpentError(t *testing.T) {
 	})
 }
 
-func Test_JoinWithMultipleErrs(t *testing.T) {
+func TestJoinWithMultipleErrs(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "not found")
 	err2 := New(ERR_BLOCK_NOT_FOUND, "block not found")
 	err3 := New(ERR_INVALID_ARGUMENT, "invalid argument")
@@ -348,7 +347,7 @@ func TestErrorString(t *testing.T) {
 	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: failed to set data from reader [bucket:key], Wrapped err: Error: UNKNOWN, (error code: 0), Message: some error", thisErr.Error())
 }
 
-func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
+func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
 	baseServiceErr := NewServiceError("block is invalid")
 	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
@@ -577,7 +576,7 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	require.True(t, Is(unwrapped, level4ContextError))
 }
 
-func Test_UnwrapGRPCWithStandardError(t *testing.T) {
+func TestUnwrapGRPCWithStandardError(t *testing.T) {
 	// Create a simple gRPC error with a standard error message
 	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
 
@@ -605,7 +604,7 @@ func Test_UnwrapGRPCWithStandardError(t *testing.T) {
 	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message())
 }
 
-func Test_UnwrapGRPCWithAnotherStandardError(t *testing.T) {
+func TestUnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	// Create a standard error
 	standardErr := fmt.Errorf("invalid argument provided")
 	grpcErr := status.Error(codes.InvalidArgument, standardErr.Error())
@@ -659,7 +658,7 @@ func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*gr
 	return nil, WrapGRPC(level4Err)
 }
 
-func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
+func TestWrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	// Set up the server
 	lis, err := net.Listen("tcp", "localhost:0") // Use port 0 for an available port
 	require.NoError(t, err)
@@ -718,7 +717,7 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	require.True(t, Is(unwrappedErr, ErrContextCanceled))
 }
 
-func Test_IsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
+func TestIsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
 	errRoot := NewServiceError("service error")
 	err := NewProcessingError("processing error", errRoot)
 	grpcErr := WrapGRPC(err)

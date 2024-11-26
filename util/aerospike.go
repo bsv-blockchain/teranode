@@ -13,12 +13,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/ordishs/go-utils/safemap"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-var statsMutex sync.Mutex
 var aerospikeConnectionMutex sync.Mutex
 var aerospikeConnections map[string]*uaerospike.Client
 
@@ -45,7 +45,7 @@ var batchSleepBetweenRetries time.Duration
 var batchSleepMultiplier float64
 var concurrentNodes int
 
-var aerospikePrometheusMetrics = map[string]prometheus.Counter{}
+var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
@@ -307,9 +307,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		}
 	}
 
-	statsMutex.Lock()
 	initStats(logger, client)
-	statsMutex.Unlock()
 
 	return client, nil
 }
@@ -347,30 +345,42 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						subKey := nonAlphanumericRegex.ReplaceAllString(subKey, "_")
 						prometheusKey := fmt.Sprintf("%s_%s", key, subKey)
 						// create prometheus metric, if not exists
-						if _, ok := aerospikePrometheusMetrics[prometheusKey]; !ok {
-							aerospikePrometheusMetrics[prometheusKey] = promauto.NewCounter(
+						if _, ok := aerospikePrometheusMetrics.Get(prometheusKey); !ok {
+							aerospikePrometheusMetrics.Set(prometheusKey, promauto.NewCounter(
 								prometheus.CounterOpts{
 									Namespace: "teranode",
 									Subsystem: "aerospike_client_" + key,
 									Name:      subKey,
 									Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
 								},
-							)
+							))
 						}
 
 						switch subStat := subStat.(type) {
 						case int16:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(float64(subStat))
+							}
 						case int:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(float64(subStat))
+							}
 						case int32:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(float64(subStat))
+							}
 						case int64:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(float64(subStat))
+							}
 						case float32:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(float64(subStat))
+							}
 						case float64:
-							aerospikePrometheusMetrics[prometheusKey].Add(subStat)
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(subStat)
+							}
 						case map[string]interface{}:
 							// ignore these for now - new histogram metrics
 						default:
@@ -378,25 +388,30 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						}
 					}
 				default:
-					statsMutex.Lock()
-					if _, ok := aerospikePrometheusMetrics[key]; !ok {
-						aerospikePrometheusMetrics[key] = promauto.NewCounter(
+					if _, ok := aerospikePrometheusMetrics.Get(key); !ok {
+						aerospikePrometheusMetrics.Set(key, promauto.NewCounter(
 							prometheus.CounterOpts{
 								Namespace: "teranode",
 								Subsystem: "aerospike_client",
 								Name:      key,
 								Help:      fmt.Sprintf("Aerospike stat %s", key),
 							},
-						)
+						))
 					}
-					statsMutex.Unlock()
+
 					switch i := s.(type) {
 					case int16:
-						aerospikePrometheusMetrics[key].Add(float64(i))
+						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
+							counter.Add(float64(i))
+						}
 					case int:
-						aerospikePrometheusMetrics[key].Add(float64(i))
+						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
+							counter.Add(float64(i))
+						}
 					case float64:
-						aerospikePrometheusMetrics[key].Add(i)
+						if counter, ok := aerospikePrometheusMetrics.Get(key); ok {
+							counter.Add(i)
+						}
 					default:
 						logger.Debugf("Unknown type for aerospike stat %s: %T", key, i)
 					}

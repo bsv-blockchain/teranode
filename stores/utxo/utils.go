@@ -3,7 +3,6 @@ package utxo
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -98,18 +97,15 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 }
 
 func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uint32) bool {
-	return output.Satoshis > 0 || shouldStoreNonZeroUTXO(isCoinbase, output.LockingScript, blockHeight)
-}
-
-func shouldStoreNonZeroUTXO(isCoinbase bool, script *bscript.Script, blockHeight uint32) bool {
-	// there is an exception before Genesis where 0 sat outputs were stored in the utxo store
-	if blockHeight < chaincfg.GenesisActivationHeight || isCoinbase {
-		b := []byte(*script)
-		opReturn := len(b) > 0 && b[0] == bscript.OpRETURN
-		opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN
-
-		return !(opReturn || opFalseOpReturn)
+	if output.Satoshis > 0 {
+		// if the output has a non-zero satoshis value, it should be stored as a UTXO
+		return true
 	}
 
-	return false
+	// we only store outputs with a zero satoshis value if they are not an OP_RETURN or OP_FALSE OP_RETURN
+	b := []byte(*output.LockingScript)
+	opReturn := len(b) > 0 && b[0] == bscript.OpRETURN
+	opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN
+
+	return !(opReturn || opFalseOpReturn)
 }
