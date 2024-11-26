@@ -113,7 +113,9 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 		return nil, errors.NewProcessingError("failed to get best block header", err)
 	}
 
-	if blockMeta.Height > lastPersistedHeight+100 {
+	persistAge, _ := gocore.Config().GetInt("blockPersister_persistAge", 100)
+
+	if blockMeta.Height > lastPersistedHeight+uint32(persistAge) {
 		block, err := u.blockchainClient.GetBlockByHeight(ctx, lastPersistedHeight+1)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to get block headers by height", err)
@@ -186,7 +188,9 @@ func (u *Server) Start(ctx context.Context) error {
 
 				if block == nil {
 					u.logger.Infof("No new blocks to process, waiting...")
-					time.Sleep(time.Minute) // Sleep when no blocks available
+
+					sleep, _, _ := gocore.Config().GetDuration("blockPersister_persistSleep", time.Minute)
+					time.Sleep(sleep) // Sleep when no blocks available
 
 					continue
 				}
