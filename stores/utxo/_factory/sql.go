@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -11,12 +12,12 @@ import (
 
 func init() {
 	availableDatabases["postgres"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, url)
+		return sql.New(ctx, logger, settings.NewSettings(), url)
 	}
 	availableDatabases["sqlitememory"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, url)
+		return sql.New(ctx, logger, settings.NewSettings(), url)
 	}
 	availableDatabases["sqlite"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, url)
+		return sql.New(ctx, logger, settings.NewSettings(), url)
 	}
 }
