@@ -1986,12 +1986,24 @@ func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 		if msg.Key != nil {
 			hash, err := chainhash.NewHash(msg.Key)
 			if err != nil {
-				sm.logger.Errorf("Failed to parse block hash from message: %v", err)
-				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
+				sm.logger.Errorf("[kafkaBlocksListener][%s] failed to parse block hash from message: %v", hash, err)
+				// not going to retry, if we cannot parse the message
+				return nil
 			}
 
+			// get the block from the msg value
+			block, err := model.NewBlockFromBytes(msg.Value)
+			if err != nil {
+				sm.logger.Errorf("[kafkaBlocksListener][%s] failed to create block from Kafka message: %v", hash, err)
+				// not going to retry, if we cannot parse the message
+				return nil
+			}
+
+			// create wireBlockHeader
+			wireBlockHeader := block.Header.ToWireBlockHeader()
+
 			sm.logger.Debugf("Received block final message from Kafka: %v", hash)
-			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), hash)
+			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
 		}
 
 		return nil
