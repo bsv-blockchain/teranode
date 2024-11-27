@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -22,30 +22,29 @@ import (
 	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type Store struct {
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	db               *usql.DB
 	engine           string
 	blockHeight      atomic.Uint32
 	medianBlockTime  atomic.Uint32
-	dbTimeout        time.Duration
 	expirationMillis uint64
 }
 
-func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
-	db, err := util.InitSQLDB(logger, storeUrl)
+	db, err := util.InitSQLDB(logger, storeURL)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
-	switch storeUrl.Scheme {
+	switch storeURL.Scheme {
 	case "postgres":
 		if err = createPostgresSchema(db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
@@ -57,21 +56,19 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 		}
 
 	default:
-		return nil, errors.NewStorageError("unknown database engine: %s", storeUrl.Scheme)
+		return nil, errors.NewStorageError("unknown database engine: %s", storeURL.Scheme)
 	}
-
-	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
 		logger:          logger,
+		settings:        tSettings,
 		db:              db,
-		engine:          storeUrl.Scheme,
+		engine:          storeURL.Scheme,
 		blockHeight:     atomic.Uint32{},
 		medianBlockTime: atomic.Uint32{},
-		dbTimeout:       time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
-	expirationValue := storeUrl.Query().Get("expiration") // This is specified in seconds
+	expirationValue := storeURL.Query().Get("expiration") // This is specified in seconds
 	if expirationValue != "" {
 		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
@@ -100,7 +97,6 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 				}
 			}
 		}()
-
 	}
 
 	return s, nil
@@ -109,6 +105,7 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
+
 	return nil
 }
 
@@ -119,6 +116,7 @@ func (s *Store) GetBlockHeight() uint32 {
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 	s.medianBlockTime.Store(medianTime)
+
 	return nil
 }
 
@@ -148,7 +146,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:Create")
 	defer deferFn()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
@@ -184,7 +182,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		_ = txn.Rollback()
 	}()
 
-	var transactionId int
+	var transactionId int //nolint:stylecheck
 
 	var txHash *chainhash.Hash
 	if options.TxID != nil {
@@ -235,6 +233,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 				return nil, errors.NewTxExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
+
 			return nil, errors.NewStorageError("Failed to insert input: %v", err)
 		}
 	}
@@ -273,7 +272,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			utxoHash, err := util.UTXOHashFromOutput(txHash, output, uint32(i))
+			utxoHash, err := util.UTXOHashFromOutput(txHash, output, uint32(i)) //nolint:gosec
 			if err != nil {
 				return nil, err
 			}
@@ -311,6 +310,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 					return nil, errors.NewTxExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 				}
+
 				return nil, errors.NewStorageError("Failed to insert block_ids: %v", err)
 			}
 		}
@@ -332,14 +332,14 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	if len(fields) > 0 {
 		bins = fields[0]
 	}
+
 	return s.get(ctx, hash, bins)
 }
 
 func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*meta.Data, error) {
-
 	prometheusUtxoGet.Inc()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	// Always get the transaction row
@@ -358,7 +358,9 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	data := &meta.Data{}
 
 	var id int
+
 	var version uint32
+
 	var lockTime uint32
 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes)
@@ -397,6 +399,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 
 		for rows.Next() {
 			input := &bt.Input{}
+
 			var previousTxHashBytes []byte
 
 			if err := rows.Scan(&previousTxHashBytes, &input.PreviousTxOutIndex, &input.PreviousTxSatoshis, &input.PreviousTxScript, &input.UnlockingScript, &input.SequenceNumber); err != nil {
@@ -475,11 +478,12 @@ func contains(slice []string, item string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	defer func() {
@@ -560,6 +564,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
+
 				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
 
@@ -605,7 +610,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			if s.expirationMillis > 0 {
 				// Now mark the transaction as tombstoned if there are no more unspent outputs
-				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6
+				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6 //nolint:gosec
 
 				if _, err := txn.ExecContext(ctx, q3, transactionID, tombstoneTime); err != nil {
 					return errors.NewStorageError("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout)
@@ -623,8 +628,8 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 	return nil
 }
 
-func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	txn, err := s.db.Begin()
@@ -662,13 +667,14 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 				continue
 			}
 
-			var transactionId int
+			var transactionId int //nolint:stylecheck
 
 			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
+
 				return err
 			}
 
@@ -690,7 +696,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 }
 
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	// Start a database transaction
@@ -710,6 +716,7 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
+
 	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
@@ -735,6 +742,7 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
+
 	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
@@ -762,7 +770,7 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	// Start a database transaction
@@ -803,7 +811,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	q := `
@@ -839,18 +847,18 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		return nil, errors.NewStorageError("utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	var spendingTxId *chainhash.Hash
+	var spendingTxId *chainhash.Hash //nolint:stylecheck
 
-	if len(spendingTransactionID) > 0 {
+	if len(spendingTransactionID) > 0 { //nolint:stylecheck
 		spendingTxId, err = chainhash.NewHash(spendingTransactionID)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	utxoStatus := utxostore.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())
+	utxoStatus := utxo.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())
 	if frozen {
-		utxoStatus = utxostore.Status_FROZEN
+		utxoStatus = utxo.Status_FROZEN
 	}
 
 	return &utxo.SpendResponse{
@@ -861,7 +869,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 }
 
 func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	for _, unresolvedMetaData := range unresolvedMetaDataSlice {
@@ -887,7 +895,7 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	q := `
@@ -1120,6 +1128,7 @@ func deleteTombstoned(db *usql.DB) error {
 			_ = txn.Rollback()
 			return errors.NewStorageError("failed to delete inputs: %v", err)
 		}
+
 		if _, err := txn.Exec("DELETE FROM transactions WHERE id = $1", id); err != nil {
 			_ = txn.Rollback()
 			return errors.NewStorageError("failed to delete transaction: %v", err)

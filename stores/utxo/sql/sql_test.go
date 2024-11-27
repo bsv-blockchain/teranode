@@ -3,7 +3,6 @@ package sql
 import (
 	"context"
 	"net/url"
-	"os"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -22,19 +22,21 @@ import (
 func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 	initPrometheusMetrics()
 
-	os.Setenv("utxostore_dbTimeoutMillis", "30000")
-
 	logger := ulogger.TestLogger{}
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.UtxoStore.DBTimeout = 30000 * time.Millisecond
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a187000000008c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c9331586c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac0200e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c2f6b52de3d7c88ac00000000")
 	require.NoError(t, err)
 
 	// storeUrl, err := url.Parse("postgres://ubsv:ubsv@localhost:5432/ubsv?expiration=1")
 	// storeUrl, err := url.Parse("sqlite:///test?expiration=1")
-	storeUrl, err := url.Parse("sqlitememory:///test?expiration=1")
+	storeURL, err := url.Parse("sqlitememory:///test?expiration=1")
+
 	require.NoError(t, err)
 
-	store, err := New(ctx, logger, storeUrl)
+	store, err := New(ctx, logger, tSettings, storeURL)
 	require.NoError(t, err)
 
 	// Delete the tx so the tests can run cleanly...

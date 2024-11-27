@@ -250,6 +250,7 @@ func NewSettings() *Settings {
 			StoreBatcherSize:           getInt("utxostore_storeBatcherSize", 100),
 			UtxoBatchSize:              getInt("utxostore_utxoBatchSize", 0),
 			GetBatcherSize:             getInt("utxostore_getBatcherSize", 1),
+			DBTimeout:                  getDuration("utxostore_dbTimeoutMillis", 5*time.Second),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:     getString("p2p_bestblock_topic", ""),

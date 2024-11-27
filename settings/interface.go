@@ -233,6 +233,7 @@ type UtxoStoreSettings struct {
 	StoreBatcherSize           int
 	UtxoBatchSize              int
 	GetBatcherSize             int
+	DBTimeout                  time.Duration
 }
 
 type P2PSettings struct {
