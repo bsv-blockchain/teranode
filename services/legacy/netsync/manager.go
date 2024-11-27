@@ -1488,6 +1488,21 @@ func (sm *SyncManager) blockHandler() {
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
 
+	// start the block queue handler
+	go func() {
+		for {
+			select {
+			case <-sm.quit:
+				return
+			case msg := <-blockQueue:
+				err := sm.handleBlockMsg(msg)
+				if msg.reply != nil {
+					msg.reply <- err
+				}
+			}
+		}
+	}()
+
 out:
 	for {
 		select {
@@ -1526,25 +1541,33 @@ out:
 			case *blockMsg:
 				// write the block directly to disk and queue for validation in a reader pipe
 				reader, writer := io.Pipe()
+
+				// start writing to the pipe in the background
+				go func() {
+					if err := msg.block.MsgBlock().Serialize(writer); err != nil {
+						sm.logger.Errorf("failed to serialize block: %v", err)
+					}
+
+					// close the writer to signal the end of the block
+					if err := writer.Close(); err != nil {
+						sm.logger.Errorf("failed to close writer: %v", err)
+					}
+				}()
+
 				if err := sm.tempStore.SetFromReader(sm.ctx,
 					msg.block.Hash().CloneBytes(),
 					reader,
 					options.WithTTL(90*time.Minute),
 					options.WithFileExtension("msgBlock"),
 					options.WithSubDirectory("blocks"),
+					options.WithAllowOverwrite(true),
 				); err != nil {
 					sm.logger.Errorf("failed to write block to disk: %v", err)
-					continue
 				}
 
-				if err := msg.block.MsgBlock().Serialize(writer); err != nil {
-					sm.logger.Errorf("failed to serialize block: %v", err)
-					continue
-				}
-
-				// close the writer to signal the end of the block
-				if err := writer.Close(); err != nil {
-					sm.logger.Errorf("failed to close writer: %v", err)
+				// close the reader to signal the end of the block
+				if err := reader.Close(); err != nil {
+					sm.logger.Errorf("failed to close reader: %v", err)
 				}
 
 				blockQueue <- &blockQueueMsg{
@@ -1592,20 +1615,6 @@ out:
 			break out
 		}
 	}
-
-	go func() {
-		for {
-			select {
-			case <-sm.quit:
-				return
-			case msg := <-blockQueue:
-				err := sm.handleBlockMsg(msg)
-				if msg.reply != nil {
-					msg.reply <- err
-				}
-			}
-		}
-	}()
 
 	sm.wg.Done()
 	sm.logger.Infof("Block handler done")

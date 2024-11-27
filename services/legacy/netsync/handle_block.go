@@ -303,7 +303,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to serialize subtree", err)
 		}
 
-		if err = sm.tempStore.Set(ctx,
+		if err = sm.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension("subtree"),
@@ -319,7 +319,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to serialize subtree data", err)
 		}
 
-		if err = sm.tempStore.Set(ctx,
+		if err = sm.subtreeStore.Set(ctx,
 			subtreeData.RootHash()[:],
 			subtreeDataBytes,
 			options.WithFileExtension("subtreeData"),

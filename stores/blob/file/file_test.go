@@ -146,7 +146,7 @@ func TestFileLoadTTLs(t *testing.T) {
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		f, err := new(ulogger.TestLogger{}, u, ttlInterval)
+		f, err := newStore(ulogger.TestLogger{}, u, ttlInterval)
 		require.NoError(t, err)
 
 		err = f.Set(ctx, key, value, options.WithTTL(ttl))

@@ -45,13 +45,13 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 			return nil, errors.NewStorageError("[File] failed to parse ttlCleanerInterval", err)
 		}
 
-		return new(logger, storeURL, ttlCleanerInterval, opts...)
+		return newStore(logger, storeURL, ttlCleanerInterval, opts...)
 	}
 
-	return new(logger, storeURL, 1*time.Minute, opts...)
+	return newStore(logger, storeURL, 1*time.Minute, opts...)
 }
 
-func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
+func newStore(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
 	if storeURL == nil {
@@ -72,7 +72,7 @@ func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Durat
 		}
 	}
 
-	options := options.NewStoreOptions(opts...)
+	fileOptions := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
 		val, err := strconv.ParseInt(hashPrefix, 10, 64)
@@ -80,7 +80,7 @@ func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Durat
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
 
-		options.HashPrefix = int(val)
+		fileOptions.HashPrefix = int(val)
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
@@ -89,11 +89,11 @@ func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Durat
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
 
-		options.HashPrefix = -int(val)
+		fileOptions.HashPrefix = -int(val)
 	}
 
-	if len(options.SubDirectory) > 0 {
-		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
+	if len(fileOptions.SubDirectory) > 0 {
+		if err := os.MkdirAll(filepath.Join(path, fileOptions.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
@@ -101,7 +101,7 @@ func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Durat
 	fileStore := &File{
 		path:        path,
 		logger:      logger,
-		options:     options,
+		options:     fileOptions,
 		fileTTLs:    make(map[string]time.Time),
 		fileTTLsCtx: context.Background(),
 	}
@@ -359,6 +359,12 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 
 func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) (string, error) {
 	merged := options.MergeOptions(s.options, opts)
+
+	if merged.SubDirectory != "" {
+		if err := os.MkdirAll(filepath.Join(s.path, merged.SubDirectory), 0755); err != nil {
+			return "", errors.NewStorageError("[File] failed to create sub directory", err)
+		}
+	}
 
 	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {

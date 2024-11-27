@@ -161,18 +161,18 @@ func getTempStore(logger ulogger.Logger) (blob.Store, error) {
 		return mainTempStore, nil
 	}
 
-	tempStoreURL, err, found := gocore.Config().GetURL("tempStore", "file://./tmp")
+	tempStoreURL, err, found := gocore.Config().GetURL("temp_store", "file://./tmp")
 	if err != nil {
-		return nil, errors.NewConfigurationError("tempStore setting error", err)
+		return nil, errors.NewConfigurationError("temp_store setting error", err)
 	}
 
 	if !found {
-		return nil, errors.NewConfigurationError("tempStore config not found")
+		return nil, errors.NewConfigurationError("temp_store config not found")
 	}
 
 	mainTempStore, err = blob.NewStore(logger, tempStoreURL)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create tempStore", err)
+		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
 
 	return mainTempStore, nil
