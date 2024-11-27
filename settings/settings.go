@@ -73,7 +73,6 @@ func NewSettings() *Settings {
 		Kafka: KafkaSettings{
 			Blocks:            getString("KAFKA_BLOCKS", "blocks"),
 			BlocksFinal:       getString("KAFKA_BLOCKS_FINAL", "blocks-final"),
-			BlocksValidate:    getString("KAFKA_BLOCKS_VALIDATE", "blocks-validate"),
 			Hosts:             getString("KAFKA_HOSTS", "localhost:9092"),
 			LegacyInv:         getString("KAFKA_LEGACY_INV", "legacy-inv"),
 			Partitions:        getInt("KAFKA_PARTITIONS", 1),
