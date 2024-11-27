@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,19 +30,44 @@ type TestContainerWrapper struct {
 }
 
 func GetFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
+	var port int
+
+	// Try up to 3 times to get a free port
+	for attempts := 0; attempts < 3; attempts++ {
+		addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+		if err != nil {
+			return 0, err
+		}
+
+		l, err := net.ListenTCP("tcp", addr)
+		if err != nil {
+			// Wait briefly before retry
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		port = l.Addr().(*net.TCPAddr).Port
+
+		// Explicitly close the listener
+		err = l.Close()
+		if err != nil {
+			return 0, err
+		}
+
+		// Small delay to ensure port is released
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify the port is actually free
+		testListener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			continue
+		}
+		testListener.Close()
+
+		return port, nil
 	}
 
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-
-	defer l.Close()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return 0, fmt.Errorf("failed to find a free port after 3 attempts")
 }
 
 func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
@@ -66,21 +92,16 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 			"--advertise-kafka-addr", fmt.Sprintf("PLAINTEXT://localhost:%d", hostPort),
 		},
 		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
-		// AutoRemove: true,
 	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
+		Reuse:            false,
 		Started:          true,
 	})
 	if err != nil {
 		return nil, errors.NewProcessingError("could not start the container: %w", err)
 	}
-
-	// mPort, err := container.MappedPort(ctx, nat.Port(fmt.Sprintf("%d/tcp", hostPort, containerPort)))
-	// if err != nil {
-	// 	return nil, errors.NewConfigurationError("could not get the mapped port: %", err)
-	// }
 
 	return &TestContainerWrapper{
 		container: container,
@@ -172,10 +193,7 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 	}
 }
 
-func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
-	// t.Parallel()
-	// logger := ulogger.NewZeroLogger("test")
-	// logger := ulogger.NewVerboseTestLogger(t)
+func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -207,7 +225,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=6000000&flush_frequency=1s&replay=1", kafkaPartitions, kafkaReplicationFactor),
 	}
 
-	logger.Infof("Kafka URL: %v", kafkaURL)
+	t.Logf("Kafka URL: %v", kafkaURL)
 
 	var wg sync.WaitGroup
 
@@ -217,7 +235,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	producerClient.Start(ctx, make(chan *Message, 10000))
 	defer producerClient.Stop() // nolint:errcheck
 
-	counter := 0
+	counter2 := 0
+	counter3 := 0
 
 	// Define test cases
 	testCases := []struct {
@@ -239,8 +258,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			groupID: "test-group-2",
 			consumerClosure: func(message *KafkaMessage) error {
 				logger.Infof("Consumer closure#2 received message: %s, Offset: %d", string(message.Value), message.Offset)
-				counter++
-				if counter%2 == 0 {
+				counter2++
+				if counter2%2 == 0 {
 					wg.Done()
 					return nil
 				}
@@ -252,8 +271,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			groupID: "test-group-3",
 			consumerClosure: func(message *KafkaMessage) error {
 				logger.Infof("Consumer closure#3 received message: %s, Offset: %d", string(message.Value), message.Offset)
-				counter++
-				if counter%3 == 0 {
+				counter3++
+				if counter3%3 == 0 {
 					wg.Done()
 					return nil
 				}
@@ -266,41 +285,35 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 	// Run test cases
 	for _, tCase := range testCases {
-		ctx, cancel := context.WithCancel(context.Background())
-
 		wg.Add(10)
+
 		t.Run(tCase.name, func(t *testing.T) {
 			client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, tCase.groupID, false)
 			require.NoError(t, err)
 
 			client.Start(ctx, tCase.consumerClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
 		})
+	}
 
-		// Create a channel to signal when the wait group is done
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
+	// Create a channel to signal when the wait group is done
+	done := make(chan struct{})
 
-		// Wait for either completion or timeout
-		select {
-		case <-done:
-			// Wait group completed successfully
-		case <-time.After(5 * time.Second):
-			t.Error("timeout waiting for messages")
-			t.FailNow()
-		}
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
-		// Stop the listener
-		cancel()
+	// Wait for either completion or timeout
+	select {
+	case <-done:
+		// Wait group completed successfully
+	case <-time.After(5 * time.Second):
+		t.Error("timeout waiting for messages")
+		t.FailNow()
 	}
 }
 
-func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t *testing.T) {
-	// t.Parallel()
-	// logger := ulogger.NewZeroLogger("test")
-	// logger := ulogger.NewVerboseTestLogger(t)
+func TestKafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOptionUsingTC(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -333,7 +346,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 			kafkaPartitions, kafkaReplicationFactor),
 	}
 
-	logger.Infof("Kafka URL: %v", kafkaURL)
+	t.Logf("Kafka URL: %v", kafkaURL)
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
@@ -344,7 +357,8 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 	numberOfMessages := 2
 	go produceMessages(logger, producerClient, numberOfMessages)
 
-	c := make(chan []byte)
+	c := make(chan []byte, 100) // buffer channel to avoid blocking
+
 	errClosure := func(message *KafkaMessage) error {
 		logger.Infof("Consumer closure received message:	 %s, Offset: %d, Partition: %d", string(message.Value), message.Offset, message.Partition)
 		c <- message.Value
@@ -396,8 +410,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t 
 	}
 }
 
-func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *testing.T) {
-	// t.Parallel()
+func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -427,7 +440,7 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 			kafkaPartitions, kafkaReplicationFactor),
 	}
 
-	logger.Infof("Kafka URL: %v", kafkaURL)
+	t.Logf("Kafka URL: %v", kafkaURL)
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
@@ -457,12 +470,13 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
 	require.NoError(t, err)
 
-	stopped := false
+	var stopped atomic.Bool
+
 	// it should not bother doing a retry and just call the supplied stop func
 	client.Start(ctx, errClosure, WithRetryAndStop(0, 1, time.Millisecond, func() {
 		c := client.ConsumerGroup
-		client.ConsumerGroup = nil
-		stopped = true
+
+		stopped.Store(true)
 
 		_ = c.Close()
 	}))
@@ -497,12 +511,10 @@ func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *t
 	require.Equal(t, 1, len(messagesReceived))
 
 	// Verify stop func was called
-	require.True(t, stopped)
-	require.Nil(t, client.ConsumerGroup)
+	require.True(t, stopped.Load())
 }
 
-func Test_KafkaAsyncProducerWithManualCommitWithNoOptions_using_tc(t *testing.T) {
-	// t.Parallel()
+func TestKafkaAsyncProducerWithManualCommitWithNoOptionsUsingTC(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -602,7 +614,6 @@ This test is to ensure that when a consumer is restarted, it will resume from th
 and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
-	// t.Parallel()
 	logger := ulogger.NewZeroLogger("test")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -643,7 +654,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		})
 	}
 
-	var receivedMessages []string
+	var (
+		receivedMessages []string
+		messagesMutex    sync.RWMutex
+	)
 
 	consume := func() {
 		consumer, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
@@ -654,7 +668,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		}()
 
 		consumer.Start(ctx, func(msg *KafkaMessage) error {
+			messagesMutex.Lock()
 			receivedMessages = append(receivedMessages, string(msg.Value))
+			messagesMutex.Unlock()
+
 			return nil
 		})
 
@@ -668,7 +685,11 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 			default:
 				time.Sleep(1 * time.Millisecond)
 
-				if len(receivedMessages) >= 2 {
+				messagesMutex.RLock()
+				l := len(receivedMessages)
+				messagesMutex.RUnlock()
+
+				if l >= 2 {
 					return
 				}
 			}
@@ -677,8 +698,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 
 	consume()
 
+	messagesMutex.RLock()
 	t.Logf("First batch complete. Received messages: %v", receivedMessages)
 	require.Equal(t, []string{"msg1", "msg2"}, receivedMessages)
+	messagesMutex.RUnlock()
 
 	t.Log("Publishing second batch of test messages...")
 
@@ -689,11 +712,15 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		})
 	}
 
+	messagesMutex.Lock()
 	receivedMessages = nil
+	messagesMutex.Unlock()
 
 	consume()
 
+	messagesMutex.RLock()
 	require.Equal(t, []string{"msg3", "msg4"}, receivedMessages)
+	messagesMutex.RUnlock()
 }
 
 func byteArrayToIntFromString(message []byte) (int, error) {
@@ -713,6 +740,7 @@ func produceMessages(logger ulogger.Logger, client KafkaAsyncProducerI, numberOf
 		client.Publish(&Message{
 			Value: msg,
 		})
+
 		logger.Infof("pushed message: %v", string(msg))
 	}
 }

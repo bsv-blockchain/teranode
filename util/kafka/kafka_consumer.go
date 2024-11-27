@@ -297,7 +297,9 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 				case <-ctx.Done():
 					return
 				case err := <-k.ConsumerGroup.Errors():
-					k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+					if err != nil {
+						k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+					}
 				}
 			}
 		}()

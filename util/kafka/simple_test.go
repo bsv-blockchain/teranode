@@ -27,6 +27,7 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 	require.NoError(t, err)
 
 	kafkaBroker := fmt.Sprintf("%s:%d", host, testContainer.hostPort)
+	t.Logf("kafkaBroker: %s", kafkaBroker)
 
 	// Set up the producer configuration
 	cfg := sarama.NewConfig()
