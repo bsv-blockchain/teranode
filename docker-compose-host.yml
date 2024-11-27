@@ -8,7 +8,7 @@ x-ubsv-base: &ubsv-base
     - ./data:/app/data
 
 x-aerospike-base: &aerospike-base
-  image: aerospike:ce-6.4.0.7_2
+  image: aerospike:ce-7.2.0.3_1
   # mem_limit: 1024m
   network_mode: "host"
   command: --config-file /etc/aerospike.conf
@@ -170,7 +170,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       BLASTER_ARGS: "-workers=2"
     # pass arguments to the command
-    command: [ "/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=100", "--quic=false" ]
+    command: [ "/app/blaster.run", "-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100", "--quic=false" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data
@@ -228,18 +228,21 @@ services:
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ./data/ubsv1/aerospike/logs:/var/log/aerospike
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ./data/ubsv2/aerospike/logs:/var/log/aerospike
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ./data/ubsv3/aerospike/logs:/var/log/aerospike
 
   aerospike-exporter-1:
     image: aerospike/aerospike-prometheus-exporter:latest
