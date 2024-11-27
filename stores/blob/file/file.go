@@ -127,33 +127,48 @@ func (s *File) loadTTLs() error {
 		return errors.NewStorageError("[File] failed to find ttl files", err)
 	}
 
-	var ttlBytes []byte
-
-	var ttl time.Time
+	var ttl *time.Time
 
 	for _, fileName := range files {
 		if fileName[len(fileName)-4:] != ".ttl" {
 			continue
 		}
 
-		// read the ttl
-		ttlBytes, err = os.ReadFile(fileName)
+		ttl, err = s.readTTLFromFile(fileName)
 		if err != nil {
-			return errors.NewStorageError("[File] failed to read ttl file", err)
+			return err
 		}
 
-		ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
-		if err != nil {
-			s.logger.Warnf("[File] failed to parse ttl from %s: %v", fileName, err)
+		// check whether we actually have a ttl
+		if ttl == nil {
 			continue
 		}
 
 		s.fileTTLsMu.Lock()
-		s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+		s.fileTTLs[fileName[:len(fileName)-4]] = *ttl
 		s.fileTTLsMu.Unlock()
 	}
 
 	return nil
+}
+
+func (s *File) readTTLFromFile(fileName string) (*time.Time, error) {
+	// read the ttl
+	ttlBytes, err := os.ReadFile(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+
+		return nil, errors.NewStorageError("[File] failed to read ttl file", err)
+	}
+
+	ttl, err := time.Parse(time.RFC3339, string(ttlBytes))
+	if err != nil {
+		return nil, errors.NewProcessingError("[File] failed to parse ttl from %s: %v", fileName, err)
+	}
+
+	return &ttl, nil
 }
 
 func (s *File) ttlCleaner(ctx context.Context, interval time.Duration) {
@@ -181,13 +196,44 @@ func cleanExpiredFiles(s *File) {
 	s.fileTTLsMu.Unlock()
 
 	for _, fileName := range filesToRemove {
-		if err := os.Remove(fileName); err != nil {
+		// check if the ttl file still exists, even if the map says it has expired, another process might have updated it
+		fileTTL, err := s.readTTLFromFile(fileName + ".ttl")
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				s.logger.Warnf("[File] ttl file %s does not exist", fileName+".ttl")
+
+				// remove from map, we do not have to keep on checking this
+				s.fileTTLsMu.Lock()
+				delete(s.fileTTLs, fileName)
+				s.fileTTLsMu.Unlock()
+
+				continue
+			}
+
+			s.logger.Warnf("[File] failed to read ttl from file: %s", fileName+".ttl")
+
+			continue
+		}
+
+		if !fileTTL.Before(time.Now()) {
+			// set the correct ttl in our map
+			s.fileTTLsMu.Lock()
+			mapTTL := s.fileTTLs[fileName]
+			s.fileTTLs[fileName] = *fileTTL
+			s.fileTTLsMu.Unlock()
+
+			s.logger.Warnf("[File] ttl file %s has expiry of %s, but map has %s", fileName+".ttl", fileTTL.UTC().Format(time.RFC3339), mapTTL.UTC().Format(time.RFC3339))
+
+			continue
+		}
+
+		if err = os.Remove(fileName); err != nil {
 			if !os.IsNotExist(err) {
 				s.logger.Warnf("[File] failed to remove file: %s", fileName)
 			}
 		}
 
-		if err := os.Remove(fileName + ".ttl"); err != nil {
+		if err = os.Remove(fileName + ".ttl"); err != nil {
 			if !os.IsNotExist(err) {
 				s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
 			}
@@ -359,6 +405,10 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	}
 
 	if newTTL == 0 {
+		s.fileTTLsMu.Lock()
+		delete(s.fileTTLs, fileName)
+		s.fileTTLsMu.Unlock()
+
 		// delete the ttl file
 		if err = os.Remove(fileName + ".ttl"); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -367,10 +417,6 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 
 			return errors.NewStorageError("[File] failed to remove ttl file", err)
 		}
-
-		s.fileTTLsMu.Lock()
-		delete(s.fileTTLs, fileName)
-		s.fileTTLsMu.Unlock()
 
 		return nil
 	}
