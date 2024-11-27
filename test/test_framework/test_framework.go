@@ -108,16 +108,10 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 func (b *BitcoinTestFramework) GetClientHandles() error {
 	logger := b.Logger
 	tSettings := settings.NewSettings()
+
 	logger.Infof("nodes: %v", b.Nodes)
 
 	for i, node := range b.Nodes {
-		// coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SettingsContext))
-		// coinbaseGrpcPort
-
-		// if !ok {
-		// 	return errors.NewConfigurationError("no coinbase_grpcAddress setting found")
-		// }
-
 		coinbaseGRPCPort := "8093/tcp"
 		coinbaseMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(coinbaseGRPCPort))
 
@@ -132,10 +126,6 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
-		// blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SettingsContext))
-		// if !ok {
-		// 	return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
-		// }
 		blockchainGRPCPort := "8087/tcp"
 		blockchainMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockchainGRPCPort))
 
@@ -149,11 +139,6 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		}
 
 		b.Nodes[i].BlockchainClient = blockchainClient
-
-		// blockassemblyGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SettingsContext))
-		// if !ok {
-		// 	return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
-		// }
 
 		blockassemblyGRPCPort := "8085/tcp"
 		blockassemblyMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockassemblyGRPCPort))
@@ -169,14 +154,9 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
-		// propagationGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SettingsContext))
-		// if !ok {
-		// 	return errors.NewConfigurationError("no propagation_grpcAddress setting found")
-		// }
-
 		propagationGRPCPort := "8084/tcp"
-		propagationMappedPort, _ := b.GetMappedPort(node.NodeName, nat.Port(propagationGRPCPort))
 
+		propagationMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(propagationGRPCPort))
 		if err != nil {
 			return errors.NewConfigurationError("error getting mapped port %v", propagationMappedPort, err)
 		}
@@ -187,27 +167,6 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		}
 
 		b.Nodes[i].DistributorClient = *distributorClient
-
-		// subtreesKafkaURL, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SettingsContext))
-		// if err != nil {
-		// 	return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
-		// }
-
-		// if !ok {
-		// 	return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
-		// }
-
-		// kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaURL.String(), "kafka-shared", "localhost", 1))
-		// kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
-		// b.Nodes[i].SubtreesKafkaURL = kafkaURL
-		// blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SettingsContext))
-
-		// blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-		// if err != nil {
-		// 	return errors.NewConfigurationError("error creating blockchain store %w", err)
-		// }
-
-		// b.Nodes[i].BlockChainDB = blockchainStore
 
 		blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SettingsContext))
 		if err != nil {
@@ -255,14 +214,6 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		if err != nil {
 			return errors.NewConfigurationError("error creating utxostore %v", utxoStoreURL, err)
 		}
-
-		// rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))
-		// if !ok {
-		// 	return errors.NewConfigurationError("no rpc_listener_url setting found")
-		// }
-
-		// rpcPort := strings.Replace(rpcURL, ":", "", 1)
-		// b.Nodes[i].RPCURL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
 	}
 
 	return nil
@@ -335,7 +286,6 @@ func (b *BitcoinTestFramework) StartNode(nodeName string) error {
 		}
 
 		time.Sleep(10 * time.Second)
-
 	}
 
 	return nil

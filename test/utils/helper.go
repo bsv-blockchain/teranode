@@ -18,8 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ordishs/go-utils"
-
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
@@ -42,7 +40,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
+	"github.com/ordishs/go-utils"
 )
 
 type Transaction struct {
@@ -81,10 +79,12 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	// Perform the request
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", errors.NewProcessingError("failed to perform request", err)
 	}
+
 	defer resp.Body.Close()
 
 	// Check the status code
@@ -141,7 +141,9 @@ func GetBlockHeight(url string) (uint32, error) {
 		fmt.Printf("Error getting block height: %s\n", err)
 		return 0, err
 	}
+
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return 0, errors.NewProcessingError("unexpected status code: %d", resp.StatusCode)
 	}
@@ -149,6 +151,7 @@ func GetBlockHeight(url string) (uint32, error) {
 	var blocks []struct {
 		Height uint32 `json:"height"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&blocks); err != nil {
 		return 0, err
 	}
@@ -160,24 +163,7 @@ func GetBlockHeight(url string) (uint32, error) {
 	return blocks[0].Height, nil
 }
 
-func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
-	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil {
-		return nil, errors.NewConfigurationError("error getting blockstore config", err)
-	}
-	if !found {
-		return nil, errors.NewConfigurationError("blockstore config not found")
-	}
-
-	blockStore, err := blob.NewStore(logger, blockStoreUrl)
-	if err != nil {
-		return nil, errors.NewServiceError("error creating block store", err)
-	}
-
-	return blockStore, nil
-}
-
-func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) {
+func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) { //nolint:stylecheck
 	switch ext {
 	case "subtree":
 		bl := ReadSubtree(r, logger, true, queryTxId)
@@ -211,10 +197,12 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 			if true {
 				filename := fmt.Sprintf("%s.subtree", subtree.String())
 				fmt.Printf("Reading subtree from %s\n", filename)
+
 				_, _, stReader, err := GetReader(ctx, filename, dir, logger)
 				if err != nil {
 					return false, err
 				}
+
 				return ReadSubtree(stReader, logger, true, queryTxId), nil
 			}
 		}
@@ -226,27 +214,31 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 	return false, nil
 }
 
-func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId chainhash.Hash) bool {
+func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId chainhash.Hash) bool { //nolint:stylecheck
 	var num uint32
 
 	if err := binary.Read(r, binary.LittleEndian, &num); err != nil {
 		fmt.Printf("error reading transaction count: %v\n", err)
 		os.Exit(1)
 	}
+
 	if verbose {
 		for i := uint32(0); i < num; i++ {
 			var tx bt.Tx
+
 			_, err := tx.ReadFrom(r)
 			if err != nil {
 				fmt.Printf("error reading transaction: %v\n", err)
 				os.Exit(1)
 			}
+
 			if *tx.TxIDChainHash() == queryTxId {
 				fmt.Printf(" (test txid) %v found\n", queryTxId)
 				return true
 			}
 		}
 	}
+
 	return false
 }
 
@@ -264,6 +256,7 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 	if err != nil {
 		return nil, "", nil, errors.NewProcessingError("error creating block store: %w", err)
 	}
+
 	r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
 	if err != nil {
 		return nil, "", nil, errors.NewProcessingError("error getting reader from store: %w", err)
@@ -277,10 +270,11 @@ func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting mining candidate: %w", err)
 	}
+
 	return miningCandidate, nil
 }
 
-func GetMiningCandidate_rpc(url string) (string, error) {
+func GetMiningCandidate_rpc(url string) (string, error) { //nolint:stylecheck
 	method := "getminingcandidate"
 	params := []interface{}{}
 
@@ -334,7 +328,7 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 	return blockHash, nil
 }
 
-func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
+func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
 	solution, err := cpuminer.Mine(ctx, miningCandidate)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block: %w", err)
@@ -361,7 +355,9 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	}
 
 	method := "submitminingsolution"
+
 	params := []interface{}{submitMiningSolutionCmd}
+
 	logger.Infof("Submitting mining solution: %s", string(solutionJSON))
 
 	resp, err := CallRPC(rpcUrl, method, params)
@@ -376,7 +372,6 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 
 // TODO: Remove after all tests are fixed
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
-
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
@@ -388,6 +383,7 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
 	}
+
 	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
@@ -402,6 +398,7 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 	}
 
 	newTx := bt.NewTx()
+
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
@@ -619,6 +616,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []tenv.TeranodeTestCl
 	}
 
 	newTx := bt.NewTx()
+
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
@@ -627,6 +625,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []tenv.TeranodeTestCl
 	newTx.LockTime = 0
 
 	newTxDouble := bt.NewTx()
+
 	err = newTxDouble.FromUTXOs(utxo)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
@@ -675,7 +674,9 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 		if err != nil {
 			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
 		}
+
 		txHashes = append(txHashes, tx)
+
 		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
 	}
 
@@ -900,7 +901,12 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	)
 
 	coinbaseClient := node.CoinbaseClient
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
+	if coinbasePrivKey == "" {
+		return false, errors.NewProcessingError("Coinbase private key is not set")
+	}
+
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to decode Coinbase private key: %v", err)
@@ -922,6 +928,7 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to request funds: %v", err)
 	}
+
 	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
@@ -982,7 +989,11 @@ func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient,
 	)
 
 	coinbaseClient := node.CoinbaseClient
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
+	if coinbasePrivKey == "" {
+		return false, errors.NewProcessingError("Coinbase private key is not set")
+	}
 
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
@@ -1082,7 +1093,6 @@ func GetBestBlockV2(ctx context.Context, node tenv.TeranodeTestClient) (*block_m
 }
 
 func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
-
 	parsedURL, err := url.Parse(serverURL)
 	if err != nil {
 		return 0, errors.New(errors.ERR_ERROR, "invalid server URL: %v", err)
@@ -1103,9 +1113,7 @@ func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
 	if err != nil {
 		return 0, errors.New(errors.ERR_ERROR, "error sending HTTP request: %v", err)
 	}
-	if err != nil {
-		return 0, errors.New(errors.ERR_ERROR, "error querying Prometheus API: %v", err)
-	}
+
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -1157,6 +1165,7 @@ func isAllowedHost(host string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 

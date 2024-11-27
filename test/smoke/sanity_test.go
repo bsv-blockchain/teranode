@@ -19,7 +19,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -113,7 +112,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 
-	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+	delay := testEnv.Nodes[0].Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(time.Duration(delay) * time.Millisecond)

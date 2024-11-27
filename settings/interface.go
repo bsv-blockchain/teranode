@@ -154,6 +154,7 @@ type BlockAssemblySettings struct {
 	InitialMerkleItemsPerSubtree        int
 	DoubleSpendWindow                   time.Duration
 	MaxGetReorgHashes                   int
+	MinerWalletPrivateKeys              []string
 }
 
 type BlockValidationSettings struct {

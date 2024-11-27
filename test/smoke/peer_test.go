@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/settings"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bk/bec"
@@ -19,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -42,6 +42,8 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	node2 := testEnv.Nodes[1]
 	node3 := testEnv.Nodes[2]
 
+	tSettings := settings.NewSettings()
+
 	_, err := helper.CallRPC(node1.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
 	require.NoError(t, err)
 
@@ -54,7 +56,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
@@ -118,7 +120,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 
-	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(time.Duration(delay) * time.Millisecond)

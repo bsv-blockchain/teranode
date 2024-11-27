@@ -24,6 +24,7 @@ import (
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
@@ -36,7 +37,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -348,8 +348,9 @@ func startApp(logFile string) error {
 }
 
 func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+	tSettings := settings.NewSettings()
+
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 	ctx := context.Background()
 	t := suite.T()
@@ -377,7 +378,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -426,7 +427,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
-	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -438,11 +439,9 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
-	require.NoError(t, err, "Error getting blockstore url")
-
-	if !found {
-		t.Errorf("Error finding blockstore")
+	blockStoreURL := tSettings.Block.BlockStore
+	if blockStoreURL == nil {
+		t.Errorf("Blockstore URL not found")
 	}
 
 	t.Logf("blockStoreURL: %s", blockStoreURL.String())
@@ -601,8 +600,9 @@ func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
 }
 
 func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+	tSettings := settings.NewSettings()
+
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 	ctx := context.Background()
 	t := suite.T()
@@ -631,7 +631,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -689,8 +689,9 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 }
 
 func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromBA() {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+	tSettings := settings.NewSettings()
+
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 	ctx := context.Background()
 	t := suite.T()
@@ -721,7 +722,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -776,7 +777,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
-	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 10000)
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -856,10 +857,9 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 
 	require.NoError(t, errJSON, "Error unmarshalling getblock response")
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
-	require.NoError(t, err, "Error getting blockstore url")
+	blockStoreURL := tSettings.Block.BlockStore
 
-	if !found {
+	if blockStoreURL == nil {
 		t.Errorf("Error finding blockstore")
 	}
 
@@ -908,8 +908,9 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 }
 
 func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC() {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+	tSettings := settings.NewSettings()
+
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 	ctx := context.Background()
 	t := suite.T()
@@ -940,7 +941,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -995,7 +996,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
-	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 10000)
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -1079,10 +1080,9 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 
 	require.NoError(t, errJSON, "Error unmarshalling getblock response")
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore.dev.system.test")
-	require.NoError(t, err, "Error getting blockstore url")
+	blockStoreURL := tSettings.Block.BlockStore
 
-	if !found {
+	if blockStoreURL == nil {
 		t.Errorf("Error finding blockstore")
 	}
 
@@ -1131,8 +1131,8 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 }
 
 // func (suite *RPCTestSuite) TestCompareSubmitMiningSolutionFromBAWithRPCWithoutTXs() {
-// 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+// 	tSettings := settings.NewSettings()
+// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 // 	ctx := context.Background()
 // 	t := suite.T()
@@ -1242,8 +1242,8 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 // }
 
 // func (suite *RPCTestSuite) TestCompareSubmitMiningSolutionFromBAWithRPCWithTXs() {
-// 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+// 	tSettings := settings.NewSettings()
+// 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
 // 	ctx := context.Background()
 // 	t := suite.T()
@@ -1270,7 +1270,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 // 	}
 
 // 	coinbaseClient, _ := coinbase.NewClient(ctx, logger)
-// 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+// 	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 // 	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
 // 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 // 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -1316,7 +1316,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 // 	require.NoError(t, err, "Failed to send new tx with rpc")
 // 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
-// 	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 10000)
+// 	delay := tSettings.BlockAssembly.DoubleSpendWindow
 // 	if delay != 0 {
 // 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 // 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -1462,10 +1462,12 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 }
 
 func CreateCoinbaseTxCandidate(m MiningCandidate) (*bt.Tx, error) {
-	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+	tSettings := settings.NewSettings()
 
-	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
-	if !found {
+	arbitraryText := tSettings.Coinbase.ArbitraryText
+
+	coinbasePrivKeys := tSettings.BlockAssembly.MinerWalletPrivateKeys
+	if len(coinbasePrivKeys) == 0 {
 		return nil, errors.NewConfigurationError("miner_wallet_private_keys not found in config")
 	}
 

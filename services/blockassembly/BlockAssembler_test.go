@@ -312,8 +312,9 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 
 	stats := gocore.NewStat("test")
 
-	settings := settings.NewSettings()
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	settings := createTestSettings()
+
+	assert.NotNil(t, settings)
 
 	// we cannot rely on the settings to be set in the test environment
 	ba := NewBlockAssembler(
@@ -326,6 +327,8 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		items.blockchainClient,
 		items.newSubtreeChan,
 	)
+
+	assert.NotNil(t, ba.settings)
 
 	// overwrite default subtree processor with a new one
 	ba.subtreeProcessor, err = subtreeprocessor.NewSubtreeProcessor(
@@ -704,4 +707,24 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		require.Error(t, err)
 		assert.Equal(t, "Error: PROCESSING, (error code: 4), Message: max block size is less than the size of the subtree", err.Error())
 	})
+}
+
+func createTestSettings() *settings.Settings {
+	settings := &settings.Settings{
+		ChainCfgParams: &chaincfg.RegressionNetParams,
+		Policy: &settings.PolicySettings{
+			BlockMaxSize: 1000000,
+		},
+		BlockAssembly: settings.BlockAssemblySettings{
+			InitialMerkleItemsPerSubtree: 4,
+			SubtreeProcessorBatcherSize:  1,
+			DoubleSpendWindow:            1000,
+			MaxGetReorgHashes:            10000,
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			TxChanBufferSize: 1,
+		},
+	}
+
+	return settings
 }

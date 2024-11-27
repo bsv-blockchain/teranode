@@ -22,8 +22,7 @@ func NewSettings() *Settings {
 	blockaAssemblySubtreeTTLMinutes := getInt("blockassembly_subtreeTTL", 120)
 	blockAssemblySubtreeTTL := time.Duration(blockaAssemblySubtreeTTLMinutes) * time.Minute
 
-	// TODO is this the same as double_spend_window_millis
-	doubleSpendWindowMillis := getInt("blockassembly_doubleSpendWindowMillis", 0)
+	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0)
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	blockValidationSubtreeTTLMinutes := getInt("blockvalidation_subtreeTTL", 120)
@@ -166,6 +165,7 @@ func NewSettings() *Settings {
 			InitialMerkleItemsPerSubtree:        getInt("initial_merkle_items_per_subtree", 1_048_576),
 			DoubleSpendWindow:                   doubleSpendWindow,
 			MaxGetReorgHashes:                   getInt("blockassembly_maxGetReorgHashes", 10_000),
+			MinerWalletPrivateKeys:              getMultiString("miner_wallet_private_keys", "|", []string{}),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:          getString("blockchain_grpcAddress", "localhost:8087"),
