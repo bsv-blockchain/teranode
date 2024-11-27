@@ -152,7 +152,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// reset the block assembly
 				b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash(), meta.Height, bestBlockchainBlockHeader.String())
 
-				moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader)
+				moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, meta.Height)
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error getting reorg blocks: %w", err)
 					continue
@@ -286,7 +286,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		b.currentRunningState.Store("reorging")
 
-		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
+		err = b.handleReorg(ctx, bestBlockchainBlockHeader, meta.Height)
 		if err != nil {
 			if errors.Is(err, errors.ErrBlockAssemblyReset) {
 				// only warn about the reset
@@ -583,12 +583,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	return miningCandidate, subtreesToInclude, nil
 }
 
-func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader) error {
+func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader, height uint32) error {
 	startTime := time.Now()
 
 	prometheusBlockAssemblerReorg.Inc()
 
-	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
+	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header, height)
 	if err != nil {
 		return errors.NewProcessingError("error getting reorg blocks", err)
 	}
@@ -610,7 +610,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	return nil
 }
 
-func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader) ([]*model.Block, []*model.Block, error) {
+func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader, height uint32) ([]*model.Block, []*model.Block, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerGetReorgBlocksDuration),
@@ -618,7 +618,7 @@ func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.Block
 	)
 	defer deferFn()
 
-	moveDownBlockHeaders, moveUpBlockHeaders, err := b.getReorgBlockHeaders(ctx, header)
+	moveDownBlockHeaders, moveUpBlockHeaders, err := b.getReorgBlockHeaders(ctx, header, height)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting reorg block headers", err)
 	}
@@ -654,55 +654,62 @@ func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.Block
 // getReorgBlockHeaders returns the block headers that need to be moved down and up to get to the new tip
 // it is based on a common ancestor between the current chain and the new chain
 // TODO optimize this function
-func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model.BlockHeader) ([]*model.BlockHeader, []*model.BlockHeader, error) {
+func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model.BlockHeader, height uint32) ([]*model.BlockHeader, []*model.BlockHeader, error) {
 	if header == nil {
 		return nil, nil, errors.NewError("header is nil")
 	}
 
-	// allow this to get up to 10,000 hashes
-	// this is needed for large resets of the block assembly
-	// the maxBlockReorgCatchup is used to limit the number of blocks we can catch up to in the subtree processor
-	// nolint:gosec
-	maxGetHashes := uint64(b.settings.BlockAssembly.MaxGetReorgHashes)
-
-	// get a much larger chain map from the current chain to determine the common ancestor
-	currentChainMap := make(map[chainhash.Hash]uint32, maxGetHashes)
-
-	currentChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), maxGetHashes)
+	// Get block locators for both chains
+	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
 	if err != nil {
-		return nil, nil, errors.NewServiceError("error getting current chain", err)
+		return nil, nil, errors.NewServiceError("error getting block locator for current chain", err)
 	}
 
-	for _, blockHeader := range currentChain {
-		currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
-	}
-
-	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), maxGetHashes)
+	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), height)
 	if err != nil {
-		return nil, nil, errors.NewServiceError("error getting new chain", err)
+		return nil, nil, errors.NewServiceError("error getting block locator for new chain", err)
 	}
 
-	// moveUpBlockHeaders will contain all block headers we need to move up to get to the new tip from the common ancestor
-	moveUpBlockHeaders := make([]*model.BlockHeader, 0, len(newChain))
+	// Find common ancestor using locators
+	var (
+		commonAncestor     *model.BlockHeader
+		commonAncestorMeta *model.BlockHeaderMeta
+	)
 
-	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
-	moveDownBlockHeaders := make([]*model.BlockHeader, 0, len(newChain))
+	for _, currentHash := range currentChainLocator {
+		for _, newHash := range newChainLocator {
+			if currentHash.IsEqual(newHash) {
+				commonAncestor, commonAncestorMeta, err = b.blockchainClient.GetBlockHeader(ctx, currentHash)
+				if err != nil {
+					return nil, nil, errors.NewServiceError("error getting common ancestor header", err)
+				}
 
-	// find the first blockHeader that is the same in both chains
-	var commonAncestor *model.BlockHeader
-
-	for _, blockHeader := range newChain {
-		// check whether the blockHeader is in the current chain
-		if _, ok := currentChainMap[*blockHeader.Hash()]; ok {
-			commonAncestor = blockHeader
-			break
+				goto FoundAncestor
+			}
 		}
-
-		moveUpBlockHeaders = append(moveUpBlockHeaders, blockHeader)
 	}
 
+FoundAncestor:
 	if commonAncestor == nil {
 		return nil, nil, errors.NewProcessingError("common ancestor not found, reorg not possible")
+	}
+
+	// Get headers from current tip down to common ancestor
+	moveDownBlockHeaders, _, err := b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), uint64(b.bestBlockHeight.Load()-commonAncestorMeta.Height+1))
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting current chain headers", err)
+	}
+
+	// Handle empty moveDownBlockHeaders or when length is 1 (only common ancestor)
+	var filteredMoveDown []*model.BlockHeader
+	if len(moveDownBlockHeaders) > 1 {
+		filteredMoveDown = moveDownBlockHeaders[:len(moveDownBlockHeaders)-1]
+	}
+
+	// Get headers from new tip down to common ancestor
+	moveUpBlockHeaders, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), uint64(height-commonAncestorMeta.Height))
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting new chain headers", err)
 	}
 
 	// reverse moveUpBlocks slice
@@ -711,22 +718,12 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		moveUpBlockHeaders[i], moveUpBlockHeaders[opp] = moveUpBlockHeaders[opp], moveUpBlockHeaders[i]
 	}
 
-	// traverse currentChain in reverse order until we find the common ancestor
-	// skipping the current block, start at the previous block (len-2)
-	for _, blockHeader := range currentChain {
-		if blockHeader.Hash().IsEqual(commonAncestor.Hash()) {
-			break
-		}
-
-		moveDownBlockHeaders = append(moveDownBlockHeaders, blockHeader)
+	maxGetReorgHashes, _ := gocore.Config().GetInt("blockassembly_maxGetReorgHashes", 10_000)
+	if len(filteredMoveDown) > maxGetReorgHashes {
+		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", maxGetReorgHashes)
 	}
 
-	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	if len(moveDownBlockHeaders) > int(maxGetHashes) {
-		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", b.settings.BlockAssembly.MaxBlockReorgRollback)
-	}
-
-	return moveDownBlockHeaders, moveUpBlockHeaders, nil
+	return filteredMoveDown, moveUpBlockHeaders, nil
 }
 
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {

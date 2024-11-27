@@ -20,6 +20,13 @@ type Store interface {
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
 	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
+
+	/*
+	   GetBlockInChainByHeightHash returns a block by height for a chain determined by the start hash.
+	   This is useful for getting the block at a given height in a chain that may have a different tip.
+	*/
+	GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error)
+
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)

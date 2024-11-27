@@ -38,9 +38,10 @@ type baTestItems struct {
 }
 
 func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
+	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
 		Header:           blockHeader,
-		CoinbaseTx:       &bt.Tx{Inputs: []*bt.Input{{}}},
+		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
 	}, "")
@@ -225,7 +226,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
-		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil)
+		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
 		require.Error(t, err)
 	})
 
@@ -235,6 +236,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
+		items.blockAssembler.bestBlockHeight.Store(4)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -251,7 +253,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		err = items.addBlock(blockHeader4Alt)
 		require.NoError(t, err)
 
-		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt)
+		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveDownBlockHeaders, 3)
@@ -271,6 +273,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
+		items.blockAssembler.bestBlockHeight.Store(2)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -281,7 +284,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		err = items.addBlock(blockHeader4)
 		require.NoError(t, err)
 
-		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4)
+		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveDownBlockHeaders, 0)

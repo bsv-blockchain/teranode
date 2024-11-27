@@ -80,3 +80,15 @@ message ValidateTransactionBatchResponse {
   bool valid = 1;                    // Overall batch validation status
   repeated string errors = 2;        // Array of error messages, one per transaction
 }
+
+// GetBlockHeightResponse provides the current block height
+// swagger:model GetBlockHeightResponse
+message GetBlockHeightResponse {
+  uint32 height = 1;                  // Current block height
+}
+
+// GetMedianBlockTimeResponse provides the median time of recent blocks
+// swagger:model GetMedianBlockTimeResponse
+message GetMedianBlockTimeResponse {
+  uint32 median_time = 1;             // Median time of recent blocks
+}

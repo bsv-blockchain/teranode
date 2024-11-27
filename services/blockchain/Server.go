@@ -495,6 +495,49 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 	}, nil
 }
 
+/*
+GetBlockInChainByHeightHash returns a block by height for a chain determined by the start hash.
+This is useful for getting the block at a given height in a chain that may have a different tip.
+*/
+func (b *Blockchain) GetBlockInChainByHeightHash(ctx context.Context, request *blockchain_api.GetBlockInChainByHeightHashRequest) (*blockchain_api.GetBlockResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlock),
+		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
+	)
+	defer deferFn()
+
+	startHash, err := chainhash.NewHash(request.StartHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
+	}
+
+	block, err := b.store.GetBlockInChainByHeightHash(ctx, request.Height, startHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	subtreeHashes := make([][]byte, len(block.Subtrees))
+	for i, subtreeHash := range block.Subtrees {
+		subtreeHashes[i] = subtreeHash[:]
+	}
+
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
+	return &blockchain_api.GetBlockResponse{
+		Header:           block.Header.Bytes(),
+		Height:           request.Height,
+		CoinbaseTx:       coinbaseBytes,
+		SubtreeHashes:    subtreeHashes,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+		Id:               block.ID,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockStats",
 		tracing.WithParentStat(b.stats),
@@ -1400,7 +1443,7 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 			height = 0
 		}
 
-		ancestorBlock, err := store.GetBlockByHeight(ctx, height)
+		ancestorBlock, err := store.GetBlockInChainByHeightHash(ctx, height, ancestorBlockHeaderHash)
 		if err != nil {
 			return nil, err
 		}

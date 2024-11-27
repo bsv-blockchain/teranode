@@ -55,6 +55,10 @@ func (s *mockStore) GetBlockByHeight(_ context.Context, height uint32) (*model.B
 
 	return nil, errors.ErrBlockNotFound
 }
+func (s *mockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error) {
+	return s.GetBlockByHeight(ctx, height)
+}
+
 func (s *mockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	panic("not implemented")
 }
