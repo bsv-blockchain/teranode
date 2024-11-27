@@ -20,6 +20,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -713,6 +714,15 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 }
 
 func createTestSettings() *settings.Settings {
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.BlockMaxSize = 1000000
+
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings.BlockAssembly.SubtreeProcessorBatcherSize = 1
+	tSettings.BlockAssembly.DoubleSpendWindow = 1000
+	tSettings.BlockAssembly.MaxGetReorgHashes = 10000
+	tSettings.SubtreeValidation.TxChanBufferSize = 1
+
 	settings := &settings.Settings{
 		ChainCfgParams: &chaincfg.RegressionNetParams,
 		Policy: &settings.PolicySettings{

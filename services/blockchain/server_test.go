@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -20,6 +19,7 @@ import (
 	utxo_memory "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -138,7 +138,7 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
-	tSettings := &settings.Settings{}
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	server, err := New(context.Background(), logger, tSettings, &store, nil)

@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -144,4 +146,11 @@ func LoadTxMetaIntoMemory() error {
 	}
 
 	return err
+}
+
+func CreateBaseTestSettings() *settings.Settings {
+	settings := settings.NewSettings()
+	settings.ChainCfgParams = &chaincfg.RegressionNetParams
+
+	return settings
 }

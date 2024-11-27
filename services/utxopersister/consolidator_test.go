@@ -8,9 +8,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +62,7 @@ func TestConsolidateBlockRange(t *testing.T) {
 	blockStore, err := blob.NewStore(logger, storeURL)
 	require.NoError(t, err)
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	consolidator := NewConsolidator(logger, tSettings, &mockHeaderIfc{}, nil, blockStore, nil)

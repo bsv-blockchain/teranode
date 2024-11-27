@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -22,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
@@ -88,9 +88,9 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		)
 
 		nilConsumer := &kafka.KafkaConsumerGroup{}
-		settings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
 
-		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 		require.NoError(t, err)
 
 		v := ValidateSubtree{
@@ -157,9 +157,9 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	settings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
 	subtreeValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
@@ -236,9 +236,9 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	settings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
 	// Create a mock context

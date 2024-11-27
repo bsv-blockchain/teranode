@@ -3,7 +3,7 @@ package coinbase
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/settings"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +14,7 @@ func TestPostMessageToSlack(t *testing.T) {
 	// This can also be done by adding these items to a .env file in the same folder as this test
 	t.SkipNow()
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	channel := tSettings.Coinbase.SlackChannel
 

@@ -21,6 +21,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -120,14 +121,15 @@ func TestMain(m *testing.M) {
 
 // Health check
 func TestHealth(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
@@ -144,14 +146,15 @@ func TestHealth(t *testing.T) {
 
 // Test coinbase value
 func TestCoinbaseSubsidyHeight(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
@@ -187,15 +190,16 @@ func TestCoinbaseSubsidyHeight(t *testing.T) {
 }
 
 func TestDifficultyAdjustment(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
 	t.Skip("Skipping difficulty adjustment test")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
@@ -204,8 +208,8 @@ func TestDifficultyAdjustment(t *testing.T) {
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
-	ba.blockAssembler.chainParams.NoDifficultyAdjustment = false
-	ba.blockAssembler.chainParams.TargetTimePerBlock = 30 * time.Second
+	ba.blockAssembler.settings.ChainCfgParams.NoDifficultyAdjustment = false
+	ba.blockAssembler.settings.ChainCfgParams.TargetTimePerBlock = 30 * time.Second
 
 	// Generate initial blocks
 	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[100]"})
@@ -252,16 +256,16 @@ func TestDifficultyAdjustment(t *testing.T) {
 }
 
 func TestShouldFollowLongerChain(t *testing.T) {
-
+	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
@@ -327,7 +331,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	require.NoError(t, err, "Failed to add Chain B block")
 
 	// Create new block assembler to check which chain it follows
-	newBA := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	newBA := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, newBA)
 
 	err = newBA.Init(ctx)
@@ -343,15 +347,16 @@ func TestShouldFollowLongerChain(t *testing.T) {
 }
 
 func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
@@ -456,7 +461,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	t.Logf("Chain B: 3 blocks with difficulty %s", chainBBits.String())
 
 	// Create new block assembler to check which chain it follows
-	newBA := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	newBA := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, newBA)
 
 	err = newBA.Init(ctx)
@@ -473,14 +478,15 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 }
 
 func TestShouldAddSubtreesToLongerChain(t *testing.T) {
-	os.Setenv("blockchain_store_cache_enabled", "false")
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Block.StoreCacheEnabled = false
 	// Create a cancellable context
 	ctx := context.Background()
 	done := make(chan struct{})
 
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 
 	err = blockchainClient.Run(ctx, "test")
@@ -489,7 +495,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	t.Logf("Creating block assembler...")
 
-	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, baService)
 	err = baService.Init(ctx)
 	require.NoError(t, err)
@@ -662,20 +668,22 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 }
 
 func TestShouldHandleReorg(t *testing.T) {
-	os.Setenv("blockchain_store_cache_enabled", "false")
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Block.StoreCacheEnabled = false
+
 	ctx := context.Background()
 	done := make(chan struct{})
 
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	t.Log("Creating block assembler...")
-	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, baService)
 	err = baService.Init(ctx)
 	require.NoError(t, err)
@@ -813,20 +821,21 @@ func TestShouldHandleReorg(t *testing.T) {
 }
 
 func TestShouldHandleReorgWithLongerChain(t *testing.T) {
-	os.Setenv("blockchain_store_cache_enabled", "false")
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Block.StoreCacheEnabled = false
 	ctx := context.Background()
 	done := make(chan struct{})
 
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	t.Log("Creating block assembler...")
-	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, baService)
 	err = baService.Init(ctx)
 	require.NoError(t, err)

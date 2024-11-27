@@ -46,7 +46,7 @@ func main() {
 
 	logger.Infof("Setting mined state for tx %s: %d", hash.String(), blockID)
 
-	//nolint:gose
+	//nolint:gosec
 	if err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, uint32(blockID)); err != nil { //nolint:gosec
 		panic(err)
 	}

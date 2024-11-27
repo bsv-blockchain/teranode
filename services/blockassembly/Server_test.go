@@ -10,16 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -178,12 +177,8 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 
 	gocore.Config().Set("tx_chan_buffer_size", "1000000")
 
-	tSettings := &settings.Settings{
-		ChainCfgParams: &chaincfg.MainNetParams,
-		Policy: &settings.PolicySettings{
-			BlockMaxSize: 1000000,
-		},
-	}
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.BlockMaxSize = 1000000
 
 	ctx := context.Background()
 	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)

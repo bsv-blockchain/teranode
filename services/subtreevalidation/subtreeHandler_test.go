@@ -5,10 +5,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,18 +23,15 @@ func (m MockExister) Exists(ctx context.Context, key []byte, opts ...options.Fil
 func TestLock(t *testing.T) {
 	exister := MockExister{}
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
-	quorumPath := tSettings.SubtreeValidation.QuorumPath
+	tSettings.SubtreeValidation.QuorumPath = "./data/subtree_quorum"
 
 	defer func() {
-		// remove quorum path
-		if quorumPath != "" {
-			_ = os.RemoveAll(quorumPath)
-		}
+		_ = os.RemoveAll(tSettings.SubtreeValidation.QuorumPath)
 	}()
 
-	q, err := quorum.New(ulogger.TestLogger{}, exister, quorumPath)
+	q, err := quorum.New(ulogger.TestLogger{}, exister, tSettings.SubtreeValidation.QuorumPath)
 	require.NoError(t, err)
 
 	hash := chainhash.HashH([]byte("test"))

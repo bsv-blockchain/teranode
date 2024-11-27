@@ -5,9 +5,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -75,7 +75,7 @@ func TestNewUTXOSet(t *testing.T) {
 
 	ctx := context.Background()
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 0)
 	require.NoError(t, err)
 

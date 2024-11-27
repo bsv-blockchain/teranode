@@ -309,7 +309,6 @@ func startKafka(logFile string) error {
 }
 
 func startApp(logFile string) error {
-	// os.Setenv("blockchain_store_cache_enabled", "false")
 	appCmd := exec.Command("go", "run", "../../.")
 
 	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.rpc")

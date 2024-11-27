@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +17,7 @@ func TestReadWriteHeight(t *testing.T) {
 	store := memory.New()
 
 	// Create a new UTXO persister
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	s := New(ctx, ulogger.TestLogger{}, tSettings, store, nil)
 
 	oldHeight, err := s.readLastHeight(ctx)

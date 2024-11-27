@@ -3,15 +3,14 @@ package blockchain
 import (
 	"context"
 	"net/url"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -19,8 +18,6 @@ import (
 )
 
 func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_in_time(t *testing.T) {
-	os.Setenv("blockchain_store_cache_enabled", "false")
-
 	ctx := context.Background()
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
@@ -32,10 +29,11 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
-	settings := &settings.Settings{}
-	settings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.Block.StoreCacheEnabled = false
 
-	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, settings)
+	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)
 	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
@@ -64,7 +62,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 
 	for i := 0; i < 150; i++ {
 		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-		currentTime += int64(settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+		currentTime += int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
 		// t.Logf("current time: %v", currentTime)
 
 		//nolint: gosec
@@ -101,8 +99,6 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 
 // nolint: gosec
 func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faster_than_expected(t *testing.T) {
-	os.Setenv("blockchain_store_cache_enabled", "false")
-
 	ctx := context.Background()
 
 	storeURL, err := url.Parse("sqlitememory://")
@@ -115,10 +111,11 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
-	settings := &settings.Settings{}
-	settings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.Block.StoreCacheEnabled = false
 
-	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, settings)
+	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)
 	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
@@ -144,7 +141,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 
 	for i := 0; i < 150; i++ {
 		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-		currentTime += int64(settings.ChainCfgParams.TargetTimePerBlock.Seconds() / 10)
+		currentTime += int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds() / 10)
 		// t.Logf("current time: %v", currentTime)
 		header := &model.BlockHeader{
 			Version:        1,

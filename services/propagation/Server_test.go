@@ -6,11 +6,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ import (
 func TestValidatorErrors(t *testing.T) {
 	tracing.SetGlobalMockTracer()
 	tx := bt.NewTx()
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)

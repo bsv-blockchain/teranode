@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -103,7 +104,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan)
@@ -138,12 +139,11 @@ func TestRotate(t *testing.T) {
 
 func Test_RemoveTxFromSubtrees(t *testing.T) {
 	t.Run("remove transaction from subtrees", func(t *testing.T) {
-		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
-		tSettings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, utxosStore, newSubtreeChan)
 
@@ -173,13 +173,12 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 }
 
 func TestReChainSubtrees(t *testing.T) {
-	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-
 	// Create a SubtreeProcessor
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	utxosStore := memory.New(ulogger.TestLogger{})
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, utxosStore, newSubtreeChan)
 
@@ -257,11 +256,8 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		settings := &settings.Settings{
-			BlockAssembly: settings.BlockAssemblySettings{
-				InitialMerkleItemsPerSubtree: 8,
-			},
-		}
+		settings := test.CreateBaseTestSettings()
+		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 8
 
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan)
 
@@ -295,11 +291,9 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		settings := &settings.Settings{
-			BlockAssembly: settings.BlockAssemblySettings{
-				InitialMerkleItemsPerSubtree: 4,
-			},
-		}
+		settings := test.CreateBaseTestSettings()
+		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan)
 
 		for i, txid := range txIDs {
@@ -368,7 +362,7 @@ func TestMoveUpBlock(t *testing.T) {
 	subtreeStore, _ := null.New(logger)
 	utxosStore := memory.New(logger)
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), logger, settings, subtreeStore, utxosStore, newSubtreeChan)
@@ -454,7 +448,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	utxosStore := memory.New(ulogger.TestLogger{})
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
@@ -540,7 +534,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	utxosStore := memory.New(ulogger.TestLogger{})
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
@@ -625,7 +619,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	utxosStore := memory.New(ulogger.TestLogger{})
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
@@ -717,7 +711,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	subtreeProcessor, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan, WithBatcherSize(1))
@@ -951,7 +945,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 		}
 	}()
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan)
@@ -1027,7 +1021,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := settings.NewSettings()
+		settings := test.CreateBaseTestSettings()
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
@@ -1139,8 +1133,9 @@ func TestMoveDownBlocks(t *testing.T) {
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := settings.NewSettings()
+		settings := test.CreateBaseTestSettings()
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
@@ -1258,7 +1253,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := settings.NewSettings()
+		settings := test.CreateBaseTestSettings()
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
 
 		subtree1 := createSubtree(t, 4, true)
@@ -1310,7 +1305,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := settings.NewSettings()
+		settings := test.CreateBaseTestSettings()
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
 
 		subtreeSize := uint64(1024 * 1024)
@@ -1486,7 +1481,7 @@ func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor,
 		}
 	})
 
-	settings := settings.NewSettings()
+	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1048576
 	settings.BlockAssembly.DoubleSpendWindow = 0
 

@@ -7,8 +7,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,9 +47,9 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	// expected from block 826224 - 180a39ef
 	expectedNbits, _ := model.NewNBitFromString("180a2268")
 
-	settings := &settings.Settings{}
-	settings.ChainCfgParams = &chaincfg.MainNetParams
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, settings)
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
 	nbits, err := d.computeTarget(firstBlockHeader, lastBlockHeader)
@@ -104,10 +104,10 @@ func TestCalculateDifficulty(t *testing.T) {
 		}, expected: *eBits}, // 826768
 	}
 
-	settings := &settings.Settings{}
-	settings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
-	d, err := NewDifficulty(nil, ulogger.TestLogger{}, settings)
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
 	for name, tc := range tests {

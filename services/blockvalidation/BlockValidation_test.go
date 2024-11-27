@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -22,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -93,9 +93,9 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 	blockchainClient := &blockchain.LocalClient{}
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	settings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	if err != nil {
 		panic(err)
 	}
@@ -201,8 +201,8 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	tSettings := test.CreateBaseTestSettings()
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
@@ -313,9 +313,9 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
@@ -399,8 +399,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	tSettings := test.CreateBaseTestSettings()
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -484,8 +484,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	tSettings := test.CreateBaseTestSettings()
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -586,8 +586,8 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	tSettings := test.CreateBaseTestSettings()
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.Error(t, err)
@@ -701,8 +701,8 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	settings := settings.NewSettings()
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, settings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	tSettings := test.CreateBaseTestSettings()
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 
 	// When: The last block in the chain is validated
 	start := time.Now()

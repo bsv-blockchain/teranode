@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -251,7 +251,7 @@ func TestTtlCache(t *testing.T) {
 
 func TestSetInitialState(t *testing.T) {
 	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	bp := New(context.Background(), nil, tSettings, nil, nil, nil, nil, WithSetInitialState(1, hash))
 
 	height, err := bp.state.GetLastPersistedBlockHeight()
