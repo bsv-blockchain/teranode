@@ -72,11 +72,9 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			fs.wg.Done() // Decrement the WaitGroup counter
 		}()
 
-		// TODO - we actually want the TTL to  be 1 hour and then we set it to 0 after success.  However, we need
-		// to investigate whu TTL files are not being removed from the file system.
 		if err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithTTL(0)); err != nil {
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				logger.Warnf("[BlockPersister] File already exists", err)
+				logger.Warnf("[BlockPersister] File already exists: %v", err)
 			} else {
 				logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 			}
