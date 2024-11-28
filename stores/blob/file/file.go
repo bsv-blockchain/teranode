@@ -215,6 +215,17 @@ func cleanExpiredFiles(s *File) {
 			continue
 		}
 
+		if fileTTL == nil {
+			s.logger.Warnf("[File] ttl file %s does not have a valud ttl: %v", fileName+".ttl", fileTTL)
+
+			// remove from map, we do not have to keep on checking this
+			s.fileTTLsMu.Lock()
+			delete(s.fileTTLs, fileName)
+			s.fileTTLsMu.Unlock()
+
+			continue
+		}
+
 		if !fileTTL.Before(time.Now()) {
 			// set the correct ttl in our map
 			s.fileTTLsMu.Lock()
