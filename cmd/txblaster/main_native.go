@@ -1,13 +1,5 @@
-//go:build bdk
-
 package main
 
-/*
-	#cgo LDFLAGS: -lsecp256k1
-	#include <stdlib.h>
-	#include <secp256k1/include/secp256k1.h>
-*/
-import "C"
 import (
 	"log"
 

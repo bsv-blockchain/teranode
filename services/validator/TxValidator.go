@@ -89,10 +89,13 @@ type TxScriptInterpreter interface {
 	//   - blockHeight: Current block height for validation context
 	// Returns:
 	//   - error: Any script verification errors encountered
+	// Logger return the encapsulated logger
+
+	// VerifyScript implement the method to verify a script for a transaction
 	VerifyScript(tx *bt.Tx, blockHeight uint32) error
 }
 
-// TxValidatorCreator defines a function type for creating script interpreters
+// TxScriptInterpreterCreator defines a function type for creating script interpreters
 // Parameters:
 //   - logger: Logger instance for the interpreter
 //   - policy: Policy settings for validation
@@ -100,11 +103,11 @@ type TxScriptInterpreter interface {
 //
 // Returns:
 //   - TxScriptInterpreter: The created script interpreter
-type TxValidatorCreator func(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) TxScriptInterpreter
+type TxScriptInterpreterCreator func(logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) TxScriptInterpreter
 
-// ScriptVerificationFactory stores registered TxValidator creator methods
+// TxScriptInterpreterFactory stores registered TxValidator creator methods
 // The factory is populated at build time based on build tags
-var ScriptVerificationFactory = make(map[TxInterpreter]TxValidatorCreator)
+var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreator)
 
 // NewTxValidator creates a new transaction validator with the specified configuration
 // Parameters:
@@ -138,11 +141,12 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 	var txScriptInterpreter TxScriptInterpreter
 
 	// If a creator was not registered to the factory, then return nil
-	if createTxScriptInterpreter, ok := ScriptVerificationFactory[scriptInterpreter]; ok {
+	if createTxScriptInterpreter, ok := TxScriptInterpreterFactory[scriptInterpreter]; ok {
 		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
 	} else {
 		// default to GoSDK
-		txScriptInterpreter = ScriptVerificationFactory[defaultTxVerifier](logger, tSettings.Policy, tSettings.ChainCfgParams)
+		txScriptInterpreter = TxScriptInterpreterFactory[defaultTxVerifier](logger, tSettings.Policy, tSettings.ChainCfgParams)
+
 	}
 
 	return &TxValidator{

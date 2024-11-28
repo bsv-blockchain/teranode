@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-3fed05f
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-latest
 ARG GITHUB_SHA
 
 

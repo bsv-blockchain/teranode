@@ -23,7 +23,7 @@ import (
 // This is called automatically when the package is imported and sets up
 // the Go-BT implementation as an available script verifier
 func init() {
-	ScriptVerificationFactory[TxInterpreterGoBT] = newScriptVerifierGoBt
+	TxScriptInterpreterFactory[TxInterpreterGoBT] = newScriptVerifierGoBt
 
 	log.Println("Registered scriptVerifierGoBt")
 }
@@ -43,20 +43,6 @@ type scriptVerifierGoBt struct {
 	logger ulogger.Logger
 	policy *settings.PolicySettings
 	params *chaincfg.Params
-}
-
-// Logger returns the verifier's logger instance
-func (v *scriptVerifierGoBt) Logger() ulogger.Logger {
-	return v.logger
-}
-
-// Params returns the verifier's network parameters
-func (v *scriptVerifierGoBt) Params() *chaincfg.Params {
-	return v.params
-}
-
-func (v *scriptVerifierGoBt) PolicySettings() *settings.PolicySettings {
-	return v.policy
 }
 
 // VerifyScript implements script verification using the Go-BT library

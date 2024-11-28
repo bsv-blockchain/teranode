@@ -24,7 +24,7 @@ import (
 // init registers the Go-SDK script verifier with the verification factory
 // This is called automatically when the package is imported
 func init() {
-	ScriptVerificationFactory[TxInterpreterGoSDK] = newScriptVerifierGoSDK
+	TxScriptInterpreterFactory[TxInterpreterGoSDK] = newScriptVerifierGoSDK
 
 	log.Println("Registered scriptVerifierGoSDK")
 }
@@ -52,20 +52,6 @@ type scriptVerifierGoSDK struct {
 	logger ulogger.Logger
 	policy *settings.PolicySettings
 	params *chaincfg.Params
-}
-
-// Logger returns the verifier's logger instance
-func (v *scriptVerifierGoSDK) Logger() ulogger.Logger {
-	return v.logger
-}
-
-// Params returns the verifier's network parameters
-func (v *scriptVerifierGoSDK) Params() *chaincfg.Params {
-	return v.params
-}
-
-func (v *scriptVerifierGoSDK) PolicySettings() *settings.PolicySettings {
-	return v.policy
 }
 
 // VerifyScript implements script verification using the Go-SDK

@@ -1,5 +1,3 @@
-//go:build bdk
-
 /*
 Package validator implements Bitcoin SV transaction validation functionality.
 
@@ -41,7 +39,7 @@ type bdkDebugVerification struct {
 // init registers the Go-BDK script verifier with the verification factory
 // This is called automatically when the package is imported with the 'bdk' build tag
 func init() {
-	ScriptVerificationFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
+	TxScriptInterpreterFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
 
 	log.Println("Registered scriptVerifierGoBDK")
 }
@@ -92,7 +90,9 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		MaxStackMemoryUsageConsensus: uint64(po.MaxStackMemoryUsageConsensus),
 		MaxStackMemoryUsagePolicy:    uint64(po.MaxStackMemoryUsagePolicy),
 	}
-	bdkscript.SetGlobalScriptConfig(bdkScriptConfig)
+	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
+		return nil
+	}
 
 	return &scriptVerifierGoBDK{
 		logger: l,
@@ -106,20 +106,6 @@ type scriptVerifierGoBDK struct {
 	logger ulogger.Logger
 	policy *settings.PolicySettings
 	params *chaincfg.Params
-}
-
-// Logger returns the verifier's logger instance
-func (v *scriptVerifierGoBDK) Logger() ulogger.Logger {
-	return v.logger
-}
-
-// Params returns the verifier's network parameters
-func (v *scriptVerifierGoBDK) Params() *chaincfg.Params {
-	return v.params
-}
-
-func (v *scriptVerifierGoBDK) PolicySettings() *settings.PolicySettings {
-	return v.policy
 }
 
 // VerifyScript implements script verification using the Go-BDK library
@@ -156,7 +142,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 		}
 
 		// isPostChronicle now is unknow, in future, it need to be calculate based on block height
-		//flags, errF := bdkscript.ScriptVerificationFlags(*in.PreviousTxScript, false)
+		// flags, errF := bdkscript.ScriptVerificationFlags(*in.PreviousTxScript, false)
 		flags, errF := bdkscript.ScriptVerificationFlagsV2(*in.PreviousTxScript, blockHeight)
 		if errF != nil {
 			return errors.NewTxInvalidError("failed to calculate flags from prev locking script, flags : %v, error: %v", flags, errF)
@@ -166,7 +152,6 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 		txBinary := tx.Bytes()
 		if errV := bdkscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, uint(flags), txBinary, i, in.PreviousTxSatoshis); errV != nil {
 			// Helpful logging to get full information to debug separately in GoBDK
-
 			errLog := bdkDebugVerification{
 				UScript:     hex.EncodeToString(*in.UnlockingScript),
 				LScript:     hex.EncodeToString(*in.PreviousTxScript),
@@ -179,10 +164,10 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 			}
 
 			errLogData, _ := json.MarshalIndent(errLog, "", "    ")
-
 			errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk, error : \n\n%v\n\n", string(errLogData))
-			//fmt.Println(errorLogMsg)
+			// fmt.Println(errorLogMsg)
 			v.logger.Warnf(errorLogMsg)
+
 			return errors.NewTxInvalidError("Failed to verify script: %w", errV)
 		}
 	}

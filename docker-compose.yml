@@ -20,8 +20,8 @@ services:
       context: .
       dockerfile: local.Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-3fed05f
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-3fed05f
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
     networks:
       - ubsv-network
     entrypoint: ["pwd"]

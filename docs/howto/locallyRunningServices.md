@@ -25,7 +25,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 For a performance boost during development, enable native mode to use the C secp256k1 library. (This step is optional for development.)
 
 ```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk .
+rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
 ### Aerospike Integration
@@ -33,7 +33,7 @@ rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk .
 Add Aerospike support by including the "aerospike" tag.
 
 ```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk,aerospike .
+rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
 ```
 
 ### Custom Settings
@@ -41,7 +41,7 @@ rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk,aerospike .
 Launch the node with specific components using the `[OPTIONS]` parameter.
 
 ```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk,aerospike . [OPTIONS]
+rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . [OPTIONS]
 ```
 
 Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
@@ -76,7 +76,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 To initiate the node with only specific components, such as `Validator` and `UtxoStore`:
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags bdk,aerospike . -Validator=1 -UtxoStore=1
+  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1 -UtxoStore=1
   ```
 
 ## 🔧 Running Individual Services

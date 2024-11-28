@@ -1,6 +1,6 @@
 # These values should be overwritten by buildx --build-args and replaced with cluster base/run ID from repo
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v2
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-latest
+ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-latest
 ARG PLATFORM_ARCH=linux/arm64
 FROM ${BASE_IMG}
 ARG GITHUB_SHA
@@ -61,7 +61,6 @@ RUN if [ "$INSTALL_DEBUG_TOOLS" = "true" ]; then \
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .
-COPY --from=0 /usr/local/bdk-v1.2.1/bin/libGoBDK.so .
 
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
