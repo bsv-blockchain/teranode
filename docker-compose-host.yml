@@ -163,6 +163,7 @@ services:
       - ./data/ubsv3/blockstore:/app/data/ubsv3/blockstore
       - ./data/ubsv3/subtree_quorum:/app/data/ubsv3/subtree_quorum
       - ./data/ubsv3/external:/app/data/ubsv3/external
+
   tx-blaster-1:
     <<: *ubsv-base
     container_name: tx-blaster-1
@@ -228,21 +229,24 @@ services:
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
-      - ./data/ubsv1/aerospike/logs:/var/log/aerospike
+      - ./data/aerospike1/logs:/var/log/aerospike
+      - ./data/aerospike1/data:/opt/aerospike/data
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
-      - ./data/ubsv2/aerospike/logs:/var/log/aerospike
+      - ./data/aerospike2/logs:/var/log/aerospike
+      - ./data/aerospike2/data:/opt/aerospike/data
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     volumes:
       - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
-      - ./data/ubsv3/aerospike/logs:/var/log/aerospike
+      - ./data/aerospike3/logs:/var/log/aerospike
+      - ./data/aerospike3/data:/opt/aerospike/data
 
   aerospike-exporter-1:
     image: aerospike/aerospike-prometheus-exporter:latest
