@@ -16,6 +16,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -46,31 +47,31 @@ type batcherIfc[T any] interface {
 }
 
 type Store struct {
-	ctx                        context.Context // store the global context for things that run in the background
-	url                        *url.URL
-	client                     *uaerospike.Client
-	namespace                  string
-	setName                    string
-	expiration                 uint32
-	blockHeight                atomic.Uint32
-	medianBlockTime            atomic.Uint32
-	logger                     ulogger.Logger
-	batchID                    atomic.Uint64
-	storeBatcher               batcherIfc[batchStoreItem]
-	getBatcher                 batcherIfc[batchGetItem]
-	spendBatcher               batcherIfc[batchSpend]
-	outpointBatcher            batcherIfc[batchOutpoint]
-	incrementBatcher           batcherIfc[batchIncrement]
-	externalStore              blob.Store
-	utxoBatchSize              int
-	externalizeAllTransactions bool
-	externalTxCache            *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	ctx              context.Context // store the global context for things that run in the background
+	url              *url.URL
+	client           *uaerospike.Client
+	namespace        string
+	setName          string
+	expiration       uint32
+	blockHeight      atomic.Uint32
+	medianBlockTime  atomic.Uint32
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	batchID          atomic.Uint64
+	storeBatcher     batcherIfc[batchStoreItem]
+	getBatcher       batcherIfc[batchGetItem]
+	spendBatcher     batcherIfc[batchSpend]
+	outpointBatcher  batcherIfc[batchOutpoint]
+	incrementBatcher batcherIfc[batchIncrement]
+	externalStore    blob.Store
+	utxoBatchSize    int
+	externalTxCache  *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 }
 
-func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, aerospikeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
-	if gocore.Config().GetBool("aerospike_debug", true) {
+	if tSettings.Aerospike.Debug {
 		asl.Logger.SetLevel(asl.DEBUG)
 	}
 
@@ -120,7 +121,7 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 
 	// It's very dangerous to change this number after a node has been running for a while
 	// Do not change this value after starting, it is used to calculate the offset for the output
-	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 128)
+	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
 	if utxoBatchSize < 1 || utxoBatchSize > math.MaxUint32 {
 		return nil, errors.NewInvalidArgumentError("utxoBatchSize must be between 1 and %d", math.MaxUint32)
 	}
@@ -129,27 +130,26 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 	// the store. Transactions with lots of outputs, being spent at the same time, benefit greatly from this cache,
 	// since external cache takes care of concurrent reads to the same transaction.
 	var externalTxCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	if gocore.Config().GetBool("utxostore_useExternalTxCache", true) {
+	if tSettings.UtxoStore.UseExternalTxCache {
 		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
 	}
 
 	s := &Store{
-		ctx:                        ctx,
-		url:                        aerospikeURL,
-		client:                     client,
-		namespace:                  namespace,
-		setName:                    setName,
-		expiration:                 expiration,
-		logger:                     logger,
-		externalStore:              externalStore,
-		utxoBatchSize:              utxoBatchSize,
-		externalizeAllTransactions: gocore.Config().GetBool("utxostore_externalizeAllTransactions", false),
-		externalTxCache:            externalTxCache,
+		ctx:             ctx,
+		url:             aerospikeURL,
+		client:          client,
+		namespace:       namespace,
+		setName:         setName,
+		expiration:      expiration,
+		logger:          logger,
+		settings:        tSettings,
+		externalStore:   externalStore,
+		utxoBatchSize:   utxoBatchSize,
+		externalTxCache: externalTxCache,
 	}
 
-	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
-	storeBatchDurationStr, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
-	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
+	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
+	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
 
 	if storeBatchSize > 1 {
 		s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)

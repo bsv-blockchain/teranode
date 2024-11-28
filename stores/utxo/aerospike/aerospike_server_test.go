@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -1283,9 +1284,11 @@ func initAerospike(t *testing.T) (*aerospike.Client, *Store, context.Context, fu
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
+	tSettings := test.CreateBaseTestSettings()
+
 	// ubsv db client
 	var db *Store
-	db, err = New(ctx, ulogger.TestLogger{}, aeroURL)
+	db, err = New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
 	require.NoError(t, err)
 
 	db.client = &uaerospike.Client{Client: client}

@@ -70,6 +70,7 @@ type AerospikeSettings struct {
 	UseDefaultBasePolicies bool
 	UseDefaultPolicies     bool
 	WarmUp                 bool
+	StoreBatcherDuration   time.Duration
 }
 
 type AlertSettings struct {
@@ -234,6 +235,8 @@ type UtxoStoreSettings struct {
 	UtxoBatchSize              int
 	GetBatcherSize             int
 	DBTimeout                  time.Duration
+	UseExternalTxCache         bool
+	ExternalizeAllTransactions bool
 }
 
 type P2PSettings struct {

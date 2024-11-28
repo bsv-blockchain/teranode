@@ -129,3 +129,20 @@ func TestGetDuration(t *testing.T) {
 		t.Errorf("Expected 0, got %v", result)
 	}
 }
+
+func TestGetDuration_invalid(t *testing.T) {
+	gocore.Config().Set("test_duration", "5000ms")
+	defer gocore.Config().Unset("test_duration")
+
+	result := getDuration("test_duration", 0)
+
+	expected := 5 * time.Second
+	if result != expected {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+
+	result = getDuration("missing_key", 0)
+	if result != 0 {
+		t.Errorf("Expected 0, got %v", result)
+	}
+}

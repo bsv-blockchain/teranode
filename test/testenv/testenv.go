@@ -294,7 +294,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	}
 
 	t.Logger.Infof("utxoStoreURL: %s", utxoStoreURL.String())
-	node.UtxoStore, err = utxostore.New(t.Context, t.Logger, utxoStoreURL)
+	node.UtxoStore, err = utxostore.New(t.Context, t.Logger, node.Settings, utxoStoreURL)
 
 	if err != nil {
 		return errors.NewConfigurationError("error creating utxostore %w", err)

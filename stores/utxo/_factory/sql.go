@@ -11,13 +11,13 @@ import (
 )
 
 func init() {
-	availableDatabases["postgres"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, settings.NewSettings(), url)
+	availableDatabases["postgres"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
+		return sql.New(ctx, logger, tSettings, url)
 	}
-	availableDatabases["sqlitememory"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, settings.NewSettings(), url)
+	availableDatabases["sqlitememory"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
+		return sql.New(ctx, logger, tSettings, url)
 	}
-	availableDatabases["sqlite"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
+	availableDatabases["sqlite"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
 		return sql.New(ctx, logger, settings.NewSettings(), url)
 	}
 }

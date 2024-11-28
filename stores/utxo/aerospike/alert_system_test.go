@@ -30,7 +30,7 @@ func TestAlertSystem(t *testing.T) {
 		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
 		key, aErr := aerospike.NewKey(db.namespace, db.setName, keySource)
 		require.NoError(t, aErr)
 
@@ -79,7 +79,7 @@ func TestAlertSystem(t *testing.T) {
 		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
 		key, err := aerospike.NewKey(db.namespace, db.setName, keySource)
 		require.NoError(t, err)
 
@@ -142,7 +142,7 @@ func TestAlertSystem(t *testing.T) {
 		}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(utxoRec.TxID, utxoRec.Vout/uint32(db.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(utxoRec.TxID, utxoRec.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
 		key, err := aerospike.NewKey(db.namespace, db.setName, keySource)
 		require.NoError(t, err)
 

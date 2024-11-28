@@ -109,7 +109,7 @@ func TestStore_getBinsToStore(t *testing.T) {
 	})
 }
 
-func setupStore(t *testing.T, client *aerospike.Client) *Store {
+func setupStore(_ *testing.T, client *aerospike.Client) *Store {
 	return &Store{
 		utxoBatchSize: 100,
 		externalStore: memory.New(),
@@ -153,10 +153,12 @@ func prepareBatchStoreItem(t *testing.T, s *Store, tx *bt.Tx, blockHeight uint32
 func TestStore_storeTransactionExternally(t *testing.T) {
 	ctx := context.Background()
 	client, db, _, deferFn := initAerospike(t)
+
 	defer deferFn()
 
 	t.Run("TestStore_storeTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
+
 		initPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -228,10 +230,12 @@ func TestStore_storeTransactionExternally(t *testing.T) {
 func TestStore_storePartialTransactionExternally(t *testing.T) {
 	ctx := context.Background()
 	client, db, _, deferFn := initAerospike(t)
+
 	defer deferFn()
 
 	t.Run("TestStore_storePartialTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
+
 		initPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")

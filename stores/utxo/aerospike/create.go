@@ -139,7 +139,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		external := s.externalizeAllTransactions
+		external := s.settings.UtxoStore.ExternalizeAllTransactions
 
 		// also check whether the tx is too big and needs to be stored externally
 		var extendedSize int
@@ -549,6 +549,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 
 		if err = s.client.PutBins(wPolicy, key, bins...); err != nil {
 			var aErr *aerospike.AerospikeError
+
 			ok := errors.As(err, &aErr)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {

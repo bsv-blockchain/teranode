@@ -51,6 +51,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, aErr)
 
 		cleanDB(t, client, key, tx)
+
 		db.utxoBatchSize = 1
 
 		// clean up the externalStore, if needed

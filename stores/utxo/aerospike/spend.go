@@ -138,7 +138,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	batchesByKey := make(map[*aerospike.Key][]aerospike.MapValue, len(batch))
 
 	for idx, bItem := range batch {
-		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize)) //nolint:gosec
 		keySourceStr := string(keySource)
 
 		if key, ok = aeroKeyMap[keySourceStr]; !ok {
@@ -189,10 +189,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 		for idx, bItem := range batch {
 			bItem.done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
-		}
-
-		// TODO should we return here?
-		// return
+		} // TODO should we return here?
 	}
 
 	start = stat.NewStat("BatchOperate").AddTime(start)

@@ -96,6 +96,7 @@ func NewSettings() *Settings {
 			UseDefaultBasePolicies: getBool("aerospike_useDefaultBasePolicies", false),
 			UseDefaultPolicies:     getBool("aerospike_useDefaultPolicies", false),
 			WarmUp:                 getBool("aerospike_warmUp", true),
+			StoreBatcherDuration:   getDuration("aerospike_storeBatcherDuration", 10*time.Millisecond),
 		},
 		Alert: AlertSettings{
 			GenesisKeys:   getMultiString("alert_genesis_keys", "|", []string{}),
@@ -250,7 +251,9 @@ func NewSettings() *Settings {
 			StoreBatcherSize:           getInt("utxostore_storeBatcherSize", 100),
 			UtxoBatchSize:              getInt("utxostore_utxoBatchSize", 0),
 			GetBatcherSize:             getInt("utxostore_getBatcherSize", 1),
-			DBTimeout:                  getDuration("utxostore_dbTimeoutMillis", 5*time.Second),
+			DBTimeout:                  getDuration("utxostore_dbTimeoutDuration", 5*time.Second),
+			UseExternalTxCache:         getBool("utxostore_useExternalTxCache", true),
+			ExternalizeAllTransactions: getBool("utxostore_externalizeAllTransactions", false),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:     getString("p2p_bestblock_topic", ""),
@@ -313,7 +316,7 @@ func NewSettings() *Settings {
 			ProcessTxMetaUsingStoreConcurrency:        getInt("subtreevalidation_processTxMetaUsingStore_Concurrency", 32),
 			ProcessTxMetaUsingStoreMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingStore_MissingTxThreshold", 1),
 			SubtreeFoundChConcurrency:                 getInt("subtreevalidation_subtreeFoundChConcurrency", 1),
-			SubtreeTTL:                                getDuration("subtreevalidation_subtreeTTL", 120*time.Minute),
+			SubtreeTTL:                                getDuration("subtreevalidation_subtreeTTLDuration", 120*time.Minute),
 			SubtreeTTLConcurrency:                     getInt("subtreevalidation_subtreeTTLConcurrency", 8),
 			SubtreeValidationTimeout:                  getInt("subtreevalidation_subtreeValidationTimeout", 1000),
 			SubtreeValidationAbandonThreshold:         getInt("subtreevalidation_subtree_validation_abandon_threshold", 1),
