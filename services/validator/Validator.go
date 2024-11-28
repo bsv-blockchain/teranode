@@ -254,7 +254,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 	}
 
-	if err = v.validateTransaction(ctx, tx, blockHeight); err != nil {
+	if err = v.validateTransaction(ctx, tx, blockHeight, validationOptions); err != nil {
 		return errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
@@ -581,7 +581,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 // validateTransaction performs transaction-level validation checks.
 // Ensures transaction is properly extended and meets all validation rules.
 // Returns error if validation fails.
-func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
+func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
@@ -598,7 +598,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	}
 
 	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransaction(tx, blockHeight)
+	return v.txValidator.ValidateTransaction(tx, blockHeight, validationOptions)
 }
 
 // feesToBtFeeQuote converts a minimum mining fee rate to a bt.FeeQuote structure.

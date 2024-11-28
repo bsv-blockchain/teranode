@@ -16,6 +16,10 @@ type Options struct {
 	// addTXToBlockAssembly determines whether transactions should be added to block assembly
 	// When true, validated transactions are forwarded to the block assembly process
 	addTXToBlockAssembly bool
+
+	// skipPolicyChecks determines whether policy checks should be skipped
+	// this is done when validating transaction from a block that has been mined
+	skipPolicyChecks bool
 }
 
 // Option defines a function type for setting options
@@ -75,10 +79,17 @@ func WithAddTXToBlockAssembly(add bool) Option {
 	}
 }
 
+func WithSkipPolicyChecks(skip bool) Option {
+	return func(o *Options) {
+		o.skipPolicyChecks = skip
+	}
+}
+
 // TxValidatorOptions defines configuration options specific to transaction validation
 type TxValidatorOptions struct {
 	// scriptInterpreter specifies which script interpreter implementation to use
 	scriptInterpreter TxInterpreter
+	skipPolicyChecks  bool
 }
 
 // TxValidatorOption defines a function type for setting transaction validator options
@@ -99,5 +110,11 @@ type TxValidatorOption func(*TxValidatorOptions)
 func WithTxValidatorInterpreter(interpreter TxInterpreter) TxValidatorOption {
 	return func(o *TxValidatorOptions) {
 		o.scriptInterpreter = interpreter
+	}
+}
+
+func WithTxValidatorSkipPolicyChecks(skip bool) TxValidatorOption {
+	return func(o *TxValidatorOptions) {
+		o.skipPolicyChecks = skip
 	}
 }

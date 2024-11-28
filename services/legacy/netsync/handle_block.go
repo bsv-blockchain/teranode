@@ -448,6 +448,7 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 				uint32(block.Height()),
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),
+				validator.WithSkipPolicyChecks(true),
 			)
 		})
 	}
@@ -487,7 +488,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
 				timeStart = time.Now()
-				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
+				//nolint:gosec
+				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
 
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
@@ -508,7 +510,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 					}()
 
 					// send to validation, but only if the parent is not in the same block
-					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
+					//nolint:gosec
+					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
 
 					return nil
 				})

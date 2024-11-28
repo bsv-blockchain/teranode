@@ -71,7 +71,7 @@ type TxValidatorI interface {
 	//   - blockHeight: The current block height for validation context
 	// Returns:
 	//   - error: Any validation errors encountered
-	ValidateTransaction(tx *bt.Tx, blockHeight uint32) error
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error
 }
 
 // TxValidator implements transaction validation logic
@@ -173,7 +173,7 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 //
 // Returns:
 //   - error: Any validation errors encountered
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
 		return nil
 	}
@@ -189,8 +189,10 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if err := tv.checkTxSize(txSize); err != nil {
-		return err
+	if !validationOptions.skipPolicyChecks {
+		if err := tv.checkTxSize(txSize); err != nil {
+			return err
+		}
 	}
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
@@ -212,7 +214,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	//    => This is a BCH only check, not applicable to BSV
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	if err := tv.sigOpsCheck(tx); err != nil {
+	if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
 		return err
 	}
 
@@ -229,8 +231,10 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
-		return err
+	if !validationOptions.skipPolicyChecks {
+		if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+			return err
+		}
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
@@ -332,10 +336,10 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 	return nil
 }
 
-func (tv *TxValidator) sigOpsCheck(tx *bt.Tx) error {
+func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {
 	maxSigOps := tv.settings.Policy.GetMaxTxSigopsCountsPolicy()
 
-	if maxSigOps == 0 {
+	if maxSigOps == 0 || validationOptions.skipPolicyChecks {
 		maxSigOps = int64(MaxTxSigopsCountPolicyAfterGenesis)
 	}
 

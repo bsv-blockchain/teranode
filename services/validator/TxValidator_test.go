@@ -180,7 +180,7 @@ func TestMaxTxSizePolicy(t *testing.T) {
 	tSettings.Policy.MaxTxSizePolicy = 10 // insanely low
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-	err := txValidator.ValidateTransaction(largeTx, 10000000)
+	err := txValidator.ValidateTransaction(largeTx, 10000000, &Options{})
 	if assert.Error(t, err) {
 		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
 	}

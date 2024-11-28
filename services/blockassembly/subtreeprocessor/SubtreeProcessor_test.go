@@ -382,7 +382,7 @@ func TestMoveUpBlock(t *testing.T) {
 
 	// this is to make sure the subtrees are added to the chain
 	for stp.txCount.Load() < 17 {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// there should be 4 chained subtrees
