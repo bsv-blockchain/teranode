@@ -182,7 +182,9 @@ func (u *Server) Start(ctx context.Context) error {
 				}
 
 				if block == nil {
-					u.logger.Infof("No new blocks to process, waiting...")
+					if u.settings.Block.BlockPersisterPersistSleep >= time.Minute {
+						u.logger.Infof("No new blocks to process, waiting...")
+					}
 
 					time.Sleep(u.settings.Block.BlockPersisterPersistSleep) // Sleep when no blocks available
 
