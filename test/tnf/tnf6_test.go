@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNFTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNFTestSuite) InitSuite() {
@@ -40,18 +40,14 @@ const (
 	miner3 = "/m3-asia/"
 )
 
-func (suite *TNFTestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
-}
-
 func (suite *TNFTestSuite) TearDownTest() {
 	// suite.BitcoinTestSuite.TearDownTest()
 }
 
 func (suite *TNFTestSuite) TestInvalidateBlock() {
+	cluster := suite.TeranodeTestEnv
+	ctx := cluster.Context
 	t := suite.T()
-	cluster := suite.Framework
 	logger := cluster.Logger
 	settingsMap := suite.SettingsMap
 
@@ -62,8 +58,6 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 			_ = cluster.Compose.Down(cluster.Context)
 		}
 	}()
-
-	ctx := cluster.Context
 
 	blockchainNode1 := cluster.Nodes[0].BlockchainClient
 	header1, meta1, _ := blockchainNode1.GetBestBlockHeader(ctx)
@@ -93,7 +87,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 
 	// Stage 2
 	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv2.tnf6.stage2"
-	if err := cluster.RestartNodes(settingsMap); err != nil {
+	if err := cluster.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 

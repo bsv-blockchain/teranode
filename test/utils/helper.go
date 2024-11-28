@@ -889,6 +889,43 @@ func UseCoinbaseUtxo(ctx context.Context, node tf.BitcoinNode, coinbaseTx *bt.Tx
 
 // tx := response.Tx
 
+func UseCoinbaseUtxoV2(ctx context.Context, node tenv.TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
+	nilHash := chainhash.Hash{}
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err := newTx.FromUTXOs(utxo)
+
+	if err != nil {
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
+	}
+
+	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
 // TODO: Use tenv
 func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000

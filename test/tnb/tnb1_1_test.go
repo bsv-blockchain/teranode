@@ -11,21 +11,20 @@
 // 5. Check if all the transaction hashes are included in the subtree
 // TODO: Send the same transactions through TxDistributor and check if they are included in each nodes' subtree
 
-//How to run manually:
+// How to run manually:
 // cd test/tnb
 // SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags tnbtests
 
 package tnb
 
 import (
-	"context"
 	"io"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -34,32 +33,31 @@ import (
 )
 
 type TNB1TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNB1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnb1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnb1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnb1Test",
+		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tnb1Test",
+		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tnb1Test",
+		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tnb1Test",
 	}
 }
 
-func (suite *TNB1TestSuite) SetupTest() {
+func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
 // func (suite *TNB1TestSuite) TearDownTest() {
 // }
 
 func (suite *TNB1TestSuite) TestSendTxsInBatch() {
-
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	blockchainNode0 := framework.Nodes[0].BlockchainClient
-	logger := framework.Logger
+	blockchainNode0 := testEnv.Nodes[0].BlockchainClient
+	logger := testEnv.Logger
 
 	blockchainSubscription, err := blockchainNode0.Subscribe(ctx, "test-tnb1")
 
@@ -68,10 +66,9 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 		return
 	}
 
-
-
 	var subtreeReader io.ReadCloser
-	txHashesFromSubtree := make([]chainhash.Hash,0)
+
+	txHashesFromSubtree := make([]chainhash.Hash, 0)
 
 	go func() {
 		for {
@@ -81,9 +78,9 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 			case notification := <-blockchainSubscription:
 				if notification.Type == model.NotificationType_Subtree {
 					subtreeHash, err := chainhash.NewHash(notification.Hash)
-					framework.Logger.Infof("subtreeHash: %v", subtreeHash)
+					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
-					subtreeReader, err = framework.Nodes[0].SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+					subtreeReader, err = testEnv.Nodes[0].SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 					require.NoError(t, err)
 
 					defer func() {
@@ -97,28 +94,27 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 						t.Errorf("error deserializing subtree: %v", err)
 					}
 
-					framework.Logger.Infof("subtree: %v", subtree)
+					testEnv.Logger.Infof("subtree: %v", subtree)
 
-					framework.Logger.Infof("subtree length: %v", len(subtree.Nodes))
+					testEnv.Logger.Infof("subtree length: %v", len(subtree.Nodes))
 
 					for i := 0; i < len(subtree.Nodes); i++ {
 						txHashesFromSubtree = append(txHashesFromSubtree, subtree.Nodes[i].Hash)
 					}
 
-					framework.Logger.Infof("txHashes from subtree: %v", txHashesFromSubtree)
-
+					testEnv.Logger.Infof("txHashes from subtree: %v", txHashesFromSubtree)
 				}
 			}
 		}
 	}()
 
 	for i := 0; i < 1; i++ {
-		txHashesSent, err := helper.CreateAndSendRawTxsConcurrently(ctx, framework.Nodes[0], 10)
+		txHashesSent, err := helper.CreateAndSendTxsConcurrently(ctx, testEnv.Nodes[0], 10)
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 
-		baClient := framework.Nodes[0].BlockassemblyClient
+		baClient := testEnv.Nodes[0].BlockassemblyClient
 		_, err = helper.GetMiningCandidate(ctx, baClient, logger)
 
 		if err != nil {
@@ -127,7 +123,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 
 		time.Sleep(120 * time.Second)
 
-		framework.Logger.Infof("txHashesSent sent: %v", txHashesSent)
+		testEnv.Logger.Infof("txHashesSent sent: %v", txHashesSent)
 
 		// Verify that all transactions in txHashesSent are included in txHashesFromSubtree
 		for _, txHash := range txHashesSent {

@@ -15,22 +15,9 @@ jobs:
     strategy:
       matrix:
         test_config:
-          - test_dir: "test/tna"
-            test_tags: "tnatests"
-            settings_context: "docker.ci.tc1.run"
-            report_name: "tna-test-report.json"
           - test_dir: "test/tnc"
-            test_tags: "tnctests"
-            settings_context: "docker.ci.tc1.run"
+            test_tags: "tnc"
             report_name: "tnc-test-report.json"
-          - test_dir: "test/tnj"
-            test_tags: "tnjtests"
-            report_name: "tnj-test-report.json"
-            settings_context: "docker.ci.tc1.run"
-          - test_dir: "test/fsm"
-            test_tags: "functional"
-            report_name: "fsm-test-report.json"
-            settings_context: "docker.ci.tc1.run"
 
     steps:
       - name: Checkout code
@@ -55,14 +42,12 @@ jobs:
           cache: "false"
 
       - name: Build Docker Image
-        run: docker compose -f docker-compose.ci.build.yml build
+        run: docker compose -f docker-compose.e2etest.yml build
 
       - name: Run Tests
         run: |
-          docker compose -f docker-compose.ci.build.yml up -d
           make install-tools
           cd ${{ matrix.test_config.test_dir }} && \
-          SETTINGS_CONTEXT=${{ matrix.test_config.settings_context || env.SETTINGS_CONTEXT_DEFAULT }} \
           go test -v -tags ${{ matrix.test_config.test_tags }} -json | \
           go-ctrf-json-reporter -output ../../${{ matrix.test_config.report_name }} --verbose
         env:

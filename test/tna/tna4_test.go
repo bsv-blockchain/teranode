@@ -3,15 +3,12 @@
 package tna
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -23,48 +20,52 @@ import (
 )
 
 type TNA4TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNA4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tna1Test",
 	}
 }
 
-func (suite *TNA4TestSuite) SetupTest() {
+func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
+
 func (suite *TNA4TestSuite) TestBroadcastPoW() {
 	// Test setup
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
-	hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+	hashes, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 10)
+
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
+
 	fmt.Printf("Hashes in created block: %v\n", hashes)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
+	baClient := testEnv.Nodes[0].BlockassemblyClient
+
 	var block, blockerr = helper.MineBlock(ctx, baClient, logger)
+
 	if blockerr != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	time.Sleep(10 * time.Second)
 
-	blockNode0, blockErr0 := framework.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	blockNode0, blockErr0 := testEnv.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
 
-	blockNode1, blockErr1 := framework.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	blockNode1, blockErr1 := testEnv.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block))
 
-	blockNode2, blockErr2 := framework.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	blockNode2, blockErr2 := testEnv.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
 
 	if blockErr0 != nil {
 		t.Errorf("Failure on blockchain on Node0: %v", err)
@@ -81,33 +82,29 @@ func (suite *TNA4TestSuite) TestBroadcastPoW() {
 	if !blockNode0 {
 		t.Errorf("Failed to retrieve new mined block on Node0: %v", blockErr0)
 	}
+
 	if !blockNode1 {
 		t.Errorf("Failed to retrieve new mined block on Node1: %v", blockErr1)
 	}
+
 	if !blockNode2 {
 		t.Errorf("Failed to retrieve new mined block on Node2: %v", blockErr2)
 	}
 }
 
 func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
 	// Send transactions
+	txDistributor := testEnv.Nodes[0].DistributorClient
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
-
-	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
@@ -128,6 +125,7 @@ func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
 	if err != nil {
 		t.Errorf("Failed to request funds: %v", err)
 	}
+
 	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
@@ -146,6 +144,7 @@ func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
+
 	if err != nil {
 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
@@ -171,15 +170,16 @@ func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
 	// Mine block on each node and check if the block exists
 
 	for i := 0; i < 3; i++ {
-		baClient := framework.Nodes[i].BlockassemblyClient
+		baClient := testEnv.Nodes[i].BlockassemblyClient
 		blockHash, err := helper.MineBlock(ctx, baClient, logger)
+
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
 		}
 
 		time.Sleep(5 * time.Second)
 
-		blockNode, blockErr := framework.Nodes[i].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(blockHash))
+		blockNode, blockErr := testEnv.Nodes[i].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(blockHash))
 
 		if blockErr != nil {
 			t.Errorf("Failure on blockchain on Node0: %v", err)
@@ -193,52 +193,60 @@ func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
 
 func (suite *TNA4TestSuite) TestMultipleMining() {
 	// Test setup
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
+	logger := testEnv.Logger
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
-
-	hashes0, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+	hashes0, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 10)
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
+
 	fmt.Printf("Hashes in created block: %v\n", hashes0)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
+	baClient := testEnv.Nodes[0].BlockassemblyClient
+
 	var block0, blockerr0 = helper.MineBlock(ctx, baClient, logger)
+
 	if blockerr0 != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	hashes1, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[1], 10)
+	hashes1, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[1], 10)
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
+
 	fmt.Printf("Hashes in created block: %v\n", hashes1)
 
-	baClient1 := framework.Nodes[1].BlockassemblyClient
+	baClient1 := testEnv.Nodes[1].BlockassemblyClient
+
 	var block1, blockerr1 = helper.MineBlock(ctx, baClient1, logger)
+
 	if blockerr1 != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	hashes2, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[2], 10)
+	hashes2, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[2], 10)
+
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
+
 	fmt.Printf("Hashes in created block: %v\n", hashes2)
 
-	baClient2 := framework.Nodes[2].BlockassemblyClient
+	baClient2 := testEnv.Nodes[2].BlockassemblyClient
+
 	var block2, blockerr2 = helper.MineBlock(ctx, baClient2, logger)
+
 	if blockerr2 != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	blockNode0, blockErr0 := framework.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block0))
-	blockNode1, blockErr1 := framework.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block1))
-	blockNode2, blockErr2 := framework.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block2))
+	blockNode0, blockErr0 := testEnv.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block0))
+	blockNode1, blockErr1 := testEnv.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block1))
+	blockNode2, blockErr2 := testEnv.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block2))
 
 	if blockErr0 != nil {
 		t.Errorf("Failure on blockchain on Node0: %v", err)
@@ -255,9 +263,11 @@ func (suite *TNA4TestSuite) TestMultipleMining() {
 	if !blockNode0 {
 		t.Errorf("Failed to retrieve new mined block on Node0: %v", blockErr0)
 	}
+
 	if !blockNode1 {
 		t.Errorf("Failed to retrieve new mined block on Node1: %v", blockErr1)
 	}
+
 	if !blockNode2 {
 		t.Errorf("Failed to retrieve new mined block on Node2: %v", blockErr2)
 	}

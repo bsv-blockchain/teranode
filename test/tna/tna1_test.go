@@ -3,7 +3,6 @@
 package tna
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -19,29 +18,32 @@ import (
 )
 
 type TNA1TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNA1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tna1Test",
 	}
 }
 
 func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
 func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	// Test setup
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
+
+	blockchainClientNode0 := testEnv.Nodes[0].BlockchainClient
+
 	var hashes []*chainhash.Hash
+
 	var found int
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
@@ -59,9 +61,10 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 				if notification.Type == model.NotificationType_Subtree {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
-					hashes = append(hashes, hash)
-					fmt.Println("Length of hashes:", len(hashes))
 
+					hashes = append(hashes, hash)
+
+					fmt.Println("Length of hashes:", len(hashes))
 				} else {
 					fmt.Println("other notifications than subtrees")
 					fmt.Println(notification.Type)
@@ -70,10 +73,12 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		}
 	}()
 
-	hashesTx, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 20)
+	hashesTx, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 20)
+
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
+
 	fmt.Printf("Hashes in created block: %v\n", hashesTx)
 
 	time.Sleep(2 * time.Second)
@@ -86,21 +91,23 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 	fmt.Println("subtree notification received")
 
-	baseDir := "../../data"
+	baseDir := "../../data/test"
 
 	fmt.Println("num of subtrees:", len(hashes))
 
 	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
 	for _, subtreeHash := range hashes {
 		fmt.Println("Subtree hash:", subtreeHash)
-		for i := 2; i <= 3; i++ {
 
+		for i := 2; i <= 3; i++ {
 			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
 			fmt.Println(subDir)
 			filePath := filepath.Join(baseDir, subDir, subtreeHash.String())
 			fmt.Println(filePath)
+
 			if _, err := os.Stat(filePath); err == nil {
 				fmt.Printf("Subtree %s exists.\n", filePath)
+
 				found += 1
 			} else if os.IsNotExist(err) {
 				fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash.String(), subDir)

@@ -1,51 +1,52 @@
-//go:build tnctests
+//go:build tnc
+
+// How to run this test manually:
+// $ cd test/tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags tnc
 
 package tnc
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNC1TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNC1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnc1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnc1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnc1Test",
+		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tnc1Test",
+		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tnc1Test",
+		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tnc1Test",
 	}
 }
 
-func (suite *TNC1TestSuite) SetupTest() {
+func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
 // TNC-1.1
 func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	node0 := framework.Nodes[0]
+	node0 := testEnv.Nodes[0]
 	blockchainClientNode0 := node0.BlockchainClient
+
 	var hashes []*chainhash.Hash
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-tnc1")
 	if err != nil {
@@ -62,7 +63,9 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 				if notification.Type == model.NotificationType_Subtree {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
+
 					hashes = append(hashes, hash)
+
 					fmt.Println("Length of hashes:", len(hashes))
 				} else {
 					fmt.Println("other notifications than subtrees")
@@ -72,14 +75,14 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 		}
 	}()
 
-	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 10000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
 
-	mc0, err0 := helper.GetMiningCandidate(ctx, framework.Nodes[0].BlockassemblyClient, logger)
-	mc1, err1 := helper.GetMiningCandidate(ctx, framework.Nodes[1].BlockassemblyClient, logger)
-	mc2, err2 := helper.GetMiningCandidate(ctx, framework.Nodes[2].BlockassemblyClient, logger)
+	mc0, err0 := helper.GetMiningCandidate(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
+	mc1, err1 := helper.GetMiningCandidate(ctx, testEnv.Nodes[1].BlockassemblyClient, logger)
+	mc2, err2 := helper.GetMiningCandidate(ctx, testEnv.Nodes[2].BlockassemblyClient, logger)
 	mp0 := utils.ReverseAndHexEncodeSlice(mc0.GetMerkleProof()[0])
 	mp1 := utils.ReverseAndHexEncodeSlice(mc1.GetMerkleProof()[0])
 	mp2 := utils.ReverseAndHexEncodeSlice(mc2.GetMerkleProof()[0])
@@ -105,31 +108,31 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	if err0 != nil {
 		t.Errorf("Failed to get mining candidate 0: %v", err0)
 	}
+
 	if err1 != nil {
 		t.Errorf("Failed to get mining candidate 1: %v", err1)
 	}
+
 	if err2 != nil {
 		t.Errorf("Failed to get mining candidate 2: %v", err2)
 	}
-
 }
 
 // TNC-1.2
 func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
-	ctx := context.Background()
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
-	ba := framework.Nodes[0].BlockassemblyClient
-	bc := framework.Nodes[0].BlockchainClient
+	logger := testEnv.Logger
+	ba := testEnv.Nodes[0].BlockassemblyClient
+	bc := testEnv.Nodes[0].BlockchainClient
 
-	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 10000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
 
-	block0bytes, errMine0 := helper.MineBlock(ctx, framework.Nodes[0].BlockassemblyClient, logger)
+	block0bytes, errMine0 := helper.MineBlock(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
 	if errMine0 != nil {
 		t.Errorf("Failed to mine block: %v", errMine0)
 	}
@@ -144,7 +147,7 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 		t.Errorf("error getting best block header: %v", errBbh)
 	}
 
-	block0, err0 := framework.Nodes[0].BlockchainClient.GetBlock(ctx, (*chainhash.Hash)(block0bytes))
+	block0, err0 := testEnv.Nodes[0].BlockchainClient.GetBlock(ctx, (*chainhash.Hash)(block0bytes))
 	if err0 != nil {
 		t.Errorf("Failed to get block: %v", err0)
 	}
@@ -162,15 +165,14 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 
 // TNC-1.3-TC-01
 func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
-	ba := framework.Nodes[0].BlockassemblyClient
-	bc := framework.Nodes[0].BlockchainClient
+	ba := testEnv.Nodes[0].BlockassemblyClient
+	bc := testEnv.Nodes[0].BlockchainClient
 
 	mc0, errmc0 := ba.GetMiningCandidate(ctx)
 	if errmc0 != nil {
@@ -184,10 +186,13 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	if errbb != nil {
 		t.Errorf("Error getting best block")
 	}
-	block, errblock := bc.GetBlock(ctx, bbheader.Hash())
+
+	block, errblock := bc.GetBlockByHeight(ctx, bbhmeta.Height)
+
 	if errblock != nil {
 		t.Errorf("Error getting block by height")
 	}
+
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()
 	logger.Infof("Amount inside block coinbase tx: %d", amount)
@@ -199,16 +204,15 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 
 // TNC-1.3-TC-02
 func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
 
-	ba := framework.Nodes[0].BlockassemblyClient
+	ba := testEnv.Nodes[0].BlockassemblyClient
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
-	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 9000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 9000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
@@ -221,7 +225,7 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	coinbaseValueBlock := mc0.CoinbaseValue
 	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
-	block, errblock := helper.GetBestBlock(ctx, framework.Nodes[0])
+	block, errblock := helper.GetBestBlockV2(ctx, testEnv.Nodes[0])
 	if errblock != nil {
 		t.Errorf("Error getting best block")
 	}

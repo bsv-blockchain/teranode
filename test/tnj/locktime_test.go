@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	setup "github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -26,7 +25,7 @@ import (
 )
 
 type TNJLockTimeTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 type LockTimeScenario struct {
@@ -40,7 +39,8 @@ type LockTimeScenario struct {
 func getFutureLockTime(daysAhead int) uint32 {
 	now := time.Now()
 	futureTime := now.Add(time.Duration(daysAhead*24) * time.Hour)
-	return uint32(futureTime.Unix())
+
+	return uint32(futureTime.Unix()) //nolint:gosec
 }
 
 func (suite *TNJLockTimeTestSuite) TestLocktimeScenarios() {
@@ -87,13 +87,11 @@ func (suite *TNJLockTimeTestSuite) TestLocktimeScenarios() {
 // Common logic function to handle each scenario
 func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario) {
 	t := suite.T()
-	framework := suite.Framework
-	ctx := framework.Context
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	url := "http://localhost:18090"
 
-	// Logger setup
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -101,7 +99,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		distributor.WithFailureTolerance(0),
 	)
 
-	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 
 	// Generate private keys and addresses
@@ -157,12 +155,12 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
+	baClient := testEnv.Nodes[0].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	require.NoError(t, err)
 
-	blockStore := framework.Nodes[0].Blockstore
-	blockchainClient := framework.Nodes[0].BlockchainClient
+	blockStore := testEnv.Nodes[0].Blockstore
+	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
 
@@ -173,7 +171,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 		require.NoError(t, err)
 
 		if bl {

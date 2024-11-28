@@ -3,14 +3,11 @@
 package tna
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -21,40 +18,35 @@ import (
 )
 
 type TNA2TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNA2TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tna1Test",
 	}
 }
 
 func (suite *TNA2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
 func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+	logger := testEnv.Logger
 
 	// Send transactions
+	txDistributor := testEnv.Nodes[0].DistributorClient
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
-
-	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
@@ -75,6 +67,7 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 	if err != nil {
 		t.Errorf("Failed to request funds: %v", err)
 	}
+
 	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
@@ -93,6 +86,7 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
+
 	if err != nil {
 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
@@ -117,19 +111,19 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 
 	// If Block Assembly removes correctly the Tx, it means that Tx exists
 
-	errTx0 := framework.Nodes[0].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
+	errTx0 := testEnv.Nodes[0].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
 
 	if errTx0 != nil {
 		t.Errorf("Error Tx0 not present: %v", errTx0)
 	}
 
-	errTx1 := framework.Nodes[1].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
+	errTx1 := testEnv.Nodes[1].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
 
 	if errTx1 != nil {
 		t.Errorf("Error Tx1 not present: %v", errTx1)
 	}
 
-	errTx2 := framework.Nodes[2].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
+	errTx2 := testEnv.Nodes[2].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
 
 	if errTx2 != nil {
 		t.Errorf("Error Tx2 not present: %v", errTx2)

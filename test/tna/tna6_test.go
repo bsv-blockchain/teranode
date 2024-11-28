@@ -3,36 +3,36 @@
 package tna
 
 import (
-	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNA6TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TNA6TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
 	}
 }
 
-func (suite *TNA6TestSuite) SetupTest() {
+func (suite *TNA4TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
+
 func (suite *TNA6TestSuite) TestAcceptanceNextBlock() {
-	ctx := context.Background()
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
 	t := suite.T()
-	framework := suite.Framework
-	ba := framework.Nodes[0].BlockassemblyClient
-	bc := framework.Nodes[0].BlockchainClient
+	ba := testEnv.Nodes[0].BlockassemblyClient
+	bc := testEnv.Nodes[0].BlockchainClient
 	miningCandidate, err := ba.GetMiningCandidate(ctx)
 
 	if err != nil {

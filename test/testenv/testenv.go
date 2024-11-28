@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/settings"
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	bcs "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
@@ -33,20 +34,22 @@ type TeranodeTestEnv struct {
 }
 
 type TeranodeTestClient struct {
-	Name                string
-	SettingsContext     string
-	CoinbaseClient      cb.Client
-	BlockchainClient    bc.ClientI
-	BlockassemblyClient ba.Client
-	DistributorClient   distributor.Distributor
-	Blockstore          blob.Store
-	SubtreeStore        blob.Store
-	BlockstoreURL       *url.URL
-	UtxoStore           *utxostore.Store
-	SubtreesKafkaURL    *url.URL
-	RPCURL              string
-	IPAddress           string
-	Settings            *settings.Settings
+	Name                   string
+	SettingsContext        string
+	CoinbaseClient         cb.Client
+	BlockchainClient       bc.ClientI
+	BlockassemblyClient    ba.Client
+	DistributorClient      distributor.Distributor
+	Blockstore             blob.Store
+	SubtreeStore           blob.Store
+	BlockstoreURL          *url.URL
+	UtxoStore              *utxostore.Store
+	SubtreesKafkaURL       *url.URL
+	RPCURL                 string
+	IPAddress              string
+	Settings               *settings.Settings
+	BlockChainDB           bcs.Store
+	DefaultSettingsContext string
 }
 
 // NewTeraNodeTestEnv creates a new test environment with the provided Compose file paths.
@@ -84,13 +87,15 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 
 		nodeNames := []string{"ubsv1", "ubsv2", "ubsv3"}
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+		defaultSettings := []string{"docker.ubsv1.test", "docker.ubsv2.test", "docker.ubsv3.test"}
 
-		for _, key := range order {
+		for idx, key := range order {
 			os.Setenv("SETTINGS_CONTEXT", envSettings[key])
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
-				SettingsContext: envSettings[key],
-				Name:            nodeNames[len(t.Nodes)],
-				Settings:        settings.NewSettings(),
+				DefaultSettingsContext: defaultSettings[idx],
+				SettingsContext:        envSettings[key],
+				Name:                   nodeNames[len(t.Nodes)],
+				Settings:               settings.NewSettings(),
 			})
 
 			os.Setenv("SETTINGS_CONTEXT", "")
@@ -250,7 +255,7 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 }
 
 func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
-	blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.context.testrunner", node.SettingsContext))
+	blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.context.testrunner", node.DefaultSettingsContext))
 	// filePathMappedVolume, err, found := gocore.Config().GetURL(fmt.Sprintf("filePathMappedVolume.%s", node.SettingsContext))
 	if err != nil {
 		return errors.NewConfigurationError("error getting mapped volume url: %w", err)
@@ -288,7 +293,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 	node.SubtreeStore = subtreeStore
 
-	utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.context.testrunner", node.SettingsContext))
+	utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.context.testrunner", node.DefaultSettingsContext))
 	if err != nil {
 		return errors.NewConfigurationError("error creating utxostore %w", err)
 	}
@@ -299,6 +304,21 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	if err != nil {
 		return errors.NewConfigurationError("error creating utxostore %w", err)
 	}
+
+	blockchainStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s.context.testrunner", node.DefaultSettingsContext))
+
+	if err != nil {
+		t.Logger.Errorf("Error bcs: %v", err)
+	}
+
+	t.Logger.Infof("blockchainStoreURL: %s", blockchainStoreURL.String())
+
+	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL)
+	if err != nil {
+		return errors.NewConfigurationError("error creating blockchain store %w", err)
+	}
+
+	node.BlockChainDB = blockchainStore
 
 	return nil
 }
