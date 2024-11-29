@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestBlock tests the MsgBlock API.
@@ -482,6 +481,15 @@ func TestBlockSerializeSize(t *testing.T) {
 		}
 	}
 }
+
+// func TestDeserializeBlock(t *testing.T) {
+// 	blockBytes, err := os.ReadFile("../testdata/0000000053840de998cab562f20fc0c432074b2ac01047d53f48a81207bd08f6.bin")
+// 	require.NoError(t, err)
+//
+// 	block := MsgBlock{}
+// 	err = block.Deserialize(bytes.NewReader(blockBytes))
+// 	require.NoError(t, err)
+// }
 
 // blockOne is the first block in the mainnet block chain.
 var blockOne = MsgBlock{

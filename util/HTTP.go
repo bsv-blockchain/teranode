@@ -3,11 +3,11 @@ package util
 import (
 	"bytes"
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/ordishs/gocore"
 )
 
@@ -60,7 +60,7 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 	}
 
 	// If there is a request body assume we want a POST and write request body
-	if len(requestBody) > 0 {
+	if len(requestBody) > 0 && requestBody[0] != nil {
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 		req.Method = http.MethodPost
 	}

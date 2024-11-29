@@ -54,7 +54,9 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 			return err
 		}
 
-		r, err := h.repository.GetLegacyBlockReader(c.Request().Context(), hash)
+		wireBlock := c.QueryParam("wire") != ""
+
+		r, err := h.repository.GetLegacyBlockReader(c.Request().Context(), hash, wireBlock)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -55,6 +56,8 @@ var (
 	tx3 = newTx(3)
 	tx4 = newTx(4)
 	tx5 = newTx(5)
+	tx6 = newTx(6)
+	tx7 = newTx(7)
 
 	hash0 = tx0.TxIDChainHash()
 	hash1 = tx1.TxIDChainHash()
@@ -62,6 +65,8 @@ var (
 	hash3 = tx3.TxIDChainHash()
 	hash4 = tx4.TxIDChainHash()
 	hash5 = tx5.TxIDChainHash()
+	hash6 = tx6.TxIDChainHash()
+	hash7 = tx7.TxIDChainHash()
 )
 
 func newTx(lockTime uint32) *bt.Tx {
@@ -96,16 +101,22 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		var wg sync.WaitGroup
 
-		wg.Add(1)
+		wg.Add(2)
 
 		go func() {
-			subtreeRequest := <-testItems.newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.NotNil(t, subtree)
-			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-			assert.Len(t, subtree.Nodes, 4)
-			assert.Equal(t, uint64(666), subtree.Fees)
-			wg.Done()
+			for i := 0; i < 2; i++ {
+				subtreeRequest := <-testItems.newSubtreeChan
+				subtree := subtreeRequest.Subtree
+				assert.NotNil(t, subtree)
+
+				if i == 0 {
+					assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+				}
+
+				assert.Len(t, subtree.Nodes, 4)
+				assert.Equal(t, uint64(666), subtree.Fees)
+				wg.Done()
+			}
 		}()
 
 		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
@@ -122,27 +133,39 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 110})
 
 		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 220})
+
+		_, err = testItems.utxoStore.Create(ctx, tx6, 0)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash6, Fee: 330})
+
+		_, err = testItems.utxoStore.Create(ctx, tx7, 0)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash7, Fee: 6})
 
 		wg.Wait()
 
+		// need to wait for the txCount to be updated after the subtree notification was fired off
+		time.Sleep(10 * time.Millisecond)
+
 		// Check the state of the SubtreeProcessor
-		assert.Equal(t, 2, testItems.blockAssembler.subtreeProcessor.SubtreeCount())
-		assert.Equal(t, uint64(5), testItems.blockAssembler.subtreeProcessor.TxCount())
+		assert.Equal(t, 3, testItems.blockAssembler.subtreeProcessor.SubtreeCount())
+		assert.Equal(t, uint64(7), testItems.blockAssembler.subtreeProcessor.TxCount())
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtrees)
-		assert.Equal(t, uint64(5000000666), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint64(5000001332), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
-		assert.Len(t, subtrees, 1)
+		assert.Len(t, subtrees, 2)
 		assert.Len(t, subtrees[0].Nodes, 4)
+		assert.Len(t, subtrees[1].Nodes, 4)
 
 		// mine block
 

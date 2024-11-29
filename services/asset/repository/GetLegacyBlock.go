@@ -31,7 +31,9 @@ import (
 // Returns:
 //   - *io.PipeReader: Reader for streaming block data
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash) (*io.PipeReader, error) {
+func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error) {
+	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
+
 	block, err := repo.GetBlockByHash(ctx, hash)
 	if err != nil {
 		return nil, err
@@ -41,7 +43,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		if err := repo.writeLegacyBlockHeader(block, w); err != nil {
+		err := repo.writeLegacyBlockHeader(w, block, returnWireBlock)
+		if err != nil {
 			_ = w.Close()
 			_ = r.CloseWithError(err)
 
@@ -49,8 +52,13 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		}
 
 		if len(block.Subtrees) == 0 {
+			// write number of transactions, which is 1 for only the coinbase tx
+			if _, err = w.Write(bt.VarInt(1)); err != nil {
+				return err
+			}
+
 			// Write the coinbase tx
-			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+			if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
 				_ = w.Close()
 				_ = r.CloseWithError(err)
 
@@ -65,11 +73,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		}
 
 		for _, subtree := range block.Subtrees {
-			err := repo.writeTransactionsViaBlockStore(gCtx, block, subtree, w)
-			if err != nil {
+			if err = repo.writeTransactionsViaBlockStore(gCtx, w, block, subtree); err != nil {
 				// not available via block-store (BlockPersister), maybe this is a timing issue.
 				// try different approach - get the subtree/tx data using the subtree-store and utxo-store
-				err = repo.writeTransactionsViaSubtreeStore(gCtx, block, subtree, w)
+				err = repo.writeTransactionsViaSubtreeStore(gCtx, w, block, subtree)
 			}
 
 			if err != nil {
@@ -98,18 +105,23 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 //
 // Returns:
 //   - error: Any error encountered during writing
-func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) error {
-	// write bitcoin block magic number
-	if _, err := w.Write([]byte{0xf9, 0xbe, 0xb4, 0xd9}); err != nil {
-		return err
-	}
+func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, returnWireBlock bool) error {
+	txCountVarInt := bt.VarInt(block.TransactionCount)
+	txCountVarIntLen := len(txCountVarInt)
 
-	// write the block size
-	sizeInBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sizeInBytes, uint32(block.SizeInBytes)) // nolint:gosec
+	if !returnWireBlock {
+		// write bitcoin block magic number
+		if _, err := w.Write([]byte{0xf9, 0xbe, 0xb4, 0xd9}); err != nil {
+			return err
+		}
 
-	if _, err := w.Write(sizeInBytes); err != nil {
-		return err
+		// write the block size
+		sizeInBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(sizeInBytes, uint32(block.SizeInBytes+uint64(model.BlockHeaderSize+txCountVarIntLen))) // nolint:gosec
+
+		if _, err := w.Write(sizeInBytes); err != nil {
+			return err
+		}
 	}
 
 	// write the 80 byte block header
@@ -118,7 +130,7 @@ func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) 
 	}
 
 	// write number of transactions
-	if _, err := w.Write(bt.VarInt(block.TransactionCount)); err != nil {
+	if _, err := w.Write(txCountVarInt); err != nil {
 		return err
 	}
 
@@ -135,7 +147,7 @@ func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) 
 //
 // Returns:
 //   - error: Any error encountered during writing
-func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
+func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *io.PipeWriter, _ *model.Block, subtreeHash *chainhash.Hash) error {
 	if subtreeReader, err := repo.GetSubtreeDataReader(ctx, subtreeHash); err != nil {
 		return err
 	} else {
@@ -163,7 +175,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 //
 // Returns:
 //   - error: Any error encountered during writing
-func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
+func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w *io.PipeWriter, block *model.Block, subtreeHash *chainhash.Hash) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)

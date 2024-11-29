@@ -272,9 +272,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					err = stp.addNode(txReq.node, false)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
+					} else {
+						stp.txCount.Add(1)
 					}
-
-					stp.txCount.Add(1)
 
 					nrProcessed++
 					if nrProcessed > stp.settings.BlockAssembly.SubtreeProcessorBatcherSize {

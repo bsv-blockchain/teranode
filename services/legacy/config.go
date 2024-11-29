@@ -17,12 +17,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/go-socks/socks"
-
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -255,13 +254,13 @@ func parseCheckpoints(checkpointStrings []string) ([]chaincfg.Checkpoint, error)
 }
 
 // newConfigParser returns a new command line flags parser.
-//func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *flags.Parser {
+// func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *flags.Parser {
 //	parser := flags.NewParser(cfg, options)
 //	if runtime.GOOS == "windows" {
 //		parser.AddGroup("Service Options", "Service Options", so)
 //	}
 //	return parser
-//}
+// }
 
 // loadConfig initializes and parses the config using a config file and command
 // line options.
@@ -329,8 +328,8 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	}
 
 	// Load additional config from file.
-	//parser := newConfigParser(&cfg, &serviceOpts, flags.Default)
-	//if !(preCfg.RegressionTest || preCfg.SimNet) || preCfg.ConfigFile !=
+	// parser := newConfigParser(&cfg, &serviceOpts, flags.Default)
+	// if !(preCfg.RegressionTest || preCfg.SimNet) || preCfg.ConfigFile !=
 	//	defaultConfigFile {
 	//
 	//	err := flags.NewIniParser(parser).ParseFile(preCfg.ConfigFile)
@@ -341,7 +340,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	//			return nil, nil, err
 	//		}
 	//	}
-	//}
+	// }
 
 	// Don't add peers from the config file when in regression test mode.
 	if preCfg.RegressionTest && len(cfg.AddPeers) > 0 {
@@ -349,13 +348,13 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	}
 
 	// Parse command line options again to ensure they take precedence.
-	//remainingArgs, err := parser.Parse()
-	//if err != nil {
+	// remainingArgs, err := parser.Parse()
+	// if err != nil {
 	//	if e, ok := err.(*flags.Error); !ok || e.Type != flags.ErrHelp {
 	//		logger.Errorf("%s", usageMessage)
 	//	}
 	//	return nil, nil, err
-	//}
+	// }
 
 	// Create the home directory if it doesn't already exist.
 	funcName := "loadConfig"
@@ -632,9 +631,9 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	// Warn about missing config file only after all other configuration is
 	// done.  This prevents the warning on help messages and invalid
 	// options.  Note this should go directly before the return.
-	//if configFileError != nil {
+	// if configFileError != nil {
 	//	bsvdLog.Warnf("%v", configFileError)
-	//}
+	// }
 
 	return &cfg, nil, nil
 }
