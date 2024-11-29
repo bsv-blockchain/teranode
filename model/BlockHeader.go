@@ -281,15 +281,13 @@ func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {
 
 	var bn = big.NewInt(0)
 
-	bn.SetString(hash.String(), 16)
+	bn.SetBytes(bt.ReverseBytes(hash[:]))
 
 	compare := bn.Cmp(target)
 	if compare <= 0 {
 		// fmt.Printf("BlockHeader SIMON DEBUG SUCCESS: %s\n", bh.StringDump())
 		return true, hash, nil
 	}
-
-	// fmt.Printf("BlockHeader SIMON DEBUG FAILED: %s\n", bh.StringDump())
 
 	return false, hash, errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }
@@ -299,7 +297,7 @@ func (bh *BlockHeader) Bytes() []byte {
 		return nil
 	}
 
-	var blockHeaderBytes []byte
+	blockHeaderBytes := make([]byte, 0, BlockHeaderSize)
 
 	uint32Bytes := make([]byte, 4)
 

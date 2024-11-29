@@ -2002,7 +2002,7 @@ func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 			// create wireBlockHeader
 			wireBlockHeader := block.Header.ToWireBlockHeader()
 
-			sm.logger.Debugf("Received block final message from Kafka: %v", hash)
+			sm.logger.Infof("received block final message from Kafka: %s, %s", hash, block.Header.String())
 			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
 		}
 

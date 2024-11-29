@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
+	"github.com/bitcoin-sv/ubsv/cmd/miner/miner"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/recovertx/recovertx"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
@@ -39,7 +40,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/faucet"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
-	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/rpc"
@@ -138,6 +138,9 @@ func main() {
 		return
 	case "recovertx.run":
 		recovertx.Start()
+		return
+	case "miner.run":
+		miner.Start()
 		return
 	}
 
@@ -243,7 +246,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
 	startPropagation := shouldStart("Propagation")
-	startMiner := shouldStart("Miner")
 	startP2P := shouldStart("P2P")
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
@@ -858,27 +860,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		}
 	}
 
-	if startMiner {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "miner")
-		if err != nil {
-			return err
-		}
-
-		minerService, err := miner.NewMiner(
-			ctx,
-			logger.New("miner"),
-			tSettings,
-			blockchainClient,
-		)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("miner", minerService); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -969,9 +950,6 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -seeder=<1|0>")
 	fmt.Println("          whether to start the seeder service")
-	fmt.Println("")
-	fmt.Println("    -miner=<1|0>")
-	fmt.Println("          whether to start the miner service")
 	fmt.Println("")
 	fmt.Println("    -asset=<1|0>")
 	fmt.Println("          whether to start the assert service")
