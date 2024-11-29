@@ -146,7 +146,6 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 	} else {
 		// default to GoSDK
 		txScriptInterpreter = TxScriptInterpreterFactory[defaultTxVerifier](logger, tSettings.Policy, tSettings.ChainCfgParams)
-
 	}
 
 	return &TxValidator{

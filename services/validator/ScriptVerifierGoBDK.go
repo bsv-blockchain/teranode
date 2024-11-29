@@ -9,7 +9,6 @@ package validator
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -22,19 +21,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
-
-// bdkDebugVerification defines the structure for debug information during script verification
-// Used for detailed logging when script verification fails
-type bdkDebugVerification struct {
-	UScript     string `mapstructure:"uScript" json:"uScript" validate:"required"`         // Unlocking script in hex
-	LScript     string `mapstructure:"lScript" json:"lScript" validate:"required"`         // Locking script in hex
-	TxBytes     string `mapstructure:"txBytes" json:"txBytes" validate:"required"`         // Full transaction in hex
-	Flags       uint32 `mapstructure:"flags" json:"flags" validate:"required"`             // Script verification flags
-	Input       int    `mapstructure:"input" json:"input" validate:"required"`             // Input index
-	Satoshis    uint64 `mapstructure:"satoshis" json:"satoshis" validate:"required"`       // Amount in satoshis
-	BlockHeight uint32 `mapstructure:"blockHeight" json:"blockHeight" validate:"required"` // Current block height
-	Err         string `mapstructure:"err" json:"err" validate:"required"`                 // Error message if verification fails
-}
 
 // init registers the Go-BDK script verifier with the verification factory
 // This is called automatically when the package is imported with the 'bdk' build tag
@@ -126,50 +112,16 @@ type scriptVerifierGoBDK struct {
 //   - error: Any script verification errors encountered
 //
 // Note: Empty scripts and special cases are handled with appropriate logging
-func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
-	for i, in := range tx.Inputs {
-		// Skip empty scripts
-		if in.PreviousTxScript == nil || in.UnlockingScript == nil {
-			continue
-		}
+func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error {
+	eTxBytes := tx.ExtendedBytes()
 
-		// TODO : For now, as there are only one way to pass go []byte to C++ array and assume
-		// the array is not empty, we actually cannot pass empty []byte to C++ array
-		// In future, we must handle this case where empty array is still valid and need to verify
-		// See https://github.com/bitcoin-sv/ubsv/issues/1270
-		if len(*in.PreviousTxScript) < 1 || len(*in.UnlockingScript) < 1 {
-			continue
-		}
+	err := bdkscript.VerifyExtend(eTxBytes, blockHeight+1)
 
-		// isPostChronicle now is unknow, in future, it need to be calculate based on block height
-		// flags, errF := bdkscript.ScriptVerificationFlags(*in.PreviousTxScript, false)
-		flags, errF := bdkscript.ScriptVerificationFlagsV2(*in.PreviousTxScript, blockHeight)
-		if errF != nil {
-			return errors.NewTxInvalidError("failed to calculate flags from prev locking script, flags : %v, error: %v", flags, errF)
-		}
+	if err != nil {
+		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)
+		v.logger.Warnf(errorLogMsg)
 
-		// Perform script verification
-		txBinary := tx.Bytes()
-		if errV := bdkscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, uint(flags), txBinary, i, in.PreviousTxSatoshis); errV != nil {
-			// Helpful logging to get full information to debug separately in GoBDK
-			errLog := bdkDebugVerification{
-				UScript:     hex.EncodeToString(*in.UnlockingScript),
-				LScript:     hex.EncodeToString(*in.PreviousTxScript),
-				TxBytes:     tx.String(),
-				Flags:       flags,
-				Input:       i,
-				Satoshis:    in.PreviousTxSatoshis,
-				BlockHeight: blockHeight,
-				Err:         errV.Error(),
-			}
-
-			errLogData, _ := json.MarshalIndent(errLog, "", "    ")
-			errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk, error : \n\n%v\n\n", string(errLogData))
-			// fmt.Println(errorLogMsg)
-			v.logger.Warnf(errorLogMsg)
-
-			return errors.NewTxInvalidError("Failed to verify script: %w", errV)
-		}
+		return errors.NewTxInvalidError("Failed to verify script: %w", err)
 	}
 
 	return nil
