@@ -13,6 +13,7 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+9. [Other Resources](#9-other-resources)
 
 ## 1. Description
 
@@ -115,7 +116,7 @@ The Coinbase Service uses gRPC for communication between nodes. The protobuf def
 
 ## 4. Data Model
 
-The Service receives blocks and processes them, extracting the Coinbase transaction and storing it in the database. The Block and Transaction data model will not be covered in this document, as it is sufficiently covered in other documents (please refer to the [Architecture Overview](../architecture/teranode-architecture.md).
+The Service receives blocks and processes them, extracting the Coinbase transaction and storing it in the database.
 
 The Coinbase Service stores the Coinbase UTXOs in a database, along with their maturity. The maturity is the number of blocks that must be mined on top of the block that contains the Coinbase transaction before the UTXO can be spent.
 
@@ -237,3 +238,8 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 - `coinbase_notification_threshold`: Threshold for sending notifications about the Coinbase balance or UTXO count.
 - `slack_channel`: Slack channel for notifications (if configured).
 - `clientName`: Name of the client for notifications.
+
+
+## 9. Other Resources
+
+[Coinbase Reference](../references/services/coinbase_reference.md)

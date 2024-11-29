@@ -5,12 +5,14 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
 - [2.1 Service Initialization](#21-service-initialization)
-- [2.2 Receiving and Processing a new Block Notification](#22-receiving-and-processing-a-new-block-notification)
+- [2.2 Receiving and Processing a new UTXO Set](#22-receiving-and-processing-a-new-utxo-set)
+- [2.2 Processing Blocks and Creating UTXO Sets](#22-processing-blocks-and-creating-utxo-sets)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+8. [Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -271,3 +273,9 @@ The `utxopersister` service utilizes specific `gocore` settings for configuratio
 - `fsm_state_restore`: Boolean flag to indicate if the service should restore from a specific state.
 - `skip_delete`: Boolean flag to control whether previous block's UTXOSet should be deleted.
 - `utxoPersister_buffer_size`: Specifies the buffer size for readers (default "4KB").
+
+
+
+## 8. Other Resources
+
+[UTXO Persister Reference](../references/services/utxopersister_reference.md)

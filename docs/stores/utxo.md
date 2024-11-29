@@ -27,7 +27,8 @@
 - [ 6. Directory Structure and Main Files](#-6-directory-structure-and-main-files)
 7. [Running the Store Locally](#7-running-the-store-locally)
 - [    How to run](#----how-to-run)
-- [    Settings](#----settings)
+8. [Settings](#8-settings)
+9. [Other Resources](#9-other-resources)
 
 ## 1. Description
 
@@ -245,6 +246,8 @@ type Data struct {
 
 This is widely used by all services, given it is a comprehensive set of data going well beyond the extended Tx data set.
 
+To know more about the UTXO data model, please read more [here](../topics/datamodel/utxo_data_model.md).
+
 ## 4. Use Cases
 
 ### 4.1. Asset Server:
@@ -447,7 +450,8 @@ UTXO Store Package Structure (stores/utxo)
 │   │       ├── SetMined            # Sets a transaction as mined
 │   │       └── Delete              # Removes UTXOs from the store
 │   ├── aerospike_server_test.go    # Tests for the Aerospike UTXO store
-│   ├── container_test.go           # Containerized tests for Aerospike
+│   ├── alert_system.go             # Aerospike alert system implementation
+│   ├── alert_system_test.go        # Tests for the Aerospike alert system
 │   ├── metrics.go                  # Metrics collection for Aerospike operations
 │   └── spend.lua                   # Lua script for batch spend operations
 ├── memory                          # In-memory UTXO Store implementation
@@ -463,7 +467,6 @@ UTXO Store Package Structure (stores/utxo)
 ├── status.proto                    # Protocol buffer definition for UTXO status
 ├── utils.go                        # Utility functions for the UTXO Store
 └── utils_test.go                   # Tests for utility functions
-
 ```
 
 
@@ -480,7 +483,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
 
-###     Settings
+## 8. Settings
 
 The `utxostore` setting must be set to pick a specific datastore implementation. The following values are supported:
 
@@ -583,3 +586,9 @@ Additionally, the following Aerospike-related settings allow to further configur
    - **Description**: Sets the duration in milliseconds for batching spend operations.
    - **Default Value**: `10`
    - **Purpose**: Defines the maximum time to wait before processing a batch of spend requests.
+
+
+
+## 9. Other Resources
+
+[UTXO Store Reference](../references/stores/utxo_reference.md)

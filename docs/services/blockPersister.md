@@ -11,6 +11,7 @@
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+8. [Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -157,3 +158,8 @@ The `blockpersister` service utilizes specific `gocore` settings for configurati
 2. **kafka_blocksFinalConfig**
   - **Purpose:** Provides Kafka configuration details for receiving block data.
   - **Usage:** Configures and initiates a Kafka listener to process incoming blocks when the service starts.
+
+
+## 8. Other Resources
+
+[Block Persister Reference](../references/services/blockpersister_reference.md)
