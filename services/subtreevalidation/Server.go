@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (
@@ -29,29 +32,46 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Server type carries the logger within it
+// Server represents the main subtree validation service.
 type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
-	logger                            ulogger.Logger
-	settings                          *settings.Settings
-	subtreeStore                      blob.Store
-	txStore                           blob.Store
-	utxoStore                         utxo.Store
-	validatorClient                   validator.Interface
-	subtreeCount                      atomic.Int32
-	stats                             *gocore.Stat
-	prioritySubtreeCheckActiveMap     map[string]bool
+	// logger handles all logging operations
+	logger ulogger.Logger
+	// settings contains the configuration for the service
+	settings *settings.Settings
+	// subtreeStore manages persistent storage of subtrees
+	subtreeStore blob.Store
+	// txStore manages transaction storage
+	txStore blob.Store
+	// utxoStore manages UTXO state
+	utxoStore utxo.Store
+	// validatorClient provides transaction validation services
+	validatorClient validator.Interface
+	// subtreeCount tracks the number of subtrees processed
+	subtreeCount atomic.Int32
+	// stats tracks operational statistics
+	stats *gocore.Stat
+	// prioritySubtreeCheckActiveMap tracks active priority subtree checks
+	prioritySubtreeCheckActiveMap map[string]bool
+	// prioritySubtreeCheckActiveMapLock protects the priority map
 	prioritySubtreeCheckActiveMapLock sync.Mutex
-	blockchainClient                  blockchain.ClientI
-	subtreeConsumerClient             kafka.KafkaConsumerGroupI
-	txmetaConsumerClient              kafka.KafkaConsumerGroupI
+	// blockchainClient interfaces with the blockchain
+	blockchainClient blockchain.ClientI
+	// subtreeConsumerClient consumes subtree-related Kafka messages
+	subtreeConsumerClient kafka.KafkaConsumerGroupI
+	// txmetaConsumerClient consumes transaction metadata Kafka messages
+	txmetaConsumerClient kafka.KafkaConsumerGroupI
 }
 
 var (
+	// once ensures the quorum is initialized only once
 	once sync.Once
-	q    *quorum.Quorum
+	// q is a singleton instance of the quorum manager used for subtree validation
+	q *quorum.Quorum
 )
 
+// New creates a new Server instance with the provided dependencies.
+// It initializes the service with the given configuration and stores.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -122,6 +142,8 @@ func New(
 	return u, nil
 }
 
+// Health checks the health status of the service and its dependencies.
+// It returns an HTTP status code, status message, and any error encountered.
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -158,6 +180,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC implements the gRPC health check endpoint.
 func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(u.stats),
@@ -175,13 +198,15 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the server metrics and performs any necessary setup.
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
 
 	return nil
 }
 
-// Start function
+// Start initializes and starts the server components including Kafka consumers
+// and gRPC server. It blocks until the context is canceled or an error occurs.
 func (u *Server) Start(ctx context.Context) error {
 	// start kafka consumers
 	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
@@ -216,6 +241,7 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the server components including Kafka consumers.
 func (u *Server) Stop(_ context.Context) error {
 	// close the kafka consumers gracefully
 	if err := u.subtreeConsumerClient.Close(); err != nil {
@@ -229,6 +255,21 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
+// checkSubtree validates a subtree and its transactions based on the provided request.
+// It handles both legacy and current validation paths, managing locks to prevent
+// duplicate processing.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - request: Contains subtree hash, base URL, and block information
+//
+// Returns:
+//   - bool: True if the subtree is valid
+//   - error: Any error encountered during validation
+//
+// The function implements a retry mechanism for lock acquisition and supports
+// both legacy and current validation paths. It will retry for up to 20 seconds
+// when attempting to acquire a lock.
 func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (*subtreevalidation_api.CheckSubtreeResponse, error) {
 	subtreeBlessed, err := u.checkSubtree(ctx, request)
 	if err != nil {

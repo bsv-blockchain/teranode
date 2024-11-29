@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (

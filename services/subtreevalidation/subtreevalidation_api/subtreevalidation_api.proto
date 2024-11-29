@@ -7,30 +7,46 @@ package subtreevalidation_api;
 import "google/protobuf/timestamp.proto";
 
 service SubtreeValidationAPI {
-  // Health returns the health of the API.
+
+  // SubtreeValidationAPI provides services for validating subtrees in the blockchain.
+  // The service includes health checking and subtree validation endpoints.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+
+
+  // CheckSubtree validates a specific subtree in the blockchain.
+  // Takes a CheckSubtreeRequest containing the subtree details and returns
+  // a CheckSubtreeResponse indicating whether the subtree is valid.
   rpc CheckSubtree (CheckSubtreeRequest) returns (CheckSubtreeResponse) {}
 }
 
-// swagger:model EmptyMessage
+// EmptyMessage represents an empty request message used for health checks.
 message EmptyMessage {}
 
-// swagger:model HealthResponse
+// HealthResponse contains the health check response data.
 message HealthResponse {
+  // ok indicates whether the service is healthy
   bool ok = 1;
+  // details provides additional information about the health status
   string details = 2;
+  // timestamp indicates when the health check was performed
   google.protobuf.Timestamp timestamp = 3;
 }
 
-// swagger:model CheckSubtreeRequest
+
+// CheckSubtreeRequest contains the parameters needed to validate a subtree.
 message CheckSubtreeRequest {
+  // hash is the merkle root hash of the subtree to validate
   bytes hash = 1;
+  // base_url is the source URL for fetching missing transactions
   string base_url = 2;
+  // block_height is the height of the block containing the subtree
   uint32 block_height = 3;
+  // block_hash is the hash of the block containing the subtree
   bytes block_hash = 4;
 }
 
-// swagger:model CheckSubtreeResponse
+// CheckSubtreeResponse contains the result of a subtree validation check.
 message CheckSubtreeResponse {
+  // blessed indicates whether the subtree is valid
   bool blessed = 1;
 }

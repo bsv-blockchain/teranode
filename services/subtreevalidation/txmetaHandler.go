@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (
@@ -10,6 +13,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// txmetaHandler processes Kafka messages containing transaction metadata.
+// It handles both addition and deletion of transaction metadata in the cache.
 func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 	if msg != nil && len(msg.Value) > chainhash.HashSize {
 		startTime := time.Now()

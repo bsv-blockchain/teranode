@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (
@@ -24,20 +27,24 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// missingTx represents a transaction that needs to be retrieved and its position in the subtree.
 type missingTx struct {
 	tx  *bt.Tx
 	idx int
 }
 
+// SetSubtreeExists marks a subtree as existing in the local storage.
 func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 	// TODO: implement for local storage
 	return nil
 }
 
+// GetSubtreeExists checks if a subtree exists in the local storage.
 func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
 	return false, nil
 }
 
+// SetTxMetaCache stores transaction metadata in the cache if caching is enabled.
 func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:SetTxMetaCache")
@@ -49,6 +56,7 @@ func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMet
 	return nil
 }
 
+// SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
 func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
@@ -57,6 +65,7 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 	return nil
 }
 
+// DelTxMetaCache removes transaction metadata from the cache if caching is enabled.
 func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCache")
@@ -68,6 +77,7 @@ func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error
 	return nil
 }
 
+// DelTxMetaCacheMulti removes multiple transaction metadata entries from the cache.
 func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCacheMulti")
@@ -79,8 +89,18 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 	return nil
 }
 
-// getMissingTransactionsBatch gets a batch of transactions from the network
-// NOTE: it does not return the transactions in the same order as the txHashes
+// getMissingTransactionsBatch retrieves a batch of transactions from the network.
+// Note: The returned transactions may not be in the same order as the input hashes.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - subtreeHash: Hash of the subtree containing the transactions
+//   - txHashes: Slice of transaction hashes to retrieve
+//   - baseURL: URL of the network source for transactions
+//
+// Returns:
+//   - []*bt.Tx: Slice of retrieved transactions
+//   - error: Any error encountered during retrieval
 func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
 	log := false
 
@@ -136,6 +156,15 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *c
 	return missingTxs, nil
 }
 
+// readTxFromReader reads and validates a single transaction from an io.ReadCloser.
+// It includes panic recovery for handling potential runtime errors from the go-bt library.
+//
+// Parameters:
+//   - body: ReadCloser containing the transaction data
+//
+// Returns:
+//   - *bt.Tx: The parsed transaction
+//   - error: Any error encountered during reading or validation
 func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	defer func() {
 		// there is a bug in go-bt, that does not check input and throws a runtime error in
@@ -166,6 +195,19 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
+// blessMissingTransaction validates a transaction and retrieves its metadata.
+// The transaction is validated against the current blockchain state and its
+// metadata is stored for future reference.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - subtreeHash: Hash of the subtree containing the transaction
+//   - tx: Transaction to validate
+//   - blockHeight: Height of the block containing the transaction
+//
+// Returns:
+//   - *meta.Data: Transaction metadata if validation succeeds
+//   - error: Any error encountered during validation
 func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
@@ -209,13 +251,20 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 	return txMeta, nil
 }
 
+// ValidateSubtree contains the parameters needed for validating a subtree.
 type ValidateSubtree struct {
-	SubtreeHash   chainhash.Hash
-	BaseURL       string
-	TxHashes      []chainhash.Hash
+	// SubtreeHash is the merkle root hash of the subtree to validate
+	SubtreeHash chainhash.Hash
+	// BaseURL is the source URL for fetching missing transactions
+	BaseURL string
+	// TxHashes contains the list of transaction hashes in the subtree
+	TxHashes []chainhash.Hash
+	// AllowFailFast enables quick failure for invalid subtrees
 	AllowFailFast bool
 }
 
+// validateSubtreeInternal performs the actual validation of a subtree.
+// It handles transaction validation, metadata management, and subtree storage.
 func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) (err error) {
 	startTotal := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "validateSubtreeInternal",
@@ -493,6 +542,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	return nil
 }
 
+// getSubtreeTxHashes retrieves transaction hashes for a subtree from a remote source.
 func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseURL string) ([]chainhash.Hash, error) {
 	if baseURL == "" {
 		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
@@ -544,6 +594,8 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	return txHashes, nil
 }
 
+// processMissingTransactions handles the retrieval and validation of missing transactions
+// in a subtree. It supports both file-based and network-based transaction retrieval.
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions")
 	defer func() {
@@ -644,15 +696,18 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	return nil
 }
 
+// txMapWrapper contains transaction metadata used during validation.
 type txMapWrapper struct {
 	missingTx          missingTx
 	someParentsInBlock bool
 	childLevelInBlock  uint32
 }
 
-// prepareTxsPerLevel prepares the transactions per level for processing
-// levels are determined by the number of parents in the block
+// prepareTxsPerLevel organizes transactions by their dependency level for ordered processing.
+// It returns the maximum level and a map of transactions per level.
+// Levels are determined by the number of parents in the block
 // this code is very similar to the one in the legacy netsync/handle_block handler, but works on different base tx data
+
 func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
 	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
 	defer deferFn()
@@ -716,6 +771,18 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 	return maxLevel, blockTxsPerLevel
 }
 
+// getMissingTransactions retrieves missing transactions from either the network or local store.
+// It handles batching and parallel retrieval of transactions for improved performance.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - subtreeHash: Hash of the subtree containing the transactions
+//   - missingTxHashes: Slice of transaction hashes to retrieve
+//   - baseUrl: URL of the network source for transactions
+//
+// Returns:
+//   - []missingTx: Slice of retrieved transactions with their indices
+//   - error: Any error encountered during retrieval
 func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData) (missingTxs []missingTx, err error) {
 	// load the subtree
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
@@ -834,6 +901,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainh
 	return missingTxs, nil
 }
 
+// isPrioritySubtreeCheckActive checks if a priority check is active for the given subtree hash.
 func (u *Server) isPrioritySubtreeCheckActive(subtreeHash string) bool {
 	u.prioritySubtreeCheckActiveMapLock.Lock()
 	defer u.prioritySubtreeCheckActiveMapLock.Unlock()

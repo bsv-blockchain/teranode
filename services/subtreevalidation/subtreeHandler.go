@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (
@@ -11,6 +14,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// consumerMessageHandler returns a function that processes Kafka messages for subtree validation.
+// It handles both recoverable and unrecoverable errors appropriately.
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
 		errCh := make(chan error, 1)

@@ -1,3 +1,6 @@
+// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
+// It handles the validation of transaction subtrees, manages transaction metadata caching,
+// and interfaces with blockchain and validation services.
 package subtreevalidation
 
 import (
@@ -13,6 +16,21 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// processTxMetaUsingCache attempts to retrieve transaction metadata from the cache for a batch
+// of transactions. It processes transactions in parallel batches for efficiency.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - txHashes: Slice of transaction hashes to process
+//   - txMetaSlice: Pre-allocated slice to store retrieved metadata
+//   - failFast: If true, fails quickly when missing transaction threshold is exceeded
+//
+// Returns:
+//   - int: Number of transactions missing from cache
+//   - error: Any error encountered during processing
+//
+// The function will return a ThresholdExceededError if failFast is true and
+// the number of missing transactions exceeds the configured threshold.
 func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewProcessingError("txHashes and txMetaSlice must be the same length")
