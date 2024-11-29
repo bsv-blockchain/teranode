@@ -122,12 +122,20 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: ps.blockchainClient.Health},
-		{Name: "ValidatorClient", Check: ps.validator.Health},
-		{Name: "TxStore", Check: ps.txStore.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
+	checks := make([]health.Check, 0, 5)
+	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+
+	if ps.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: ps.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)})
+	}
+
+	if ps.validator != nil {
+		checks = append(checks, health.Check{Name: "ValidatorClient", Check: ps.validator.Health})
+	}
+
+	if ps.txStore != nil {
+		checks = append(checks, health.Check{Name: "TxStore", Check: ps.txStore.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

@@ -100,12 +100,23 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: ba.blockchainClient.Health},
-		{Name: "SubtreeStore", Check: ba.subtreeStore.Health},
-		{Name: "TxStore", Check: ba.txStore.Health},
-		{Name: "UTXOStore", Check: ba.utxoStore.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(ba.blockchainClient)},
+	checks := make([]health.Check, 0, 5)
+
+	if ba.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: ba.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(ba.blockchainClient)})
+	}
+
+	if ba.subtreeStore != nil {
+		checks = append(checks, health.Check{Name: "SubtreeStore", Check: ba.subtreeStore.Health})
+	}
+
+	if ba.txStore != nil {
+		checks = append(checks, health.Check{Name: "TxStore", Check: ba.txStore.Health})
+	}
+
+	if ba.utxoStore != nil {
+		checks = append(checks, health.Check{Name: "UTXOStore", Check: ba.utxoStore.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

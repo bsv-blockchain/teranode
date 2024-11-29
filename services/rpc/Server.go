@@ -1176,10 +1176,15 @@ func (s *RPCServer) Health(ctx context.Context, checkLiveness bool) (int, string
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
-		{Name: "BlockAssemblyClient", Check: s.blockAssemblyClient.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
+	checks := make([]health.Check, 0, 3)
+
+	if s.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: s.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)})
+	}
+
+	if s.blockAssemblyClient != nil {
+		checks = append(checks, health.Check{Name: "BlockAssemblyClient", Check: s.blockAssemblyClient.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

@@ -103,12 +103,20 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
-		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "Validator", Check: v.validator.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
+	checks := make([]health.Check, 0, 5)
+	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+
+	if v.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: v.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)})
+	}
+
+	if v.utxoStore != nil {
+		checks = append(checks, health.Check{Name: "UTXOStore", Check: v.utxoStore.Health})
+	}
+
+	if v.validator != nil {
+		checks = append(checks, health.Check{Name: "Validator", Check: v.validator.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

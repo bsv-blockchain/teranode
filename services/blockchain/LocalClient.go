@@ -45,10 +45,18 @@ func (c LocalClient) Health(ctx context.Context, checkLiveness bool) (int, strin
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainStore", Check: c.store.Health},
-		{Name: "SubtreeStore", Check: c.subtreeStore.Health},
-		{Name: "UTXOStore", Check: c.utxoStore.Health},
+	checks := make([]health.Check, 0, 3)
+
+	if c.store != nil {
+		checks = append(checks, health.Check{Name: "BlockchainStore", Check: c.store.Health})
+	}
+
+	if c.subtreeStore != nil {
+		checks = append(checks, health.Check{Name: "SubtreeStore", Check: c.subtreeStore.Health})
+	}
+
+	if c.utxoStore != nil {
+		checks = append(checks, health.Check{Name: "UTXOStore", Check: c.utxoStore.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

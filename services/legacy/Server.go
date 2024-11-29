@@ -34,14 +34,14 @@ type Server struct {
 	height   uint32
 
 	// ubsv stores
-	blockchainClient  blockchain.ClientI
-	validationClient  validator.Interface
-	subtreeStore      blob.Store
-	tempStore         blob.Store
-	utxoStore         utxo.Store
-	subtreeValidation subtreevalidation.Interface
-	blockValidation   blockvalidation.Interface
-	blockAssembly     *blockassembly.Client
+	blockchainClient    blockchain.ClientI
+	validationClient    validator.Interface
+	subtreeStore        blob.Store
+	tempStore           blob.Store
+	utxoStore           utxo.Store
+	subtreeValidation   subtreevalidation.Interface
+	blockValidation     blockvalidation.Interface
+	blockAssemblyClient *blockassembly.Client
 }
 
 // New will return a server instance with the logger stored within it
@@ -54,23 +54,23 @@ func New(logger ulogger.Logger,
 	utxoStore utxo.Store,
 	subtreeValidation subtreevalidation.Interface,
 	blockValidation blockvalidation.Interface,
-	blockAssembly *blockassembly.Client,
+	blockAssemblyClient *blockassembly.Client,
 ) *Server {
 
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:            logger,
-		settings:          tSettings,
-		stats:             gocore.NewStat("legacy"),
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		subtreeStore:      subtreeStore,
-		tempStore:         tempStore,
-		utxoStore:         utxoStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
+		logger:              logger,
+		settings:            tSettings,
+		stats:               gocore.NewStat("legacy"),
+		blockchainClient:    blockchainClient,
+		validationClient:    validationClient,
+		subtreeStore:        subtreeStore,
+		tempStore:           tempStore,
+		utxoStore:           utxoStore,
+		subtreeValidation:   subtreeValidation,
+		blockValidation:     blockValidation,
+		blockAssemblyClient: blockAssemblyClient,
 	}
 }
 
@@ -86,14 +86,35 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
-		{Name: "ValidationClient", Check: s.validationClient.Health},
-		{Name: "SubtreeStore", Check: s.subtreeStore.Health},
-		{Name: "UTXOStore", Check: s.utxoStore.Health},
-		{Name: "SubtreeValidation", Check: s.subtreeValidation.Health},
-		{Name: "BlockValidation", Check: s.blockValidation.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
+	checks := make([]health.Check, 0, 8)
+
+	if s.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: s.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)})
+	}
+
+	if s.validationClient != nil {
+		checks = append(checks, health.Check{Name: "ValidationClient", Check: s.validationClient.Health})
+	}
+
+	if s.subtreeStore != nil {
+		checks = append(checks, health.Check{Name: "SubtreeStore", Check: s.subtreeStore.Health})
+	}
+
+	if s.utxoStore != nil {
+		checks = append(checks, health.Check{Name: "UTXOStore", Check: s.utxoStore.Health})
+	}
+
+	if s.subtreeValidation != nil {
+		checks = append(checks, health.Check{Name: "SubtreeValidation", Check: s.subtreeValidation.Health})
+	}
+
+	if s.blockValidation != nil {
+		checks = append(checks, health.Check{Name: "BlockValidation", Check: s.blockValidation.Health})
+	}
+
+	if s.blockAssemblyClient != nil {
+		checks = append(checks, health.Check{Name: "BlockAssembly", Check: s.blockAssemblyClient.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -129,7 +150,7 @@ func (s *Server) Init(ctx context.Context) error {
 		s.tempStore,
 		s.subtreeValidation,
 		s.blockValidation,
-		s.blockAssembly,
+		s.blockAssemblyClient,
 		listenAddresses,
 		assetHTTPAddress,
 	)

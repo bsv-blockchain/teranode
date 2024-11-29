@@ -69,10 +69,15 @@ func (f *Faucet) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: f.blockchainClient.Health},
-		{Name: "CoinbaseClient", Check: f.coinbaseClient.Health},
-		{Name: "FSM", Check: blockchain.CheckFSM(f.blockchainClient)},
+	checks := make([]health.Check, 0, 3)
+
+	if f.blockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: f.blockchainClient.Health})
+		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(f.blockchainClient)})
+	}
+
+	if f.coinbaseClient != nil {
+		checks = append(checks, health.Check{Name: "CoinbaseClient", Check: f.coinbaseClient.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

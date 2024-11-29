@@ -96,12 +96,26 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := []health.Check{
-		{Name: "BlockchainClient", Check: repo.BlockchainClient.Health},
-		{Name: "UtxoStore", Check: repo.UtxoStore.Health},
-		{Name: "TxStore", Check: repo.TxStore.Health},
-		{Name: "SubtreeStore", Check: repo.SubtreeStore.Health},
-		{Name: "BlockPersisterStore", Check: repo.BlockPersisterStore.Health},
+	checks := make([]health.Check, 0, 5)
+
+	if repo.BlockchainClient != nil {
+		checks = append(checks, health.Check{Name: "BlockchainClient", Check: repo.BlockchainClient.Health})
+	}
+
+	if repo.UtxoStore != nil {
+		checks = append(checks, health.Check{Name: "UtxoStore", Check: repo.UtxoStore.Health})
+	}
+
+	if repo.TxStore != nil {
+		checks = append(checks, health.Check{Name: "TxStore", Check: repo.TxStore.Health})
+	}
+
+	if repo.SubtreeStore != nil {
+		checks = append(checks, health.Check{Name: "SubtreeStore", Check: repo.SubtreeStore.Health})
+	}
+
+	if repo.BlockPersisterStore != nil {
+		checks = append(checks, health.Check{Name: "BlockPersisterStore", Check: repo.BlockPersisterStore.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

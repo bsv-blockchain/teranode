@@ -165,10 +165,12 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 		brokersURL = v.rejectedTxKafkaProducerClient.BrokersURL()
 	}
 
-	checks := []health.Check{
-		{Name: "BlockHeight", Check: checkBlockHeight},
-		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
+	checks := make([]health.Check, 0, 3)
+	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	checks = append(checks, health.Check{Name: "BlockHeight", Check: checkBlockHeight})
+
+	if v.utxoStore != nil {
+		checks = append(checks, health.Check{Name: "UTXOStore", Check: v.utxoStore.Health})
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
