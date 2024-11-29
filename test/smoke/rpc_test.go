@@ -333,7 +333,7 @@ func startApp(logFile string) error {
 	log.Println("Waiting for app to be ready...")
 
 	for {
-		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness", nil)
+		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness")
 		if err == nil {
 			break
 		}

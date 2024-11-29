@@ -124,7 +124,7 @@ func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, 
 func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 	if s.httpAddress != "" {
 		// try the http endpoint first, if that fails we can try the grpc endpoint
-		subtreeBytes, err := util.DoHTTPRequest(ctx, s.httpAddress+"/subtree/"+utils.ReverseAndHexEncodeSlice(subtreeHash), nil)
+		subtreeBytes, err := util.DoHTTPRequest(ctx, s.httpAddress+"/subtree/"+utils.ReverseAndHexEncodeSlice(subtreeHash))
 		if err != nil {
 			s.logger.Warnf("error getting subtree %x from blockvalidation http endpoint: %s", subtreeHash, err)
 		} else if subtreeBytes != nil {

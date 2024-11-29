@@ -1178,7 +1178,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
 	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHTTPAddress, hash.String())
-	blockBytes, err := util.DoHTTPRequest(s.ctx, url, nil)
+	blockBytes, err := util.DoHTTPRequest(s.ctx, url)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
 
