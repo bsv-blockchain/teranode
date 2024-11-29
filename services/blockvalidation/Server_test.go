@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -16,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -303,7 +303,7 @@ func TestServer_processBlockFound(t *testing.T) {
 
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
 
@@ -312,7 +312,7 @@ func TestServer_processBlockFound(t *testing.T) {
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	if !tSettings.BlockValidation.UseCatchupWhenBehind {
 		t.Skip("Skipping test as blockvalidation_useCatchupWhenBehind is false")
 	}

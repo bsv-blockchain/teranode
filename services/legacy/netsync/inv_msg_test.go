@@ -5,8 +5,8 @@ import (
 
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "localhost:8333")
 		require.NoError(t, err)
@@ -52,7 +52,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "[::1]:8333")
 		require.NoError(t, err)
@@ -85,7 +85,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "[2600:1f18:573a:32f:ba74:c04d:50a3:ca7d]:8333")
 		require.NoError(t, err)

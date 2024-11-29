@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -833,10 +832,10 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			}
 		}()
 
-		settings := settings.NewSettings()
-		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-		subtreeProcessor, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, newSubtreeChan)
+		subtreeProcessor, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, newSubtreeChan)
 
 		hashes := make([]*chainhash.Hash, len(txIDs))
 

@@ -30,13 +30,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/settings"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -50,7 +50,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// delete spends set to false
 	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
 	if err != nil {
@@ -111,7 +111,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 
 	initPrometheusMetrics()
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
@@ -148,7 +148,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -190,7 +190,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	var height uint32 = 257727
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -221,7 +221,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	var height uint32 = 249976
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -248,7 +248,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 	tSettings.Policy.MinMiningTxFee = 0
 
@@ -301,7 +301,7 @@ func TestValidateTransactions(t *testing.T) {
 		tx, err := bt.NewTxFromString(txHex)
 		require.NoError(t, err)
 
-		tSettings := settings.NewSettings()
+		tSettings := test.CreateBaseTestSettings()
 		tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 		v := &Validator{
@@ -329,7 +329,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	var height uint32 = 249976
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -356,7 +356,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	var height uint32 = 478631
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -410,7 +410,7 @@ func Benchmark_validateInternal(b *testing.B) {
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/settings"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -42,7 +42,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	node2 := testEnv.Nodes[1]
 	node3 := testEnv.Nodes[2]
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	_, err := helper.CallRPC(node1.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
 	require.NoError(t, err)

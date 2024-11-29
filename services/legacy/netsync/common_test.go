@@ -16,8 +16,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -106,7 +106,7 @@ func MakeConnectedPeers(inboundCfg peer.Config, outboundCfg peer.Config, index u
 	inboundCfg.TstAllowSelfConnection = true
 	outboundCfg.TstAllowSelfConnection = true
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	conn1, conn2 := Pipe(
 		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.0.%d:8333", index)},

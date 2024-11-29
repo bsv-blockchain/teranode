@@ -16,8 +16,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -224,7 +224,7 @@ func testPeer(t *testing.T, p *peer.Peer, s peerStats) {
 
 // TestPeerConnection tests connection between inbound and outbound peers.
 func TestPeerConnection(t *testing.T) {
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	verack := make(chan struct{})
 	peer1Cfg := &peer.Config{
 		Listeners: peer.MessageListeners{
@@ -364,7 +364,7 @@ func TestPeerConnection(t *testing.T) {
 // TestPeerListeners tests that the peer listeners are called as expected.
 func TestPeerListeners(t *testing.T) {
 	verack := make(chan struct{}, 1)
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 	ok := make(chan wire.Message, 20)
 	peerCfg := &peer.Config{
 		Listeners: peer.MessageListeners{
@@ -626,7 +626,7 @@ func TestOutboundPeer(t *testing.T) {
 		TrickleInterval:        time.Second * 10,
 		TstAllowSelfConnection: true,
 	}
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	r, w := io.Pipe()
 	c := &conn{raddr: "10.0.0.1:8333", Writer: w, Reader: r}
@@ -770,7 +770,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		TrickleInterval:        time.Second * 10,
 		TstAllowSelfConnection: true,
 	}
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	localNA := wire.NewNetAddressIPPort(
 		net.ParseIP("10.0.0.1"),
@@ -887,7 +887,7 @@ func TestDuplicateVersionMsg(t *testing.T) {
 		&conn{laddr: "10.0.0.1:9108", raddr: "10.0.0.2:9108"},
 		&conn{laddr: "10.0.0.2:9108", raddr: "10.0.0.1:9108"},
 	)
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, inConn.laddr)
 	if err != nil {

@@ -31,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -175,7 +176,7 @@ func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
 
 // policy settings tests
 func TestMaxTxSizePolicy(t *testing.T) {
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	tSettings.Policy.MaxTxSizePolicy = 10 // insanely low
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)

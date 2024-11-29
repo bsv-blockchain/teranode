@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -462,7 +463,7 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
 
-	tSettings := settings.NewSettings()
+	tSettings := test.CreateBaseTestSettings()
 
 	repo, err := NewRepository(logger, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	assert.NoError(t, err)
