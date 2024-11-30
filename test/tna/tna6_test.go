@@ -22,7 +22,7 @@ func (suite *TNA6TestSuite) InitSuite() {
 	}
 }
 
-func (suite *TNA4TestSuite) SetupTest() {
+func (suite *TNA6TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }

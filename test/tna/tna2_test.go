@@ -38,7 +38,6 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
-	logger := testEnv.Logger
 
 	// Send transactions
 	txDistributor := testEnv.Nodes[0].DistributorClient

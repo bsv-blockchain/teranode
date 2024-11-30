@@ -31,7 +31,7 @@ func (suite *TNA4TestSuite) InitSuite() {
 	}
 }
 
-func (suite *TNA1TestSuite) SetupTest() {
+func (suite *TNA4TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }

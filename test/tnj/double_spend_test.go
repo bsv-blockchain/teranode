@@ -54,26 +54,32 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 		_, err = helper.MineBlock(ctx, baClient, logger)
 
 		if err != nil {
-
 			t.Errorf("Failed to mine block: %v", err)
-
 		}
+
 		time.Sleep(5 * time.Second)
 	}
 
 	// Send a double spend transaction
 	arrayOfNodes := []testenv.TeranodeTestClient{node1, node2}
 	_, err := helper.CreateAndSendDoubleSpendTx(ctx, arrayOfNodes)
+
 	if err != nil {
 		t.Errorf("Failed to create and send double spend tx: %v", err)
 	}
+
 	baClient := arrayOfNodes[0].BlockassemblyClient
+
 	_, err = helper.MineBlock(ctx, baClient, logger)
+
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
+
 	baClient = arrayOfNodes[1].BlockassemblyClient
+
 	_, err = helper.MineBlock(ctx, baClient, logger)
+
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}

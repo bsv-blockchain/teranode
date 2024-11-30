@@ -2,7 +2,7 @@
 
 // How to run this test manually:
 // $ cd test/tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags tnc
 
 package tnc
 
@@ -31,7 +31,7 @@ func (suite *TNC1TestSuite) InitSuite() {
 	}
 }
 
-func (suite *TNA1TestSuite) SetupTest() {
+func (suite *TNC1TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
@@ -75,7 +75,7 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 		}
 	}()
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 10000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
@@ -127,7 +127,7 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	ba := testEnv.Nodes[0].BlockassemblyClient
 	bc := testEnv.Nodes[0].BlockchainClient
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 10000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
@@ -182,7 +182,7 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	coinbaseValueBlock := mc0.CoinbaseValue
 	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
-	bbheader, _, errbb := bc.GetBestBlockHeader(ctx)
+	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		t.Errorf("Error getting best block")
 	}
@@ -212,7 +212,7 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 
 	logger := testEnv.Logger
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 9000)
+	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 9000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}

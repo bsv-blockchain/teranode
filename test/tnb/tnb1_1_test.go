@@ -1,4 +1,4 @@
-//go:build tnbtests
+//go:build tnb
 
 //Settings:
 // Uses validator_sendBatchSize.docker.ci.tnb1Test=10
@@ -44,7 +44,7 @@ func (suite *TNB1TestSuite) InitSuite() {
 	}
 }
 
-func (suite *TNA1TestSuite) SetupTest() {
+func (suite *TNB1TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
