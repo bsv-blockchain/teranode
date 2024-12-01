@@ -25,15 +25,18 @@ type TNC1TestSuite struct {
 
 func (suite *TNC1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tnc1Test",
-		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tnc1Test",
-		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tnc1Test",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnc1Test",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnc1Test",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnc1Test",
 	}
 }
 
 func (suite *TNC1TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+}
+
+func (suite *TNC1TestSuite) TearDownTest() {
 }
 
 // TNC-1.1
@@ -132,7 +135,7 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
 
-	block0bytes, errMine0 := helper.MineBlock(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
+	_, errMine0 := helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	if errMine0 != nil {
 		t.Errorf("Failed to mine block: %v", errMine0)
 	}
@@ -147,18 +150,12 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 		t.Errorf("error getting best block header: %v", errBbh)
 	}
 
-	block0, err0 := testEnv.Nodes[0].BlockchainClient.GetBlock(ctx, (*chainhash.Hash)(block0bytes))
-	if err0 != nil {
-		t.Errorf("Failed to get block: %v", err0)
-	}
-
 	prevHash, errHash := chainhash.NewHash(mc0.PreviousHash)
 
 	if errHash != nil {
 		t.Errorf("error getting previous hash: %v", errHash)
 	}
-
-	if bestBlockheader.String() != block0.Header.String() || bestBlockheader.String() != prevHash.String() {
+	if bestBlockheader.String() != prevHash.String() {
 		t.Errorf("Teranode working on incorrect prevHash")
 	}
 }

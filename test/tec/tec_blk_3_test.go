@@ -1,16 +1,17 @@
 //go:build tecblk3test
 
-package test
+package resilience
 
 import (
+	"fmt"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/stretchr/testify/suite"
 )
 
 type TECBlk3TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TECBlk3TestSuite) InitSuite() {
@@ -23,36 +24,32 @@ func (suite *TECBlk3TestSuite) InitSuite() {
 
 func (suite *TECBlk3TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestWithCustomComposeAndSettingsSkipChecks(
+	suite.SetupTestEnv(
 		suite.SettingsMap,
-		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml"}, false,
+		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.utxo.override.yml"},
+		false,
 	)
-}
-
-func (suite *TECBlk3TestSuite) TearDownTest() {
-
 }
 
 func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {
 	t := suite.T()
-	blockchainHealth, err := suite.Framework.Nodes[1].BlockchainClient.Health(suite.Framework.Context)
+	testenv := suite.TeranodeTestEnv
+	ctx := testenv.Context
 
-	t.Log("Setting up Teranode with invalid blockassembly_grpcAddress...")
+	fmt.Println("Setting up Teranode with invalid blockassembly_grpcAddress...")
 
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failed to start blockchain: %v", err)
-		return
+		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be false, but got true")
-		return
+	if blockchainHealth != 200 {
+		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 
-	t.Log("Block Assembly Recoverability Test passed successfully...")
+	fmt.Println("Block Assembly Recoverability Test passed successfully...")
 }
 
 func TestTECBlk3TestSuite(t *testing.T) {
-
 	suite.Run(t, new(TECBlk3TestSuite))
 }

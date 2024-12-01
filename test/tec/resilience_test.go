@@ -1,58 +1,58 @@
 //go:build tectests
 
-package test
+package resilience
 
 import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/stretchr/testify/suite"
 )
 
 type TECTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TECTestSuite) TestShutDownPropagationService() {
-
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	err := framework.StartNode("ubsv-2")
+	err := testenv.StartNode("ubsv2")
 	if err != nil {
 		t.Errorf("Failed to start node: %v", err)
 	}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc1"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
 		t.Errorf("Failed to start blockchain: %v", err)
 	}
 
-	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := testenv.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(ctx, emptyMessage)
 	if err != nil {
 		t.Errorf("Failure of blockassembly: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
 		t.Errorf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
+	if blockchainHealth!=200 {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
+	if coinbaseHealth!=200 {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
 }
@@ -60,92 +60,96 @@ func (suite *TECTestSuite) TestShutDownPropagationService() {
 func (suite *TECTestSuite) TestShutDownBlockAssembly() {
 
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc2"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
 
-	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
 		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
+	if blockchainHealth!=200 {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
+	if coinbaseHealth!=200 {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
 }
 
 func (suite *TECTestSuite) TestShutDownBlockValidation() {
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc3"
-	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Errorf("Failed to restart nodes: %v", err)
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
+		t.Fatalf("Failed to restart nodes: %v", err)
 	}
 
-	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failed to start blockchain: %v", err)
+		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := testenv.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(ctx, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockassembly: %v", err)
+		t.Fatalf("Failure of blockassembly: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failure of coinbase assembly: %v", err)
+		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be false, but got true")
+	if blockchainHealth!=200 {
+		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
-		t.Errorf("Expected coinbaseHealth to be true, but got false")
+	if coinbaseHealth!=200 {
+		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
 
 func (suite *TECTestSuite) TestShutDownBlockchain() {
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
+	emptyMessage := &blockassembly_api.EmptyMessage{}
+
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("Recovered from panic: %v", r)
-			_ = framework.Compose.Down(framework.Context)
+			_ = testenv.Compose.Down(ctx)
 		}
 	}()
-	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc4"
-	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Errorf("Failed to restart nodes: %v", err)
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
+		t.Fatalf("Failed to restart nodes: %v", err)
 	}
 
-	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := testenv.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(ctx, emptyMessage)
 	if err != nil {
 		t.Fatalf("Failure of blockassembly: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
@@ -153,82 +157,84 @@ func (suite *TECTestSuite) TestShutDownBlockchain() {
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
-		t.Errorf("Expected coinbaseHealth to be true, but got false")
+	if coinbaseHealth!=200 {
+		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
 
 func (suite *TECTestSuite) TestShutDownP2P() {
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc5"
-	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Errorf("Failed to restart nodes: %v", err)
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
+		t.Fatalf("Failed to restart nodes: %v", err)
 	}
 
-	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failed to start blockchain: %v", err)
+		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := testenv.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(ctx, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockassembly: %v", err)
+		t.Fatalf("Failure of blockassembly: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failure of coinbase assembly: %v", err)
+		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be false, but got true")
+	if blockchainHealth!=200 {
+		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
-		t.Errorf("Expected coinbaseHealth to be true, but got false")
+	if coinbaseHealth!=200 {
+		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
 
 func (suite *TECTestSuite) TestShutDownAsset() {
 	t := suite.T()
-	framework := suite.Framework
+	testenv := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc6"
-	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Errorf("Failed to restart nodes: %v", err)
+	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
+		t.Fatalf("Failed to restart nodes: %v", err)
 	}
 
-	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failed to start blockchain: %v", err)
+		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := testenv.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(ctx, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockassembly: %v", err)
+		t.Fatalf("Failure of blockassembly: %v", err)
 	}
 
-	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	coinbaseHealth, _, err := testenv.Nodes[1].CoinbaseClient.Health(ctx, true)
 	if err != nil {
-		t.Errorf("Failure of coinbase assembly: %v", err)
+		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be false, but got true")
+	if blockchainHealth!=200 {
+		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if !coinbaseHealth.Ok {
-		t.Errorf("Expected coinbaseHealth to be true, but got false")
+	if coinbaseHealth!=200 {
+		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
 

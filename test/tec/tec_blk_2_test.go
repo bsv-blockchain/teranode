@@ -1,17 +1,17 @@
 //go:build tecblk2test
 
-package test
+package resilience
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	"github.com/stretchr/testify/suite"
 )
 
 type TECBlk2TestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 func (suite *TECBlk2TestSuite) InitSuite() {
@@ -24,9 +24,10 @@ func (suite *TECBlk2TestSuite) InitSuite() {
 
 func (suite *TECBlk2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestWithCustomComposeAndSettings(
+	suite.SetupTestEnv(
 		suite.SettingsMap,
 		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.utxo.override.yml"},
+		false,
 	)
 }
 

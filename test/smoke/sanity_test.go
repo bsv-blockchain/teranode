@@ -128,7 +128,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	// Generate blocks
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	// wait for the blocks to be generated
-	time.Sleep(30 * time.Second)
+	time.Sleep(5 * time.Second)
 	require.NoError(t, err, "Failed to generate blocks")
 
 	blockStore := testEnv.Nodes[0].Blockstore

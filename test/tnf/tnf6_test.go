@@ -22,9 +22,9 @@ type TNFTestSuite struct {
 
 func (suite *TNFTestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnf6",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnf6.stage1",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnf6",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnf6",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnf6.stage1",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnf6",
 	}
 }
 

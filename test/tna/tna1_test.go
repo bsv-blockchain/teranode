@@ -23,15 +23,18 @@ type TNA1TestSuite struct {
 
 func (suite *TNA1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
 	}
 }
 
 func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+}
+
+func (suite *TNA1TestSuite) TearDownTest() {
 }
 
 func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {

@@ -13,7 +13,7 @@
 
 // How to run manually:
 // cd test/tnb
-// SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags tnbtests
+// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags tnb
 
 package tnb
 
@@ -38,9 +38,9 @@ type TNB1TestSuite struct {
 
 func (suite *TNB1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tnb1Test",
-		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tnb1Test",
-		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tnb1Test",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnb1Test",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnb1Test",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnb1Test",
 	}
 }
 
@@ -49,8 +49,8 @@ func (suite *TNB1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-// func (suite *TNB1TestSuite) TearDownTest() {
-// }
+func (suite *TNB1TestSuite) TearDownTest() {
+}
 
 func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	testEnv := suite.TeranodeTestEnv
@@ -86,6 +86,9 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					defer func() {
 						_ = subtreeReader.Close()
 					}()
+
+					// wait for the subtree to be written to disk
+					time.Sleep(10 * time.Second)
 
 					subtree := util.Subtree{}
 

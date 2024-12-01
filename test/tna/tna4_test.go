@@ -25,9 +25,9 @@ type TNA4TestSuite struct {
 
 func (suite *TNA4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.test.ubsv1.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.test.ubsv2.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.test.ubsv3.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
 	}
 }
 
