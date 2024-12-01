@@ -36,8 +36,8 @@ func (suite *TNC1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNC1TestSuite) TearDownTest() {
-}
+// func (suite *TNC1TestSuite) TearDownTest() {
+// }
 
 // TNC-1.1
 func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
@@ -155,6 +155,7 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	if errHash != nil {
 		t.Errorf("error getting previous hash: %v", errHash)
 	}
+
 	if bestBlockheader.String() != prevHash.String() {
 		t.Errorf("Teranode working on incorrect prevHash")
 	}

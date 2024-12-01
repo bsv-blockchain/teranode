@@ -55,6 +55,7 @@ jobs:
           test_tags: ${{ matrix.test_config.test_tags }}
           settings_context: ${{ matrix.test_config.settings_context || '' }}
           report_name: ${{ matrix.test_config.report_name }}
+          GITHUB_ACTIONS: true
         continue-on-error: false
 
       - name: Publish Test Summary Results
