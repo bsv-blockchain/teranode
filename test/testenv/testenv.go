@@ -174,7 +174,7 @@ func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
 	rpcMappedPort, err := t.GetMappedPort(node.Name, nat.Port(rpcPort))
 
 	if err != nil {
-		return errors.NewConfigurationError("error getting rpc mapped port: %w", err)
+		return errors.NewConfigurationError("error getting rpc mapped port:", err)
 	}
 
 	node.RPCURL = fmt.Sprintf("http://%s", makeHostAddressFromPort(rpcMappedPort.Port()))
@@ -187,12 +187,12 @@ func (t *TeranodeTestEnv) setupCoinbaseClient(node *TeranodeTestClient) error {
 
 	coinbaseMappedPort, err := t.GetMappedPort(node.Name, nat.Port(coinbaseGRPCPort))
 	if err != nil {
-		return errors.NewConfigurationError("error getting coinbase mapped port: %w", err)
+		return errors.NewConfigurationError("error getting coinbase mapped port:", err)
 	}
 
 	coinbaseClient, err := cb.NewClientWithAddress(t.Context, t.Logger, makeHostAddressFromPort(coinbaseMappedPort.Port()))
 	if err != nil {
-		return errors.NewConfigurationError("error creating coinbase client: %w", err)
+		return errors.NewConfigurationError("error creating coinbase client:", err)
 	}
 
 	node.CoinbaseClient = *coinbaseClient
@@ -205,12 +205,12 @@ func (t *TeranodeTestEnv) setupBlockchainClient(node *TeranodeTestClient) error 
 	blockchainMappedPort, err := t.GetMappedPort(node.Name, nat.Port(blockchainGRPCPort))
 
 	if err != nil {
-		return errors.NewConfigurationError("error getting blockchain mapped port: %w", err)
+		return errors.NewConfigurationError("error getting blockchain mapped port", err)
 	}
 
 	blockchainClient, err := bc.NewClientWithAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
 	if err != nil {
-		return errors.NewConfigurationError("error creating blockchain client: %w", err)
+		return errors.NewConfigurationError("error creating blockchain client", err)
 	}
 
 	node.BlockchainClient = blockchainClient
@@ -223,12 +223,12 @@ func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) err
 
 	blockassemblyMappedPort, err := t.GetMappedPort(node.Name, nat.Port(blockassemblyGRPCPort))
 	if err != nil {
-		return errors.NewConfigurationError("error getting blockassembly mapped port: %w", err)
+		return errors.NewConfigurationError("error getting blockassembly mapped port", err)
 	}
 
 	blockassemblyClient, err := ba.NewClientWithAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
 	if err != nil {
-		return errors.NewConfigurationError("error creating blockassembly client: %w", err)
+		return errors.NewConfigurationError("error creating blockassembly client", err)
 	}
 
 	node.BlockassemblyClient = *blockassemblyClient
@@ -241,12 +241,12 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 	distributorMappedPort, err := t.GetMappedPort(node.Name, nat.Port(distributorGRPCPort))
 
 	if err != nil {
-		return errors.NewConfigurationError("error getting distributor mapped port: %w", err)
+		return errors.NewConfigurationError("error getting distributor mapped port:", err)
 	}
 
 	distributorClient, err := distributor.NewDistributorFromAddress(t.Context, t.Logger, node.Settings, makeHostAddressFromPort(distributorMappedPort.Port()))
 	if err != nil {
-		return errors.NewConfigurationError("error creating distributor client: %w", err)
+		return errors.NewConfigurationError("error creating distributor client:", err)
 	}
 
 	node.DistributorClient = *distributorClient
@@ -258,18 +258,18 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.context.testrunner", node.DefaultSettingsContext))
 	// filePathMappedVolume, err, found := gocore.Config().GetURL(fmt.Sprintf("filePathMappedVolume.%s", node.SettingsContext))
 	if err != nil {
-		return errors.NewConfigurationError("error getting mapped volume url: %w", err)
+		return errors.NewConfigurationError("error getting mapped volume url:", err)
 	}
 
 	if !found {
-		return errors.NewConfigurationError("error getting mapped volume url: %w", err)
+		return errors.NewConfigurationError("error getting mapped volume url:", err)
 	}
 
 	t.Logger.Infof("blockStoreURL: %s", blockStoreURL.String())
 
 	blockStore, err := blob.NewStore(t.Logger, blockStoreURL)
 	if err != nil {
-		return errors.NewConfigurationError("error creating blockstore: %w", err)
+		return errors.NewConfigurationError("error creating blockstore:", err)
 	}
 
 	node.Blockstore = blockStore
@@ -279,30 +279,30 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	t.Logger.Infof("subtreeStoreURL: %s", subtreeStoreURL.String())
 
 	if err != nil {
-		return errors.NewConfigurationError("error getting subtreestore url: %w", err)
+		return errors.NewConfigurationError("error getting subtreestore url:", err)
 	}
 
 	if !found {
-		return errors.NewConfigurationError("error getting subtreestore url: %w", err)
+		return errors.NewConfigurationError("error getting subtreestore url:", err)
 	}
 
 	subtreeStore, err := blob.NewStore(t.Logger, subtreeStoreURL, options.WithHashPrefix(2))
 	if err != nil {
-		return errors.NewConfigurationError("error creating subtreestore: %w", err)
+		return errors.NewConfigurationError("error creating subtreestore:", err)
 	}
 
 	node.SubtreeStore = subtreeStore
 
 	utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.context.testrunner", node.DefaultSettingsContext))
 	if err != nil {
-		return errors.NewConfigurationError("error creating utxostore %w", err)
+		return errors.NewConfigurationError("error creating utxostore", err)
 	}
 
 	t.Logger.Infof("utxoStoreURL: %s", utxoStoreURL.String())
 	node.UtxoStore, err = utxostore.New(t.Context, t.Logger, node.Settings, utxoStoreURL)
 
 	if err != nil {
-		return errors.NewConfigurationError("error creating utxostore %w", err)
+		return errors.NewConfigurationError("error creating utxostore", err)
 	}
 
 	blockchainStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s.context.testrunner", node.DefaultSettingsContext))
@@ -315,7 +315,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL)
 	if err != nil {
-		return errors.NewConfigurationError("error creating blockchain store %w", err)
+		return errors.NewConfigurationError("error creating blockchain store", err)
 	}
 
 	node.BlockChainDB = blockchainStore
