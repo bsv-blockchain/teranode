@@ -681,7 +681,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		for {
 			select {
 			case <-deadline:
-				break
+				return
 			default:
 				time.Sleep(1 * time.Millisecond)
 
@@ -696,6 +696,8 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		}
 	}
 
+	// this relies on replay=1 to replay messages from the beginning
+	// because 2 messages have already been published and we want to pick them up
 	consume()
 
 	messagesMutex.RLock()
@@ -716,6 +718,9 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	receivedMessages = nil
 	messagesMutex.Unlock()
 
+	// this should be ignoring replay=1 because the kafka server knows the previous offset for this consumer group
+	// We expect this to find msg3 and msg4
+	// If it were to replay, it would find msg1 and msg2 again
 	consume()
 
 	messagesMutex.RLock()
