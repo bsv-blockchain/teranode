@@ -1,12 +1,15 @@
 package blockchain
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"math"
 	"math/big"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/require"
@@ -218,5 +221,62 @@ func TestCompactToBig(t *testing.T) {
 				x, n.Int64(), want.Int64())
 			return
 		}
+	}
+}
+
+func TestDifficultyPrecision(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, chainParams.PowLimitBits) // 0x1d00ffff
+	powLimitBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+	firstChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001483b3cc42a76ae3dc13792")
+	lastChainwork, _ := hex.DecodeString("0000000000000000000000000000000000000000014844e5fe3b17bb6cc37242")
+	d := &Difficulty{
+		powLimitnBits: powLimitBits,
+		logger:        ulogger.TestLogger{},
+		store:         nil,
+		settings: &settings.Settings{
+			ChainCfgParams: chainParams,
+		},
+	}
+
+	testCases := []struct {
+		name             string
+		firstBlockHeader *model.SuitableBlock
+		lastBlockHeader  *model.SuitableBlock
+		expectedNBits    string
+		precision        int64
+	}{
+		{
+			name: "Test Case 1",
+			firstBlockHeader: &model.SuitableBlock{
+				NBits:     []byte{0x1a, 0x40, 0x6c, 0xcc},
+				Time:      1620000000,
+				ChainWork: firstChainwork,
+			},
+			lastBlockHeader: &model.SuitableBlock{
+				NBits:     []byte{0x1a, 0x40, 0x3b, 0x78},
+				Time:      1620010000,
+				ChainWork: lastChainwork,
+			},
+			expectedNBits: "de730718",
+			precision:     10,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			newNbit, err := d.computeTarget(tc.firstBlockHeader, tc.lastBlockHeader)
+			require.NoError(t, err)
+
+			expectedPrecision := int64(math.Pow10(int(tc.precision)))
+
+			newDiff := newNbit.CalculateDifficulty()
+			integerPart, _ := newDiff.Int64()
+			fractionalPart := new(big.Float).Sub(newDiff, big.NewFloat(float64(integerPart)))
+			fractionalPart.Mul(fractionalPart, big.NewFloat(float64(expectedPrecision)))
+			fractionalInt, _ := fractionalPart.Int64()
+			require.LessOrEqual(t, fractionalInt, expectedPrecision-1)
+		})
 	}
 }

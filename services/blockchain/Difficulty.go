@@ -233,6 +233,10 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 	newTarget := new(big.Int).Div(nt, pw)
 
+	precision := big.NewInt(10000000000) // 16 decimal places
+
+	newTarget.Div(newTarget.Mul(newTarget, precision), precision)
+
 	// clip again if above minimum target (too easy)
 	if newTarget.Cmp(d.settings.ChainCfgParams.PowLimit) > 0 {
 		d.logger.Debugf("new target would be above pow limit, set to pow limit")
