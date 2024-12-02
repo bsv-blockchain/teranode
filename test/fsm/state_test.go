@@ -69,9 +69,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 		logger.Infof("Hashes: %v", hashes)
 
-		baClient := framework.Nodes[0].BlockassemblyClient
-
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 		require.NoError(t, err)
 	}
 
