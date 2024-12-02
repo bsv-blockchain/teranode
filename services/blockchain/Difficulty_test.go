@@ -81,6 +81,11 @@ func TestCalculateDifficulty(t *testing.T) {
 	lChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001502c65f8e18b3db26b2729") // 826766
 	eBits, _ := model.NewNBitFromString("1807d4ed")                                                       // 826768
 
+	testnetFirstBits, _ := model.NewNBitFromString("1d0089cc")
+	testnetFirstChainwork, _ := hex.DecodeString("00000000000000000000000000000000000000000000015814b500abc2fbe36e")
+	testnetLastBits, _ := model.NewNBitFromString("1d008462") // 1649593
+	testnetLastChainwork, _ := hex.DecodeString("00000000000000000000000000000000000000000000015814b501a58807409f")
+	testnetExpectedBits, _ := model.NewNBitFromString("1d00833a")
 	tests := map[string]struct {
 		firstBlockHeader model.SuitableBlock
 		lastBlockHeader  model.SuitableBlock
@@ -95,6 +100,16 @@ func TestCalculateDifficulty(t *testing.T) {
 			Time:      1689046071,
 			ChainWork: lastChainwork,
 		}, expected: *expectedBits, // 800146
+		},
+		"testnet block #1649594": {firstBlockHeader: model.SuitableBlock{
+			NBits:     testnetFirstBits.CloneBytes(), // 800000
+			Time:      1733063205,
+			ChainWork: testnetFirstChainwork,
+		}, lastBlockHeader: model.SuitableBlock{ // 1649593
+			NBits:     testnetLastBits.CloneBytes(),
+			Time:      1733140025,
+			ChainWork: testnetLastChainwork,
+		}, expected: *testnetExpectedBits, // 1649449
 		},
 		"block #826768": {firstBlockHeader: model.SuitableBlock{
 			NBits:     fBits.CloneBytes(), // 826622
