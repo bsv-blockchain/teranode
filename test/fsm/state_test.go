@@ -20,6 +20,7 @@ import (
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -71,9 +72,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		baClient := framework.Nodes[0].BlockassemblyClient
 
 		_, err = helper.MineBlock(ctx, baClient, logger)
-		if err != nil {
-			t.Errorf("Failed to mine block: %v", err)
-		}
+		require.NoError(t, err)
 	}
 
 	err = framework.StartNode("ubsv2")
@@ -178,8 +177,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 		logger.Infof("Hashes: %v", hashes)
 
-		baClient := framework.Nodes[0].BlockassemblyClient
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+		require.NoError(t, err)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -340,8 +339,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	// assert.LessOrEqual(t, metricsAfter, float64(10), "Tx count mismatch")
 
 	//mine a block
-	baClient := framework.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(framework.Context, baClient, logger)
+	_, err = helper.MineBlockWithRPC(framework.Context, framework.Nodes[0], logger)
+	require.NoError(t, err)
 	time.Sleep(5 * time.Second)
 
 	var o []options.FileOption
@@ -389,7 +388,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 
 	// Check newer blocks that arrived and check if the test tx is included in the block
 
-	_, err = helper.MineBlock(framework.Context, baClient, logger)
+	_, err = helper.MineBlockWithRPC(framework.Context, framework.Nodes[0], logger)
+	require.NoError(t, err)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
@@ -429,7 +429,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(framework.Context, baClient, logger)
+		_, err = helper.MineBlockWithRPC(framework.Context, framework.Nodes[0], logger)
+		require.NoError(t, err)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
