@@ -18,7 +18,7 @@ message MiningCandidate {
   repeated bytes merkle_proof = 8;
   uint32 subtreeCount = 9;
   uint32 num_txs = 10;
-  uint32 size_without_coinbase = 11;
+  uint64 size_without_coinbase = 11;
 }
 
 // swagger:model MiningSolution

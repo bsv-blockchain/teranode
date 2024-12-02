@@ -138,7 +138,7 @@ type MiningCandidate struct {
 		Height              uint32   `json:"height"`
 		MerkleProof         []string `json:"merkleProof"`
 		NumTxs              uint32   `json:"num_txs"`
-		SizeWithoutCoinbase uint32   `json:"sizeWithoutCoinbase"`
+		SizeWithoutCoinbase uint64   `json:"sizeWithoutCoinbase"`
 	}
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`

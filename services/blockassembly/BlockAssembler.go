@@ -489,7 +489,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var txCount uint32
 
-	var sizeWithoutCoinbase uint32
+	var sizeWithoutCoinbase uint64
 
 	var subtreesToInclude []*util.Subtree
 
@@ -512,8 +512,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 				txCount += uint32(len(subtree.Nodes))
-				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-				sizeWithoutCoinbase += uint32(subtree.SizeInBytes)
+				sizeWithoutCoinbase += subtree.SizeInBytes
 			} else {
 				break
 			}

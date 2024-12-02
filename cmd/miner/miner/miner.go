@@ -88,11 +88,10 @@ func (m *Miner) mine(ctx context.Context) {
 				Version:       miningCandidate.Version,
 				NBits:         nbits.CloneBytes(),
 				//nolint:gosec
-				Time:        uint32(miningCandidate.CurTime),
-				Height:      miningCandidate.Height,
-				MerkleProof: merkleproof,
-				//nolint:gosec
-				SizeWithoutCoinbase: uint32(miningCandidate.SizeWithoutCoinbase),
+				Time:                uint32(miningCandidate.CurTime),
+				Height:              miningCandidate.Height,
+				MerkleProof:         merkleproof,
+				SizeWithoutCoinbase: miningCandidate.SizeWithoutCoinbase,
 			}
 
 			solution, rounds, err := m.tryMining(ctx, candidate, m.cpus)

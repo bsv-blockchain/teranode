@@ -21,7 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// swagger:model EmptyMessage
+// EmptyMessage represents an empty request message used for health checks.
 type EmptyMessage struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -58,14 +58,17 @@ func (*EmptyMessage) Descriptor() ([]byte, []int) {
 	return file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDescGZIP(), []int{0}
 }
 
-// swagger:model HealthResponse
+// HealthResponse contains the health check response data.
 type HealthResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok        bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Details   string                 `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	// ok indicates whether the service is healthy
+	Ok bool `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	// details provides additional information about the health status
+	Details string `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	// timestamp indicates when the health check was performed
 	Timestamp *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 }
 
@@ -120,16 +123,20 @@ func (x *HealthResponse) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
-// swagger:model CheckSubtreeRequest
+// CheckSubtreeRequest contains the parameters needed to validate a subtree.
 type CheckSubtreeRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Hash        []byte `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	BaseUrl     string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	// hash is the merkle root hash of the subtree to validate
+	Hash []byte `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	// base_url is the source URL for fetching missing transactions
+	BaseUrl string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	// block_height is the height of the block containing the subtree
 	BlockHeight uint32 `protobuf:"varint,3,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`
-	BlockHash   []byte `protobuf:"bytes,4,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
+	// block_hash is the hash of the block containing the subtree
+	BlockHash []byte `protobuf:"bytes,4,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
 }
 
 func (x *CheckSubtreeRequest) Reset() {
@@ -190,12 +197,13 @@ func (x *CheckSubtreeRequest) GetBlockHash() []byte {
 	return nil
 }
 
-// swagger:model CheckSubtreeResponse
+// CheckSubtreeResponse contains the result of a subtree validation check.
 type CheckSubtreeResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// blessed indicates whether the subtree is valid
 	Blessed bool `protobuf:"varint,1,opt,name=blessed,proto3" json:"blessed,omitempty"`
 }
 

@@ -526,7 +526,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
-		assert.Equal(t, uint32(999), miningCandidate.SizeWithoutCoinbase)
+		assert.Equal(t, uint64(999), miningCandidate.SizeWithoutCoinbase)
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
 		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)
@@ -635,7 +635,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
-		assert.Equal(t, uint32(45000), miningCandidate.SizeWithoutCoinbase) // 3 * 1500
+		assert.Equal(t, uint64(45000), miningCandidate.SizeWithoutCoinbase) // 3 * 1500
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
 		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)

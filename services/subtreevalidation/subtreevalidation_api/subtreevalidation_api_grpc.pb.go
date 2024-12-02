@@ -27,8 +27,12 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SubtreeValidationAPIClient interface {
-	// Health returns the health of the API.
+	// SubtreeValidationAPI provides services for validating subtrees in the blockchain.
+	// The service includes health checking and subtree validation endpoints.
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
+	// CheckSubtree validates a specific subtree in the blockchain.
+	// Takes a CheckSubtreeRequest containing the subtree details and returns
+	// a CheckSubtreeResponse indicating whether the subtree is valid.
 	CheckSubtree(ctx context.Context, in *CheckSubtreeRequest, opts ...grpc.CallOption) (*CheckSubtreeResponse, error)
 }
 
@@ -64,8 +68,12 @@ func (c *subtreeValidationAPIClient) CheckSubtree(ctx context.Context, in *Check
 // All implementations must embed UnimplementedSubtreeValidationAPIServer
 // for forward compatibility.
 type SubtreeValidationAPIServer interface {
-	// Health returns the health of the API.
+	// SubtreeValidationAPI provides services for validating subtrees in the blockchain.
+	// The service includes health checking and subtree validation endpoints.
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
+	// CheckSubtree validates a specific subtree in the blockchain.
+	// Takes a CheckSubtreeRequest containing the subtree details and returns
+	// a CheckSubtreeResponse indicating whether the subtree is valid.
 	CheckSubtree(context.Context, *CheckSubtreeRequest) (*CheckSubtreeResponse, error)
 	mustEmbedUnimplementedSubtreeValidationAPIServer()
 }
