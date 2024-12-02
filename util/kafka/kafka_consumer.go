@@ -89,7 +89,10 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 		ConsumerGroupID:   consumerGroupID,
 		ConsumerCount:     consumerCount,
 		AutoCommitEnabled: autoCommit,
-		Replay:            util.GetQueryParamInt(url, "replay", 1) == 1, // default is start from beginning
+		// default is start from beginning
+		// do not ignore everything that is already queued, this is the case where we start a new consumer group for the first time
+		// maybe it shouldn't be called replay because it suggests that the consume will always replay messages from the beginning
+		Replay: util.GetQueryParamInt(url, "replay", 1) == 1,
 	}
 
 	return NewKafkaConsumerGroup(consumerConfig)
