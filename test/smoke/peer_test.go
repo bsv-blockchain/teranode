@@ -58,6 +58,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
@@ -97,6 +98,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
+
 	if err != nil {
 
 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
@@ -116,6 +118,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	if err != nil {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
+
 	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
@@ -123,6 +126,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
@@ -132,8 +136,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := testEnv.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
@@ -148,14 +151,19 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	for i := 0; i < 30; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
 		}
+
 		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+
 		if err != nil {
 			t.Errorf("Failed to get block headers: %v", err)
 		}
+
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
+
 		if !blNode1 {
 			blNode1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 
@@ -177,7 +185,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)

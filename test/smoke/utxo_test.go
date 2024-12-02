@@ -136,8 +136,7 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
@@ -199,7 +198,7 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -253,7 +252,6 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
-	baClient := framework.Nodes[0].BlockassemblyClient
 	blockStore := framework.Nodes[0].Blockstore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
@@ -321,7 +319,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block")
 
 	// Verify both transactions are in blocks
@@ -353,7 +351,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 		assert.NoError(t, err, "Failed to mine block")
 	}
 
@@ -548,8 +546,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block")
 
 	blockStore := framework.Nodes[0].Blockstore
@@ -582,7 +579,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 
 			targetHeight++
 
-			_, err = helper.MineBlock(ctx, baClient, logger)
+			_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 			if err != nil {
 				logger.Warnf("Failed to mine block: %v", err)
 			}
@@ -689,8 +686,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		t.Errorf("Failed to delete parent tx: %v", err)
 	}
 
-	baClient := framework.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
@@ -720,7 +716,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -781,7 +777,6 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
-	baClient := framework.Nodes[0].BlockassemblyClient
 	blockStore := framework.Nodes[0].Blockstore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
@@ -881,7 +876,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block")
 
 	// Verify both transactions are in blocks
@@ -906,7 +901,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 			}
 
 			targetHeight++
-			_, err = helper.MineBlock(ctx, baClient, logger)
+			_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 			assert.NoError(t, err, "Failed to mine block")
 		}
 

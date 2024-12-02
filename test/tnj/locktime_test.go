@@ -155,8 +155,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := testEnv.Nodes[0].BlockassemblyClient
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	require.NoError(t, err)
 
 	blockStore := testEnv.Nodes[0].Blockstore
@@ -179,7 +178,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		}
 
 		targetHeight++
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 		require.NoError(t, err)
 	}
 

@@ -50,8 +50,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 
 		logger.Infof("Hashes: %v\n", hashes)
 
-		baClient := node1.BlockassemblyClient
-		_, err = helper.MineBlock(ctx, baClient, logger)
+		_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -68,17 +67,13 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 		t.Errorf("Failed to create and send double spend tx: %v", err)
 	}
 
-	baClient := arrayOfNodes[0].BlockassemblyClient
-
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	baClient = arrayOfNodes[1].BlockassemblyClient
-
-	_, err = helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[1], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
@@ -136,7 +131,7 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	logger.Infof("Faucet transaction sent: %s", faucetTx.TxIDChainHash())
 
 	// Mine a block to confirm faucet transaction
-	_, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block for faucet transaction")
 
 	// Disable P2P on second node to create network partition
@@ -208,10 +203,10 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	logger.Infof("Double-spend transaction sent to node2: %s", tx2.TxIDChainHash())
 
 	// Mine blocks on both nodes to create competing chains
-	_, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block on node1")
 
-	_, err = helper.MineBlock(ctx, node2.BlockassemblyClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[1], logger)
 	assert.NoError(t, err, "Failed to mine block on node2")
 
 	// Re-enable P2P on second node
@@ -232,7 +227,7 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	time.Sleep(10 * time.Second)
 
 	// mine blocks
-	_, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
+	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block on node1")
 
 	// Verify both nodes converged to same chain tip

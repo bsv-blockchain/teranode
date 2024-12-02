@@ -35,7 +35,7 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	logger := testEnv.Logger
 
 	for i := 0; i < 32; i++ {
-		_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, 0)
+		_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 0)
 		if errTXs != nil {
 			t.Errorf("Failed to send txs with distributor: %v", errTXs)
 		}
@@ -71,7 +71,7 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	fmt.Printf("Transaction sent: %s \n", newTx)
 	time.Sleep(10 * time.Second)
 
-	_, err := helper.MineBlock(testEnv.Context, testEnv.Nodes[0].BlockassemblyClient, logger)
+	_, err := helper.MineBlockWithRPC(testEnv.Context, testEnv.Nodes[0], logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
