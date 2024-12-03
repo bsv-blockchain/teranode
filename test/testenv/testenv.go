@@ -388,8 +388,6 @@ func (t *TeranodeTestEnv) StartNode(nodeName string) error {
 		if err := node.Start(t.Context); err != nil {
 			return err
 		}
-
-		time.Sleep(10 * time.Second)
 	}
 
 	return nil

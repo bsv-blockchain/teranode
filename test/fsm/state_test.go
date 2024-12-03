@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
@@ -48,9 +49,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
 	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		done = make(chan struct{})
+		mu sync.Mutex
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -78,15 +77,20 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		t.Errorf("Failed to start node: %v", err)
 	}
 
-	wg.Add(1)
+	if err := helper.WaitForHealthLiveness(12000, 30*time.Second); err != nil {
+		t.Fatalf("Failed to wait for health liveness: %v", err)
+	}
 
-	go func() {
+	// wait for node 2 block validator to catch up
+	wait := func() {
+		// trigger a new block to wake up node 2 and start catch up process
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+		require.NoError(t, err)
 
-		defer wg.Done()
-
+		timeout := time.After(30 * time.Second)
 		for {
 			select {
-			case <-done:
+			case <-timeout:
 				return
 			default:
 				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
@@ -94,17 +98,23 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 				mu.Lock()
 				if _, exists := stateSet[response]; !exists {
 					framework.Logger.Infof("New unique state: %v", response)
-
-					stateSet[response] = struct{}{} // Add the state to the set
+					stateSet[response] = struct{}{}
 				}
 				mu.Unlock()
+
+				_, blockMetaNode0, err := blockchainNode0.GetBestBlockHeader(ctx)
+				require.NoError(t, err)
+
+				_, err = blockchainNode1.GetBlockByHeight(ctx, blockMetaNode0.Height)
+				if !errors.Is(err, errors.ErrBlockNotFound) {
+					return
+				}
+
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
-	}()
-
-	time.Sleep(120 * time.Second)
-	close(done)
-	wg.Wait()
+	}
+	wait()
 
 	stateFound := false
 
@@ -142,7 +152,6 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		states []blockchain_api.FSMStateType
 		mu     sync.Mutex
 		wg     sync.WaitGroup
-		done   = make(chan struct{})
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -190,32 +199,29 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 	wg.Add(1)
 	go func() {
-
 		defer wg.Done()
 
+		timeout := time.After(10 * time.Second)
 		for {
 			select {
-			case <-done:
+			case <-timeout:
 				return
-
 			default:
 				response, _ := blockchainNode1.GetFSMCurrentState(framework.Context)
 
 				mu.Lock()
 				if _, exists := stateSet[*response]; !exists {
 					logger.Infof("New unique state: %v", response)
-
-					stateSet[*response] = struct{}{} // Add the state to the set
+					stateSet[*response] = struct{}{}
 				}
 				logger.Infof("Current states: %v", stateSet)
 				mu.Unlock()
-				time.Sleep(1 * time.Second)
+
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}()
 
-	time.Sleep(120 * time.Second)
-	close(done)
 	wg.Wait()
 
 	stateFound := false

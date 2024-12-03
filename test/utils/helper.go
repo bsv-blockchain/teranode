@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
@@ -300,8 +301,6 @@ func MineBlockWithRPC(ctx context.Context, node tenv.TeranodeTestClient, logger 
 		return "", errors.NewProcessingError("error generating block: %w", err)
 	}
 
-	time.Sleep(5 * time.Second)
-
 	return resp, nil
 }
 
@@ -566,8 +565,11 @@ func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count i
 		}
 
 		txHashes = append(txHashes, tx)
+	}
 
-		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	delay := node.Settings.BlockAssembly.DoubleSpendWindow
+	if delay != 0 {
+		time.Sleep(delay)
 	}
 
 	return txHashes, nil
@@ -583,8 +585,11 @@ func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []tenv.TeranodeT
 		}
 
 		txHashes = append(txHashes, tx)
+	}
 
-		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	delay := nodes[0].Settings.BlockAssembly.DoubleSpendWindow
+	if delay != 0 {
+		time.Sleep(delay)
 	}
 
 	return txHashes, nil
@@ -1169,4 +1174,56 @@ func RemoveDataDirectory(dir string, useSudo bool) error {
 	}
 
 	return nil
+}
+
+func WaitForHealthLiveness(port int, timeout time.Duration) error {
+	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+	timeoutElapsed := time.After(timeout)
+
+	var err error
+
+	for {
+		select {
+		case <-timeoutElapsed:
+			return errors.NewError("health check failed for port %d after timeout: %v", port, err)
+		default:
+			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
+			if err != nil {
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+
+			return nil
+		}
+	}
+}
+
+func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) error {
+	var (
+		err    error
+		status int
+	)
+
+	const readiness = false // we don't need readiness check here, just liveness
+
+	timeout := time.After(30 * time.Second)
+	// wait for Blockchain GRPC to be ready and send FSM RUN event
+	for {
+		select {
+		case <-timeout:
+			return errors.NewError("Timeout waiting for Blockchain service: %v", err)
+		default:
+			status, _, err = blockchainClient.Health(ctx, readiness)
+			if err != nil || status != http.StatusOK {
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+
+			err = blockchainClient.Run(ctx, "test")
+
+			return err
+		}
+	}
 }

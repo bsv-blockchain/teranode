@@ -1,6 +1,7 @@
 package arrange
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	tenv "github.com/bitcoin-sv/ubsv/test/testenv"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -93,39 +95,39 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		if suite.T() != nil && suite.TeranodeTestEnv != nil {
 			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
 		}
+
 		suite.T().Fatalf("Failed to set up TeranodeTestEnv: %v", err)
 	}
 
-	time.Sleep(30 * time.Second)
-
 	if !skipSetUpTestClient {
+		var err error
+
 		err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		suite.T().Logf("Sending initial RUN event to Node1")
+		// wait for all blockchain nodes to be ready
+		for index, node := range suite.TeranodeTestEnv.Nodes {
+			suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
 
-		err = suite.TeranodeTestEnv.Nodes[0].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
-		if err != nil {
-			suite.T().Fatal(err)
+			err = helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+			if err != nil {
+				suite.T().Fatal(err)
+			}
 		}
 
-		suite.T().Logf("Sending initial RUN event to Node2")
+		ports := []int{10000, 12000, 14000} // ports are defined in docker-compose.e2etest.yml
+		for index, port := range ports {
+			suite.T().Logf("Waiting for node %d to be ready", index)
 
-		err = suite.TeranodeTestEnv.Nodes[1].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
-		if err != nil {
-			suite.T().Fatal(err)
+			err = helper.WaitForHealthLiveness(port, 30*time.Second)
+			if err != nil {
+				suite.T().Fatal(err)
+			}
 		}
 
-		suite.T().Logf("Sending initial RUN event to Node3")
-
-		err = suite.TeranodeTestEnv.Nodes[2].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
-		if err != nil {
-			suite.T().Fatal(err)
-		}
-
-		time.Sleep(10 * time.Second)
+		suite.T().Log("All nodes ready")
 
 		// Min height possible is 101
 		// whatever height you specify, make sure :
@@ -134,7 +136,13 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		height := uint32(101)
 
 		// Generate blocks
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+		_, err = retry.Retry(
+			context.Background(),
+			suite.TeranodeTestEnv.Logger,
+			func() (string, error) {
+				return helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+			},
+		)
 		if err != nil {
 			// we sometimes set an error saying the job was not found but strangely the test works even with this error
 			// suite.T().Fatal(err)
