@@ -9,6 +9,7 @@ import (
 
 var peerServerMetricHandlers = []string{
 	"OnVersion",
+	"OnProtoconf",
 	"OnMemPool",
 	"OnTx",
 	"OnBlock",

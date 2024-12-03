@@ -273,6 +273,10 @@ type serverPeer struct {
 	// The following variables must only be used atomically
 	feeFilter int64
 
+	// protoconf fields
+	numberOfFields       atomic.Uint64
+	maxRecvPayloadLength atomic.Uint32
+
 	*peer.Peer
 
 	connReq        *connmgr.ConnReq
@@ -516,6 +520,33 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	sp.server.AddPeer(sp)
 
 	return nil
+}
+
+// OnProtoconf is invoked when a peer receives a protoconf bitcoin message.
+func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnProtoconf",
+		tracing.WithHistogram(peerServerMetrics["OnProtoconf"]),
+	)
+
+	// Check that the num of fields.
+	if msg.NumberOfFields == 0 {
+		sp.numberOfFields.Store(msg.NumberOfFields)
+
+		return
+	}
+
+	if msg.NumberOfFields == 1 {
+		sp.numberOfFields.Store(msg.NumberOfFields)
+		sp.maxRecvPayloadLength.Store(msg.MaxRecvPayloadLength)
+
+		sp.server.logger.Debugf("Peer %v sent a valid protoconf '%v'", sp.String(), msg)
+
+		return
+	}
+
+	sp.server.logger.Warnf("Peer %v sent an invalid protoconf '%v' -- disconnecting", sp, msg)
+
+	sp.Disconnect()
 }
 
 // OnMemPool is invoked when a peer receives a mempool bitcoin message.
@@ -1765,6 +1796,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
 			OnVersion:      sp.OnVersion,
+			OnProtoconf:    sp.OnProtoconf,
 			OnMemPool:      sp.OnMemPool,
 			OnTx:           sp.OnTx,
 			OnBlock:        sp.OnBlock,

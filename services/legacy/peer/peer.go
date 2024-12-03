@@ -188,6 +188,9 @@ type MessageListeners struct {
 	// OnVerAck is invoked when a peer receives a verack bitcoin message.
 	OnVerAck func(p *Peer, msg *wire.MsgVerAck)
 
+	// OnProtoconf is invoked when a peer receives a protoconf bitcoin message.
+	OnProtoconf func(p *Peer, msg *wire.MsgProtoconf)
+
 	// OnReject is invoked when a peer receives a reject bitcoin message.
 	OnReject func(p *Peer, msg *wire.MsgReject)
 
@@ -1413,12 +1416,10 @@ out:
 			break out
 
 		case *wire.MsgVerAck:
-
 			// No read lock is necessary because verAckReceived is not written
 			// to in any other goroutine.
 			if p.verAckReceived {
-				p.logger.Infof("Already received 'verack' from peer %v -- "+
-					"disconnecting", p)
+				p.logger.Infof("Already received 'verack' from peer %v -- disconnecting", p)
 				break out
 			}
 			p.flagsMtx.Lock()
@@ -1426,6 +1427,11 @@ out:
 			p.flagsMtx.Unlock()
 			if p.cfg.Listeners.OnVerAck != nil {
 				p.cfg.Listeners.OnVerAck(p, msg)
+			}
+
+		case *wire.MsgProtoconf:
+			if p.cfg.Listeners.OnProtoconf != nil {
+				p.cfg.Listeners.OnProtoconf(p, msg)
 			}
 
 		case *wire.MsgGetAddr:
