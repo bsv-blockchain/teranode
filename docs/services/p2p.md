@@ -3,21 +3,22 @@
 ## Index
 
 1. [Description](#1-description)
-2. [Functionality ](#2-functionality)
+2. [Functionality](#2-functionality)
 - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
-- [2.1.1. Creating a new P2P Server](#211-creating-a-new-p2p-server)
-   - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
-   - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
+- [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
+- [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
+- [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
 - [2.2. Peer Discovery and Connection](#22-peer-discovery-and-connection)
 - [2.3. Best Block Messages](#23-best-block-messages)
 - [2.4. Blockchain Messages](#24-blockchain-messages)
 - [2.5. TX Validator Messages](#25-tx-validator-messages)
-- [2.6. Websocket notifications ](#26-websocket-notifications-)
+- [2.6. Websocket notifications](#26-websocket-notifications)
 3. [Technology](#3-technology)
 4. [Data Model](#4-data-model)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+8. [Other Resources](#8-other-resources)
 
 
 ## 1. Description
@@ -302,7 +303,8 @@ As a sequence:
 
 ## 4. Data Model
 
-Please refer to the [Architecture Overview](../architecture/teranode-architecture.md) document for a detailed description of the Block and Subtree data model.
+- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
@@ -390,3 +392,8 @@ The following settings can be configured for the p2p service:
 - **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
 - **`securityLevelHTTP`**: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
 - **`server_certFile`** and **`server_keyFile`**: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
+
+
+## 8. Other Resources
+
+[P2P Reference](../references/services/p2p_reference.md)

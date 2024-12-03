@@ -2,6 +2,7 @@
 
 ## Index
 
+
 1. [Introduction](#1-introduction)
 - [1.1. Summary](#11-summary)
 - [1.2. Data Transformation for Compatibility](#12-data-transformation-for-compatibility)
@@ -15,6 +16,8 @@
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
+7. [Other Resources](#7-other-resources)
+
 
 ## 1. Introduction
 
@@ -200,8 +203,7 @@ Technology highlights:
 
 ## 6. Directory Structure and Main Files
 
-
-**** TODO  - clarify and wait for structure cleanup
+- TODO
 
 ## 7. How to run
 
@@ -212,3 +214,8 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Legacy=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the P2P Legacy Service locally.
+
+
+## 7. Other Resources
+
+[Alert Reference](../references/services/legacy_reference.md)

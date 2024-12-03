@@ -1,13 +1,23 @@
 # 🐘️ Kafka in Teranode
 
 ## Table of Contents
+
 1. [Description](#1-description)
 2. [Use Cases](#2-use-cases)
-    - [Propagation](#propagation)
-    - [Validator](#validator)
-    - [P2P](#p2p)
-    - [Blockchain](#blockchain)
+- [Propagation Service](#propagation-service)
+- [Validator Component](#validator-component)
+- [P2P Service](#p2p-service)
+- [Blockchain](#blockchain)
 3. [Reliability and Recoverability](#3-reliability-and-recoverability)
+4. [Settings](#4-settings)
+- [General Kafka Settings](#general-kafka-settings)
+- [Service-Specific Settings](#service-specific-settings)
+   - [Block Assembly](#block-assembly)
+   - [Block Validation](#block-validation)
+   - [Subtree Validation](#subtree-validation)
+   - [Validator](#validator)
+5. [Other Resources](#5-other-resources)
+
 
 ## 1. Description
 
@@ -107,3 +117,10 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 ### Validator
 - `validator_kafkaWorkers`: Number of Kafka workers for validator (default: 100)
 - `validator_kafkaPartitions`: Number of Kafka partitions (mentioned in a comment)
+
+
+## 5. Other Resources
+
+- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.

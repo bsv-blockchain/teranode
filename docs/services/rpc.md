@@ -2,8 +2,6 @@
 
 ## Index
 
-## Index
-
 1. [Introduction](#1-introduction)
 - [Supported RPC Commands](#supported-rpc-commands)
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
@@ -35,6 +33,7 @@
 - [Core Settings from `gocore` Configuration:](#core-settings-from-gocore-configuration)
 - [Usage of Settings:](#usage-of-settings)
 7. [How to run](#7-how-to-run)
+8. [Other Resources](#8-other-resources)
 
 
 ## 1. Introduction
@@ -390,3 +389,8 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -RPC=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the RPC Service locally.
+
+
+## 8. Other Resources
+
+[Alert Reference](../references/services/propagation_reference.md)
