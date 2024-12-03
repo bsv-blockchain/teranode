@@ -135,6 +135,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	}
 
 	d.lastComputednBits = nBits
+	d.bestBlockHash = bestBlockHeader.Hash()
 
 	return nBits, nil
 }
