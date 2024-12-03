@@ -151,7 +151,6 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	var (
 		states []blockchain_api.FSMStateType
 		mu     sync.Mutex
-		wg     sync.WaitGroup
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -161,20 +160,28 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	err := framework.Nodes[0].BlockchainClient.Run(ctx, "ubsv1")
-	if err != nil {
-		suite.T().Fatal(err)
+	var err error
+	// wait for all blockchain nodes to be ready
+	for index, node := range suite.TeranodeTestEnv.Nodes {
+		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+
+		err = helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 	}
 
-	err = framework.Nodes[1].BlockchainClient.Run(ctx, "ubsv2")
-	if err != nil {
-		suite.T().Fatal(err)
+	ports := []int{10000, 12000, 14000} // ports are defined in docker-compose.e2etest.yml
+	for index, port := range ports {
+		suite.T().Logf("Waiting for node %d to be ready", index)
+
+		err = helper.WaitForHealthLiveness(port, 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 	}
 
-	err = framework.Nodes[2].BlockchainClient.Run(ctx, "ubsv3")
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+	suite.T().Log("All nodes ready")
 
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 1)
@@ -197,32 +204,40 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	// wait for node 2 block validator to catch up
+	wait := func() {
+		// trigger a new block to wake up node 2 and start catch up process
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+		require.NoError(t, err)
 
-		timeout := time.After(10 * time.Second)
+		timeout := time.After(30 * time.Second)
 		for {
 			select {
 			case <-timeout:
 				return
 			default:
-				response, _ := blockchainNode1.GetFSMCurrentState(framework.Context)
+				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
 
 				mu.Lock()
-				if _, exists := stateSet[*response]; !exists {
-					logger.Infof("New unique state: %v", response)
-					stateSet[*response] = struct{}{}
+				if _, exists := stateSet[response]; !exists {
+					framework.Logger.Infof("New unique state: %v", response)
+					stateSet[response] = struct{}{}
 				}
-				logger.Infof("Current states: %v", stateSet)
 				mu.Unlock()
 
-				time.Sleep(100 * time.Millisecond)
+				_, blockMetaNode0, err := blockchainNode0.GetBestBlockHeader(ctx)
+				require.NoError(t, err)
+
+				_, err = blockchainNode1.GetBlockByHeight(ctx, blockMetaNode0.Height)
+				if !errors.Is(err, errors.ErrBlockNotFound) {
+					return
+				}
+
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
-	}()
-
-	wg.Wait()
+	}
+	wait()
 
 	stateFound := false
 
