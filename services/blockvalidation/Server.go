@@ -1142,7 +1142,7 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 
 	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data: %v", err))
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data", err))
 	}
 
 	return &blockvalidation_api.SetMinedMultiResponse{

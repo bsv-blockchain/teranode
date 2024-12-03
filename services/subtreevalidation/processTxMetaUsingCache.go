@@ -99,7 +99,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	}
 
 	if err := g.Wait(); err != nil {
-		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache: %v", err)
+		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache", err)
 	}
 
 	return int(missed.Load()), nil

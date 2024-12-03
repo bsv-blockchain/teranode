@@ -978,7 +978,7 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			if time.Now().After(deadline) {
-				return errors.NewStorageError("timed out waiting for PostgreSQL to start: %w", err)
+				return errors.NewStorageError("timed out waiting for PostgreSQL to start", err)
 			}
 
 			logger.Infof("PostgreSQL is not up yet - waiting")

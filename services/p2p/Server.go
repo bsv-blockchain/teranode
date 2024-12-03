@@ -328,7 +328,7 @@ func (s *Server) Start(ctx context.Context) error {
 		rejectedTxTopicName,
 	)
 	if err != nil {
-		return errors.NewServiceError("error starting p2p node: %w", err)
+		return errors.NewServiceError("error starting p2p node", err)
 	}
 
 	_ = s.P2PNode.SetTopicHandler(ctx, bestBlockTopicName, s.handleBestBlockTopic)

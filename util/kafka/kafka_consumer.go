@@ -161,7 +161,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 
 	consumerGroup, err := sarama.NewConsumerGroup(cfg.BrokersURL, cfg.ConsumerGroupID, config)
 	if err != nil {
-		return nil, errors.NewServiceError("failed to create Kafka consumer group for %s: %v", cfg.Topic, err)
+		return nil, errors.NewServiceError("failed to create Kafka consumer group for %s", cfg.Topic, err)
 	}
 
 	client := &KafkaConsumerGroup{

@@ -122,12 +122,12 @@ func getTxFromFields(txRecord TXRecord, data map[string]string) (tx *bt.Tx, err 
 
 		in, err := hex.DecodeString(input)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("could not decode input: %v", err)
+			return nil, errors.NewTxInvalidError("could not decode input", err)
 		}
 
 		_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(in))
 		if err != nil {
-			return nil, errors.NewTxInvalidError("could not read input: %v", err)
+			return nil, errors.NewTxInvalidError("could not read input", err)
 		}
 	}
 
@@ -144,12 +144,12 @@ func getTxFromFields(txRecord TXRecord, data map[string]string) (tx *bt.Tx, err 
 
 		out, err := hex.DecodeString(output)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("could not decode output: %v", err)
+			return nil, errors.NewTxInvalidError("could not decode output", err)
 		}
 
 		_, err = tx.Outputs[i].ReadFrom(bytes.NewReader(out))
 		if err != nil {
-			return nil, errors.NewTxInvalidError("could not read output: %v", err)
+			return nil, errors.NewTxInvalidError("could not read output", err)
 		}
 	}
 

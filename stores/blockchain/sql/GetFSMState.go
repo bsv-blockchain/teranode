@@ -19,7 +19,7 @@ func (s *SQL) GetFSMState(ctx context.Context) (string, error) {
 			return "", nil
 		}
 
-		return "", errors.NewStorageError("failed to get FSM state: %w", err)
+		return "", errors.NewStorageError("failed to get FSM state", err)
 	}
 
 	// Deserialize the data back to string

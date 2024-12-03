@@ -88,12 +88,12 @@ func (f *Faucet) Init(ctx context.Context) error {
 
 	f.coinbaseClient, err = coinbase.NewClient(ctx, f.logger, f.settings)
 	if err != nil {
-		return errors.NewProcessingError("could not create coinbase client: %v", err)
+		return errors.NewProcessingError("could not create coinbase client", err)
 	}
 
 	f.distributor, err = distributor.NewDistributor(ctx, f.logger, f.settings, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
 	if err != nil {
-		return errors.NewServiceError("could not create distributor: %v", err)
+		return errors.NewServiceError("could not create distributor", err)
 	}
 
 	f.e.POST("/faucet/request", f.faucetHandler)

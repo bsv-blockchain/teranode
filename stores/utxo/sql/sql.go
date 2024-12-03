@@ -234,7 +234,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				return nil, errors.NewTxExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
 
-			return nil, errors.NewStorageError("Failed to insert input: %v", err)
+			return nil, errors.NewStorageError("Failed to insert input", err)
 		}
 	}
 
@@ -311,7 +311,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 					return nil, errors.NewTxExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 				}
 
-				return nil, errors.NewStorageError("Failed to insert block_ids: %v", err)
+				return nil, errors.NewStorageError("Failed to insert block_ids", err)
 			}
 		}
 	}
@@ -366,7 +366,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.NewTxNotFoundError("transaction %s not found: %v", hash, err)
+			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
 		}
 
 		return nil, err
@@ -565,7 +565,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
 
-				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
+				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d", spend.TxID, spend.Vout, err)
 			}
 
 			// If the utxo is frozen, it cannot be spent
@@ -596,7 +596,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout)
 			if err != nil {
-				return errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d: %v", spend.TxID, spend.Vout, err)
+				return errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d", spend.TxID, spend.Vout, err)
 			}
 
 			affected, err := result.RowsAffected()
@@ -680,7 +680,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 
 			if s.expirationMillis > 0 {
 				if _, err := txn.ExecContext(ctx, q2, transactionId); err != nil {
-					return errors.NewStorageError("[UnSpend] error removing tombstone for %s:%d: %v", spend.TxID, spend.Vout, err)
+					return errors.NewStorageError("[UnSpend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
 				}
 			}
 
@@ -1090,7 +1090,7 @@ func deleteTombstoned(db *usql.DB) error {
 
 	rows, err := db.Query(q, time.Now().UnixNano()/1e6)
 	if err != nil {
-		return errors.NewStorageError("failed to get transactions with tombstone: %v", err)
+		return errors.NewStorageError("failed to get transactions with tombstone", err)
 	}
 
 	var ids []int
@@ -1100,7 +1100,7 @@ func deleteTombstoned(db *usql.DB) error {
 
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return errors.NewStorageError("failed to scan transaction id: %v", err)
+			return errors.NewStorageError("failed to scan transaction id", err)
 		}
 
 		ids = append(ids, id)
@@ -1111,31 +1111,31 @@ func deleteTombstoned(db *usql.DB) error {
 	for _, id := range ids {
 		txn, err := db.Begin()
 		if err != nil {
-			return errors.NewStorageError("failed to start transaction: %v", err)
+			return errors.NewStorageError("failed to start transaction", err)
 		}
 
 		if _, err := txn.Exec("DELETE FROM block_ids WHERE transaction_id = $1", id); err != nil {
 			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete block_ids: %v", err)
+			return errors.NewStorageError("failed to delete block_ids", err)
 		}
 
 		if _, err := txn.Exec("DELETE FROM outputs WHERE transaction_id = $1", id); err != nil {
 			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete outputs: %v", err)
+			return errors.NewStorageError("failed to delete outputs", err)
 		}
 
 		if _, err := txn.Exec("DELETE FROM inputs WHERE transaction_id = $1", id); err != nil {
 			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete inputs: %v", err)
+			return errors.NewStorageError("failed to delete inputs", err)
 		}
 
 		if _, err := txn.Exec("DELETE FROM transactions WHERE id = $1", id); err != nil {
 			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete transaction: %v", err)
+			return errors.NewStorageError("failed to delete transaction", err)
 		}
 
 		if err := txn.Commit(); err != nil {
-			return errors.NewStorageError("failed to commit transaction: %v", err)
+			return errors.NewStorageError("failed to commit transaction", err)
 		}
 	}
 

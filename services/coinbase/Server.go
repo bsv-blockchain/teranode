@@ -174,7 +174,7 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 
 	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("could not parse transaction bytes: %v", err))
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not parse transaction bytes", err))
 	}
 
 	if !tx.IsExtended() {

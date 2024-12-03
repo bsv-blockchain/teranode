@@ -222,7 +222,7 @@ func cleanUpE2EContainers(isGitHubActions bool) (err error) {
 func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) (*tenv.TeranodeTestEnv, error) {
 	testEnv := tenv.NewTeraNodeTestEnv(composeFiles)
 	if err := testEnv.SetupDockerNodes(settingsMap); err != nil {
-		return nil, errors.NewConfigurationError("Error setting up nodes: %v\n", err)
+		return nil, errors.NewConfigurationError("Error setting up nodes", err)
 	}
 
 	return testEnv, nil
@@ -230,7 +230,7 @@ func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) 
 
 func TearDownTeranodeTestEnv(testEnv *tenv.TeranodeTestEnv) error {
 	if err := testEnv.StopDockerNodes(); err != nil {
-		return errors.NewConfigurationError("Error stopping nodes: %v\n", err)
+		return errors.NewConfigurationError("Error stopping nodes", err)
 	}
 
 	return nil

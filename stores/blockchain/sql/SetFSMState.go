@@ -21,7 +21,7 @@ func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
 
 	_, err := s.db.ExecContext(ctx, query, "fsm_state", fsmStateData)
 	if err != nil {
-		return errors.NewStorageError("failed to set FSM state: %w", err)
+		return errors.NewStorageError("failed to set FSM state", err)
 	}
 
 	return nil

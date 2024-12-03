@@ -74,7 +74,7 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 	// Get an ephemeral port
 	hostPort, err := GetFreePort()
 	if err != nil {
-		return nil, errors.NewConfigurationError("could not get free port: %w", err)
+		return nil, errors.NewConfigurationError("could not get free port", err)
 	}
 
 	// const containerPort = 9092 // The internal port Redpanda uses
@@ -100,7 +100,7 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 		Started:          true,
 	})
 	if err != nil {
-		return nil, errors.NewProcessingError("could not start the container: %w", err)
+		return nil, errors.NewProcessingError("could not start the container", err)
 	}
 
 	return &TestContainerWrapper{
@@ -114,7 +114,7 @@ func (t *TestContainerWrapper) CleanUp() error {
 	defer cancelFunc()
 
 	if err := t.container.Terminate(ctx); err != nil {
-		return errors.NewConfigurationError("could not terminate the container: %w", err)
+		return errors.NewConfigurationError("could not terminate the container", err)
 	}
 
 	return nil

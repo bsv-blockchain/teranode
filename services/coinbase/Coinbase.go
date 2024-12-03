@@ -86,7 +86,7 @@ func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchain
 
 	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
 	if err != nil {
-		return nil, errors.NewConfigurationError("can't create coinbase address: %v", err)
+		return nil, errors.NewConfigurationError("can't create coinbase address", err)
 	}
 
 	backoffDuration := tSettings.Coinbase.DistributorBackoffDuration

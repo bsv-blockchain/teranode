@@ -49,7 +49,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 		for _, blockID := range blockIDStrings {
 			blockIDInt, err := strconv.ParseUint(blockID, 10, 32)
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not parse block ID: %v", err)
+				return nil, errors.NewTxInvalidError("could not parse block ID", err)
 			}
 
 			blockIDs = append(blockIDs, uint32(blockIDInt)) // nolint: gosec

@@ -112,7 +112,7 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 
 	producer, err := sarama.NewAsyncProducer(cfg.BrokersURL, config)
 	if err != nil {
-		return nil, errors.NewServiceError("Failed to create Kafka async producer for %s: %v", cfg.Topic, err)
+		return nil, errors.NewServiceError("Failed to create Kafka async producer for %s", cfg.Topic, err)
 	}
 
 	client := &KafkaAsyncProducer{

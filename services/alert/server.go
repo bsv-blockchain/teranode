@@ -275,11 +275,11 @@ func (s *Server) requireP2P() error {
 func (s *Server) createPrivateKeyDirectory() error {
 	dirName, err := os.UserHomeDir()
 	if err != nil {
-		return errors.NewConfigurationError("failed to initialize p2p private key file: %w", err)
+		return errors.NewConfigurationError("failed to initialize p2p private key file", err)
 	}
 
 	if err = os.Mkdir(fmt.Sprintf("%s/%s", dirName, config.LocalPrivateKeyDirectory), 0750); err != nil && !errors.Is(err, os.ErrExist) {
-		return errors.NewConfigurationError("failed to ensure %s dir exists: %w", config.LocalPrivateKeyDirectory, err)
+		return errors.NewConfigurationError("failed to ensure %s dir exists", config.LocalPrivateKeyDirectory, err)
 	}
 
 	s.appConfig.P2P.PrivateKeyPath = fmt.Sprintf("%s/%s/%s", dirName, config.LocalPrivateKeyDirectory, config.LocalPrivateKeyDefault)

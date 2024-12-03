@@ -392,7 +392,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 			if err != nil {
 				// After all retries, if there's still an error, wrap and return it using %w
 				// to wrap the error, so the caller can use errors.Is() to check for this specific error
-				return nil, errors.NewServiceError("error getting mining candidate after %d retries: %w", len(retryDelays), err)
+				return nil, errors.NewServiceError("error getting mining candidate after %d retries", len(retryDelays), err)
 			}
 
 			if candidate == nil {

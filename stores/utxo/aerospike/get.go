@@ -176,7 +176,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not read input: %v", err)
+				return nil, errors.NewTxInvalidError("could not read input", err)
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputInterface.([]byte)))
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not read output: %v", err)
+				return nil, errors.NewTxInvalidError("could not read output", err)
 			}
 		}
 	}
@@ -268,7 +268,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.NewStorageError("error in aerospike map store batch records: %w", err)
+		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
 
 	for idx, batchRecord := range batchRecords {
@@ -308,7 +308,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 					} else {
 						tx, txErr := s.getTxFromBins(bins)
 						if txErr != nil {
-							return errors.NewTxInvalidError("invalid tx: %v", txErr)
+							return errors.NewTxInvalidError("invalid tx", txErr)
 						}
 
 						items[idx].Data.Tx = tx
@@ -425,7 +425,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 		if err != nil {
 			for _, item := range batch {
-				sendErrorAndClose(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err))
+				sendErrorAndClose(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta", err))
 			}
 
 			return
@@ -443,7 +443,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records: %w", err))
+			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records", err))
 		}
 
 		return
@@ -459,9 +459,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
 			if errors.Is(batchRecord.Err, aerospike.ErrKeyNotFound) {
-				txErrors[previousTxHash] = errors.NewTxNotFoundError("could not find transaction %s in aerospike: %w", previousTxHash.String(), batchRecord.Err)
+				txErrors[previousTxHash] = errors.NewTxNotFoundError("could not find transaction %s in aerospike", previousTxHash.String(), batchRecord.Err)
 			} else {
-				txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike get outpoint batch record: %w", batchRecord.Err)
+				txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike get outpoint batch record", batchRecord.Err)
 			}
 
 			continue
@@ -481,7 +481,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				txErrors[previousTxHash] = errors.NewTxInvalidError("invalid tx: %v", err)
+				txErrors[previousTxHash] = errors.NewTxInvalidError("invalid tx", err)
 
 				continue
 			}
@@ -569,12 +569,12 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	if ext == "tx" {
 		if _, err = tx.ReadFrom(bufferedReader); err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader: %w", previousTxHash.String(), err)
+			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader", previousTxHash.String(), err)
 		}
 	} else {
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader: %w", previousTxHash.String(), err)
+			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
 		}
 
 		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
@@ -612,7 +612,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 			if retries < 3 {
 				retries++
 
-				s.logger.Errorf("failed to get batch of txmeta: %v", err)
+				s.logger.Errorf("failed to get batch of txmeta", err)
 				time.Sleep(time.Duration(retries) * time.Second)
 
 				continue

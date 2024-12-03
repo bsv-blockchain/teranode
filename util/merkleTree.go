@@ -16,7 +16,7 @@ func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 
 	merkleProof, err := subtrees[0].GetMerkleProof(0)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed creating merkle proof for subtree: %v", err)
+		return nil, errors.NewProcessingError("failed creating merkle proof for subtree", err)
 	}
 
 	// Create a new tree with the subtreeHashes of the subtrees

@@ -205,7 +205,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	if err := g.Wait(); err != nil {
-		return errors.NewServiceError("the main server has ended with error: %w", err)
+		return errors.NewServiceError("the main server has ended with error", err)
 	}
 
 	return nil

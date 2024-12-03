@@ -466,7 +466,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 
 		err := spendingTx.FromUTXOs(utxos...)
 		if err != nil {
-			return nil, errors.NewProcessingError("error adding UTXOs to transaction: %v", err)
+			return nil, errors.NewProcessingError("error adding UTXOs to transaction", err)
 		}
 
 		fee := uint64(1000)
@@ -474,12 +474,12 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 
 		err = spendingTx.AddP2PKHOutputFromAddress(address1.AddressString, amountToSend)
 		if err != nil {
-			return nil, errors.NewProcessingError("error adding output to transaction: %v", err)
+			return nil, errors.NewProcessingError("error adding output to transaction", err)
 		}
 
 		err = spendingTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
 		if err != nil {
-			return nil, errors.NewProcessingError("error filling transaction inputs: %v", err)
+			return nil, errors.NewProcessingError("error filling transaction inputs", err)
 		}
 
 		return spendingTx, nil
@@ -508,7 +508,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 		logger.Infof("Stopping Aerospike node")
 
 		if err := framework.StopNode("aerospike-1"); err != nil {
-			errChan <- errors.NewProcessingError("failed to stop aerospike: %v", err)
+			errChan <- errors.NewProcessingError("failed to stop aerospike", err)
 			return
 		}
 		errChan <- nil
@@ -520,7 +520,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 
 		_, err := txDistributor.SendTransaction(ctx, tx2)
 		if err != nil {
-			errChan <- errors.NewProcessingError("failed to send second transaction: %v", err)
+			errChan <- errors.NewProcessingError("failed to send second transaction", err)
 			return
 		}
 		errChan <- nil

@@ -121,7 +121,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error 
 		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)
 		v.logger.Warnf(errorLogMsg)
 
-		return errors.NewTxInvalidError("Failed to verify script: %w", err)
+		return errors.NewTxInvalidError("Failed to verify script", err)
 	}
 
 	return nil

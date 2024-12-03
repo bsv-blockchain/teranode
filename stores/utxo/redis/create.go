@@ -62,7 +62,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
+		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s", txHash, err)
 	}
 
 	fields := map[string]interface{}{

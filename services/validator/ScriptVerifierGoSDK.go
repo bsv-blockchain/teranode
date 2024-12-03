@@ -119,7 +119,7 @@ func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err e
 				return nil
 			}
 
-			return errors.NewTxInvalidError("script execution error: %w", err)
+			return errors.NewTxInvalidError("script execution error", err)
 		}
 	}
 

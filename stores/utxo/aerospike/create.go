@@ -400,7 +400,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, hasUtxos, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
+		return nil, hasUtxos, errors.NewProcessingError("failed to get fees and utxo hashes for %s", txHash, err)
 	}
 
 	var inputs []interface{}

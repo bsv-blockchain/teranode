@@ -165,7 +165,7 @@ func (s *File) readTTLFromFile(fileName string) (*time.Time, error) {
 
 	ttl, err := time.Parse(time.RFC3339, string(ttlBytes))
 	if err != nil {
-		return nil, errors.NewProcessingError("[File] failed to parse ttl from %s: %v", fileName, err)
+		return nil, errors.NewProcessingError("[File] failed to parse ttl from %s", fileName, err)
 	}
 
 	return &ttl, nil

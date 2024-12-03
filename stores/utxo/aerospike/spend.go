@@ -145,7 +145,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
 			if err != nil {
 				// we just return the error on the channel, we cannot process this utxo any further
-				bItem.done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.TxID.String(), err)
+				bItem.done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend", bItem.spend.TxID.String(), err)
 				continue
 			}
 
@@ -217,7 +217,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					if err != nil {
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response: %v", txID.String(), err)
+							batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response", txID.String(), err)
 						}
 					}
 
@@ -343,7 +343,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 		if err != nil {
 			item.res <- incrementNrRecordsRes{
 				res: nil,
-				err: errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err),
+				err: errors.NewProcessingError("failed to init new aerospike key for txMeta", err),
 			}
 
 			continue
@@ -361,7 +361,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 		for _, item := range batch {
 			item.res <- incrementNrRecordsRes{
 				res: nil,
-				err: errors.NewStorageError("error in aerospike send outpoint batch records: %w", err),
+				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
 			}
 		}
 
@@ -374,7 +374,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 		if batchRecord.Err != nil {
 			batch[idx].res <- incrementNrRecordsRes{
 				res: nil,
-				err: errors.NewStorageError("error in aerospike send outpoint batch records: %w", err),
+				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
 			}
 
 			continue

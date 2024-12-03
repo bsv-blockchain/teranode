@@ -505,7 +505,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	if b.Header.Version > 1 && b.Height > LastV1Block {
 		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height: %w", b.Hash().String(), err)
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.Hash().String(), err)
 		}
 
 		if height != b.Height {
@@ -972,24 +972,24 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 
 	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
-		return errors.NewConfigurationError("aerospike get URL error: %w", err)
+		return errors.NewConfigurationError("aerospike get URL error", err)
 	}
 
 	portStr := aeroURL.Port()
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		return errors.NewConfigurationError("aerospike port error: %w", err)
+		return errors.NewConfigurationError("aerospike port error", err)
 	}
 
 	client, aErr := aerospike.NewClient(aeroURL.Host, port)
 	if aErr != nil {
-		return errors.NewServiceError("aerospike error: %w", aErr)
+		return errors.NewServiceError("aerospike error", aErr)
 	}
 
 	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), parentTxStruct.txHash.CloneBytes())
 	if aeroErr != nil {
-		return errors.NewProcessingError("aerospike error: %w", aeroErr)
+		return errors.NewProcessingError("aerospike error", aeroErr)
 	}
 
 	readPolicy := aerospike.NewPolicy()
@@ -1001,7 +1001,7 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 	logger.Warnf("Aerospike get [%s]took %v", parentTxStruct.txHash.String(), time.Since(start))
 
 	if aErr != nil {
-		return errors.NewServiceError("aerospike error: %w", aErr)
+		return errors.NewServiceError("aerospike error", aErr)
 	}
 
 	return errors.NewServiceError("aerospike response: %v", response)
@@ -1145,7 +1145,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("meta"))
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta: %w", b.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta", b.Hash().String(), subtreeHash.String(), err)
 	}
 
 	defer func() {
@@ -1155,7 +1155,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store
 	// no need to check whether this fails or not, it's just a cache file and not critical
 	subtreeMetaSlice, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta: %w", b.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta", b.Hash().String(), subtreeHash.String(), err)
 	}
 
 	return subtreeMetaSlice, nil

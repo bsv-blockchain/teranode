@@ -428,7 +428,7 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 
 	subtreeBytes, err := repo.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56, options.WithFileExtension("subtree"))
 	if err != nil {
-		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method: %w", err)
+		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
 	}
 
 	if len(subtreeBytes) != 56 {

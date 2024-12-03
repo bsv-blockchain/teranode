@@ -1052,7 +1052,7 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 		blocksPartOfCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, parentTransactionsBlockIDs)
 		// if err is not nil, log the error and continue iterating for the next transaction
 		if err != nil {
-			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] failed to check if old blocks are part of the current chain: %v", blockStr, err)
+			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] failed to check if old blocks are part of the current chain", blockStr, err)
 			return false
 		}
 

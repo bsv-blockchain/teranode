@@ -14,7 +14,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
-		return errors.NewStorageError("error checking block exists: %v", err)
+		return errors.NewStorageError("error checking block exists", err)
 	}
 
 	if !exists {

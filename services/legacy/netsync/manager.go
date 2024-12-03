@@ -871,7 +871,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		return errors.NewProcessingError("failed to get current FSM state: %v", err)
+		return errors.NewProcessingError("failed to get current FSM state", err)
 	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateLEGACYSYNCING {
 		legacySyncMode = true
 	}

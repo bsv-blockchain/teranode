@@ -33,7 +33,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 
 	fee, err := strconv.ParseUint(data["fee"], 10, 64)
 	if err != nil {
-		return nil, errors.NewTxInvalidError("could not parse fee: %v", err)
+		return nil, errors.NewTxInvalidError("could not parse fee", err)
 	}
 
 	var blockIDs []uint32
@@ -46,7 +46,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 		for _, blockID := range blockIDStrings {
 			blockIDInt, err := strconv.ParseUint(blockID, 10, 32)
 			if err != nil {
-				return nil, errors.NewTxInvalidError("could not parse block ID: %v", err)
+				return nil, errors.NewTxInvalidError("could not parse block ID", err)
 			}
 
 			blockIDs = append(blockIDs, uint32(blockIDInt)) // nolint: gosec
@@ -55,7 +55,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 
 	isCoinbase, err := strconv.ParseBool(data["isCoinbase"])
 	if err != nil {
-		return nil, errors.NewTxInvalidError("could not parse isCoinbase: %v", err)
+		return nil, errors.NewTxInvalidError("could not parse isCoinbase", err)
 	}
 
 	metaData := &meta.Data{
@@ -96,7 +96,7 @@ func (s *Store) retrieveRawTransaction(ctx context.Context, txHash *chainhash.Ha
 	bufferedReader := bufio.NewReaderSize(reader, 1*1024*1024) // 1MB buffer
 
 	if _, err = tx.ReadFrom(bufferedReader); err != nil {
-		return nil, errors.NewTxInvalidError("[retrieveRawTransaction][%s] could not read tx from reader: %w", txHash.String(), err)
+		return nil, errors.NewTxInvalidError("[retrieveRawTransaction][%s] could not read tx from reader", txHash.String(), err)
 	}
 
 	return tx, nil

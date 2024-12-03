@@ -178,7 +178,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *i
 func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w *io.PipeWriter, block *model.Block, subtreeHash *chainhash.Hash) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
-		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store", subtreeHash.String(), err)
 	}
 
 	defer func() {
@@ -189,7 +189,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
-		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree: %w", err)
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
 	}
 
 	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
@@ -224,12 +224,12 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 			// Write coinbase tx
 			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
-				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx: %w", err)
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx", err)
 			}
 		} else {
 			// Write regular tx
 			if _, err := w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
-				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing tx[%d]: %v)", i, err)
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing tx[%d])", i, err)
 			}
 		}
 	}
