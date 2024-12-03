@@ -1,4 +1,4 @@
-//go:build tnatests
+//go:build tna
 
 package tna
 

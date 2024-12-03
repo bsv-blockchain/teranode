@@ -18,7 +18,18 @@ jobs:
           - test_dir: "test/tnc"
             test_tags: "tnc"
             report_name: "tnc-test-report.json"
-
+          - test_dir: "test/tnb"
+            test_tags: "tnb"
+            report_name: "tnb-test-report.json"
+          - test_dir: "test/tnf"
+            test_tags: "tnf"
+            report_name: "tnf-test-report.json"
+          - test_dir: "test/tnj"
+            test_tags: "tnj"
+            report_name: "tnj-test-report.json"
+          - test_dir: "test/tna"
+            test_tags: "tna"
+            report_name: "tna-test-report.json"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

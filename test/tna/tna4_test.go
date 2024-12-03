@@ -1,4 +1,4 @@
-//go:build tnatests
+//go:build tna
 
 package tna
 
@@ -16,6 +16,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -49,23 +50,24 @@ func (suite *TNA4TestSuite) TestBroadcastPoW() {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
-	fmt.Printf("Hashes in created block: %v\n", hashes)
+	t.Logf("Hashes in created block: %v\n", hashes)
 
-	baClient := testEnv.Nodes[0].BlockassemblyClient
-
-	var block, blockerr = helper.MineBlock(ctx, baClient, logger)
+	var _, blockerr = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 
 	if blockerr != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	time.Sleep(10 * time.Second)
+	time.Sleep(2 * time.Second)
 
-	blockNode0, blockErr0 := testEnv.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	bestBlock, _, err := testEnv.Nodes[0].BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
 
-	blockNode1, blockErr1 := testEnv.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	blockNode0, blockErr0 := testEnv.Nodes[0].BlockchainClient.GetBlockExists(ctx, bestBlock.Hash())
 
-	blockNode2, blockErr2 := testEnv.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+	blockNode1, blockErr1 := testEnv.Nodes[1].BlockChainDB.GetBlockExists(ctx, bestBlock.Hash())
+
+	blockNode2, blockErr2 := testEnv.Nodes[2].BlockchainClient.GetBlockExists(ctx, bestBlock.Hash())
 
 	if blockErr0 != nil {
 		t.Errorf("Failure on blockchain on Node0: %v", err)
