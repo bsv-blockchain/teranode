@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"unicode/utf8"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -354,7 +355,15 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 	hdr := messageHeader{}
 	hdr.magic = bsvnet
 	hdr.command = cmd
-	hdr.length = uint32(lenp)
+
+	//nolint:gosec
+	if lenp >= math.MaxUint32 {
+		hdr.length = 0xffffffff
+		hdr.extLength = uint64(lenp)
+	} else {
+		hdr.length = uint32(lenp)
+	}
+
 	copy(hdr.checksum[:], chainhash.DoubleHashB(payload)[0:4])
 
 	// Encode the header for the message.  This is done to a buffer
