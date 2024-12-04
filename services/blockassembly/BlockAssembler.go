@@ -658,13 +658,15 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, errors.NewError("header is nil")
 	}
 
+	bestBlockHeight := b.bestBlockHeight.Load()
 	// Get block locators for both chains
-	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
+	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, b.bestBlockHeader.Load().Hash(), bestBlockHeight)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting block locator for current chain", err)
 	}
 
-	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), height)
+	// newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), height)
+	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), bestBlockHeight+1) // start from the best block header so that the locator returned works in step with the current chain locator
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting block locator for new chain", err)
 	}
@@ -694,7 +696,9 @@ FoundAncestor:
 	}
 
 	// Get headers from current tip down to common ancestor
-	moveDownBlockHeaders, _, err := b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), uint64(b.bestBlockHeight.Load()-commonAncestorMeta.Height+1))
+	headerCount := bestBlockHeight - commonAncestorMeta.Height + 1
+
+	moveDownBlockHeaders, _, err := b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), uint64(headerCount))
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting current chain headers", err)
 	}
