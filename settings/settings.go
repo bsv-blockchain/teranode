@@ -292,7 +292,6 @@ func NewSettings() *Settings {
 			Store:                       getURL("coinbase_store", ""),
 			StoreDBTimeoutMillis:        getInt("coinbase_store_dbTimeoutMillis", 0),
 			WaitForPeers:                getBool("coinbase_wait_for_peers", false),
-			WaitUntilBlock:              getInt("coinbase_wait_until_block", 0),
 			WalletPrivateKey:            getString("coinbase_wallet_private_key", ""),
 			DistributorBackoffDuration:  getDuration("distributor_backoff_duration", 1*time.Second),
 			DistributorMaxRetries:       getInt("distributor_max_retries", 3),

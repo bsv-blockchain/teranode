@@ -129,7 +129,6 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 		// Min height possible is 101
 		// whatever height you specify, make sure :
-		// mine_initial_blocks_count.docker = [height]
 		// blockvalidation_maxPreviousBlockHeadersToCheck = [height - 1]
 		height := uint32(101)
 

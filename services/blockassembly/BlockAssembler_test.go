@@ -11,9 +11,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly/mining"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -169,10 +169,10 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate)
 		require.NoError(t, err)
 
-		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
@@ -443,10 +443,10 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate)
 		require.NoError(t, err)
 
-		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
@@ -547,10 +547,10 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash4.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate)
 		require.NoError(t, err)
 
-		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
@@ -656,10 +656,10 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, hash2.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate)
 		require.NoError(t, err)
 
-		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)

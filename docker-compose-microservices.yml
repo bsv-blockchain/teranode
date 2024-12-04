@@ -173,7 +173,7 @@ services:
   ubsv-miner:
     <<: *ubsv-base
     container_name: ubsv-miner
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run"]
     ports:
       - 4040
       - 8089

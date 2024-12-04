@@ -285,7 +285,6 @@ type CoinbaseSettings struct {
 	Store                       *url.URL
 	StoreDBTimeoutMillis        int
 	WaitForPeers                bool
-	WaitUntilBlock              int
 	WalletPrivateKey            string
 	DistributorBackoffDuration  time.Duration
 	DistributorMaxRetries       int

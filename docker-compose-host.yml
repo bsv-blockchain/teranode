@@ -101,7 +101,7 @@ services:
         condition: service_started
       aerospike-1:
         condition: service_started
-    entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       JAEGER_SERVICE_NAME: ubsv-1

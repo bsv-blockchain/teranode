@@ -341,6 +341,28 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 			}
 		}
 
+	case "subtreeFull":
+		var numTxs uint32
+
+		if err := binary.Read(br, binary.LittleEndian, &numTxs); err != nil {
+			return errors.NewProcessingError("error reading number of txs", err)
+		}
+
+		fmt.Printf(numTransactionsFormat, numTxs)
+
+		if verbose {
+			for i := uint32(0); i < numTxs; i++ {
+				var tx bt.Tx
+
+				_, err := tx.ReadFrom(br)
+				if err != nil {
+					return errors.NewProcessingError("error reading transaction", err)
+				}
+
+				fmt.Printf("%v\n", tx.TxIDChainHash())
+			}
+		}
+
 	case "subtree":
 		st := &util.Subtree{}
 		if err := st.DeserializeFromReader(br); err != nil {

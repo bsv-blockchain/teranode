@@ -33,9 +33,6 @@ type FileStorer struct {
 }
 
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
-	hasher := sha256.New()
-
-	reader, writer := io.Pipe()
 
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
 
@@ -47,6 +44,9 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	logger.Infof("Using %s buffer for file storer", bufferSize)
+
+	reader, writer := io.Pipe()
+	hasher := sha256.New()
 
 	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
 	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize.Int())

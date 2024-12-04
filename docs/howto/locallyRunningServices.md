@@ -57,7 +57,6 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Coinbase           | `-Coinbase=1`          | Activate the Coinbase component.      |
 | Help               | `-help=1`              | Display the help information.         |
 | Legacy             | `-Legacy=1`            | Begin the Legacy Bridge process.      |
-| Miner              | `-Miner=1`             | Start the Miner component.            |
 | P2P                | `-P2P=1`               | Begin the P2P communication process.  |
 | Propagation        | `-Propagation=1`       | Begin the Propagation process.        |
 | RPC                | `-RPC=1`               | Begin the RPC server.                 |

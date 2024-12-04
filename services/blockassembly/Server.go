@@ -8,9 +8,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly/mining"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -935,7 +935,7 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 	}
 
 	// mine the block
-	miningSolution, err := cpuminer.Mine(ctx, miningCandidate)
+	miningSolution, err := mining.Mine(ctx, miningCandidate)
 	if err != nil {
 		return errors.NewProcessingError("error mining block", err)
 	}

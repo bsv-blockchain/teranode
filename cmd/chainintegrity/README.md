@@ -11,7 +11,7 @@ mainnet.
 rm -rf data
 
 # run the node for a bit to create at least 100 blocks
-miner_waitSeconds=0 SETTINGS_CONTEXT=dev go run .
+SETTINGS_CONTEXT=dev go run .
 
 # stop the node (CTRL+C)
 

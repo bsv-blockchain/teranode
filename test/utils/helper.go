@@ -22,9 +22,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly/mining"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -274,12 +274,12 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 		return nil, errors.NewProcessingError("error getting mining candidate", err)
 	}
 
-	solution, err := cpuminer.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
 
-	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+	blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 	if err != nil {
 		return nil, errors.NewProcessingError("error building block header", err)
 	}
@@ -303,12 +303,12 @@ func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogg
 }
 
 func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
-	solution, err := cpuminer.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
 
-	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+	blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 	if err != nil {
 		return nil, errors.NewProcessingError("error building block header", err)
 	}
@@ -323,12 +323,12 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 }
 
 func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
-	solution, err := cpuminer.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
 
-	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+	blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
 	if err != nil {
 		return nil, errors.NewProcessingError("error building block header", err)
 	}

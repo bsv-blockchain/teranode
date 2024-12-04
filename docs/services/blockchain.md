@@ -5,17 +5,31 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Service initialization](#21-service-initialization)
-- [2.2. Adding a new block to the blockchain](#22-adding-a-new-block-to-the-blockchain)
-- [2.3. Sending new block notifications to the Block Persister](#23-sending-new-block-notifications-to-the-block-persister)
-- [2.4. Getting a block from the blockchain](#24-getting-a-block-from-the-blockchain)
-- [2.5. Getting the last N blocks from the blockchain](#25-getting-the-last-n-blocks-from-the-blockchain)
-- [2.6. Checking if a Block Exists in the Blockchain](#26-checking-if-a-block-exists-in-the-blockchain)
-- [2.7. Getting the Best Block Header](#27-getting-the-best-block-header)
-- [2.8. Getting the Block Headers](#28-getting-the-block-headers)
-- [2.9. Invalidating a Block](#29-invalidating-a-block)
-- [2.10. Subscribing to Blockchain Events](#210-subscribing-to-blockchain-events)
-- [2.11. Triggering a Subscription Notification](#211-triggering-a-subscription-notification)
+- [🌐 Blockchain Service](#-blockchain-service)
+  - [Index](#index)
+  - [1. Description](#1-description)
+  - [2. Functionality](#2-functionality)
+    - [2.1. Service initialization](#21-service-initialization)
+    - [2.2. Adding a new block to the blockchain](#22-adding-a-new-block-to-the-blockchain)
+    - [2.3. Sending new block notifications to the Block Persister](#23-sending-new-block-notifications-to-the-block-persister)
+    - [2.4. Getting a block from the blockchain](#24-getting-a-block-from-the-blockchain)
+    - [2.5. Getting the last N blocks from the blockchain](#25-getting-the-last-n-blocks-from-the-blockchain)
+    - [2.6. Checking if a Block Exists in the Blockchain](#26-checking-if-a-block-exists-in-the-blockchain)
+    - [2.7. Getting the Best Block Header](#27-getting-the-best-block-header)
+    - [2.8. Getting the Block Headers](#28-getting-the-block-headers)
+    - [2.9. Invalidating a Block](#29-invalidating-a-block)
+    - [2.10. Subscribing to Blockchain Events](#210-subscribing-to-blockchain-events)
+    - [2.11. Triggering a Subscription Notification](#211-triggering-a-subscription-notification)
+  - [3. gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+  - [4. Data Model](#4-data-model)
+  - [5. Technology](#5-technology)
+  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+  - [7. How to run](#7-how-to-run)
+  - [8. Configuration options (settings flags)](#8-configuration-options-settings-flags)
+    - [Blockchain Service Configuration](#blockchain-service-configuration)
+    - [Operational Settings](#operational-settings)
+    - [Mining and Difficulty Settings](#mining-and-difficulty-settings)
+  - [9. Other Resources](#9-other-resources)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -499,8 +513,6 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 
 ### Mining and Difficulty Settings
 - **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments. Defaults to false.
-- **Initial Blocks Count (`mine_initial_blocks_count`)**: Specifies the number of blocks that should be mined at the initial difficulty level. Defaults to 200.
-- **Mine Initial Blocks Flag (`mine_initial_blocks`)**: A boolean flag to determine if initial blocks should be mined under special conditions. Used in conjunction with `mine_initial_blocks_count`.
 
 
 ## 9. Other Resources

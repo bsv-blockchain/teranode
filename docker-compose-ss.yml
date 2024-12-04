@@ -391,35 +391,6 @@ services:
     #   - "19905:9905"
     #   - "19292:9292"
 
-  miner-1:
-    <<: *ubsv-base-1
-    container_name: miner-1
-    entrypoint:
-      [
-        "/app/wait.sh",
-        "postgres",
-        "5432",
-        "0",
-        "--",
-        "/app/wait.sh",
-        "kafka-shared",
-        "9092",
-        "0",
-        "--",
-        "/app/ubsv.run",
-        "-all=0",
-        "-miner=1",
-      ]
-    environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
-      JAEGER_SERVICE_NAME: miner-1
-    # ports:
-    #   - "18081-18089:8081-8089"
-    #   - "18090-18097:8090-8097"
-    #   - "19091:9091"
-    #   - "19905:9905"
-    #   - "19292:9292"
-
   blockpersister-1:
     <<: *ubsv-base-1
     container_name: blockpersister-1

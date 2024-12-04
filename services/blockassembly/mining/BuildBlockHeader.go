@@ -1,4 +1,4 @@
-package cpuminer
+package mining
 
 import (
 	"encoding/binary"
@@ -22,8 +22,10 @@ func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSo
 	if solution.Time != nil {
 		time = *solution.Time
 	}
+
 	t := make([]byte, 4)
 	binary.LittleEndian.PutUint32(t, time)
+
 	n := make([]byte, 4)
 	binary.LittleEndian.PutUint32(n, solution.Nonce)
 
@@ -31,6 +33,7 @@ func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSo
 	if err != nil {
 		return nil, err
 	}
+
 	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDChainHash().CloneBytes(), candidate.MerkleProof)
 
 	a := []byte{}
@@ -40,5 +43,6 @@ func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSo
 	a = append(a, t...)
 	a = append(a, candidate.NBits...)
 	a = append(a, n...)
+
 	return a, nil
 }
