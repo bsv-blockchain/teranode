@@ -11,7 +11,6 @@ import (
 	"time"
 
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -92,11 +91,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 
 	logger := testEnv.Logger
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	txDistributor := testEnv.Nodes[0].DistributorClient
 
 	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
