@@ -18,33 +18,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 )
 
-var (
-
-	// txWhitelist contains transaction IDs that are exempt from standard validation rules
-	// These are typically historical transactions that would otherwise fail validation
-	// due to changes in validation rules over time
-	txWhitelist = map[string]struct{}{
-		// Historical transactions with special handling requirements
-		"c99c49da4c38af669dea436d3e73780dfdb6c1ecf9958baa52960e8baee30e73": {},
-		"0ad07700151caa994c0bc3087ad79821adf071978b34b8b3f0838582e45ef305": {},
-		"7c451f68e15303ab3e28450405cfa70f2c2cc9fa29e92cb2d8ed6ca6edb13645": {},
-		"a6c116351836d9cc223321ba4b38d68c8f0db53661f8c2229acabbc269c1b2c8": {},
-		"f5efee46ccfa4191ccd9d9f645e2f5d09bbe195f95ef5608e992d6794cd653cd": {},
-		"904bda3a7d3e3b8402793334a75fb1ce5a6ff5cf1c2d3bcbd7bd25872d0e8c1e": {},
-		"8ac76995ce4ac10dd02aa819e7e6535854a2271e44f908570f71bc418ffe3f02": {},
-		"e218970e8f810be99d60aa66262a1d382bc4b1a26a69af07ac47d622885db1a7": {},
-		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
-		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
-		"b3146a5012e75fa06eaf92171416796e141e984b29bf23999726f6d698957cef": {}, // spending of OP_RETURN
-		"ad74a116639ea654ed8ba4170781199c2f37004b14dc9a5c54df55788c9ab50c": {}, // spending of weird OP_SHIFT script causing panic
-		"cc95cdc21ff31afb8295d8015b222d0e54dcae634010bea8e79c09325ac173cf": {}, // spending of weird OP_SHIFT script causing panic
-		"6e1d88f10e829fa2dd9691ef5cf9550ba6f0eed51d676f1b74df3fa894fe7035": {}, // spending of weird OP_SHIFT script causing panic
-		"7562141b4a26e2482f43e9e123222579c8c9f704d465aacf11ed041a85d2e50d": {}, // spending of weird OP_SHIFT script causing panic
-		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
-		"65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3": {}, //
-	}
-)
-
 // TxInterpreter defines the type of script interpreter to be used
 // for transaction validation
 type TxInterpreter string
@@ -173,10 +146,6 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 // Returns:
 //   - error: Any validation errors encountered
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
-	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
-		return nil
-	}
-
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
