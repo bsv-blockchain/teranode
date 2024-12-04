@@ -1,4 +1,4 @@
-package test
+package utils
 
 type BlockchainInfo struct {
 	Result struct {

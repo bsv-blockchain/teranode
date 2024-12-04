@@ -1,4 +1,4 @@
-//go:build tnj
+//go:build test_all || test_tnj
 
 // How to run this test manually:
 // $ cd test/tnj
@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
-	"github.com/bitcoin-sv/ubsv/test/testenv"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
@@ -19,7 +17,7 @@ import (
 )
 
 type TNJDoubleSpendTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNJDoubleSpendTestSuite) TearDownTest() {
@@ -60,7 +58,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	}
 
 	// Send a double spend transaction
-	arrayOfNodes := []testenv.TeranodeTestClient{node1, node2}
+	arrayOfNodes := []helper.TeranodeTestClient{node1, node2}
 	_, err := helper.CreateAndSendDoubleSpendTx(ctx, arrayOfNodes)
 
 	if err != nil {

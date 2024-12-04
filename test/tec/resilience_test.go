@@ -1,17 +1,17 @@
-//go:build tectests
+//go:build test_all || test_tec
 
-package resilience
+package tec
 
 import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
 type TECTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TECTestSuite) TestShutDownPropagationService() {
@@ -46,13 +46,13 @@ func (suite *TECTestSuite) TestShutDownPropagationService() {
 		t.Errorf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth!=200 {
+	if blockchainHealth != 200 {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
 }
@@ -79,10 +79,10 @@ func (suite *TECTestSuite) TestShutDownBlockAssembly() {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth!=200 {
+	if blockchainHealth != 200 {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
 }
@@ -114,13 +114,13 @@ func (suite *TECTestSuite) TestShutDownBlockValidation() {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth!=200 {
+	if blockchainHealth != 200 {
 		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
@@ -157,7 +157,7 @@ func (suite *TECTestSuite) TestShutDownBlockchain() {
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
@@ -189,13 +189,13 @@ func (suite *TECTestSuite) TestShutDownP2P() {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth!=200 {
+	if blockchainHealth != 200 {
 		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }
@@ -227,13 +227,13 @@ func (suite *TECTestSuite) TestShutDownAsset() {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth!=200 {
+	if blockchainHealth != 200 {
 		t.Errorf("Expected blockchainHealth to be 200, but got %d", blockchainHealth)
 	}
 	if !blockassemblyHealth.Ok {
 		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
-	if coinbaseHealth!=200 {
+	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
 }

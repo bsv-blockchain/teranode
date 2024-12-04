@@ -1,4 +1,4 @@
-package arrange
+package utils
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	tenv "github.com/bitcoin-sv/ubsv/test/testenv"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/stretchr/testify/suite"
 )
@@ -18,7 +16,7 @@ const stringTrue = "true"
 
 type TeranodeTestSuite struct {
 	suite.Suite
-	TeranodeTestEnv *tenv.TeranodeTestEnv
+	TeranodeTestEnv *TeranodeTestEnv
 	ComposeFiles    []string
 	SettingsMap     map[string]string
 }
@@ -111,7 +109,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		for index, node := range suite.TeranodeTestEnv.Nodes {
 			suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
 
-			err = helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+			err = SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
 			if err != nil {
 				suite.T().Fatal(err)
 			}
@@ -121,7 +119,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		for index, port := range ports {
 			suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(port, 30*time.Second)
+			err = WaitForHealthLiveness(port, 30*time.Second)
 			if err != nil {
 				suite.T().Fatal(err)
 			}
@@ -140,7 +138,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			context.Background(),
 			suite.TeranodeTestEnv.Logger,
 			func() (string, error) {
-				return helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+				return CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 			},
 		)
 		if err != nil {
@@ -149,17 +147,17 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			suite.T().Logf("Error generating blocks: %v", err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL1, height, 30)
+		err = WaitForBlockHeight(NodeURL1, height, 30)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL2, height, 30)
+		err = WaitForBlockHeight(NodeURL2, height, 30)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL3, height, 30)
+		err = WaitForBlockHeight(NodeURL3, height, 30)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
@@ -219,8 +217,8 @@ func cleanUpE2EContainers(isGitHubActions bool) (err error) {
 	return nil
 }
 
-func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) (*tenv.TeranodeTestEnv, error) {
-	testEnv := tenv.NewTeraNodeTestEnv(composeFiles)
+func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) (*TeranodeTestEnv, error) {
+	testEnv := NewTeraNodeTestEnv(composeFiles)
 	if err := testEnv.SetupDockerNodes(settingsMap); err != nil {
 		return nil, errors.NewConfigurationError("Error setting up nodes", err)
 	}
@@ -228,7 +226,7 @@ func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) 
 	return testEnv, nil
 }
 
-func TearDownTeranodeTestEnv(testEnv *tenv.TeranodeTestEnv) error {
+func TearDownTeranodeTestEnv(testEnv *TeranodeTestEnv) error {
 	if err := testEnv.StopDockerNodes(); err != nil {
 		return errors.NewConfigurationError("Error stopping nodes", err)
 	}

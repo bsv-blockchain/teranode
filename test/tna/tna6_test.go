@@ -1,17 +1,17 @@
-//go:build tna
+//go:build test_all || test_tna
 
 package tna
 
 import (
 	"testing"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNA6TestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNA6TestSuite) InitSuite() {

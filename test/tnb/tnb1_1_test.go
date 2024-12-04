@@ -1,4 +1,4 @@
-//go:build tnb
+//go:build test_all || test_tnb
 
 //Settings:
 // Uses validator_sendBatchSize.docker.ci.tnb1Test=10
@@ -24,7 +24,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -33,7 +32,7 @@ import (
 )
 
 type TNB1TestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNB1TestSuite) InitSuite() {

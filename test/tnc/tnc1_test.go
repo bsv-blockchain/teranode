@@ -1,4 +1,4 @@
-//go:build tnc
+//go:build test_all || test_tnc
 
 // How to run this test manually:
 // $ cd test/tnc
@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -20,7 +19,7 @@ import (
 )
 
 type TNC1TestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNC1TestSuite) InitSuite() {

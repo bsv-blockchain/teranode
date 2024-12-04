@@ -1,18 +1,17 @@
-//go:build functional
+//go:build test_all || test_smoke || test_functional
 
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
 // $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
 
-package test
+package smoke
 
 import (
 	"fmt"
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -25,7 +24,7 @@ import (
 )
 
 type SanityTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 // func (suite *SanityTestSuite) TearDownTest() {

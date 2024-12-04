@@ -1,4 +1,4 @@
-//go:build tnjtests
+//go:build test_all || test_tnj
 
 package tnj
 
@@ -7,14 +7,13 @@ import (
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNJ4TestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNJ4TestSuite) InitSuite() {

@@ -1,18 +1,17 @@
-//go:build peer
+//go:build test_all || test_smoke || test_peer
 
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
 // $ go test -v -run "^TestPeerTestSuite$/TestBanPeerList$" -tags peer
 
-package test
+package smoke
 
 import (
 	"fmt"
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bk/bec"
@@ -26,7 +25,7 @@ import (
 )
 
 type PeerTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *PeerTestSuite) TearDownTest() {

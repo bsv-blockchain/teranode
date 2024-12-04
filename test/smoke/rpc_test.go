@@ -1,9 +1,9 @@
-//go:build rpc
+//go:build test_all || test_smoke || test_rpc
 
 // How to execute single tests: go test -v -run "^TestRPCTestSuite$/TestRPCReconsiderBlock$" -tags rpc
 // Change TestRPCInvalidateBlock with the name of the test to execute
 
-package test
+package smoke
 
 import (
 	"context"
@@ -25,7 +25,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -47,7 +46,7 @@ var appCmd *exec.Cmd
 var appPID int
 
 type RPCTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *RPCTestSuite) SetupTest() {

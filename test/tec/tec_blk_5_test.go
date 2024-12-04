@@ -1,17 +1,17 @@
-//go:build tecblk5test
+//go:build test_all || test_tec || test_tec_blk_5
 
-package resilience
+package tec
 
 import (
 	"fmt"
 	"testing"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
+	helpler "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
 type TECBlk5TestSuite struct {
-	arrange.TeranodeTestSuite
+	helpler.TeranodeTestSuite
 }
 
 func (suite *TECBlk5TestSuite) InitSuite() {

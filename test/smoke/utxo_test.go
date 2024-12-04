@@ -1,4 +1,4 @@
-//go:build utxo
+//go:build test_all || test_smoke || test_utxo
 
 // How to run each test:
 // Clean up docker containers before running the test manually
@@ -11,7 +11,7 @@
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags utxo
-package test
+package smoke
 
 import (
 	"fmt"
@@ -20,7 +20,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -35,7 +34,7 @@ import (
 )
 
 type UtxoTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *UtxoTestSuite) TearDownTest() {

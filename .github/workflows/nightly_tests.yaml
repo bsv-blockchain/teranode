@@ -16,20 +16,20 @@ jobs:
       matrix:
         test_config:
           - test_dir: "test/tnc"
-            test_tags: "tnc"
-            report_name: "tnc-test-report.json"
+            test_tags: "test_tnc"
+            report_name: "test-tnc-report.json"
           - test_dir: "test/tnb"
-            test_tags: "tnb"
-            report_name: "tnb-test-report.json"
+            test_tags: "test_tnb"
+            report_name: "test-tnb-report.json"
           - test_dir: "test/tnf"
-            test_tags: "tnf"
-            report_name: "tnf-test-report.json"
+            test_tags: "test_tnf"
+            report_name: "test-tnf-report.json"
           - test_dir: "test/tnj"
-            test_tags: "tnj"
-            report_name: "tnj-test-report.json"
+            test_tags: "test_tnj"
+            report_name: "test-tnj-report.json"
           - test_dir: "test/tna"
-            test_tags: "tna"
-            report_name: "tna-test-report.json"
+            test_tags: "test_tna"
+            report_name: "test-tna-report.json"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

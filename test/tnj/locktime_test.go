@@ -1,4 +1,4 @@
-//go:build tnjtests
+//go:build test_all || test_tnj
 
 // How to run this test manually:
 //
@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
@@ -25,7 +24,7 @@ import (
 )
 
 type TNJLockTimeTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 type LockTimeScenario struct {

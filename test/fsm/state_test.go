@@ -1,4 +1,4 @@
-//go:build functional
+//go:build test_all || test_fsm || test_functional
 
 // How to run this test:
 // $ cd test/fsm/
@@ -18,7 +18,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +25,7 @@ import (
 )
 
 type FsmTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *FsmTestSuite) TearDownTest() {

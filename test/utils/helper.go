@@ -1,4 +1,4 @@
-package helper
+package utils
 
 import (
 	"bytes"
@@ -30,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	tenv "github.com/bitcoin-sv/ubsv/test/testenv"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -287,15 +286,14 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 
 	blockHash := util.Sha256d(blockHeader)
 
-	err = baClient.SubmitMiningSolution(ctx, solution)
-	if err != nil {
+	if err := baClient.SubmitMiningSolution(ctx, solution); err != nil {
 		return nil, errors.NewProcessingError("error submitting mining solution", err)
 	}
 
 	return blockHash, nil
 }
 
-func MineBlockWithRPC(ctx context.Context, node tenv.TeranodeTestClient, logger ulogger.Logger) (string, error) {
+func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger) (string, error) {
 	resp, err := CallRPC(node.RPCURL, "generate", []interface{}{1})
 	if err != nil {
 		return "", errors.NewProcessingError("error generating block", err)
@@ -317,8 +315,7 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 
 	blockHash := util.Sha256d(blockHeader)
 
-	err = baClient.SubmitMiningSolution(ctx, solution)
-	if err != nil {
+	if err := baClient.SubmitMiningSolution(ctx, solution); err != nil {
 		return nil, errors.NewProcessingError("error submitting mining solution", err)
 	}
 
@@ -367,7 +364,7 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	return blockHash, nil
 }
 
-func CreateAndSendTx(ctx context.Context, node tenv.TeranodeTestClient) (chainhash.Hash, error) {
+func CreateAndSendTx(ctx context.Context, node TeranodeTestClient) (chainhash.Hash, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
 	nilHash := chainhash.Hash{}
@@ -422,7 +419,7 @@ func CreateAndSendTx(ctx context.Context, node tenv.TeranodeTestClient) (chainha
 	return *newTx.TxIDChainHash(), nil
 }
 
-func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTestClient) (chainhash.Hash, error) {
+func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
@@ -477,7 +474,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTes
 	return *newTx.TxIDChainHash(), nil
 }
 
-func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []tenv.TeranodeTestClient) (chainhash.Hash, error) {
+func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -555,7 +552,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []tenv.TeranodeTestCl
 	return *newTx.TxIDChainHash(), nil
 }
 
-func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+func CreateAndSendTxs(ctx context.Context, node TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var txHashes []chainhash.Hash
 
 	for i := 0; i < count; i++ {
@@ -575,7 +572,7 @@ func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count i
 	return txHashes, nil
 }
 
-func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var txHashes []chainhash.Hash
 
 	for i := 0; i < count; i++ {
@@ -595,7 +592,7 @@ func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []tenv.TeranodeT
 	return txHashes, nil
 }
 
-func CreateAndSendTxsConcurrently(ctx context.Context, node tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+func CreateAndSendTxsConcurrently(ctx context.Context, node TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var wg sync.WaitGroup
 
 	var txHashes []chainhash.Hash
@@ -648,7 +645,7 @@ func CreateAndSendTxsConcurrently(ctx context.Context, node tenv.TeranodeTestCli
 	return txHashes, nil
 }
 
-func UseCoinbaseUtxo(ctx context.Context, node tenv.TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
+func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
@@ -713,7 +710,7 @@ func UseCoinbaseUtxo(ctx context.Context, node tenv.TeranodeTestClient, coinbase
 
 // tx := response.Tx
 
-func UseCoinbaseUtxoV2(ctx context.Context, node tenv.TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
+func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
@@ -750,7 +747,7 @@ func UseCoinbaseUtxoV2(ctx context.Context, node tenv.TeranodeTestClient, coinba
 	return *newTx.TxIDChainHash(), nil
 }
 
-func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
+func SendTXsWithDistributorV2(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000
 
 	logger.Infof("Sending transactions with distributor setting fees to %v", tSettings.Propagation.GRPCAddresses)
@@ -834,7 +831,7 @@ func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient,
 	return true, nil
 }
 
-func GetBestBlockV2(ctx context.Context, node tenv.TeranodeTestClient) (*block_model.Block, error) {
+func GetBestBlockV2(ctx context.Context, node TeranodeTestClient) (*block_model.Block, error) {
 	bbheader, _, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
@@ -997,7 +994,7 @@ func CopyFile(src, dst string) error {
 	return nil
 }
 
-func GetUtxoBalance(ctx context.Context, node tenv.TeranodeTestClient) uint64 {
+func GetUtxoBalance(ctx context.Context, node TeranodeTestClient) uint64 {
 	utxoBalance, _, _ := node.CoinbaseClient.GetBalance(ctx)
 	return utxoBalance
 }
@@ -1016,7 +1013,7 @@ func GeneratePrivateKeyAndAddress() (*bec.PrivateKey, *bscript.Address, error) {
 	return privateKey, address, nil
 }
 
-func RequestFunds(ctx context.Context, node tenv.TeranodeTestClient, address string) (*bt.Tx, error) {
+func RequestFunds(ctx context.Context, node TeranodeTestClient, address string) (*bt.Tx, error) {
 	faucetTx, err := node.CoinbaseClient.RequestFunds(ctx, address, true)
 	if err != nil {
 		return nil, err
@@ -1025,7 +1022,7 @@ func RequestFunds(ctx context.Context, node tenv.TeranodeTestClient, address str
 	return faucetTx, nil
 }
 
-func SendTransaction(ctx context.Context, node tenv.TeranodeTestClient, tx *bt.Tx) (bool, error) {
+func SendTransaction(ctx context.Context, node TeranodeTestClient, tx *bt.Tx) (bool, error) {
 	_, err := node.DistributorClient.SendTransaction(ctx, tx)
 	if err != nil {
 		return false, err
@@ -1066,7 +1063,7 @@ func CreateTransaction(utxo *bt.UTXO, address string, satoshis uint64, privateKe
 	return tx, nil
 }
 
-func FreezeUtxos(ctx context.Context, testenv tenv.TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger) error {
+func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{
 		TxID:     tx.TxIDChainHash(),
@@ -1084,7 +1081,7 @@ func FreezeUtxos(ctx context.Context, testenv tenv.TeranodeTestEnv, tx *bt.Tx, l
 	return nil
 }
 
-func ReassignUtxo(ctx context.Context, testenv tenv.TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger) error {
+func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger) error {
 	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
 	if err != nil {
 		return err

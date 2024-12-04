@@ -1,4 +1,4 @@
-//go:build tnftests
+//go:build test_all || test_tnf
 
 // How to run this test:
 // $ cd test/tnf/
@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
 type TNFTestSuite struct {
-	arrange.TeranodeTestSuite
+	helper.TeranodeTestSuite
 }
 
 func (suite *TNFTestSuite) InitSuite() {
