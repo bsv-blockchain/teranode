@@ -1,7 +1,7 @@
 //go:build test_all || test_tnb
 
 //Settings:
-// Uses validator_sendBatchSize.docker.ci.tnb1Test=10
+// Uses validator_sendBatchSize.docker.ubsv.test.tnb1Test=10
 
 //Steps:
 // 1. Create and send transactions concurrently
@@ -13,7 +13,7 @@
 
 // How to run manually:
 // cd test/tnb
-// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags tnb
+// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags test_tnb
 
 package tnb
 
@@ -79,6 +79,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					subtreeHash, err := chainhash.NewHash(notification.Hash)
 					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
+
 					subtreeReader, err = testEnv.Nodes[0].SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 					require.NoError(t, err)
 

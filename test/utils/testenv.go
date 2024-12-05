@@ -275,7 +275,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	node.Blockstore = blockStore
 	node.BlockstoreURL = blockStoreURL
 
-	subtreeStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.context.testrunner", node.SettingsContext))
+	subtreeStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.context.testrunner", node.DefaultSettingsContext))
 	t.Logger.Infof("subtreeStoreURL: %s", subtreeStoreURL.String())
 
 	if err != nil {
