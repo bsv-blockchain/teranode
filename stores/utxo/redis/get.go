@@ -9,7 +9,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	redis_db "github.com/redis/go-redis/v9"
 )
+
+func (s *Store) GetClient() *redis_db.Client {
+	return s.client
+}
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	res := s.client.HGetAll(ctx, hash.String())

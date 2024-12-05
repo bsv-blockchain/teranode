@@ -1,24 +1,26 @@
+//go:build test_all || test_stores || test_stores_sql
+
 package sql
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	storesql "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// go test -v -tags test_stores_sql ./test/...
 
 func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	t.Run("empty - no match", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -29,7 +31,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// No blocks stored, should return false
@@ -40,7 +42,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("single block in chain", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -51,7 +53,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1
@@ -70,7 +72,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("multiple blocks in chain", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -81,7 +83,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1 and block2
@@ -115,7 +117,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -126,7 +128,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1
@@ -141,7 +143,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in branch", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -152,7 +154,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1, block2, and an alternative block (block2Alt)
@@ -196,7 +198,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in correct chain", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -207,7 +209,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1, block2, and an alternative block (block2Alt)
@@ -251,7 +253,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("one of the block is in chain other is not", func(t *testing.T) {
-		connStr, teardown, err := SetupPostgresContainer()
+		connStr, teardown, err := helper.SetupTestPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -262,7 +264,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		// Store block1 and block2
@@ -282,44 +284,4 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 	})
-}
-
-func SetupPostgresContainer() (string, func() error, error) {
-	ctx := context.Background()
-
-	dbName := "testdb"
-	dbUser := "postgres"
-	dbPassword := "password"
-
-	postgresC, err := postgres.Run(ctx,
-		"docker.io/postgres:16-alpine",
-		postgres.WithDatabase(dbName),
-		postgres.WithUsername(dbUser),
-		postgres.WithPassword(dbPassword),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2),
-			wait.ForListeningPort("5432/tcp")),
-	)
-	if err != nil {
-		return "", nil, err
-	}
-
-	host, err := postgresC.Host(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-
-	port, err := postgresC.MappedPort(ctx, "5432")
-	if err != nil {
-		return "", nil, err
-	}
-
-	connStr := fmt.Sprintf("postgres://postgres:password@%s:%s/testdb?sslmode=disable", host, port.Port())
-
-	teardown := func() error {
-		return postgresC.Terminate(ctx)
-	}
-
-	return connStr, teardown, nil
 }

@@ -1,3 +1,5 @@
+//go:build test_all || test_stores || test_stores_sql
+
 package sql
 
 import (
@@ -5,12 +7,16 @@ import (
 	"net/url"
 	"testing"
 
+	storesql "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
+// go test -v -tags test_stores_sql ./test/...
+
 func Test_SetGetFSMState(t *testing.T) {
-	connStr, teardown, err := SetupPostgresContainer()
+	connStr, teardown, err := helper.SetupTestPostgresContainer()
 
 	if err != nil {
 		t.Logf("Error setting up postgres container: %v", err)
@@ -26,7 +32,7 @@ func Test_SetGetFSMState(t *testing.T) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeURL)
+	s, err := storesql.New(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
 	err = s.SetFSMState(context.Background(), "CATCHING_BLOCKS")

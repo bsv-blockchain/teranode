@@ -1,3 +1,5 @@
+//go:build test_all || test_stores || test_utxo || test_stores_redis
+
 package redis
 
 import (
@@ -11,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	storeRedis "github.com/bitcoin-sv/ubsv/stores/utxo/redis"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -20,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// go test -v -tags test_stores_redis ./test/...
 
 var (
 	coinbaseKey *chainhash.Hash
@@ -92,8 +97,9 @@ var (
 func TestRedis(t *testing.T) {
 	ctx := context.Background()
 
-	redis, store, _, deferFn := initRedis(t)
+	store, _, deferFn := initRedis(t)
 	defer deferFn()
+	redis := store.GetClient()
 
 	parentTxHash := tx.Inputs[0].PreviousTxIDChainHash()
 
@@ -578,8 +584,9 @@ func TestRedis(t *testing.T) {
 func TestCoinbase(t *testing.T) {
 	ctx := context.Background()
 
-	redis, store, _, deferFn := initRedis(t)
+	store, _, deferFn := initRedis(t)
 	defer deferFn()
+	redis := store.GetClient()
 
 	coinbaseTxHash := coinbaseTx.TxIDChainHash()
 
@@ -620,7 +627,7 @@ func TestCoinbase(t *testing.T) {
 //	require.NoError(t, err)
 //
 //	// ubsv db client
-//	var db *Store
+//	var db *storeRedis.Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
 //
@@ -670,7 +677,7 @@ func TestCoinbase(t *testing.T) {
 //	require.NoError(t, err)
 //
 //	// ubsv db client
-//	var db *Store
+//	var db *storeRedisStore
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
 //
@@ -781,8 +788,9 @@ func TestCoinbase(t *testing.T) {
 func TestStoreDecorate(t *testing.T) {
 	ctx := context.Background()
 
-	client, store, _, deferFn := initRedis(t)
+	store, _, deferFn := initRedis(t)
 	defer deferFn()
+	client := store.GetClient()
 
 	t.Run("redis BatchDecorate", func(t *testing.T) {
 		cleanDB(t, client, spendingTxID1, tx)
@@ -897,7 +905,7 @@ func TestStoreDecorate(t *testing.T) {
 //	require.NoError(t, err)
 //
 //	// ubsv db client
-//	var db *Store
+//	var db *storeRedis.Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
 //
@@ -958,7 +966,7 @@ func TestStoreDecorate(t *testing.T) {
 //}
 
 func TestSmokeTests(t *testing.T) {
-	_, store, ctx, deferFn := initRedis(t)
+	store, ctx, deferFn := initRedis(t)
 	defer deferFn()
 
 	t.Run("redis store", func(t *testing.T) {
@@ -997,7 +1005,7 @@ func TestSmokeTests(t *testing.T) {
 	})
 }
 
-func initRedis(t *testing.T) (*redis_db.Client, *Store, context.Context, func()) {
+func initRedis(t *testing.T) (*storeRedis.Store, context.Context, func()) {
 	ctx := context.Background()
 
 	container, err := redisTest.RunContainer(ctx)
@@ -1019,12 +1027,12 @@ func initRedis(t *testing.T) (*redis_db.Client, *Store, context.Context, func())
 	require.NoError(t, err)
 
 	// ubsv redisStore client
-	var redisStore *Store
-	redisStore, err = New(ctx, ulogger.TestLogger{}, redisURL)
+	var redisStore *storeRedis.Store
+	redisStore, err = storeRedis.New(ctx, ulogger.TestLogger{}, redisURL)
 	require.NoError(t, err)
 
-	return redisStore.client, redisStore, ctx, func() {
-		redisStore.client.Close()
+	return redisStore, ctx, func() {
+		redisStore.GetClient().Close()
 	}
 }
 

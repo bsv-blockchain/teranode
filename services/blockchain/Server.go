@@ -98,6 +98,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return b, nil
 }
 
+// GetStoreFSMState call the GetFSMState of the store interface
+func (b *Blockchain) GetStoreFSMState(ctx context.Context) (string, error) {
+	return b.store.GetFSMState(ctx)
+}
+
+// ResetFSMS reset finiteStateMachine to nil. This method was aim to help the testing
+func (b *Blockchain) ResetFSMS() {
+	b.finiteStateMachine = nil
+}
+
 func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
