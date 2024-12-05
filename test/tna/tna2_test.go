@@ -1,5 +1,9 @@
 //go:build test_all || test_tna
 
+// How to run this test manually:
+// $ cd test/tna
+// $ go test -v -run "^TestTNA2TestSuite$/TestTxsReceivedAllNodes$" -tags test_tna
+
 package tna
 
 import (

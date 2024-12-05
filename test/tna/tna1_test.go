@@ -1,5 +1,9 @@
 //go:build test_all || test_tna
 
+// How to run this test manually:
+// $ cd test/tna
+// $ go test -v -run "^TestTNA1TestSuite$/TestBroadcastNewTxAllNodes$" -tags test_tna
+
 package tna
 
 import (
@@ -31,9 +35,6 @@ func (suite *TNA1TestSuite) InitSuite() {
 func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
-}
-
-func (suite *TNA1TestSuite) TearDownTest() {
 }
 
 func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
@@ -103,14 +104,20 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 		for i := 2; i <= 3; i++ {
 			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
+			subSubDir := subtreeHash.String()[:2]
+
 			fmt.Println(subDir)
-			filePath := filepath.Join(baseDir, subDir, subtreeHash.String())
+			fmt.Println(subSubDir)
+
+			filePath := filepath.Join(baseDir, subDir, subSubDir, subtreeHash.String())
 			fmt.Println(filePath)
 
-			if _, err := os.Stat(filePath); err == nil {
-				fmt.Printf("Subtree %s exists.\n", filePath)
+			if matches, err := filepath.Glob(filePath + "*"); err == nil {
+				if len(matches) > 0 {
+					fmt.Printf("Subtree %s exists.\n", filePath)
 
-				found += 1
+					found += 1
+				}
 			} else if os.IsNotExist(err) {
 				fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash.String(), subDir)
 			} else {
