@@ -30,32 +30,32 @@ DATABASE coinbase3
   CONNECTION LIMIT = -1;
 
 
-CREATE ROLE "mainnet-1" LOGIN
-  PASSWORD 'mainnet-1'
+CREATE ROLE "prod-mainnet-1" LOGIN
+  PASSWORD 'prod-mainnet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-1" to postgresuser;
+grant "prod-mainnet-1" to postgresuser;
 CREATE
-DATABASE "mainnet-1"
-  WITH OWNER = "mainnet-1"
+DATABASE "prod-mainnet-1"
+  WITH OWNER = "prod-mainnet-1"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "mainnet-2" LOGIN
-  PASSWORD 'mainnet-2'
+CREATE ROLE "prod-mainnet-2" LOGIN
+  PASSWORD 'prod-mainnet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-2" to postgresuser;
+grant "prod-mainnet-2" to postgresuser;
 CREATE
-DATABASE "mainnet-2"
-  WITH OWNER = "mainnet-2"
+DATABASE "prod-mainnet-2"
+  WITH OWNER = "prod-mainnet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "mainnet-3" LOGIN
-    PASSWORD 'mainnet-3'
+CREATE ROLE "prod-mainnet-3" LOGIN
+    PASSWORD 'prod-mainnet-3'
     NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "mainnet-3" to postgresuser;
+grant "prod-mainnet-3" to postgresuser;
 CREATE
-    DATABASE "mainnet-3"
-    WITH OWNER = "mainnet-3"
+    DATABASE "prod-mainnet-3"
+    WITH OWNER = "prod-mainnet-3"
     ENCODING = 'UTF8'
     CONNECTION LIMIT = -1;
