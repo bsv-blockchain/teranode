@@ -658,8 +658,8 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 	}
 
 	newTx := bt.NewTx()
-	err := newTx.FromUTXOs(utxo)
 
+	err := newTx.FromUTXOs(utxo)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -681,34 +681,6 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 
 	return *newTx.TxIDChainHash(), nil
 }
-
-// faucetTx, err := bt.NewTxFromString(tx)
-// if err != nil {
-// 	fmt.Printf("error creating transaction from string", err)
-// }
-
-// payload := []byte(fmt.Sprintf(`{"address":"%s"}`, address.AddressString))
-// req, err := http.NewRequest("POST", faucetURL, bytes.NewBuffer(payload))
-// if err != nil {
-// 	fmt.Printf("error creating request", err)
-// }
-
-// req.Header.Set("Content-Type", "application/json")
-// client := &http.Client{}
-// resp, err := client.Do(req)
-// if err != nil {
-// 	fmt.Printf("error sending request", err)
-// }
-
-// defer resp.Body.Close()
-
-// var response Transaction
-// err = json.NewDecoder(resp.Body).Decode(&response)
-// if err != nil {
-// 	fmt.Printf("error decoding response", err)
-// }
-
-// tx := response.Tx
 
 func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
@@ -945,6 +917,15 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 			}
 		}
 	}
+}
+
+func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int, logger ulogger.Logger) (string, error) {
+	resp, err := CallRPC(node.RPCURL, "generate", []interface{}{numBlocks})
+	if err != nil {
+		return "", errors.NewProcessingError("error generating blocks", err)
+	}
+
+	return resp, nil
 }
 
 func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url.URL, block []byte, blockHeight uint32, tx chainhash.Hash, logger ulogger.Logger) (bool, error) {

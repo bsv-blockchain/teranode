@@ -256,6 +256,168 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 }
 
 /* Description */
+// This test suite is used to test the FSM states of the blockchain node with p2p initially off.
+// 1. Start the chain of 3 nodes with p2p off for ubsv2 and ubsv3
+// 2. Send transactions concurrently to all nodes in batches
+// 3. Turn on p2p for all nodes
+// 4. Check if nodes catch up and have matching best block headers
+func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitchOff() {
+	t := suite.T()
+	framework := suite.TeranodeTestEnv
+	settingsMap := suite.SettingsMap
+	logger := framework.Logger
+	ctx := framework.Context
+
+	// Get blockchain clients for verification
+	blockchainNode0 := framework.Nodes[0].BlockchainClient
+	blockchainNode1 := framework.Nodes[1].BlockchainClient
+	blockchainNode2 := framework.Nodes[2].BlockchainClient
+
+	var (
+		mu sync.Mutex
+		stateSetNode1 = make(map[blockchain_api.FSMStateType]struct{})
+		stateSetNode2 = make(map[blockchain_api.FSMStateType]struct{})
+	)
+
+	// Start nodes with p2p off for ubsv2 and ubsv3
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test.stopP2P"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
+
+	// Wait for all blockchain nodes to be ready
+	for index, node := range suite.TeranodeTestEnv.Nodes {
+		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+		err := helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	// Wait for health checks
+	ports := []int{10000, 12000, 14000}
+	for index, port := range ports {
+		suite.T().Logf("Waiting for node %d to be ready", index)
+		err := helper.WaitForHealthLiveness(port, 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	suite.T().Log("All nodes ready")
+
+	// Send transactions concurrently to all nodes
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(nodeIndex int) {
+			defer wg.Done()
+			hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[nodeIndex], 10)
+			if err != nil {
+				t.Errorf("Failed to create and send raw txs to node %d: %v", nodeIndex, err)
+				return
+			}
+			logger.Infof("Hashes for node %d: %v", nodeIndex, hashes)
+
+			// Generate multiple blocks for each node
+			resp, err := helper.GenerateBlocks(ctx, framework.Nodes[nodeIndex], 500, logger)
+			if err != nil {
+				t.Errorf("Failed to generate blocks on node %d: %v", nodeIndex, err)
+			}
+			logger.Infof("Generated blocks for node %d: %v", nodeIndex, resp)
+		}(i)
+	}
+	wg.Wait()
+
+	// Turn on p2p for all nodes by resetting to default settings
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes with p2p on: %v", err)
+	}
+
+	// Monitor state changes and wait for catch up
+	wait := func() {
+		// Trigger a new block to wake up nodes and start catch up process
+		resp, err := helper.GenerateBlocks(ctx, framework.Nodes[0], 1, logger)
+		require.NoError(t, err)
+		logger.Infof("Generated trigger block: %v", resp)
+
+		timeout := time.After(30 * time.Second)
+		for {
+			select {
+			case <-timeout:
+				return
+			default:
+				// Monitor Node 1 states
+				responseNode1 := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				mu.Lock()
+				if _, exists := stateSetNode1[responseNode1]; !exists {
+					framework.Logger.Infof("Node 1 new state: %v", responseNode1)
+					stateSetNode1[responseNode1] = struct{}{}
+				}
+				mu.Unlock()
+
+				// Monitor Node 2 states
+				responseNode2 := blockchainNode2.GetFSMCurrentStateForE2ETestMode()
+				mu.Lock()
+				if _, exists := stateSetNode2[responseNode2]; !exists {
+					framework.Logger.Infof("Node 2 new state: %v", responseNode2)
+					stateSetNode2[responseNode2] = struct{}{}
+				}
+				mu.Unlock()
+
+				// Check if both nodes have caught up
+				_, blockMetaNode0, err := blockchainNode0.GetBestBlockHeader(ctx)
+				require.NoError(t, err)
+
+				_, err1 := blockchainNode1.GetBlockByHeight(ctx, blockMetaNode0.Height)
+				_, err2 := blockchainNode2.GetBlockByHeight(ctx, blockMetaNode0.Height)
+				if !errors.Is(err1, errors.ErrBlockNotFound) && !errors.Is(err2, errors.ErrBlockNotFound) {
+					return
+				}
+
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	wait()
+
+	// Verify both nodes went through catch-up state (FSMStateType 3 is CATCHINGUP)
+	stateCatchupFound1 := false
+	stateCatchupFound2 := false
+
+	for state := range stateSetNode1 {
+		if state == blockchain_api.FSMStateType(3) {
+			stateCatchupFound1 = true
+			break
+		}
+	}
+
+	for state := range stateSetNode2 {
+		if state == blockchain_api.FSMStateType(3) {
+			stateCatchupFound2 = true
+			break
+		}
+	}
+
+	// Get final block headers from all nodes
+	headerNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	headerNode1, _, err := blockchainNode1.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	headerNode2, _, err := blockchainNode2.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	// Verify all nodes have caught up and have the same best block header
+	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers of node 0 and 1 are not equal")
+	assert.Equal(t, headerNode0.Hash(), headerNode2.Hash(), "Best block headers of node 0 and 2 are not equal")
+	assert.True(t, stateCatchupFound1, "Node 1 did not enter catch-up state")
+	assert.True(t, stateCatchupFound2, "Node 2 did not enter catch-up state")
+}
+
+/* Description */
 // This test suite is used to test the CatchUpTransactions State of the blockchain node.
 // Start the chain of 3 nodes
 // Set the CatchUpTransactions State for the 1st node

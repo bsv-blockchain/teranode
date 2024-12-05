@@ -30,6 +30,9 @@ jobs:
           - test_dir: "test/tna"
             test_tags: "test_tna"
             report_name: "test-tna-report.json"
+          - test_dir: "test/fsm"
+            test_tags: "test_fsm"
+            report_name: "test-fsm-report.json"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
