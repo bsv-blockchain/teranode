@@ -164,6 +164,42 @@ services:
       - ./data/ubsv3/subtree_quorum:/app/data/ubsv3/subtree_quorum
       - ./data/ubsv3/external:/app/data/ubsv3/external
 
+  miner-1:
+    <<: *ubsv-base
+    container_name: miner-1
+    depends_on:
+      - ubsv-1
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv1"
+    command: [ "/app/wait.sh", "localhost", "19292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/ubsv1/", "-rpcport", "19292" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner1:/app/data
+
+  miner-2:
+    <<: *ubsv-base
+    container_name: miner-2
+    depends_on:
+      - ubsv-2
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv2"
+    command: [ "/app/wait.sh", "localhost", "29292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/ubsv2/", "-rpcport", "29292" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner2:/app/data
+
+  miner-3:
+    <<: *ubsv-base
+    container_name: miner-3
+    depends_on:
+      - ubsv-3
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv3"
+    command: [ "/app/wait.sh", "localhost", "39292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/ubsv3/", "-rpcport", "39292" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner3:/app/data
+
   tx-blaster-1:
     <<: *ubsv-base
     container_name: tx-blaster-1

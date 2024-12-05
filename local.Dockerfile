@@ -60,7 +60,7 @@ RUN if [ "$INSTALL_DEBUG_TOOLS" = "true" ]; then \
 
 WORKDIR /app
 
-COPY --from=0 /go/bin/dlv .
+# COPY --from=0 /go/bin/dlv .
 
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
@@ -73,6 +73,7 @@ COPY --from=0 /app/settings.conf .
 # RUN ln -s ubsv.run utxostoreblaster.run
 # RUN ln -s ubsv.run aerospiketest.run
 # RUN ln -s ubsv.run s3blaster.run
+RUN ln -s ubsv.run miner.run
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 
