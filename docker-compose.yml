@@ -10,6 +10,7 @@ x-ubsv-base: &ubsv-base
     - ./data:/app/data
   expose:
     - 8081-8093
+
 networks:
   ubsv-network:
     name: my-ubsv-network
@@ -24,7 +25,7 @@ services:
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
     networks:
       - ubsv-network
-    entrypoint: ["pwd"]
+    entrypoint: [ "pwd" ]
 
   jaeger:
     image: jaegertracing/all-in-one:1.59
@@ -63,7 +64,7 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -116,20 +117,7 @@ services:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint:
-      [
-        "/app/wait.sh",
-        "postgres",
-        "5432",
-        "0",
-        "--",
-        "/app/wait.sh",
-        "kafka-shared",
-        "9092",
-        "0",
-        "--",
-        "/app/ubsv.run",
-      ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1}
       logLevel: "DEBUG"
@@ -157,20 +145,7 @@ services:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint:
-      [
-        "/app/wait.sh",
-        "postgres",
-        "5432",
-        "0",
-        "--",
-        "/app/wait.sh",
-        "kafka-shared",
-        "9092",
-        "0",
-        "--",
-        "/app/ubsv.run",
-      ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2}
       logLevel: "DEBUG"
@@ -189,6 +164,7 @@ services:
       - "28090-28093:8090-8093"
       - "29091:9091"
       - "29905:9905"
+      - "29292:9292"
 
   ubsv3:
     <<: *ubsv-base
@@ -197,20 +173,7 @@ services:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint:
-      [
-        "/app/wait.sh",
-        "postgres",
-        "5432",
-        "0",
-        "--",
-        "/app/wait.sh",
-        "kafka-shared",
-        "9092",
-        "0",
-        "--",
-        "/app/ubsv.run",
-      ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3}
       logLevel: "DEBUG"
@@ -229,6 +192,43 @@ services:
       - "38090-38093:8090-8093"
       - "39091:9091"
       - "39905:9905"
+      - "39292:9292"
+
+  miner1:
+    <<: *ubsv-base
+    container_name: miner1
+    depends_on:
+      - ubsv1
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1}
+    command: [ "/app/wait.sh", "ubsv1", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/ubsv1/", "-rpcport", "9292", "-rpcconnect", "ubsv1" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner1:/app/data
+
+  miner2:
+    <<: *ubsv-base
+    container_name: miner2
+    depends_on:
+      - ubsv2
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2}
+    command: [ "/app/wait.sh", "ubsv2", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/ubsv2/", "-rpcport", "9292", "-rpcconnect", "ubsv2" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner2:/app/data
+
+  miner3:
+    <<: *ubsv-base
+    container_name: miner3
+    depends_on:
+      - ubsv3
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3}
+    command: [ "/app/wait.sh", "ubsv3", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/ubsv3/", "-rpcport", "9292", "-rpcconnect", "ubsv3" ]
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/miner3:/app/data
 
   txblaster1:
     <<: *ubsv-base
@@ -243,16 +243,7 @@ services:
       BLASTER_ARGS: "-workers=2"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv1:8384 | https://ubsv2:8384 | https://ubsv3:8384
-    command:
-      [
-        "/app/blaster.run",
-        "-workers=1",
-        "-print=0",
-        "-profile=:9092",
-        "-log=0",
-        "-limit=10",
-        "--quic=false",
-      ]
+    command: [ "/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false" ]
     networks:
       - ubsv-network
     volumes:
