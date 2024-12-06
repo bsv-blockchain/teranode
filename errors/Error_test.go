@@ -302,7 +302,7 @@ func Test_UtxoSpentError(t *testing.T) {
 
 		fmt.Println(unwrappedErr.Error())
 
-		contains := "60: Error UTXO_SPENT, (error code: 60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx id 0000000000000000000000000000000000000000000000000000000000000000, data: utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000000000000000000000"
+		contains := "60: Error UTXO_SPENT (error code: 60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx id 0000000000000000000000000000000000000000000000000000000000000000, data: utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000000000000000000000"
 		assert.Contains(t, unwrappedErr.Error(), contains)
 	})
 
@@ -336,7 +336,7 @@ func TestJoinWithMultipleErrs(t *testing.T) {
 
 	joinedErr := Join(err1, err2, err3)
 	require.NotNil(t, joinedErr)
-	require.Equal(t, "Error: NOT_FOUND, (error code: 3), Message: not found, Error: BLOCK_NOT_FOUND, (error code: 10), Message: block not found, Error: INVALID_ARGUMENT, (error code: 1), Message: invalid argument", joinedErr.Error())
+	require.Equal(t, "Error: NOT_FOUND (error code: 3), Message: not found, Error: BLOCK_NOT_FOUND (error code: 10), Message: block not found, Error: INVALID_ARGUMENT (error code: 1), Message: invalid argument", joinedErr.Error())
 }
 
 func TestErrorString(t *testing.T) {
@@ -344,7 +344,7 @@ func TestErrorString(t *testing.T) {
 
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
-	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: failed to set data from reader [bucket:key], Wrapped err: Error: UNKNOWN, (error code: 0), Message: some error", thisErr.Error())
+	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: failed to set data from reader [bucket:key], Wrapped err: Error: UNKNOWN (error code: 0), Message: some error", thisErr.Error())
 }
 
 func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {

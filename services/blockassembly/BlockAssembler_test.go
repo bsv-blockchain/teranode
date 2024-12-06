@@ -732,7 +732,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		wg.Wait()
 		_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.Error(t, err)
-		assert.Equal(t, "Error: PROCESSING, (error code: 4), Message: max block size is less than the size of the subtree", err.Error())
+		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: max block size is less than the size of the subtree", err.Error())
 	})
 }
 

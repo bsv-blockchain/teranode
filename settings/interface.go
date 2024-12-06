@@ -39,6 +39,11 @@ type Settings struct {
 	Propagation       PropagationSettings
 	RPC               RPCSettings
 	Faucet            FaucetSettings
+	Dashboard         DashboardSettings
+}
+
+type DashboardSettings struct {
+	Enabled bool
 }
 
 type KafkaSettings struct {

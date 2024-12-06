@@ -9,7 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
-	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
+	"github.com/bitcoin-sv/ubsv/services/asset/httpimpl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/settings"
@@ -31,7 +31,7 @@ type Server struct {
 	subtreeStore        blob.Store
 	blockPersisterStore blob.Store
 	httpAddr            string
-	httpServer          *http_impl.HTTP
+	httpServer          *httpimpl.HTTP
 	centrifugeAddr      string
 	centrifugeServer    *centrifuge_impl.Centrifuge
 	blockchainClient    blockchain.ClientI
@@ -130,7 +130,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	v.httpServer, err = http_impl.New(v.logger, v.settings, repo)
+	v.httpServer, err = httpimpl.New(v.logger, v.settings, repo)
 	if err != nil {
 		return errors.NewServiceError("error creating http server", err)
 	}

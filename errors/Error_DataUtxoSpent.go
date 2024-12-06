@@ -65,7 +65,7 @@ func NewUtxoSpentError(txID chainhash.Hash, vOut uint32, utxoHash chainhash.Hash
 		SpendingTxHash: spendingTxID,
 	}
 
-	utxoSpentError := New(ERR_UTXO_SPENT, "Error %s, (error code: %d): %s:%d utxo already spent by tx id %s", ERR_UTXO_SPENT.Enum(), ERR_UTXO_SPENT, txID.String(), vOut, spendingTxID.String())
+	utxoSpentError := New(ERR_UTXO_SPENT, "Error %s (error code: %d): %s:%d utxo already spent by tx id %s", ERR_UTXO_SPENT.Enum(), ERR_UTXO_SPENT, txID.String(), vOut, spendingTxID.String())
 	utxoSpentError.data = utxoSpentErrStruct
 
 	return utxoSpentError

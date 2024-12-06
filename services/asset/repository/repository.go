@@ -19,14 +19,40 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// Package repository provides access to blockchain data storage and retrieval operations.
+type Interface interface {
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
+	GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
+	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
+	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
+	GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	GetBlockByHash(ctx context.Context, hash *chainhash.Hash) (*model.Block, error)
+	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
+	GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)
+	GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error)
+	GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
+	GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error)
+	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
+	GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error)
+	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
+	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
+}
+
+// Repository provides access to blockchain data storage and retrieval operations.
 // It implements the necessary interfaces to interact with various data stores and
 // blockchain clients.
 type Repository struct {
@@ -119,6 +145,10 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
+}
+
+func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return repo.UtxoStore.Get(ctx, hash)
 }
 
 // GetTransaction retrieves transaction data by its hash.
@@ -398,7 +428,9 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhas
 //   - *util.Subtree: Deserialized subtree structure
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
-	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
+	ctx, _, _ = tracing.StartTracing(ctx, "Repository:GetSubtree",
+		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
+	)
 
 	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
@@ -411,6 +443,10 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 	}
 
 	return subtree, nil
+}
+
+func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -512,17 +548,4 @@ func (repo *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHea
 	}
 
 	return header, meta, nil
-}
-
-func (repo *Repository) GetBalance(ctx context.Context) (uint64, uint64, error) {
-	if repo.CoinbaseProvider == nil {
-		return 0, 0, nil
-	}
-
-	res, err := repo.CoinbaseProvider.GetBalance(ctx, &emptypb.Empty{})
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return res.NumberOfUtxos, res.TotalSatoshis, nil
 }

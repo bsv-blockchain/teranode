@@ -20,13 +20,6 @@ type Spend struct {
 	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
 }
 
-// SpendResponse is a struct that holds the response from the GetSpend function
-type SpendResponse struct {
-	Status       int             `json:"status"`
-	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
-	LockTime     uint32          `json:"lockTime,omitempty"`
-}
-
 var (
 	MetaFields       = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
 	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}

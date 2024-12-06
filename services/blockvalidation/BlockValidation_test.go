@@ -594,7 +594,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 
 	expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49)"
-	// Message [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found, Wrapped err: Error: UNKNOWN, (error code: 0), Message: sql: no rows in result set"
+	// Message [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found, Wrapped err: Error: UNKNOWN (error code: 0), Message: sql: no rows in result set"
 	require.Contains(t, err.Error(), expectedErrorMessage)
 }
 

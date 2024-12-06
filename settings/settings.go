@@ -49,7 +49,7 @@ func NewSettings() *Settings {
 			// DataCarrierSize:                 int64(getInt("datacarriersize", 1000000)),
 			MaxScriptSizePolicy: getInt("maxscriptsizepolicy", 500000), // 500KB
 			// TODO: what should this be?
-			//MaxOpsPerScriptPolicy:           int64(getInt("maxopsperscriptpolicy", 1000000)),
+			// MaxOpsPerScriptPolicy:           int64(getInt("maxopsperscriptpolicy", 1000000)),
 			MaxScriptNumLengthPolicy:     getInt("maxscriptnumlengthpolicy", 10000),       // 10K
 			MaxPubKeysPerMultisigPolicy:  int64(getInt("maxpubkeyspermultisigpolicy", 0)), // 0 is unlimited
 			MaxTxSigopsCountsPolicy:      int64(getInt("maxtxsigopscountspolicy", 0)),     // 0 is unlimited
@@ -362,6 +362,9 @@ func NewSettings() *Settings {
 		},
 		Faucet: FaucetSettings{
 			HTTPListenAddress: getString("faucet_httpListenAddress", ""),
+		},
+		Dashboard: DashboardSettings{
+			Enabled: getBool("dashboard_enabled", false),
 		},
 	}
 }

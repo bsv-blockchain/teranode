@@ -15,7 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
-	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
+	"github.com/bitcoin-sv/ubsv/services/asset/httpimpl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/settings"
@@ -33,7 +33,7 @@ type Centrifuge struct {
 	settings         *settings.Settings
 	repository       *repository.Repository
 	baseURL          string
-	httpServer       *http_impl.HTTP
+	httpServer       *httpimpl.HTTP
 	blockchainClient blockchain.ClientI
 	centrifugeNode   *centrifuge.Node
 }
@@ -55,7 +55,7 @@ type messageType struct {
 // Returns:
 //   - *Centrifuge: New Centrifuge server instance
 //   - error: Any error encountered during initialization
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, httpServer *http_impl.HTTP) (*Centrifuge, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, httpServer *httpimpl.HTTP) (*Centrifuge, error) {
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
 	if assetHTTPAddress == "" {
 		return nil, errors.NewConfigurationError("asset_httpAddress not found in config")

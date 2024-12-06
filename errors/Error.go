@@ -45,7 +45,7 @@ func (e *Error) Error() string {
 
 	if e.WrappedErr() == nil {
 		if dataMsg == "" {
-			return fmt.Sprintf("Error: %s, (error code: %d), Message: %v", e.code.Enum(), e.code, e.message)
+			return fmt.Sprintf("Error: %s (error code: %d), Message: %v", e.code.Enum(), e.code, e.message)
 		}
 		return fmt.Sprintf("%d: %v, data: %s", e.code, e.message, dataMsg)
 	}
