@@ -135,6 +135,7 @@ type BlockChainSettings struct {
 	RetrySleep           int
 	StoreURL             *url.URL
 	FSMStateRestore      bool
+	FSMStateChangeDelay  time.Duration // used by tests to delay the state change and have time to capture the state
 	StoreDBTimeoutMillis int
 }
 

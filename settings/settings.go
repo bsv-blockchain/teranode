@@ -176,6 +176,7 @@ func NewSettings() *Settings {
 			RetrySleep:           getInt("blockchain_retrySleep", 1000),
 			StoreURL:             getURL("blockchain_store", "sqlite:///blockchain"),
 			FSMStateRestore:      getBool("fsm_state_restore", false),
+			FSMStateChangeDelay:  getDuration("fsm_state_change_delay", 0),
 			StoreDBTimeoutMillis: getInt("blockchain_store_dbTimeoutMillis", 5000),
 		},
 		BlockValidation: BlockValidationSettings{

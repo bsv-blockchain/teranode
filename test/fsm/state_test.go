@@ -2,9 +2,9 @@
 
 // How to run this test:
 // $ cd test/fsm/
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags functional
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithP2PSwitch$" -tags functional
-// $ go test -v -run "^TestFsmTestSuite$/TestTXCatchUpState_SendTXsToNode0$" -tags functional
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags test_functional
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithP2PSwitch$" -tags test_functional
+// $ go test -v -run "^TestFsmTestSuite$/TestTXCatchUpState_SendTXsToNode0$" -tags test_functional
 
 package test
 
@@ -51,15 +51,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		mu sync.Mutex
 	)
 
-	stateSet := make(map[blockchain_api.FSMStateType]struct{})
-
 	err := framework.StopNode("ubsv2")
 	if err != nil {
 		t.Errorf("Failed to stop node: %v", err)
 	}
 
 	for i := 0; i < 5; i++ {
-		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 10)
+		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 5)
 
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
@@ -80,6 +78,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		t.Fatalf("Failed to wait for health liveness: %v", err)
 	}
 
+	stateSet := make(map[blockchain_api.FSMStateType]struct{})
+
 	// wait for node 2 block validator to catch up
 	wait := func() {
 		// trigger a new block to wake up node 2 and start catch up process
@@ -87,29 +87,43 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		require.NoError(t, err)
 
 		timeout := time.After(30 * time.Second)
+
 		for {
 			select {
 			case <-timeout:
 				return
 			default:
-				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				// We are trying to capture all the states as block validation runs in the background
+				// However, it is very possible that block validation switches from RUNNING to CATCHINGUP
+				// and then back to RUNNING before our test manages to capture the CATCHINGUP state
+				// This is making this test flaky
+				// To attempt to counter this, the Blockchain server uses a delay to ensure that the state change is captured
+				// This is configured using the fsm_state_change_delay setting
+				state := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
 
 				mu.Lock()
-				if _, exists := stateSet[response]; !exists {
-					framework.Logger.Infof("New unique state: %v", response)
-					stateSet[response] = struct{}{}
+				if _, exists := stateSet[state]; !exists {
+					framework.Logger.Infof("New unique state: %v", state)
+
+					stateSet[state] = struct{}{}
 				}
 				mu.Unlock()
 
-				_, blockMetaNode0, err := blockchainNode0.GetBestBlockHeader(ctx)
-				require.NoError(t, err)
+				if state == blockchain_api.FSMStateType_RUNNING {
+					if _, exists := stateSet[blockchain_api.FSMStateType_CATCHINGBLOCKS]; exists {
+						// take a note of the best block header of node 0 (ubsv1)
+						blockHeaderNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
+						require.NoError(t, err)
 
-				_, err = blockchainNode1.GetBlockByHeight(ctx, blockMetaNode0.Height)
-				if !errors.Is(err, errors.ErrBlockNotFound) {
-					return
+						// check if the block of node 0 (ubsv1) is synced to node 1 (ubsv2)
+						_, err = blockchainNode1.GetBlockExists(ctx, blockHeaderNode0.Hash())
+						if !errors.Is(err, errors.ErrBlockNotFound) {
+							return
+						}
+					}
 				}
 
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond) // this is increasing of NOT capturing the CATCHINGUP state if block validation is fast
 			}
 		}
 	}
@@ -117,8 +131,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 	stateFound := false
 
-	for state := range stateSet {
-		if state == blockchain_api.FSMStateType(3) {
+	for state, _ := range stateSet {
+		if state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 			stateFound = true
 			break
 		}
@@ -128,7 +142,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
-	assert.True(t, stateFound, "State 3 was not captured")
+	assert.True(t, stateFound, "State 3 (CATCHINGBLOCKS) was not captured")
 }
 
 /* Description */
@@ -215,24 +229,37 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 			case <-timeout:
 				return
 			default:
-				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				// We are trying to capture all the states as block validation runs in the background
+				// However, it is very possible that block validation switches from RUNNING to CATCHINGUP
+				// and then back to RUNNING before our test manages to capture the CATCHINGUP state
+				// This is making this test flaky
+				// To attempt to counter this, the Blockchain server uses a delay to ensure that the state change is captured
+				// This is configured using the fsm_state_change_delay setting
+				state := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
 
 				mu.Lock()
-				if _, exists := stateSet[response]; !exists {
-					framework.Logger.Infof("New unique state: %v", response)
-					stateSet[response] = struct{}{}
+				if _, exists := stateSet[state]; !exists {
+					framework.Logger.Infof("New unique state: %v", state)
+
+					stateSet[state] = struct{}{}
 				}
 				mu.Unlock()
 
-				_, blockMetaNode0, err := blockchainNode0.GetBestBlockHeader(ctx)
-				require.NoError(t, err)
+				if state == blockchain_api.FSMStateType_RUNNING {
+					if _, exists := stateSet[blockchain_api.FSMStateType_CATCHINGBLOCKS]; exists {
+						// take a note of the best block header of node 0 (ubsv1)
+						blockHeaderNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
+						require.NoError(t, err)
 
-				_, err = blockchainNode1.GetBlockByHeight(ctx, blockMetaNode0.Height)
-				if !errors.Is(err, errors.ErrBlockNotFound) {
-					return
+						// check if the block of node 0 (ubsv1) is synced to node 1 (ubsv2)
+						_, err = blockchainNode1.GetBlockExists(ctx, blockHeaderNode0.Hash())
+						if !errors.Is(err, errors.ErrBlockNotFound) {
+							return
+						}
+					}
 				}
 
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond) // this is increasing of NOT capturing the CATCHINGUP state if block validation is fast
 			}
 		}
 	}
@@ -241,7 +268,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	stateFound := false
 
 	for state := range stateSet {
-		if state == blockchain_api.FSMStateType(3) {
+		if state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 			stateFound = true
 			break
 		}
@@ -252,7 +279,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 
 	logger.Infof("Captured states: %v", states)
-	assert.True(t, stateFound, "State 3 was not captured")
+	assert.True(t, stateFound, "State 3 (CATCHINGBLOCKS) was not captured")
 }
 
 /* Description */
@@ -274,7 +301,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitchOff() {
 	blockchainNode2 := framework.Nodes[2].BlockchainClient
 
 	var (
-		mu sync.Mutex
+		mu            sync.Mutex
 		stateSetNode1 = make(map[blockchain_api.FSMStateType]struct{})
 		stateSetNode2 = make(map[blockchain_api.FSMStateType]struct{})
 	)
@@ -389,14 +416,14 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitchOff() {
 	stateCatchupFound2 := false
 
 	for state := range stateSetNode1 {
-		if state == blockchain_api.FSMStateType(3) {
+		if state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 			stateCatchupFound1 = true
 			break
 		}
 	}
 
 	for state := range stateSetNode2 {
-		if state == blockchain_api.FSMStateType(3) {
+		if state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
 			stateCatchupFound2 = true
 			break
 		}

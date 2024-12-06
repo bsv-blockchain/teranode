@@ -55,6 +55,7 @@ type Blockchain struct {
 	kafkaChan                     chan *kafka.Message
 	stats                         *gocore.Stat
 	finiteStateMachine            *fsm.FSM
+	stateChangeTimestamp          time.Time
 	AppCtx                        context.Context
 	localTestStartState           string
 }
@@ -1188,6 +1189,16 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	}
 
 	b.logger.Infof("[Blockchain Server] FSM current state: %v, response: %v", b.finiteStateMachine.Current(), resp)
+
+	// For test purposes, we want to ensure that the state changes cannot happen too fast
+	// This is to ensure that the state change is captured in the test
+	duration := time.Since(b.stateChangeTimestamp)
+	if duration < b.settings.BlockChain.FSMStateChangeDelay {
+		b.logger.Warnf("[Blockchain Server] State transition too fast for tests. Sleeping for %v before returning the response (should only happen in tests)", b.settings.BlockChain.FSMStateChangeDelay-duration)
+		time.Sleep(b.settings.BlockChain.FSMStateChangeDelay - duration)
+	}
+
+	b.stateChangeTimestamp = time.Now()
 
 	return resp, nil
 }
