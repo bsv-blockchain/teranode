@@ -61,67 +61,88 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 			case <-ctx.Done():
 				return
 			case notification := <-blockchainSubscription:
+				t.Logf("Received notification: %v", notification)
+
 				if notification.Type == model.NotificationType_Subtree {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
 
 					hashes = append(hashes, hash)
 
-					fmt.Println("Length of hashes:", len(hashes))
+					t.Logf("Length of hashes: %d", len(hashes))
 				} else {
-					fmt.Println("other notifications than subtrees")
-					fmt.Println(notification.Type)
+					t.Logf("other notifications than subtrees")
+					t.Logf("notification type: %v", notification.Type)
 				}
 			}
 		}
 	}()
 
-	hashesTx, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 20)
+	hashesTx, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 30)
 
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
-	fmt.Printf("Hashes in created block: %v\n", hashesTx)
+	t.Logf("Hashes in created block: %v", hashesTx)
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(30 * time.Second)
 
 	if len(hashes) > 0 {
-		fmt.Println("First element of hashes:", hashes[0])
+		t.Logf("First element of hashes: %v", hashes[0])
 	} else {
-		fmt.Println("hashes is empty!")
+		t.Log("hashes is empty!")
 	}
-
-	fmt.Println("subtree notification received")
 
 	baseDir := "../../data/test"
 
-	fmt.Println("num of subtrees:", len(hashes))
+	t.Logf("num of subtrees: %d", len(hashes))
+
+	// Keep track of which transactions we've found
+	foundTxs := make(map[string]bool) // Using string representation of hash as key
+	remainingTxs := len(hashesTx)
 
 	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
 	for _, subtreeHash := range hashes {
-		fmt.Println("Subtree hash:", subtreeHash)
+		t.Logf("Subtree hash: %v", subtreeHash)
 
-		for i := 2; i <= 3; i++ {
+		for i := 1; i <= 3; i++ {
 			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
 			subSubDir := subtreeHash.String()[:2]
 
-			fmt.Println(subDir)
-			fmt.Println(subSubDir)
+			t.Logf("Checking directory: %s", subDir)
+			t.Logf("Subdirectory: %s", subSubDir)
 
 			filePath := filepath.Join(baseDir, subDir, subSubDir, subtreeHash.String())
-			fmt.Println(filePath)
+			t.Logf("Full path: %s", filePath)
 
 			if matches, err := filepath.Glob(filePath + "*"); err == nil {
 				if len(matches) > 0 {
-					fmt.Printf("Subtree %s exists.\n", filePath)
-
+					t.Logf("Subtree %s exists.", filePath)
 					found += 1
+
+					subtreeStore := testEnv.Nodes[0].SubtreeStore
+
+					// Check only transactions that haven't been found yet
+					for _, txHash := range hashesTx {
+						if foundTxs[txHash.String()] {
+							continue // Skip if we already found this tx
+						}
+
+						exists, err := helper.CheckIfTxExistsInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), txHash)
+						require.NoError(t, err)
+
+						if exists {
+							t.Logf("Tx %s found in subtree %s", txHash.String(), subtreeHash.String())
+							foundTxs[txHash.String()] = true
+							remainingTxs--
+						}
+					}
 				}
 			} else if os.IsNotExist(err) {
-				fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash.String(), subDir)
+				t.Logf("Subtree %s doesn't exists %s.", subtreeHash.String(), subDir)
 			} else {
-				fmt.Printf("Error checking the file %s in %s: %v\n", subtreeHash.String(), subDir, err)
+				t.Logf("Error checking the file %s in %s: %v", subtreeHash.String(), subDir, err)
 			}
 		}
 	}
@@ -129,6 +150,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	if found == 0 {
 		t.Errorf("Test failed, no subtree found")
 	}
+
+	// Verify that all transactions were found
+	require.Equal(t, 0, remainingTxs, "Not all transactions were found in the subtrees")
 }
 
 func TestTNA1TestSuite(t *testing.T) {

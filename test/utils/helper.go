@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -26,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -205,8 +207,8 @@ func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 	var num uint32
 
 	if err := binary.Read(r, binary.LittleEndian, &num); err != nil {
-		fmt.Printf("error reading transaction count: %v\n", err)
-		os.Exit(1)
+		logger.Errorf("error reading transaction count: %v", err)
+		return false
 	}
 
 	if verbose {
@@ -942,6 +944,33 @@ func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url
 	}
 }
 
+func CheckIfTxExistsInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
+	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, options.WithFileExtension("subtree"))
+	if err != nil {
+		return false, errors.NewProcessingError("error getting subtree reader", err)
+	}
+
+	st := util.Subtree{}
+
+	err = st.DeserializeFromReader(subtreeReader)
+	if err != nil {
+		return false, errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
+	}
+
+	txHashes := make([]chainhash.Hash, len(st.Nodes))
+	for i := 0; i < len(st.Nodes); i++ {
+		txHashes[i] = st.Nodes[i].Hash
+	}
+
+	for _, txHash := range txHashes {
+		if txHash == tx {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func Unzip(src, dest string) error {
 	cmd := exec.Command("unzip", "-f", src, "-d", dest)
 	err := cmd.Run()
@@ -1204,4 +1233,72 @@ func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logg
 			return err
 		}
 	}
+}
+
+// ValidateUTXODiff validates that a UTXO diff file contains the expected transaction outputs
+func ValidateUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash chainhash.Hash, diffType string, tx bt.Tx) (bool, error) {
+	if diffType != "additions" && diffType != "deletions" {
+		return false, errors.NewProcessingError("invalid diff type: %s, must be 'additions' or 'deletions'", diffType)
+	}
+
+	r, err := store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension(fmt.Sprintf("utxo-%s", diffType)))
+	if err != nil {
+		return false, errors.NewProcessingError("error getting reader from store", err)
+	}
+
+	br := bufio.NewReaderSize(r, 1024*1024)
+
+	// Read the file header
+	_, hash, _, err := utxopersister.GetHeaderFromReader(br)
+	if err != nil {
+		return false, errors.NewProcessingError("failed to read UTXO %s header: %v", diffType, err)
+	}
+
+	// Verify block hash matches
+	if hash.String() != blockHash.String() {
+		return false, errors.NewProcessingError("block hash mismatch: expected %s, got %s", blockHash.String(), hash.String())
+	}
+
+	wrapper, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
+	if err != nil {
+		return false, errors.NewProcessingError("failed to read UTXO wrapper: %v", err)
+	}
+
+	// Check if this wrapper contains our transaction
+	if wrapper.TxID.String() == tx.TxIDChainHash().String() {
+		logger.Infof("Found transaction %s in UTXO %s", tx.TxIDChainHash().String(), diffType)
+		// Verify each UTXO matches the transaction outputs
+		for _, utxo := range wrapper.UTXOs {
+			if int(utxo.Index) >= len(tx.Outputs) {
+				return false, errors.NewProcessingError("UTXO index %d out of range for tx with %d outputs", utxo.Index, len(tx.Outputs))
+			}
+
+			output := tx.Outputs[utxo.Index]
+			if !output.LockingScript.EqualsBytes(utxo.Script) {
+				return false, errors.NewProcessingError("UTXO script mismatch at index %d", utxo.Index)
+			}
+
+			if output.Satoshis != utxo.Value {
+				return false, errors.NewProcessingError("UTXO value mismatch at index %d: expected %d, got %d", utxo.Index, output.Satoshis, utxo.Value)
+			}
+		}
+
+		return true, nil
+	}
+
+	return false, errors.NewProcessingError("transaction %s not found in UTXO %s", tx.TxIDChainHash().String(), diffType)
+}
+
+// VerifyUTXOFileExists checks if a UTXO-related file exists in the block store
+func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chainhash.Hash, fileType string) error {
+	exists, err := store.Exists(ctx, blockHash[:], options.WithFileExtension(fileType))
+	if err != nil {
+		return errors.NewProcessingError("failed to check if %s exists: %v", fileType, err)
+	}
+
+	if !exists {
+		return errors.NewProcessingError("%s file does not exist", fileType)
+	}
+
+	return nil
 }

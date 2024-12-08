@@ -1,5 +1,14 @@
 //go:build test_all || test_tna
 
+// Package tna implements acceptance tests for Teranode's transaction and block handling.
+//
+// TNA-2 Test Suite
+// This test suite verifies that Teranode correctly collects new transactions into a block.
+// It tests:
+// 1. Single transaction propagation across all nodes
+// 2. Multiple transaction propagation in sequence
+// 3. Concurrent transaction propagation under load
+//
 // How to run this test manually:
 // $ cd test/tna
 // $ go test -v -run "^TestTNA2TestSuite$/TestTxsReceivedAllNodes$" -tags test_tna
@@ -7,17 +16,10 @@
 package tna
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -43,94 +45,68 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 	ctx := testEnv.Context
 	t := suite.T()
 
-	// Send transactions
-	txDistributor := testEnv.Nodes[0].DistributorClient
+	t.Run("Single transaction propagation", func(t *testing.T) {
+		// Create and send a single transaction
+		txHash, err := helper.CreateAndSendTxToSliceOfNodes(ctx, testEnv.Nodes)
+		if err != nil {
+			t.Fatalf("Failed to create and send transaction: %v", err)
+		}
 
-	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		// Wait for transaction propagation
+		time.Sleep(2 * time.Second)
 
-	if err != nil {
-		t.Errorf("Failed to decode Coinbase private key: %v", err)
-	}
+		// Verify transaction exists in block assembly on all nodes
+		for i, node := range testEnv.Nodes {
+			err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
+			if err != nil {
+				t.Errorf("Transaction not found in block assembly on node %d: %v", i, err)
+			}
+		}
+	})
 
-	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	t.Run("Multiple transactions propagation", func(t *testing.T) {
+		// Send multiple transactions
+		numTxs := 5
+		txHashes, err := helper.CreateAndSendTxsToASliceOfNodes(ctx, testEnv.Nodes, numTxs)
+		if err != nil {
+			t.Fatalf("Failed to create and send multiple transactions: %v", err)
+		}
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		t.Errorf("Failed to generate private key: %v", err)
-	}
+		// Wait for transaction propagation
+		time.Sleep(2 * time.Second)
 
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	if err != nil {
-		t.Errorf("Failed to create address: %v", err)
-	}
+		// Verify all transactions exist in block assembly on all nodes
+		for _, txHash := range txHashes {
+			for i, node := range testEnv.Nodes {
+				err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
+				if err != nil {
+					t.Errorf("Transaction %s not found in block assembly on node %d: %v", txHash, i, err)
+				}
+			}
+		}
+	})
 
-	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
-	if err != nil {
-		t.Errorf("Failed to request funds: %v", err)
-	}
+	t.Run("Concurrent transactions propagation", func(t *testing.T) {
+		// Send transactions concurrently
+		numTxs := 10
+		txHashes, err := helper.CreateAndSendTxsConcurrently(ctx, testEnv.Nodes[0], numTxs)
+		if err != nil {
+			t.Fatalf("Failed to create and send concurrent transactions: %v", err)
+		}
 
-	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
+		// Wait for transaction propagation
+		time.Sleep(3 * time.Second)
 
-	_, err = txDistributor.SendTransaction(ctx, tx)
-	if err != nil {
-		t.Errorf("Failed to send transaction: %v", err)
-	}
-
-	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
-
-	utxo := &bt.UTXO{
-		TxIDHash:      tx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: tx.Outputs[0].LockingScript,
-		Satoshis:      tx.Outputs[0].Satoshis,
-	}
-
-	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-
-	if err != nil {
-		t.Errorf("Error adding UTXO to transaction: %s\n", err)
-	}
-
-	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
-	if err != nil {
-		t.Errorf("Error adding output to transaction: %v", err)
-	}
-
-	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-	if err != nil {
-		t.Errorf("Error filling transaction inputs: %v", err)
-	}
-
-	_, err = txDistributor.SendTransaction(ctx, newTx)
-	if err != nil {
-		t.Errorf("Failed to send new transaction: %v", err)
-	}
-
-	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-	time.Sleep(5 * time.Second)
-
-	// If Block Assembly removes correctly the Tx, it means that Tx exists
-
-	errTx0 := testEnv.Nodes[0].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
-
-	if errTx0 != nil {
-		t.Errorf("Error Tx0 not present: %v", errTx0)
-	}
-
-	errTx1 := testEnv.Nodes[1].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
-
-	if errTx1 != nil {
-		t.Errorf("Error Tx1 not present: %v", errTx1)
-	}
-
-	errTx2 := testEnv.Nodes[2].BlockassemblyClient.RemoveTx(ctx, newTx.TxIDChainHash())
-
-	if errTx2 != nil {
-		t.Errorf("Error Tx2 not present: %v", errTx2)
-	}
+		// Verify all transactions exist in block assembly on all nodes
+		for _, txHash := range txHashes {
+			for i, node := range testEnv.Nodes {
+				err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
+				if err != nil {
+					t.Errorf("Transaction %s not found in block assembly on node %d: %v", txHash, i, err)
+				}
+			}
+		}
+	})
 }
 
 func TestTNA2TestSuite(t *testing.T) {

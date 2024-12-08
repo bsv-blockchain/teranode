@@ -45,6 +45,7 @@ type TeranodeTestClient struct {
 	BlockstoreURL          *url.URL
 	UtxoStore              *utxostore.Store
 	SubtreesKafkaURL       *url.URL
+	AssetURL               string
 	RPCURL                 string
 	IPAddress              string
 	Settings               *settings.Settings
@@ -139,6 +140,11 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		if err := t.setupRPCURL(node); err != nil {
 			return err
 		}
+
+		if err := t.setupAssetURL(node); err != nil {
+			return err
+		}
+
 	}
 
 	return nil
@@ -178,6 +184,19 @@ func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
 	}
 
 	node.RPCURL = fmt.Sprintf("http://%s", makeHostAddressFromPort(rpcMappedPort.Port()))
+
+	return nil
+}
+
+func (t *TeranodeTestEnv) setupAssetURL(node *TeranodeTestClient) error {
+	assetPort := "8090/tcp"
+	assetMappedPort, err := t.GetMappedPort(node.Name, nat.Port(assetPort))
+
+	if err != nil {
+		return errors.NewConfigurationError("error getting asset mapped port:", err)
+	}
+
+	node.AssetURL = fmt.Sprintf("http://%s", makeHostAddressFromPort(assetMappedPort.Port()))
 
 	return nil
 }
