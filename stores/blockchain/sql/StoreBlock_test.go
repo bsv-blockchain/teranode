@@ -14,14 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_StoreBlock(t *testing.T) {
+func TestStoreBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("store block 1", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -35,7 +35,7 @@ func Test_StoreBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -59,7 +59,7 @@ func Test_StoreBlock(t *testing.T) {
 	})
 }
 
-func Test_getCumulativeChainWork(t *testing.T) {
+func TestGetCumulativeChainWork(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("block 1", func(t *testing.T) {
@@ -106,7 +106,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())
@@ -171,7 +171,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())

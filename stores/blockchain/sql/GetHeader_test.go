@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetHeader(t *testing.T) {
+func TestSQLGetHeader(t *testing.T) {
 	t.Run("block 0 - genesis block header", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
 		tSettings := test.CreateBaseTestSettings()
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		headerHash, err := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")

@@ -18,7 +18,7 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		err = s.RevalidateBlock(context.Background(), block2.Hash())
@@ -29,7 +29,7 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})

@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -33,7 +32,7 @@ type SQL struct {
 	chainParams   *chaincfg.Params
 }
 
-func New(logger ulogger.Logger, storeURL *url.URL, settings *settings.Settings) (*SQL, error) {
+func New(logger ulogger.Logger, storeURL *url.URL, chainParams *chaincfg.Params) (*SQL, error) {
 	logger = logger.New("bcsql")
 
 	db, err := util.InitSQLDB(logger, storeURL)
@@ -63,7 +62,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, settings *settings.Settings) 
 		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
 		blocksCache:   *NewBlockchainCache(),
-		chainParams:   settings.ChainCfgParams,
+		chainParams:   chainParams,
 	}
 
 	err = s.insertGenesisTransaction(logger)

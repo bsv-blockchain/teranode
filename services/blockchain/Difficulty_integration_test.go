@@ -30,7 +30,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)
@@ -110,7 +110,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)

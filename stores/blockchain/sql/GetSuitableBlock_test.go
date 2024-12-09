@@ -28,13 +28,13 @@ func Test_getMedianBlock(t *testing.T) {
 	require.Equal(t, uint32(2), b.Time)
 }
 
-func TestSQL_GetSuitableBlock(t *testing.T) {
+func TestSQLGetSuitableBlock(t *testing.T) {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	_, _, err = s.StoreBlock(context.Background(), block1, "")

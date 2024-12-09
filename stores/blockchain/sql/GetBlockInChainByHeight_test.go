@@ -144,7 +144,7 @@ func setupTestStore(t *testing.T) *SQL {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	store, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	store, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	return store

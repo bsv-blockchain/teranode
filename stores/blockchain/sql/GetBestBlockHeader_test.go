@@ -19,7 +19,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
@@ -34,7 +34,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 
 		require.NoError(t, err)
 
@@ -63,7 +63,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 
 		require.NoError(t, err)
 

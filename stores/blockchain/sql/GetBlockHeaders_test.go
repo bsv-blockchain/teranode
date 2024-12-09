@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetBlockHeaders(t *testing.T) {
+func TestSQLGetBlockHeaders(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("empty - no error", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		headers, heights, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
@@ -33,7 +33,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

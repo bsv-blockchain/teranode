@@ -12,14 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetBlockHeaderIDs(t *testing.T) {
+func TestSQLGetBlockHeaderIDs(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("empty - no error", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		headerIDs, err := s.GetBlockHeaderIDs(context.Background(), &chainhash.Hash{}, 2)
@@ -31,7 +31,7 @@ func TestSQL_GetBlockHeaderIDs(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

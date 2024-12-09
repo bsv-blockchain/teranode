@@ -66,7 +66,7 @@ func Start() {
 		usage(err.Error())
 	}
 
-	blockchainStore, err := blockchain.NewStore(logger, tSettings.BlockChain.StoreURL, tSettings)
+	blockchainStore, err := blockchain.NewStore(logger, tSettings.BlockChain.StoreURL, tSettings.ChainCfgParams)
 	if err != nil {
 		usage(err.Error())
 	}

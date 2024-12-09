@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetBlockByHeight(t *testing.T) {
+func TestSQLGetBlockByHeight(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("block 0 - genesis block", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		block, err := s.GetBlockByHeight(context.Background(), 0)
@@ -35,7 +35,7 @@ func TestSQL_GetBlockByHeight(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

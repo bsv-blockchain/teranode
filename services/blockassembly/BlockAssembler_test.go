@@ -333,7 +333,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.TestNetParams
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)

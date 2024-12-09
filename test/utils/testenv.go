@@ -335,7 +335,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 	t.Logger.Infof("blockchainStoreURL: %s", blockchainStoreURL.String())
 
-	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL, tSettings)
+	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL, tSettings.ChainCfgParams)
 	if err != nil {
 		return errors.NewConfigurationError("error creating blockchain store", err)
 	}

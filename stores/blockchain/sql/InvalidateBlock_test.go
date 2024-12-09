@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_InvalidateBlock(t *testing.T) {
+func TestSQLInvalidateBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("empty - error", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		err = s.InvalidateBlock(context.Background(), block2.Hash())
@@ -29,7 +29,7 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})
@@ -85,7 +85,7 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})

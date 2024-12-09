@@ -200,7 +200,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
@@ -312,7 +312,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
@@ -400,7 +400,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
@@ -488,7 +488,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
@@ -592,7 +592,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
@@ -709,7 +709,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)

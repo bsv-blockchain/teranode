@@ -5,13 +5,12 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenesisHash_NewChain(t *testing.T) {
+func TestGenesisHashNewChain(t *testing.T) {
 	testCases := []struct {
 		name        string
 		chainParams *chaincfg.Params
@@ -43,13 +42,8 @@ func TestGenesisHash_NewChain(t *testing.T) {
 			dbURL, err := url.Parse("sqlitememory:///")
 			require.NoError(t, err)
 
-			// Create settings with chain params
-			s := &settings.Settings{
-				ChainCfgParams: tc.chainParams,
-			}
-
 			// Create new SQL store - this should insert the genesis block
-			store, err := New(logger, dbURL, s)
+			store, err := New(logger, dbURL, tc.chainParams)
 			require.NoError(t, err)
 			defer store.Close()
 
@@ -63,12 +57,12 @@ func TestGenesisHash_NewChain(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify the hash matches the expected genesis block hash
-			assert.Equal(t, s.ChainCfgParams.GenesisHash[:], hash)
+			assert.Equal(t, tc.chainParams.GenesisHash[:], hash)
 		})
 	}
 }
 
-func TestGenesisHash_WrongParams(t *testing.T) {
+func TestGenesisHashWrongParams(t *testing.T) {
 	testCases := []struct {
 		name          string
 		initialParams *chaincfg.Params
@@ -104,9 +98,7 @@ func TestGenesisHash_WrongParams(t *testing.T) {
 			require.NoError(t, err)
 
 			// First create a store with initial params
-			store, err := New(logger, dbURL, &settings.Settings{
-				ChainCfgParams: tc.initialParams,
-			})
+			store, err := New(logger, dbURL, tc.initialParams)
 			require.NoError(t, err)
 			defer store.Close()
 

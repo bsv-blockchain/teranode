@@ -18,12 +18,12 @@ import (
 
 var blockCount = 10
 
-func TestSQL_LocateBlockHeaders(t *testing.T) {
+func TestSQLLocateBlockHeaders(t *testing.T) {
 	dbURL, _ := url.Parse("sqlitememory:///")
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockCount)

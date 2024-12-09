@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQL_GetBlockHeadersFromTill(t *testing.T) {
+func TestSQLGetBlockHeadersFromTill(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("blocks not found", func(t *testing.T) {
@@ -22,7 +22,7 @@ func TestSQL_GetBlockHeadersFromTill(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		headers, _, err := s.GetBlockHeadersFromTill(ctx, &chainhash.Hash{}, &chainhash.Hash{})
@@ -35,7 +35,7 @@ func TestSQL_GetBlockHeadersFromTill(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 		require.NoError(t, err)
 
 		generatedBlockHeaders := generateBlockHeaders(t, s, 25)
