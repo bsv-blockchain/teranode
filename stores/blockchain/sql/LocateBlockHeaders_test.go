@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,9 @@ var blockCount = 10
 func TestSQL_LocateBlockHeaders(t *testing.T) {
 	dbURL, _ := url.Parse("sqlitememory:///")
 
-	s, err := New(ulogger.TestLogger{}, dbURL)
+	tSettings := test.CreateBaseTestSettings()
+
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockCount)

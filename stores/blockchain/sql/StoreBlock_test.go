@@ -8,17 +8,20 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func Test_StoreBlock(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("store block 1", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -32,7 +35,7 @@ func Test_StoreBlock(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -57,6 +60,8 @@ func Test_StoreBlock(t *testing.T) {
 }
 
 func Test_getCumulativeChainWork(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("block 1", func(t *testing.T) {
 		work, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
 		require.NoError(t, err)
@@ -101,7 +106,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())
@@ -166,7 +171,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())

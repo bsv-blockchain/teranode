@@ -1,7 +1,9 @@
 package sql
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"net/http"
 	"net/url"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -30,15 +33,8 @@ type SQL struct {
 	chainParams   *chaincfg.Params
 }
 
-func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
+func New(logger ulogger.Logger, storeURL *url.URL, settings *settings.Settings) (*SQL, error) {
 	logger = logger.New("bcsql")
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
 
 	db, err := util.InitSQLDB(logger, storeURL)
 	if err != nil {
@@ -67,7 +63,7 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
 		blocksCache:   *NewBlockchainCache(),
-		chainParams:   params,
+		chainParams:   settings.ChainCfgParams,
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -291,22 +287,25 @@ func createSqliteSchema(db *usql.DB) error {
 func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	q := `
 		SELECT
-	     count(*)
+	     hash
 		FROM blocks b
+		WHERE b.height = 0
 	`
 
 	var (
-		err        error
-		blockCount uint64
+		err  error
+		hash []byte
 	)
 
 	if err = s.db.QueryRow(q).Scan(
-		&blockCount,
+		&hash,
 	); err != nil {
-		return err
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
 
-	if blockCount == 0 {
+	if len(hash) == 0 {
 		wireGenesisBlock := s.chainParams.GenesisBlock
 		// wireGenesisBlock := chaincfg.MainNetParams.GenesisBlock
 
@@ -335,6 +334,9 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 		} else if s.engine == util.Postgres {
 			_, _ = s.db.Exec("SET session_replication_role = 'origin'")
 		}
+	} else if !bytes.Equal(hash, s.chainParams.GenesisHash[:]) {
+		// Check the chainParams genesis block hash is the same as the one in the database
+		return errors.NewConfigurationError("genesis block hash mismatch")
 	}
 
 	return nil

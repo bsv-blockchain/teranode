@@ -8,13 +8,13 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +39,9 @@ func TestTransaction(t *testing.T) {
 	txStore := getMemoryStore(t)
 	utxoStore := memory.New(ulogger.TestLogger{})
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
@@ -53,10 +55,8 @@ func TestTransaction(t *testing.T) {
 	err = txStore.Set(context.Background(), txHash.CloneBytes(), tx.Bytes())
 	require.NoError(t, err)
 
-	settings := &settings.Settings{}
-
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -150,7 +150,9 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	txStore := getMemoryStore(t)
 	utxoStore := memory.New(ulogger.TestLogger{})
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
@@ -164,10 +166,8 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
-	settings := &settings.Settings{}
-
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	return txns, key, repo

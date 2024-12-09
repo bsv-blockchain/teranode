@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,9 @@ func TestSQL_GetSuitableBlock(t *testing.T) {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeURL)
+	tSettings := test.CreateBaseTestSettings()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	_, _, err = s.StoreBlock(context.Background(), block1, "")

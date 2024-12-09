@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -21,7 +22,6 @@ type BlockSubtree struct {
 }
 
 func Start() {
-
 	debug := flag.Bool("debug", false, "enable debug logging")
 	logfile := flag.String("logfile", "chainextract.log", "path to logfile")
 	flag.Parse()
@@ -30,30 +30,37 @@ func Start() {
 	if *debug {
 		debugLevel = "DEBUG"
 	}
+
 	var logger = ulogger.New("chainextracts", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
 	if err != nil {
 		panic(err.Error())
 	}
+
+	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
+
 	if !found {
 		panic("no blockchain_store setting found")
 	}
 
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+	tSettings := settings.NewSettings()
+
+	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}
 
-	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore.docker.ci.chainintegrity.ubsv1")
+	subtreeStoreURL, err, found := gocore.Config().GetURL("subtreestore.docker.ci.chainintegrity.ubsv1")
 	if err != nil {
 		panic(err)
 	}
+
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err := blob.NewStore(logger, subtreeStoreUrl)
+
+	subtreeStore, err := blob.NewStore(logger, subtreeStoreURL)
 	if err != nil {
 		panic(err)
 	}
@@ -77,11 +84,13 @@ func Start() {
 		hash := chainhash.Hash(hashBytes)
 
 		logger.Infof("checking block %s", hash)
+
 		block, height, err := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(hashBytes))
 		if err != nil {
 			logger.Errorf("failed to get block %s: %s", height, err)
 			continue
 		}
+
 		logger.Infof("block %s has height %d", hash, height)
 
 		if len(block.Subtrees) == 0 {
@@ -97,6 +106,7 @@ func Start() {
 				logger.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, hash, err)
 				logger.Debugf("block dump: %s", block.Header.StringDump())
 			}
+
 			logger.Infof("subtree %s exists", subtreeHash)
 		}
 
@@ -105,7 +115,6 @@ func Start() {
 			return
 		} else {
 			logger.Infof("Block %s is valid", hash)
-
 		}
 	}
 }

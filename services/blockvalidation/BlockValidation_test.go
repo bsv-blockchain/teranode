@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -145,7 +146,6 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
-	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	require.NoError(t, err)
@@ -166,9 +166,12 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	blockHeader := &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  hashPrevBlock,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
 		HashMerkleRoot: calculatedMerkleRootHash,
 		//nolint:gosec
 		Timestamp: uint32(time.Now().Unix()),
@@ -196,12 +199,12 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -307,13 +310,13 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
-
-	tSettings := test.CreateBaseTestSettings()
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
@@ -394,12 +397,15 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
+
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -479,12 +485,14 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -581,12 +589,15 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
+
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -696,12 +707,14 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 		previousBlockHash = block.Header.Hash() // Update the previous block hash for the next block
 	}
 
-	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	tSettings := test.CreateBaseTestSettings()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
+
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 
 	// When: The last block in the chain is validated

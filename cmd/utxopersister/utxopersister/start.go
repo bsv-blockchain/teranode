@@ -72,7 +72,7 @@ func Start() {
 
 		logger.Infof("Using blockchainStore at %s", blockchainStoreURL)
 
-		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
 		if err != nil {
 			logger.Errorf("Failed to create blockchainStore: %v", err)
 			return

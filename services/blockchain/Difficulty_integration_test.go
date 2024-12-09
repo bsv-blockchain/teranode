@@ -26,23 +26,21 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 
 	currentTime := time.Now().Unix()
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
-	require.NoError(t, err)
-
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
+
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)
 	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
-	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-
 	//nolint: gosec
 	header := &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  hashGenesisBlock,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *d.powLimitnBits,
@@ -108,21 +106,20 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 
 	currentTime := time.Now().Unix()
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
-	require.NoError(t, err)
-
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
+
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
 
 	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, tSettings)
 	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
-	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	header := &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  hashGenesisBlock,
+		HashPrevBlock:  chaincfg.MainNetParams.GenesisHash,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *d.powLimitnBits,

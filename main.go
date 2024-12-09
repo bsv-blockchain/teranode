@@ -326,7 +326,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
 		if err != nil {
 			return err
 		}

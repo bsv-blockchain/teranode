@@ -18,6 +18,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -274,6 +275,8 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 }
 
 func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
+	tSettings := test.CreateBaseTestSettings()
+
 	blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.context.testrunner", node.DefaultSettingsContext))
 	// filePathMappedVolume, err, found := gocore.Config().GetURL(fmt.Sprintf("filePathMappedVolume.%s", node.SettingsContext))
 	if err != nil {
@@ -332,7 +335,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 	t.Logger.Infof("blockchainStoreURL: %s", blockchainStoreURL.String())
 
-	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL)
+	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL, tSettings)
 	if err != nil {
 		return errors.NewConfigurationError("error creating blockchain store", err)
 	}

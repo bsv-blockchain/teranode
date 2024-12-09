@@ -9,17 +9,20 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSQL_GetBlockHeadersFromTill(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("blocks not found", func(t *testing.T) {
 		ctx := context.Background()
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		headers, _, err := s.GetBlockHeadersFromTill(ctx, &chainhash.Hash{}, &chainhash.Hash{})
@@ -32,7 +35,7 @@ func TestSQL_GetBlockHeadersFromTill(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		generatedBlockHeaders := generateBlockHeaders(t, s, 25)

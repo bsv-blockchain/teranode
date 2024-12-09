@@ -191,11 +191,10 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 }
 
 var (
-	hashGenesisBlock, _ = chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-	bits, _             = model.NewNBitFromString("1d00ffff")
-	blockHeader1        = &model.BlockHeader{
+	bits, _      = model.NewNBitFromString("1d00ffff")
+	blockHeader1 = &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  hashGenesisBlock,
+		HashPrevBlock:  chaincfg.TestNetParams.GenesisHash,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *bits,
@@ -244,7 +243,7 @@ var (
 	}
 )
 
-func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
+func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 	t.Run("getReorgBlocks nil", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
@@ -331,7 +330,10 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.TestNetParams
+
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)

@@ -7,15 +7,18 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSQL_GetState(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("state 0", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		_, err = s.GetState(context.Background(), "test")

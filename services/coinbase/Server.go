@@ -88,9 +88,11 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewConfigurationError("failed to get coinbase_store setting")
 	}
 
+	tSettings := settings.NewSettings()
+
 	// We will reuse the blockchain service here to store the coinbase UTXOs
 	// you could use the same database as the blockchain service, but we will allow for a different one
-	store, err := blockchain.NewStore(s.logger, coinbaseStoreURL)
+	store, err := blockchain.NewStore(s.logger, coinbaseStoreURL, tSettings)
 	if err != nil {
 		return errors.NewStorageError("failed to create coinbase store: %s", err)
 	}

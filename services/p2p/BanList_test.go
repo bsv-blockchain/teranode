@@ -27,7 +27,9 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL)
+	tSettings := test.CreateBaseTestSettings()
+
+	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	banList := &BanList{

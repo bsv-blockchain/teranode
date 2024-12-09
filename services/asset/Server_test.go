@@ -40,7 +40,7 @@ func testSetup(t *testing.T) *testCtx {
 	blobStore := blobMemory.New()
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	require.NoError(t, err)

@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -15,11 +16,13 @@ import (
 
 const blockWindow = 144
 
-func TestSQL_GetHashOfAncestorBlock(t *testing.T) {
+func TestSQLGetHashOfAncestorBlock(t *testing.T) {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeURL)
+	tSettings := test.CreateBaseTestSettings()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockWindow+4)
@@ -32,11 +35,13 @@ func TestSQL_GetHashOfAncestorBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, blocks[len(blocks)-blockWindow].Hash(), ancestorHash)
 }
-func TestSQL_GetHashOfAncestorBlock_short(t *testing.T) {
+func TestSQLGetHashOfAncestorBlockShort(t *testing.T) {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeURL)
+	tSettings := test.CreateBaseTestSettings()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	// don't generate enough blocks

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -70,7 +71,9 @@ func Start() {
 		panic(err.Error())
 	}
 
-	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL)
+	tSettings := settings.NewSettings()
+
+	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}

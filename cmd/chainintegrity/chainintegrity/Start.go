@@ -58,7 +58,7 @@ func Start() {
 
 	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
 
-	blockchainDB, err := blockchain_store.NewStore(logger, tSettings.BlockChain.StoreURL)
+	blockchainDB, err := blockchain_store.NewStore(logger, tSettings.BlockChain.StoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -138,10 +139,12 @@ func createTestBlock(t *testing.T, nonce uint32, previousHash *chainhash.Hash) *
 func setupTestStore(t *testing.T) *SQL {
 	t.Helper()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	store, err := New(ulogger.TestLogger{}, storeURL)
+	store, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	return store
