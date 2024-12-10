@@ -1,10 +1,25 @@
 # 🗂️️ State Management in Teranode
 
-Last Modified: 24-Octubre-2024
+Last Modified: 10-December-2024
 
 ## Table of Contents
-1. [Description](#1-description)
 
+1. [Introduction](#1-introduction)
+2. [State Machine in Teranode](#2-state-machine-in-teranode)
+3. [Functionality](#3-functionality)
+- [3.1. State Machine Initialization](#31-state-machine-initialization)
+- [3.1. Accessing the State Machine over gRPC](#31-accessing-the-state-machine-over-grpc)
+- [3.2. State Machine States](#32-state-machine-states)
+    - [3.2.1. FSM Idle State](#321-fsm---idle-state)
+    - [3.2.2. FSM Legacy Syncing State](#322-fsm---legacy-syncing-state)
+    - [3.2.3. FSM Running State](#323-fsm---running-state)
+    - [3.2.4. FSM Catching Blocks State](#324-fsm---catching-blocks-state)
+- [3.3. State Machine Events](#33-state-machine-events)
+    - [3.3.1. FSM Event Legacy Sync](#331-fsm-event---legacy-sync)
+    - [3.3.2. FSM Event Run](#332-fsm-event---run)
+    - [3.3.3. FSM Event Catch up Blocks](#333-fsm-event---catch-up-blocks)
+    - [3.3.4. FSM Event Idle](#334-fsm-event---idle)
+- [3.4. Waiting on State Machine Transitions](#34-waiting-on-state-machine-transitions)
 
 ## 1. Introduction
 
@@ -24,22 +39,16 @@ The Teranode blockchain service uses a Finite State Machine (FSM) to manage the 
 
 The FSM has the following **states**:
 
-* **Stopped**
+* **Idle**
+* **LegacySyncing**
 * **Running**
 * **CatchingBlocks**
-* **CatchingTxs**
-* **Restoring**
-* **LegacySyncing**
-* **ResourceUnavailable** (defined but not used in the current implementation)
 
 The FSM responds to the following **events**:
 
+* **LegacySync**
 * **Run**
 * **CatchupBlocks**
-* **CatchupTxs**
-* **Restore**
-* **LegacySync**
-* **Unavailable** (defined but not used in the current implementation)
 * **Stop**
 
 
@@ -50,12 +59,10 @@ The diagram below represents the relationships between the states and events in 
 
 The FSM handles the following state **transitions**:
 
-* **Run**: Transitions to _Running_ from _Stopped_, _Restoring_, _LegacySyncing_, _CatchingTxs_, or _CatchingBlocks_
-* **LegacySync**: Transitions to _LegacySyncing_ _from_ Stopped
-* **Restore**: Transitions to _Restoring_ from _Stopped_
+* **LegacySync**: Transitions to _LegacySyncing_ from _Idle_
+* **Run**: Transitions to _Running_ from _Idle_, _LegacySyncing_ or _CatchingBlocks_
 * **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_
-* **CatchupTxs**: Transitions to _CatchingTxs_ from _Running_ or _CatchingBlocks_
-* **Stop**: Transitions to _Stopped_ from _Running_, _CatchingTxs_, or _CatchingBlocks_
+* **Stop**: Transitions to _Idle_ from _LegacySyncing_, _Running_, or _CatchingBlocks_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using https://mermaid.live/.
 fsm_visualizer main.go.
@@ -65,7 +72,7 @@ fsm_visualizer main.go.
 
 ### 3.1. State Machine Initialization
 
-As part of its own initialization, the Blockchain service initializes the FSM in the **Stopped** state, before it transitions to a LegacySyncing, Restoring or Running state.
+As part of its own initialization, the Blockchain service initializes the FSM in the **Idle** state, before it transitions to a LegacySyncing or Running state.
 
 
 ### 3.1. Accessing the State Machine over gRPC
@@ -76,65 +83,91 @@ The Blockchain service exposes the following gRPC methods to interact with the F
 * **WaitForFSMtoTransitionToGivenState** - Waits for the FSM to transition to a specific state.
 * **SendFSMEvent** - Sends an event to the FSM to trigger a state transition.
 
+* **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method).
 * **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method).
 * **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method).
-* **CatchUpTransactions** - Transitions the FSM to the CatchingTxs state (delegates on the SendFSMEvent
-* **Restore** - Transitions the FSM to the Restoring state (delegates on the SendFSMEvent method
-* **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent
-* **Unavailable** - Transitions the FSM to the ResourceUnavailable state (delegates on the SendFSMEvent method
 
 
 ### 3.2. State Machine States
 
-#### 3.2.1. FSM - Stopped State
+#### 3.2.1. FSM - Idle State
 
-The Blockchain service always starts in a `Stopped` state. The Stopped state is the initial state of the FSM and represents the node being offline or not actively participating in the network.
+The Blockchain service always starts in an `Idle` state. In this state:
 
-Upon node initialisation, all services will wait for the FSM to transition to the `Running` state (either directly or after going through a `Legacy Sync` or `Restore`) before starting their operations. As such, the node should see no activity until the FSM transitions to the Running state.
+- No operations are permitted
+- All services are inactive
+- The node is not participating in the network in any way
+- Must be manually triggered to transition to another state
 
-#### 3.2.3. FSM - Restoring State
+Allowed Operations in Idle State:
+- ❌ Process external transactions
+- ❌ Legacy relay transactions
+- ❌ Queue subtrees
+- ❌ Process subtrees
+- ❌ Queue blocks
+- ❌ Process blocks
+- ❌ Relay blocks
+- ❌ Speedy process blocks
+- ❌ Create subtrees (or propagate them)
+- ❌ Create blocks (mine candidates)
 
-When a node is starting up, and only if the `fsm_state_restore` setting is enabled, the blockchain will automatically transition into the `Restoring` state. The `Restoring` state represents the node awaiting a restoration process to be completed (such as a set of node initialization processes), before it can transition to a `Running` mode
+All services will wait for the FSM to transition to the `Running` state (either directly or after going through a `Legacy Sync` step) before starting their operations. As such, the node should see no activity until the FSM transitions to the `Running` state.
+
+The node can also return back to the `Idle` state from any other state, however this can only be triggered by a manual / external request.
+
+#### 3.2.2. FSM - Legacy Syncing State
+
+When a node is starting up, it may need to perform a legacy sync. This is a full block sync performed against legacy BSV nodes. In this state:
+
+Allowed Operations in Legacy Syncing State:
+- ❌ Process external transactions
+- ❌ Legacy relay transactions
+- ❌ Queue subtrees
+- ❌ Process subtrees
+- ❌ Queue blocks
+- ❌ Process blocks
+- ❌ Relay blocks
+- ✅ Speedy process blocks
+- ❌ Create subtrees (or propagate them)
+- ❌ Create blocks (mine candidates)
+
+#### 3.2.3. FSM - Running State
+
+The `Running` state represents the node actively participating in the network. In this state:
+
+Allowed Operations in Running State:
+- ✅ Process external transactions
+- ✅ Legacy relay transactions
+- ✅ Queue subtrees
+- ✅ Process subtrees
+- ✅ Queue blocks
+- ✅ Process blocks
+- ✅ Relay blocks
+- ❌ Speedy process blocks
+- ✅ Create subtrees (or propagate them)
+- ✅ Create blocks (mine candidates)
 
 
-While at the `Resstoring` state, all services will be idle and waiting on an Admin (manual) transition to the `Running` state.
-
-
-Similarly to the Stopped status, all services will wait for the FSM to transition to the Running state before starting their operations.
-
-#### 3.2.3. FSM - Legacy Syncing State
-
-When a node is starting up, it may need to perform a legacy sync. This is a block download performed against legacy BSV nodes. `LegacySyncing` represents the state in which the node is syncing from legacy BSV nodes.
-
-While in this state, the Block Assembler will not mine new blocks.
-
-#### 3.2.4. FSM - Running State
-
-The `Running` state represents the node actively participating in the network. In this state, the node is processing transactions, blocks, and other network activities.
-
-If `fsm_state_restore` setting is enabled, and if the node was previously in the `Stopped` or `Restoring` state, all services will start their operations once the FSM transitions to the `Running` state.
+If `fsm_state_restore` setting is enabled, and if the node was previously in the `Idle` state, all services will start their operations once the FSM transitions to the `Running` state.
 
 If the node was previously in any other state, the Block Assembler would now start mining blocks. The Block Assembler will never mine blocks under any other node state.
 
-#### 3.2.5. FSM - Catching Blocks State
 
-The `CatchingBlocks` state represents the node catching up on blocks. This state is entered when the node is behind the network and needs to catch up on the latest blocks.
+#### 3.2.4. FSM - Catching Blocks State
 
-No mining takes place in BlockAssembler when the node is in the `CatchingBlocks` state.
+The `CatchingBlocks` state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:
 
-
-#### 3.2.6. FSM - Catching Transactions State
-
-The `CatchingTxs` state represents the node catching up on transactions. This state is entered when the node is behind the network and needs to catch up on the latest transactions.
-
-No mining takes place in BlockAssembler in this state.
-Likewise, the TX Validator component will stop validating transactions. The transactions will be queued up for processing once the FSM state reverts to anything other than `CatchingTxs`.
-
-#### 3.2.7. FSM - Resource Unavailable State
-
-
-The `ResourceUnavailable` state represents a situation where the node is unable to access the required resources to function properly, such as third party dependencies. This state is not currently used in the implementation.
-
+Allowed Operations in Catching Blocks State:
+- ✅ Process external transactions
+- ✅ Legacy relay transactions
+- ✅ Queue subtrees
+- ✅ Process subtrees
+- ✅ Queue blocks
+- ✅ Process blocks
+- ✅ Relay blocks
+- ❌ Speedy process blocks
+- ❌ Create subtrees (or propagate them)
+- ❌ Create blocks (mine candidates)
 
 
 ### 3.3. State Machine Events
@@ -148,12 +181,7 @@ The P2P Legacy service triggers this event when the node is starting up and need
 ![fsm_legacy_symc.svg](img/plantuml/fsm_legacy_sync.svg)
 
 
-#### 3.3.2. FSM Event - Restore
-
-The gRPC `Restore` method triggers the FSM to transition to the `Restoring` state. This event is used to indicate that the node is awaiting a manual `Run` event before services can commence operations.
-
-
-#### 3.3.3. FSM Event - Run
+#### 3.3.2. FSM Event - Run
 
 The gRPC `Run` method triggers the FSM to transition to the `Running` state. This event is used to indicate that the node is ready to start participating in the network and processing transactions and blocks.
 
@@ -168,23 +196,12 @@ The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingB
 ![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
 
 
-#### 3.3.4. FSM Event - Catch up Transactions
+#### 3.3.4. FSM Event - Idle
 
-The gRPC `CatchUpTransactions` method triggers the FSM to transition to the `CatchingTxs` state. This event is used to indicate that the node is catching up on transactions and needs to process the latest transactions before resuming full operations.
-
-This method is intended to be manually triggered.
-
-#### 3.3.5. FSM Event - Unavailable
-
-The gRPC `Unavailable` method triggers the FSM to transition to the `ResourceUnavailable` state. This event is used to indicate that the node is unable to access the required resources to function properly.
+The gRPC `Idle` method triggers the FSM to transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
 
 This method is not currently used.
 
-#### 3.3.6. FSM Event - Stop
-
-The gRPC `Stop` method triggers the FSM to transition to the `Stopped` state. This event is used to stop the node from participating in the network and halt all operations.
-
-This method is not currently used.
 
 ### 3.4. Waiting on State Machine Transitions
 
