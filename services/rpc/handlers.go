@@ -198,7 +198,7 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 
 	// If verbose level does not match 0 or 1
 	// we can consider it 2 (current bitcoin core behavior)
-	if verbosity == 1 {
+	if verbosity == 1 { //nolint:wsl
 		// 	transactions := blk.Transactions()
 		// 	txNames := make([]string, len(transactions))
 		// 	for i, tx := range transactions {
@@ -669,6 +669,11 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		s.logger.Errorf("error getting best block header: %v", err)
 	}
 
+	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(bestBlockMeta.ChainWork))
+	if err != nil {
+		s.logger.Errorf("error creating chain work hash: %v", err)
+	}
+
 	jsonMap := map[string]interface{}{
 		"chain":                s.settings.ChainCfgParams.Name,
 		"blocks":               bestBlockMeta.Height,
@@ -677,7 +682,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		"difficulty":           bestBlockHeader.Bits.CalculateDifficulty(),
 		"mediantime":           0,
 		"verificationprogress": 0,
-		"chainwork":            bestBlockMeta.ChainWork,
+		"chainwork":            chainWorkHash.String(),
 		"pruned":               false, // the minimum relay fee for non-free transactions in BSV/KB
 		"softforks":            []interface{}{},
 	}
