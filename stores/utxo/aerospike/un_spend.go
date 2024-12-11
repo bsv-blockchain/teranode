@@ -59,7 +59,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
-	ret, aErr := s.client.Execute(policy, key, luaPackage, "unSpend",
+	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unSpend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)
@@ -74,22 +74,22 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 		return errors.NewStorageError("error in aerospike unspend record", aErr)
 	}
 
-	resp, err := s.parseLuaReturnValue(responseMsg)
+	resp, err := s.ParseLuaReturnValue(responseMsg)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
 		return errors.NewProcessingError("error parsing response %s", responseMsg, err)
 	}
 
-	switch resp.returnValue {
+	switch resp.ReturnValue {
 	case LuaOk:
-		if resp.signal == LuaNotAllSpent {
+		if resp.Signal == LuaNotAllSpent {
 			go func() {
-				if _, err := s.incrementNrRecords(spend.TxID, 1); err != nil {
+				if _, err := s.IncrementNrRecords(spend.TxID, 1); err != nil {
 					s.logger.Errorf("error incrementing nrRecords for tx %s: %v", spend.TxID.String(), err)
 				}
 			}()
 
-			if resp.external {
+			if resp.External {
 				go s.setTTLExternalTransaction(s.ctx, spend.TxID, 0)
 			}
 		}

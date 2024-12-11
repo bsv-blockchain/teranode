@@ -25,7 +25,7 @@ import (
 // Used for NOOP batch operations
 var placeholderKey *aerospike.Key
 
-type batchStoreItem struct {
+type BatchStoreItem struct {
 	txHash      *chainhash.Hash
 	isCoinbase  bool
 	tx          *bt.Tx
@@ -65,7 +65,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *createOptions.IsCoinbase
 	}
 
-	item := &batchStoreItem{
+	item := &BatchStoreItem{
 		txHash:      txHash,
 		isCoinbase:  isCoinbase,
 		tx:          tx,
@@ -80,7 +80,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	} else {
 		// if the batcher is disabled, we still want to process the request in a go routine
 		go func() {
-			s.sendStoreBatch([]*batchStoreItem{item})
+			s.sendStoreBatch([]*BatchStoreItem{item})
 		}()
 	}
 
@@ -95,7 +95,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	return txMeta, nil
 }
 
-func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
+func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	start := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendStoreBatch",
 		tracing.WithParentStat(gocoreStat),
@@ -160,7 +160,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			external = true
 		}
 
-		binsToStore, hasUtxos, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
+		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -170,7 +170,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		start = stat.NewStat("getBinsToStore").AddTime(start)
+		start = stat.NewStat("GetBinsToStore").AddTime(start)
 
 		if len(binsToStore) > 1 {
 			// Make this batch item a NOOP and persist all of these to be written via a queue
@@ -178,10 +178,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 			if len(batch[idx].tx.Inputs) == 0 {
 				// This will also create the aerospike records
-				go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
+				go s.StorePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 			} else {
 				// This will also create the aerospike records
-				go s.storeTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
+				go s.StoreTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 			}
 
 			continue
@@ -313,16 +313,16 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, hasUtxos, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
+					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
 					}
 
 					if len(batch[idx].tx.Inputs) == 0 {
-						go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
+						go s.StorePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 					} else {
-						go s.storeTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
+						go s.StoreTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 					}
 
 					continue
@@ -375,7 +375,7 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 	return batches
 }
 
-func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, bool, error) {
+func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -499,7 +499,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	return batches, hasUtxos, nil
 }
 
-func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
+func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	timeStart := time.Now()
 
 	opts := []options.FileOption{
@@ -518,7 +518,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 		bItem.tx.ExtendedBytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("[getBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("[GetBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
 		return
 	}
 
@@ -553,12 +553,12 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 			ok := errors.As(err, &aErr)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[storeTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx)
+					s.logger.Warnf("[StoreTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx)
 					continue
 				}
 			}
 
-			utils.SafeSend[error](bItem.done, errors.NewProcessingError("[storeTransactionExternally][%s] could not put bins (extended mode) to store", bItem.txHash, err))
+			utils.SafeSend[error](bItem.done, errors.NewProcessingError("[StoreTransactionExternally][%s] could not put bins (extended mode) to store", bItem.txHash, err))
 
 			return
 		}
@@ -567,7 +567,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 	utils.SafeSend(bItem.done, nil)
 }
 
-func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
+func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 
 	wrapper := utxopersister.UTXOWrapper{
@@ -608,7 +608,7 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 		wrapper.Bytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("[storePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("[StorePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
 		return
 	}
 
@@ -643,7 +643,7 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash))
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StorePartialTransactionExternally] %v already exists in store", bItem.txHash))
 
 					return
 				}

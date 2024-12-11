@@ -1,3 +1,5 @@
+//go:build test_all || test_stores || test_utxo || test_aerospike
+
 package aerospike
 
 import (
@@ -6,11 +8,14 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// go test -v -tags test_aerospike ./test/...
 
 // Create a sample UTXO spend
 var txID, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
@@ -30,8 +35,8 @@ func TestAlertSystem(t *testing.T) {
 		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
-		key, aErr := aerospike.NewKey(db.namespace, db.setName, keySource)
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.GetUtxoBatchSize())) //nolint:gosec
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 		require.NoError(t, aErr)
 
 		// Insert a mock UTXO record
@@ -58,7 +63,7 @@ func TestAlertSystem(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, frozenUTXO, 64)
 		assert.Equal(t, utxoHash0[:], frozenUTXO[:32])
-		assert.Equal(t, frozenUTXOBytes, frozenUTXO[32:64])
+		assert.Equal(t, ubsv_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:64])
 
 		// try to spend the UTXO
 		err = db.Spend(context.Background(), spends, 0)
@@ -79,13 +84,13 @@ func TestAlertSystem(t *testing.T) {
 		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
-		key, err := aerospike.NewKey(db.namespace, db.setName, keySource)
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.GetUtxoBatchSize())) //nolint:gosec
+		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 		require.NoError(t, err)
 
 		utxoBytes := make([]byte, 64)
 		copy(utxoBytes[:32], utxoHash0[:])
-		copy(utxoBytes[32:64], frozenUTXOBytes)
+		copy(utxoBytes[32:64], ubsv_aerospike.GetFrozenUTXOBytes())
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
@@ -142,8 +147,8 @@ func TestAlertSystem(t *testing.T) {
 		}
 
 		// Create a key for the UTXO
-		keySource := uaerospike.CalculateKeySource(utxoRec.TxID, utxoRec.Vout/uint32(db.utxoBatchSize)) //nolint:gosec
-		key, err := aerospike.NewKey(db.namespace, db.setName, keySource)
+		keySource := uaerospike.CalculateKeySource(utxoRec.TxID, utxoRec.Vout/uint32(db.GetUtxoBatchSize())) //nolint:gosec
+		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 		require.NoError(t, err)
 
 		// delete the key

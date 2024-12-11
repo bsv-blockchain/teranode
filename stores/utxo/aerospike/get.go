@@ -291,7 +291,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 			external, ok := bins["external"].(bool)
 			if ok && external {
-				if externalTx, err = s.getTxFromExternalStore(ctx, items[idx].Hash); err != nil {
+				if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
 					items[idx].Err = err
 
 					continue
@@ -473,7 +473,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			if previousTx, err = s.getTxFromExternalStore(s.ctx, previousTxHash); err != nil {
+			if previousTx, err = s.GetTxFromExternalStore(s.ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -521,8 +521,8 @@ func sendErrorAndClose(errCh chan error, err error) {
 	close(errCh)
 }
 
-func (s *Store) getTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "getTxFromExternalStore",
+func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	ctx, _, _ = tracing.StartTracing(ctx, "GetTxFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
@@ -554,7 +554,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 			options.WithFileExtension(ext),
 		)
 		if err != nil {
-			return nil, errors.NewStorageError("[getTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
+			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
 		}
 	}
 
@@ -569,12 +569,12 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	if ext == "tx" {
 		if _, err = tx.ReadFrom(bufferedReader); err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader", previousTxHash.String(), err)
+			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from reader", previousTxHash.String(), err)
 		}
 	} else {
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
+			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
 		}
 
 		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)

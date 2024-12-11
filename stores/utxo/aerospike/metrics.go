@@ -40,7 +40,7 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
-func initPrometheusMetrics() {
+func InitPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 

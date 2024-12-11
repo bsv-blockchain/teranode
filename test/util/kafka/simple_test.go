@@ -1,3 +1,5 @@
+//go:build test_all || test_util || test_kafka
+
 package kafka
 
 import (
@@ -10,6 +12,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/stretchr/testify/require"
 )
+
+// go test -v -tags test_kafka ./test/...
 
 func TestKafkaProduceConsumeDirect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

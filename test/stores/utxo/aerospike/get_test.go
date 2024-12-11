@@ -1,3 +1,5 @@
+//go:build test_all || test_stores || test_utxo || test_aerospike
+
 package aerospike
 
 import (
@@ -8,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
@@ -17,20 +20,21 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func TestStore_getTxFromExternalStore(t *testing.T) {
+// go test -v -tags test_aerospike ./test/...
+
+func TestStore_GetTxFromExternalStore(t *testing.T) {
 	ctx := context.Background()
 
 	client, _, _, deferFn := initAerospike(t)
 	defer deferFn()
 
-	t.Run("TestStore_getTxFromExternalStore", func(t *testing.T) {
-		s := &Store{
-			externalStore:   memory.New(),
-			externalTxCache: util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
-			client:          &uaerospike.Client{Client: client},
-			namespace:       aerospikeNamespace,
-			setName:         aerospikeSet,
-		}
+	t.Run("TestStore_GetTxFromExternalStore", func(t *testing.T) {
+		s := &ubsv_aerospike.Store{}
+		s.SetExternalStore(memory.New())
+		s.SetClient(&uaerospike.Client{Client: client})
+		s.SetNamespace(aerospikeNamespace)
+		s.SetName(aerospikeSet)
+		s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
 
 		// read a sample transaction from testdata and store it in the external store
 		f, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -42,11 +46,11 @@ func TestStore_getTxFromExternalStore(t *testing.T) {
 		txHash := txFromFile.TxIDChainHash()
 		txBytes := txFromFile.Bytes()
 
-		err = s.externalStore.Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
 		require.NoError(t, err)
 
 		// Test fetching the transaction from the external store
-		fetchedTx, err := s.getTxFromExternalStore(ctx, *txHash)
+		fetchedTx, err := s.GetTxFromExternalStore(ctx, *txHash)
 		require.NoError(t, err)
 		require.NotNil(t, fetchedTx)
 		require.Equal(t, txFromFile.Version, fetchedTx.Version)
@@ -57,14 +61,13 @@ func TestStore_getTxFromExternalStore(t *testing.T) {
 		require.Equal(t, txFromFile.Outputs[0].LockingScript, fetchedTx.Outputs[0].LockingScript)
 	})
 
-	t.Run("TestStore_getTxFromExternalStore concurrent", func(t *testing.T) {
-		s := &Store{
-			externalStore:   memory.New(),
-			externalTxCache: util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
-			client:          &uaerospike.Client{Client: client},
-			namespace:       aerospikeNamespace,
-			setName:         aerospikeSet,
-		}
+	t.Run("TestStore_GetTxFromExternalStore concurrent", func(t *testing.T) {
+		s := &ubsv_aerospike.Store{}
+		s.SetExternalStore(memory.New())
+		s.SetClient(&uaerospike.Client{Client: client})
+		s.SetNamespace(aerospikeNamespace)
+		s.SetName(aerospikeSet)
+		s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
 
 		// read a sample transaction from testdata and store it in the external store
 		f, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -76,14 +79,14 @@ func TestStore_getTxFromExternalStore(t *testing.T) {
 		txHash := txFromFile.TxIDChainHash()
 		txBytes := txFromFile.Bytes()
 
-		err = s.externalStore.Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
 		require.NoError(t, err)
 
 		// Test fetching the transaction from the external store concurrently
 		g := errgroup.Group{}
 		for i := 0; i < 100; i++ {
 			g.Go(func() error {
-				fetchedTx, err := s.getTxFromExternalStore(ctx, *txHash)
+				fetchedTx, err := s.GetTxFromExternalStore(ctx, *txHash)
 				if err != nil {
 					return err
 				}
@@ -98,7 +101,7 @@ func TestStore_getTxFromExternalStore(t *testing.T) {
 		require.NoError(t, err)
 
 		// check how often the external store was accessed
-		memStore, ok := s.externalStore.(*memory.Memory)
+		memStore, ok := s.GetExternalStore().(*memory.Memory)
 		require.True(t, ok)
 		assert.Equal(t, memStore.Counters["set"], 1)
 		assert.Equal(t, memStore.Counters["get"], 1)

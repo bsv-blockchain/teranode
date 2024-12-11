@@ -25,7 +25,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			return aErr
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "freeze",
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "freeze",
 			aerospike.NewValue(s.calculateOffsetForOutput(spend.Vout)),
 			aerospike.NewValue(spend.UTXOHash[:]),
 		))
@@ -50,11 +50,11 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts, err := s.parseLuaReturnValue(responseMsg)
+					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err))
-					} else if responseMsgParts.returnValue == LuaError {
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, responseMsgParts.signal))
+					} else if responseMsgParts.ReturnValue == LuaError {
+						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, responseMsgParts.Signal))
 					}
 				}
 			}
@@ -82,7 +82,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			return aErr
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "unfreeze",
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "unfreeze",
 			aerospike.NewValue(s.calculateOffsetForOutput(spend.Vout)),
 			aerospike.NewValue(spend.UTXOHash[:]),
 		))
@@ -107,11 +107,11 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts, err := s.parseLuaReturnValue(responseMsg)
+					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch unfreeze %d aerospike utxos", batchID, len(spends), err))
-					} else if responseMsgParts.returnValue == LuaError {
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to unfreeze aerospike utxo: %s", batchID, responseMsgParts.signal))
+					} else if responseMsgParts.ReturnValue == LuaError {
+						errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to unfreeze aerospike utxo: %s", batchID, responseMsgParts.Signal))
 					}
 				}
 			}
@@ -138,7 +138,7 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
 	batchRecords := []aerospike.BatchRecordIfc{
-		aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "reassign",
+		aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "reassign",
 			aerospike.NewValue(s.calculateOffsetForOutput(oldUtxo.Vout)),
 			aerospike.NewValue(oldUtxo.UTXOHash[:]),
 			aerospike.NewValue(newUtxo.UTXOHash[:]),
@@ -162,11 +162,11 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 	if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 		responseMsg, ok := response.Bins["SUCCESS"].(string)
 		if ok {
-			responseMsgParts, err := s.parseLuaReturnValue(responseMsg)
+			responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
 			if err != nil {
 				return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", err)
-			} else if responseMsgParts.returnValue == LuaError {
-				return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", responseMsgParts.signal)
+			} else if responseMsgParts.ReturnValue == LuaError {
+				return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", responseMsgParts.Signal)
 			}
 		}
 	}

@@ -58,7 +58,7 @@ type Store struct {
 	logger           ulogger.Logger
 	settings         *settings.Settings
 	batchID          atomic.Uint64
-	storeBatcher     batcherIfc[batchStoreItem]
+	storeBatcher     batcherIfc[BatchStoreItem]
 	getBatcher       batcherIfc[batchGetItem]
 	spendBatcher     batcherIfc[batchSpend]
 	outpointBatcher  batcherIfc[batchOutpoint]
@@ -69,7 +69,7 @@ type Store struct {
 }
 
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, aerospikeURL *url.URL) (*Store, error) {
-	initPrometheusMetrics()
+	InitPrometheusMetrics()
 
 	if tSettings.Aerospike.Debug {
 		asl.Logger.SetLevel(asl.DEBUG)
@@ -152,7 +152,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
 
 	if storeBatchSize > 1 {
-		s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+		s.storeBatcher = batcher.New[BatchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
 	} else {
 		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
 	}
@@ -164,7 +164,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
-	if err = registerLuaIfNecessary(logger, client, luaPackage, ubsvLUA); err != nil {
+	if err = registerLuaIfNecessary(logger, client, LuaPackage, ubsvLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
 	}
 

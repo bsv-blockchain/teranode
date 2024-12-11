@@ -1,3 +1,5 @@
+//go:build test_all || test_stores || test_utxo || test_aerospike
+
 package aerospike
 
 import (
@@ -8,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -15,13 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// go test -v -tags test_aerospike ./test/...
+
 func TestStore_SpendMultiRecord(t *testing.T) {
 	client, db, ctx, deferFn := initAerospike(t)
 	defer deferFn()
 
 	t.Run("Spent tx id", func(t *testing.T) {
 		// clean up the externalStore, if needed
-		_ = db.externalStore.Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// create a tx
 		_, err := db.Create(ctx, tx, 101)
@@ -47,15 +52,15 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
-		key, aErr := aerospike.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), tx.TxIDChainHash().CloneBytes())
 		require.NoError(t, aErr)
 
 		cleanDB(t, client, key, tx)
 
-		db.utxoBatchSize = 1
+		db.SetUtxoBatchSize(1)
 
 		// clean up the externalStore, if needed
-		_ = db.externalStore.Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// create a tx
 		_, err := db.Create(ctx, tx, 101)
@@ -72,8 +77,8 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 			require.NoError(t, err)
 
 			//nolint:gosec
-			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(vOut/db.utxoBatchSize))
-			key, err := aerospike.NewKey(db.namespace, db.setName, keySource)
+			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(vOut/db.GetUtxoBatchSize()))
+			key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 			require.NoError(t, err)
 
 			// check we created 5 records in aerospike properly
@@ -92,17 +97,17 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		}
 
 		// check we created the tx in the external store
-		exists, err := db.externalStore.Exists(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		exists, err := db.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// check that the TTL is not set on the external store
-		ttl, err := db.externalStore.GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		ttl, err := db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(0), ttl)
 
 		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(0))
-		mainRecordKey, err := aerospike.NewKey(db.namespace, db.setName, keySource)
+		mainRecordKey, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 		require.NoError(t, err)
 
 		// spend the utxos, one by one, checking the return values from the lua script
@@ -127,7 +132,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 				assert.Equal(t, 1, resp.Bins["nrRecords"])
 
 				// check the external file ttl has been set
-				ttl, err := db.externalStore.GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+				ttl, err := db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 				require.NoError(t, err)
 				assert.Greater(t, ttl, time.Duration(0))
 			} else {
@@ -145,7 +150,7 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 	t.Run("Increment nrRecords", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
@@ -155,7 +160,7 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		require.NoError(t, err)
 
 		// Increment nrRecords by 1
-		res, err := db.incrementNrRecords(txID, 1)
+		res, err := db.IncrementNrRecords(txID, 1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -166,7 +171,7 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		assert.Equal(t, 2, resp.Bins["nrRecords"])
 
 		// Decrement nrRecords by 1
-		res, err = db.incrementNrRecords(txID, -1)
+		res, err = db.IncrementNrRecords(txID, -1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -179,17 +184,17 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		r, ok := res.(string)
 		require.True(t, ok)
 
-		ret, err := db.parseLuaReturnValue(r)
+		ret, err := db.ParseLuaReturnValue(r)
 		require.NoError(t, err)
-		assert.Equal(t, LuaOk, ret.returnValue)
-		assert.Equal(t, luaReturnValue(""), ret.signal)
-		assert.Nil(t, ret.spendingTxID)
+		assert.Equal(t, ubsv_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, ubsv_aerospike.LuaReturnValue(""), ret.Signal)
+		assert.Nil(t, ret.SpendingTxID)
 	})
 
 	t.Run("Increment nrRecords - set TTL", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
@@ -211,23 +216,23 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		require.NotNil(t, rec)
 
 		// Decrement nrRecords by 1
-		res, err := db.incrementNrRecords(txID, -1)
+		res, err := db.IncrementNrRecords(txID, -1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
 		r, ok := res.(string)
 		require.True(t, ok)
 
-		ret, err := db.parseLuaReturnValue(r)
+		ret, err := db.ParseLuaReturnValue(r)
 		require.NoError(t, err)
-		assert.Equal(t, LuaOk, ret.returnValue)
-		assert.Equal(t, luaReturnValue("TTLSET"), ret.signal)
+		assert.Equal(t, ubsv_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, ubsv_aerospike.LuaReturnValue("TTLSET"), ret.Signal)
 	})
 
 	t.Run("Increment nrRecords - multi", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.namespace, db.setName, txID.CloneBytes())
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
@@ -238,7 +243,7 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 
 		for i := 0; i < 5; i++ {
 			// Decrement nrRecords by 1
-			res, err := db.incrementNrRecords(txID, 1)
+			res, err := db.IncrementNrRecords(txID, 1)
 			require.NoError(t, err)
 			require.NotNil(t, res)
 		}

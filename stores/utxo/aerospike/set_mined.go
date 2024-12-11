@@ -36,7 +36,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 		batchRecords[idx] = aerospike.NewBatchUDF(
 			batchUDFPolicy,
 			key,
-			luaPackage,
+			LuaPackage,
 			"setMined",
 			aerospike.NewValue(blockID),
 			aerospike.NewValue(s.expiration), // ttl
@@ -72,12 +72,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts, err := s.parseLuaReturnValue(responseMsg)
+					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						nrErrors++
-						errs = errors.NewError("aerospike batchRecord %s parseLuaReturnValue error: %s", hashes[idx].String(), errors.Join(errs, err))
+						errs = errors.NewError("aerospike batchRecord %s ParseLuaReturnValue error: %s", hashes[idx].String(), errors.Join(errs, err))
 					} else {
-						switch responseMsgParts.returnValue {
+						switch responseMsgParts.ReturnValue {
 						case LuaOk:
 							okUpdates++
 						default:

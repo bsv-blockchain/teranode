@@ -176,7 +176,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	for aeroKey, batchItems := range batchesByKey {
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "spendMulti",
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(s.expiration), // ttl
@@ -213,7 +213,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					res, err := s.parseLuaReturnValue(responseMsg)
+					res, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
@@ -221,15 +221,15 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						}
 					}
 
-					switch res.returnValue {
+					switch res.ReturnValue {
 					case LuaOk:
-						if res.signal == LuaAllSpent {
+						if res.Signal == LuaAllSpent {
 							// all utxos in this record are spent so we decrement the nrRecords in the master record
 							// we do this in a separate go routine to avoid blocking the batcher
 							go s.handleAllSpent(ctx, txID)
-						} else if res.signal == LuaTTLSet {
+						} else if res.Signal == LuaTTLSet {
 							// record has been set to expire, we need to set the TTL on the external transaction file
-							if res.external {
+							if res.External {
 								// add ttl to the externally stored transaction, if applicable
 								go s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
 							}
@@ -249,10 +249,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					case LuaSpent:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].done <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.spendingTxID)
+							batch[idx].done <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.SpendingTxID)
 						}
 					case LuaError:
-						if res.signal == LuaTxNotFound {
+						if res.Signal == LuaTxNotFound {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
 								batch[idx].done <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
@@ -260,7 +260,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						} else {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
-								batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, res.signal)
+								batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, res.Signal)
 							}
 						}
 					default:
@@ -283,22 +283,22 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 }
 
 func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
-	res, err := s.incrementNrRecords(txID, -1)
+	res, err := s.IncrementNrRecords(txID, -1)
 	if err != nil {
 		// TODO if this goes wrong, we never decrement the nrRecords and the record will never be deleted
 		s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", txID.String(), err)
 	}
 
 	if r, ok := res.(string); ok {
-		ret, err := s.parseLuaReturnValue(r) // always returns len 3
+		ret, err := s.ParseLuaReturnValue(r) // always returns len 3
 		if err != nil {
 			s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to parse LUA return value: %v", txID.String(), err)
-		} else if ret.returnValue == LuaOk {
-			if ret.signal == LuaTTLSet {
+		} else if ret.ReturnValue == LuaOk {
+			if ret.Signal == LuaTTLSet {
 				// TODO - we should TTL all the pagination records for this TX
-				_ = ret.signal
+				_ = ret.Signal
 
-				if ret.external {
+				if ret.External {
 					// add ttl to the externally stored transaction, if applicable
 					s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
 				}
@@ -312,7 +312,7 @@ type incrementNrRecordsRes struct {
 	err error
 }
 
-func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
+func (s *Store) IncrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
 	res := make(chan incrementNrRecordsRes)
 
 	go func() {
@@ -349,7 +349,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 			continue
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "incrementNrRecords",
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementNrRecords",
 			aerospike.NewIntegerValue(item.increment),
 			aerospike.NewValue(s.expiration), // ttl
 		))

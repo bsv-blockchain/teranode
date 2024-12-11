@@ -15,14 +15,19 @@ import (
 //go:embed ubsv.lua
 var ubsvLUA []byte
 
-var luaPackage = "ubsv_v19" // N.B. Do not have any "." in this string
+var LuaPackage = "ubsv_v19" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]
 
-type luaReturnValue string
+type LuaReturnValue string
 
-func (l *luaReturnValue) ToString() string {
+// GetFrozenUTXOBytes exposes frozenUTXOBytes to public for testing
+func GetFrozenUTXOBytes() []byte {
+	return frozenUTXOBytes
+}
+
+func (l *LuaReturnValue) ToString() string {
 	if l == nil {
 		return ""
 	}
@@ -30,23 +35,23 @@ func (l *luaReturnValue) ToString() string {
 	return string(*l)
 }
 
-type luaReturnMessage struct {
-	returnValue  luaReturnValue
-	signal       luaReturnValue
-	spendingTxID *chainhash.Hash
-	external     bool
+type LuaReturnMessage struct {
+	ReturnValue  LuaReturnValue
+	Signal       LuaReturnValue
+	SpendingTxID *chainhash.Hash
+	External     bool
 }
 
 const (
-	LuaOk          luaReturnValue = "OK"
-	LuaTTLSet      luaReturnValue = "TTLSET"
-	LuaSpent       luaReturnValue = "SPENT"
-	LuaExternal    luaReturnValue = "EXTERNAL"
-	LuaAllSpent    luaReturnValue = "ALLSPENT"
-	LuaNotAllSpent luaReturnValue = "NOTALLSPENT"
-	LuaFrozen      luaReturnValue = "FROZEN"
-	LuaTxNotFound  luaReturnValue = "TX not found"
-	LuaError       luaReturnValue = "ERROR"
+	LuaOk          LuaReturnValue = "OK"
+	LuaTTLSet      LuaReturnValue = "TTLSET"
+	LuaSpent       LuaReturnValue = "SPENT"
+	LuaExternal    LuaReturnValue = "EXTERNAL"
+	LuaAllSpent    LuaReturnValue = "ALLSPENT"
+	LuaNotAllSpent LuaReturnValue = "NOTALLSPENT"
+	LuaFrozen      LuaReturnValue = "FROZEN"
+	LuaTxNotFound  LuaReturnValue = "TX not found"
+	LuaError       LuaReturnValue = "ERROR"
 )
 
 func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, funcName string, funcBytes []byte) error {
@@ -84,13 +89,13 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 	return nil
 }
 
-func (s *Store) parseLuaReturnValue(returnValue string) (luaReturnMessage, error) {
-	rets := luaReturnMessage{}
+func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error) {
+	rets := LuaReturnMessage{}
 
 	r := strings.Split(returnValue, ":")
 
 	if len(r) > 0 {
-		rets.returnValue = luaReturnValue(r[0])
+		rets.ReturnValue = LuaReturnValue(r[0])
 	}
 
 	if len(r) > 1 {
@@ -100,14 +105,14 @@ func (s *Store) parseLuaReturnValue(returnValue string) (luaReturnMessage, error
 				return rets, errors.NewProcessingError("error parsing spendingTxID %s", r[1], err)
 			}
 
-			rets.spendingTxID = hash
+			rets.SpendingTxID = hash
 		} else {
-			rets.signal = luaReturnValue(r[1])
+			rets.Signal = LuaReturnValue(r[1])
 		}
 	}
 
 	if len(r) > 2 {
-		rets.external = r[2] == string(LuaExternal)
+		rets.External = r[2] == string(LuaExternal)
 	}
 
 	return rets, nil

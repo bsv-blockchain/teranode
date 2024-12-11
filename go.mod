@@ -293,7 +293,7 @@ require (
 	github.com/libp2p/go-yamux/v4 v4.0.1 // indirect
 	github.com/libsv/go-bc v0.1.29 // indirect
 	github.com/libsv/go-bn v0.0.2
-	github.com/libsv/go-p2p v0.3.2 // indirect
+	github.com/libsv/go-p2p v0.3.2
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7
 	github.com/mailru/easyjson v0.7.7 // indirect

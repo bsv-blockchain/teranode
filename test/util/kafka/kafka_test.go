@@ -1,3 +1,5 @@
+//go:build test_all || test_util || test_kafka
+
 package kafka
 
 import (
@@ -13,11 +15,14 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	ukafka "github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// go test -v -tags test_kafka ./test/...
 
 const (
 	RedpandaImage   = "redpandadata/redpanda"
@@ -152,15 +157,15 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 		RawQuery: "partitions=1&replicationFactor=1&flush_frequency=1s&replay=1",
 	}
 
-	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producerClient, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	consumerClient, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_consumer", true)
+	consumerClient, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_consumer", true)
 	require.NoError(t, err)
 
 	done := make(chan struct{})
 
-	consumerFn := func(message *KafkaMessage) error {
+	consumerFn := func(message *ukafka.KafkaMessage) error {
 		logger.Infof("received message: %s = %s, Offset: %d ", message.Key, message.Value, message.Offset)
 
 		defer func() {
@@ -176,10 +181,10 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 
 	consumerClient.Start(ctx, consumerFn)
 
-	producerClient.Start(ctx, make(chan *Message, 100))
+	producerClient.Start(ctx, make(chan *ukafka.Message, 100))
 	defer producerClient.Stop() // nolint:errcheck
 
-	producerClient.Publish(&Message{
+	producerClient.Publish(&ukafka.Message{
 		Key:   []byte("key"),
 		Value: []byte("value"),
 	})
@@ -229,10 +234,10 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producerClient, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producerClient.Start(ctx, make(chan *Message, 10000))
+	producerClient.Start(ctx, make(chan *ukafka.Message, 10000))
 	defer producerClient.Stop() // nolint:errcheck
 
 	counter2 := 0
@@ -242,12 +247,12 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 	testCases := []struct {
 		name            string
 		groupID         string
-		consumerClosure func(*KafkaMessage) error
+		consumerClosure func(*ukafka.KafkaMessage) error
 	}{
 		{
 			name:    "Process messages with all success",
 			groupID: "test-group-1",
-			consumerClosure: func(message *KafkaMessage) error {
+			consumerClosure: func(message *ukafka.KafkaMessage) error {
 				logger.Infof("Consumer closure#1 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				wg.Done()
 				return nil
@@ -256,7 +261,7 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 		{
 			name:    "Process messages with 2nd time success closure",
 			groupID: "test-group-2",
-			consumerClosure: func(message *KafkaMessage) error {
+			consumerClosure: func(message *ukafka.KafkaMessage) error {
 				logger.Infof("Consumer closure#2 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				counter2++
 				if counter2%2 == 0 {
@@ -269,7 +274,7 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 		{
 			name:    "Process messages with 3rd time success closure",
 			groupID: "test-group-3",
-			consumerClosure: func(message *KafkaMessage) error {
+			consumerClosure: func(message *ukafka.KafkaMessage) error {
 				logger.Infof("Consumer closure#3 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				counter3++
 				if counter3%3 == 0 {
@@ -288,10 +293,10 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 		wg.Add(10)
 
 		t.Run(tCase.name, func(t *testing.T) {
-			client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, tCase.groupID, false)
+			client, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, tCase.groupID, false)
 			require.NoError(t, err)
 
-			client.Start(ctx, tCase.consumerClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
+			client.Start(ctx, tCase.consumerClosure, ukafka.WithRetryAndMoveOn(3, 1, time.Millisecond))
 		})
 	}
 
@@ -348,10 +353,10 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOptionUsingTC(t *te
 
 	t.Logf("Kafka URL: %v", kafkaURL)
 
-	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producerClient, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producerClient.Start(ctx, make(chan *Message, 10000))
+	producerClient.Start(ctx, make(chan *ukafka.Message, 10000))
 	defer producerClient.Stop() // nolint:errcheck
 
 	numberOfMessages := 2
@@ -359,18 +364,18 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOptionUsingTC(t *te
 
 	c := make(chan []byte, 100) // buffer channel to avoid blocking
 
-	errClosure := func(message *KafkaMessage) error {
+	errClosure := func(message *ukafka.KafkaMessage) error {
 		logger.Infof("Consumer closure received message:	 %s, Offset: %d, Partition: %d", string(message.Value), message.Offset, message.Partition)
 		c <- message.Value
 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
-	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test", false)
+	client, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test", false)
 	require.NoError(t, err)
 
 	// WithRetryAndMoveOn(3, 1, time.Millisecond) is the key here - we're testing that the consumer will retry 3 times before moving on
-	client.Start(ctx, errClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
+	client.Start(ctx, errClosure, ukafka.WithRetryAndMoveOn(3, 1, time.Millisecond))
 
 	messagesReceived := [][]byte{}
 	timeout := time.After(10 * time.Second)
@@ -442,10 +447,10 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *test
 
 	t.Logf("Kafka URL: %v", kafkaURL)
 
-	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producerClient, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producerClient.Start(ctx, make(chan *Message, 10000))
+	producerClient.Start(ctx, make(chan *ukafka.Message, 10000))
 	defer producerClient.Stop() // nolint:errcheck
 
 	numberOfMessages := 2
@@ -454,7 +459,7 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *test
 	messagesChan := make(chan []byte)
 	processingDone := make(chan struct{})
 
-	errClosure := func(message *KafkaMessage) error {
+	errClosure := func(message *ukafka.KafkaMessage) error {
 		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d",
 			string(message.Value), message.Offset, message.Partition)
 
@@ -467,13 +472,13 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *test
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
-	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
+	client, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
 	require.NoError(t, err)
 
 	var stopped atomic.Bool
 
 	// it should not bother doing a retry and just call the supplied stop func
-	client.Start(ctx, errClosure, WithRetryAndStop(0, 1, time.Millisecond, func() {
+	client.Start(ctx, errClosure, ukafka.WithRetryAndStop(0, 1, time.Millisecond, func() {
 		c := client.ConsumerGroup
 
 		stopped.Store(true)
@@ -546,10 +551,10 @@ func TestKafkaAsyncProducerWithManualCommitWithNoOptionsUsingTC(t *testing.T) {
 
 	logger.Infof("Kafka URL: %v", kafkaURL)
 
-	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producerClient, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producerClient.Start(ctx, make(chan *Message, 10000))
+	producerClient.Start(ctx, make(chan *ukafka.Message, 10000))
 	defer producerClient.Stop() // nolint:errcheck
 
 	numberOfMessages := 2
@@ -558,7 +563,7 @@ func TestKafkaAsyncProducerWithManualCommitWithNoOptionsUsingTC(t *testing.T) {
 	messagesChan := make(chan []byte)
 	processingDone := make(chan struct{})
 
-	errClosure := func(message *KafkaMessage) error {
+	errClosure := func(message *ukafka.KafkaMessage) error {
 		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d",
 			string(message.Value), message.Offset, message.Partition)
 
@@ -571,7 +576,7 @@ func TestKafkaAsyncProducerWithManualCommitWithNoOptionsUsingTC(t *testing.T) {
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
-	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
+	client, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
 	require.NoError(t, err)
 
 	// default Kafka behaviour on message consumption error is to retry forever
@@ -639,17 +644,17 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		RawQuery: "partitions=1&replicationFactor=1&flush_frequency=1ms&replay=1",
 	}
 
-	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producer, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
 	require.NoError(t, err)
 
-	producer.Start(ctx, make(chan *Message, 100))
+	producer.Start(ctx, make(chan *ukafka.Message, 100))
 	defer producer.Stop() // nolint:errcheck
 
 	t.Log("Publishing first batch of test messages...")
 
 	messages := []string{"msg1", "msg2"}
 	for _, msg := range messages {
-		producer.Publish(&Message{
+		producer.Publish(&ukafka.Message{
 			Value: []byte(msg),
 		})
 	}
@@ -660,14 +665,14 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	)
 
 	consume := func() {
-		consumer, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
+		consumer, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
 		require.NoError(t, err)
 
 		defer func() {
 			_ = consumer.ConsumerGroup.Close()
 		}()
 
-		consumer.Start(ctx, func(msg *KafkaMessage) error {
+		consumer.Start(ctx, func(msg *ukafka.KafkaMessage) error {
 			messagesMutex.Lock()
 			receivedMessages = append(receivedMessages, string(msg.Value))
 			messagesMutex.Unlock()
@@ -709,7 +714,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 
 	messages = []string{"msg3", "msg4"}
 	for _, msg := range messages {
-		producer.Publish(&Message{
+		producer.Publish(&ukafka.Message{
 			Value: []byte(msg),
 		})
 	}
@@ -739,10 +744,10 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 	return intValue, nil
 }
 
-func produceMessages(logger ulogger.Logger, client KafkaAsyncProducerI, numberOfMessages int) {
+func produceMessages(logger ulogger.Logger, client ukafka.KafkaAsyncProducerI, numberOfMessages int) {
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))
-		client.Publish(&Message{
+		client.Publish(&ukafka.Message{
 			Value: msg,
 		})
 
