@@ -4,8 +4,8 @@ All services accept settings allowing local and remote servers to have their own
 
 Please review the following documents for more information on how to deploy the settings:
 - [Developer Setup](../howto/developerSetup.md)
-- [Test Setup](../sop/StandardOperatingProcedures-docker-compose-milestone-3-alpha-testing.md)
-- [Production Setup](../sop/StandardOperatingProcedures-kubernetes-operator-milestone-3-alpha-testing.md)
+- [Test Setup](../howto/miners/docker/minersHowToConfigureTheNode.md)
+- [Production Setup](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 
 The settings are stored in 2 files:
 
