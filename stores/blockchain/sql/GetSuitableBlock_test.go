@@ -24,7 +24,8 @@ func Test_getMedianBlock(t *testing.T) {
 		Time: 2,
 	})
 
-	b := getMedianBlock(blocks)
+	b, err := getMedianBlock(blocks)
+	require.NoError(t, err)
 	require.Equal(t, uint32(2), b.Time)
 }
 

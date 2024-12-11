@@ -167,6 +167,7 @@ func NewSettings() *Settings {
 			DoubleSpendWindow:                   doubleSpendWindow,
 			MaxGetReorgHashes:                   getInt("blockassembly_maxGetReorgHashes", 10_000),
 			MinerWalletPrivateKeys:              getMultiString("miner_wallet_private_keys", "|", []string{}),
+			DifficultyCache:                     getBool("blockassembly_difficultyCache", true),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:          getString("blockchain_grpcAddress", "localhost:8087"),

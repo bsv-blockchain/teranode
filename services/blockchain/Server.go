@@ -8,9 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/looplab/fsm"
-	"github.com/ordishs/go-utils"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -25,6 +22,8 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/looplab/fsm"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -145,6 +144,7 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 	defer deferFn()
 
 	status, details, err := b.Health(ctx, false)
+
 	return &blockchain_api.HealthResponse{
 		Ok:        status == http.StatusOK,
 		Details:   details,
@@ -461,11 +461,13 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	}
 
 	blockHeaderBytes := make([][]byte, len(blocks))
+
 	for i, block := range blocks {
 		blockBytes, err := block.Bytes()
 		if err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
+
 		blockHeaderBytes[i] = blockBytes
 	}
 
@@ -571,6 +573,7 @@ func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.
 	defer deferFn()
 
 	resp, err := b.store.GetBlockGraphData(ctx, req.PeriodMillis)
+
 	return resp, errors.WrapGRPC(err)
 }
 
@@ -623,24 +626,31 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 
 	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
+
 		nBits = defaultNbits
 	} else {
-
 		hash, err := chainhash.NewHash(request.BlockHash)
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's block hash is not valid", err))
 		}
 
-		blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
+		blockHeaders, metas, err := b.store.GetBlockHeaders(ctx, hash, 2)
 		if err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 
-		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height)
+		var testnetArgs []int64
+
+		if b.settings.ChainCfgParams.ReduceMinDifficulty {
+			testnetArgs = append(testnetArgs, int64(blockHeaders[0].Timestamp))
+		}
+
+		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeaders[0], metas[0].Height, testnetArgs...)
 		if err == nil {
 			nBits = nBitsp
 		} else {
 			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
+
 			nBits = defaultNbits
 		}
 
@@ -1047,6 +1057,7 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 	defer deferFn()
 
 	blockHash := chainhash.Hash(req.BlockHash)
+
 	err := b.store.SetBlockMinedSet(ctx, &blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
@@ -1088,6 +1099,7 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 	defer deferFn()
 
 	blockHash := chainhash.Hash(req.BlockHash)
+
 	err := b.store.SetBlockSubtreesSet(ctx, &blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
@@ -1161,6 +1173,7 @@ func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targe
 		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
+
 	return nil
 }
 
@@ -1172,6 +1185,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
 		return nil, err
 	}
+
 	state := b.finiteStateMachine.Current()
 
 	// set the state in persistent storage
@@ -1335,6 +1349,7 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
+
 	blockHeight := req.Height
 
 	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeight)
@@ -1396,6 +1411,7 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 	for _, header := range headers {
 		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
 	}
+
 	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
@@ -1442,10 +1458,13 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		adjustedHeight := blockHeaderHeight - 10
 		maxEntries = 12 + fastLog2Floor(adjustedHeight)
 	}
+
 	locator := make([]*chainhash.Hash, 0, maxEntries)
 
 	step := uint32(1)
+
 	ancestorBlockHeaderHash := blockHeaderHash
+
 	ancestorBlockHeight := blockHeaderHeight // this needs to be signed
 
 	for ancestorBlockHeaderHash != nil {
@@ -1470,7 +1489,9 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		if err != nil {
 			return nil, err
 		}
+
 		ancestorBlockHeaderHash = ancestorBlock.Header.Hash()
+
 		ancestorBlockHeight = height
 
 		// Once 11 entries have been included, start doubling the

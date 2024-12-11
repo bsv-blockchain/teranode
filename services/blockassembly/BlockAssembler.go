@@ -495,6 +495,9 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var coinbaseMerkleProofBytes [][]byte
 
+	// set the size without the coinbase to the size of the blockheader
+	sizeWithoutCoinbase = 80
+
 	if len(subtrees) > 0 {
 		currentBlockSize := uint64(0)
 
@@ -512,6 +515,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
 				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 				txCount += uint32(len(subtree.Nodes))
+
 				sizeWithoutCoinbase += subtree.SizeInBytes
 			} else {
 				break
@@ -554,6 +558,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 			b.currentDifficulty = nBits
 		}
+	} else {
+		b.currentDifficulty = nBits
 	}
 	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	timeNow := uint32(time.Now().Unix())

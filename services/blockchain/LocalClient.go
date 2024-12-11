@@ -60,7 +60,6 @@ func (c LocalClient) Health(ctx context.Context, checkLiveness bool) (int, strin
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
-
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
@@ -279,5 +278,5 @@ func (c LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, 
 		return 0, 0, errors.NewProcessingError("[Blockchain] could not calculate median block time", err)
 	}
 
-	return meta.Height, uint32(medianTimestamp.Unix()), nil
+	return meta.Height, uint32(medianTimestamp.Unix()), nil //nolint:gosec
 }

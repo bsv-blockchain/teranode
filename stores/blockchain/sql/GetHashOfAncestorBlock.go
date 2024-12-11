@@ -24,11 +24,11 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 			id,
 			hash,
 			parent_id,
-			1 AS depth
+			0 AS depth  -- Start at depth 0 for the input block
 		FROM
 			blocks
 		WHERE
-			hash = $1  -- $1 is the placeholder for the starting block hash (h1)
+			hash = $1
 
 		UNION ALL
 
@@ -42,14 +42,14 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 		INNER JOIN
 			ChainBlocks cb ON b.id = cb.parent_id
 		WHERE
-			cb.depth < $2 AND cb.depth < (SELECT COUNT(*) FROM blocks)  -- Ensure depth doesn't exceed the number of blocks
+			cb.depth < $2 AND cb.depth < (SELECT COUNT(*) FROM blocks)
 	)
 	SELECT
 	hash
 	FROM
 		ChainBlocks
 	WHERE
-		depth = $2
+		depth = $2  -- This will now correctly get the block $2 blocks back
 	ORDER BY
 		depth DESC
 	LIMIT 1`

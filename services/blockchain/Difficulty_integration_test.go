@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -17,12 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_in_time(t *testing.T) {
+func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *testing.T) {
+	os.Setenv("network", "mainnet")
+
 	ctx := context.Background()
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	gcoinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 
 	currentTime := time.Now().Unix()
 
@@ -49,7 +52,7 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 
 	block := &model.Block{
 		Header:           header,
-		CoinbaseTx:       gcoinbaseTx,
+		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
 	}
@@ -87,8 +90,10 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 	// Calculate next difficulty
 	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
+
 	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
 	require.NoError(t, err)
+
 	t.Logf("newBits: %v", newBits.String())
 
 	// Assert that difficulty has changed
@@ -96,13 +101,15 @@ func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_i
 }
 
 // nolint: gosec
-func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faster_than_expected(t *testing.T) {
+func TestDifficultyAdjustmentShouldChangeDifficultyIfBlocksAreMinedFasterThanExpected(t *testing.T) {
+	os.Setenv("network", "mainnet")
+
 	ctx := context.Background()
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	gcoinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 
 	currentTime := time.Now().Unix()
 
@@ -119,7 +126,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 
 	header := &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  chaincfg.MainNetParams.GenesisHash,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *d.powLimitnBits,
@@ -127,7 +134,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	}
 	block := &model.Block{
 		Header:           header,
-		CoinbaseTx:       gcoinbaseTx,
+		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
 	}
@@ -165,6 +172,7 @@ func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faste
 	// Calculate next difficulty
 	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
+
 	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
 	require.NoError(t, err)
 	t.Logf("newBits: %v", newBits.String())

@@ -25,16 +25,54 @@ func TestSQLGetHashOfAncestorBlock(t *testing.T) {
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
 	require.NoError(t, err)
 
+	// Create blockWindow+4 blocks (e.g. 148 blocks if blockWindow=144)
+	// Each block points to previous block via HashPrevBlock
 	blocks := generateBlocks(t, blockWindow+4)
+
+	// Store all blocks in the database
 	for _, block := range blocks {
 		_, _, err = s.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
 
-	ancestorHash, err := s.GetHashOfAncestorBlock(context.Background(), blocks[len(blocks)-1].Hash(), blockWindow)
-	require.NoError(t, err)
-	require.Equal(t, blocks[len(blocks)-blockWindow].Hash(), ancestorHash)
+	// Test cases to verify ancestor block retrieval
+	testCases := []struct {
+		name          string
+		startIndex    int // Index of starting block
+		depth         int // How many blocks to go back
+		expectedIndex int // Index of expected ancestor block
+	}{
+		{
+			name:          "go back 144 blocks from last block",
+			startIndex:    len(blocks) - 1,               // Start from last block (index 147)
+			depth:         blockWindow,                   // Go back 144 blocks
+			expectedIndex: len(blocks) - 1 - blockWindow, // Should get block at index 3
+		},
+		{
+			name:          "go back 2 blocks from middle",
+			startIndex:    10,
+			depth:         2,
+			expectedIndex: 8,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startBlock := blocks[tc.startIndex]
+			expectedBlock := blocks[tc.expectedIndex]
+
+			// Get ancestor block hash by traversing back 'depth' blocks
+			ancestorHash, err := s.GetHashOfAncestorBlock(context.Background(), startBlock.Hash(), tc.depth)
+			require.NoError(t, err)
+
+			// Verify we got the correct ancestor
+			require.Equal(t, expectedBlock.Hash(), ancestorHash,
+				"Expected block at index %d when going back %d blocks from index %d",
+				tc.expectedIndex, tc.depth, tc.startIndex)
+		})
+	}
 }
+
 func TestSQLGetHashOfAncestorBlockShort(t *testing.T) {
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)

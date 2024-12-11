@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -348,7 +347,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		}
 
 		// Decode the provided address.
-		addr, err := bsvutil.DecodeAddress(encodedAddr, &chaincfg.MainNetParams)
+		addr, err := bsvutil.DecodeAddress(encodedAddr, s.settings.ChainCfgParams)
 		if err != nil {
 			return nil, &bsvjson.RPCError{
 				Code:    bsvjson.ErrRPCInvalidAddressOrKey,
@@ -370,7 +369,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 			}
 		}
 
-		if !addr.IsForNet(&chaincfg.MainNetParams) {
+		if !addr.IsForNet(s.settings.ChainCfgParams) {
 			return nil, &bsvjson.RPCError{
 				Code: bsvjson.ErrRPCInvalidAddressOrKey,
 				Message: "Invalid address: " + encodedAddr +

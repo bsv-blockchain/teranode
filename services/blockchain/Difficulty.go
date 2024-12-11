@@ -12,7 +12,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"golang.org/x/exp/rand"
+	"github.com/ordishs/go-utils"
 )
 
 const DifficultyAdjustmentWindow = 144
@@ -52,86 +52,80 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 	return d, nil
 }
 
-func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
+func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32, testnetArgs ...int64) (*model.NBit, error) {
 	// If regest or simnet we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &bestBlockHeader.Bits, nil
 	}
 
-	// if bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), we don't need to recalculate the difficulty,
-	// just send the one we have if it's set
-	if d.bestBlockHash != nil && d.bestBlockHash.IsEqual(bestBlockHeader.Hash()) {
-		d.logger.Debugf("bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), returning last computed difficulty")
-
-		if d.lastComputednBits != nil {
-			return d.lastComputednBits, nil
-		}
-	}
-
 	if bestBlockHeight < uint32(DifficultyAdjustmentWindow)+4 {
-		d.logger.Debugf("not enough blocks to calculate difficulty adjustment")
+		d.logger.Debugf("[Difficulty] not enough blocks to calculate difficulty adjustment")
 		// not enough blocks to calculate difficulty adjustment
 		// set to start difficulty
 
 		return d.powLimitnBits, nil
 	}
 
-	now := time.Now()
+	// if we're not on testnet then we can cache the difficulty if required
+	if !d.settings.ChainCfgParams.ReduceMinDifficulty && d.settings.BlockAssembly.DifficultyCache {
+		// if bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), we don't need to recalculate the difficulty,
+		// just send the one we have if it's set
+		if d.bestBlockHash != nil && d.bestBlockHash.IsEqual(bestBlockHeader.Hash()) {
+			d.logger.Debugf("[Difficulty] bestBlockHash is set and it's the same as the bestBlockHeader.Hash(), returning last computed difficulty")
 
-	// For networks that support it, allow special reduction of the
-	// required difficulty once too much time has elapsed without
-	// mining a block.
-	if d.settings.ChainCfgParams.ReduceMinDifficulty {
-		// Return minimum difficulty when more than the desired
-		// amount of time has elapsed without mining a block.
-		reductionTime := d.settings.ChainCfgParams.MinDiffReductionTime.Seconds()
-
-		// Add a random additional time of +/- 1 minute
-		// this is to prevent testnet nodes all mining their own blocks at the same time
-		randomAdjustment := time.Duration(rand.Int63n(120)-60) * time.Second
-		reductionTime += randomAdjustment.Seconds()
-		d.logger.Debugf("Adjusted reduction time by %v seconds", randomAdjustment.Seconds())
-
-		allowMinTime := bestBlockHeader.Timestamp + uint32(reductionTime)
-		if now.Unix() > int64(allowMinTime) {
-			bytesLittleEndian := make([]byte, 4)
-			binary.LittleEndian.PutUint32(bytesLittleEndian, d.settings.ChainCfgParams.PowLimitBits)
-			nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
-
-			return nBits, nil
+			if d.lastComputednBits != nil {
+				return d.lastComputednBits, nil
+			}
 		}
+	}
+
+	d.logger.Debugf("[Difficulty] bestBlockHeader.Hash: %s, bestBlockHeader.Height: %d, bestBlockHeader.Time: %d", bestBlockHeader.Hash().String(), bestBlockHeight, bestBlockHeader.Timestamp)
+
+	verifyBestBlockHeader, _, err := d.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewStorageError("[Difficulty] error getting best block header", err)
+	}
+
+	if !bestBlockHeader.Hash().IsEqual(verifyBestBlockHeader.Hash()) {
+		d.logger.Errorf("[Difficulty] bestBlockHeader.Hash: %s is not the same as the best block header in the store: %s", bestBlockHeader.Hash().String(), verifyBestBlockHeader.Hash().String())
 	}
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
 	if err != nil {
 		return nil,
-			errors.NewStorageError("error getting suitable block", err)
+			errors.NewStorageError("[Difficulty] error getting suitable block", err)
 	}
 
 	if lastSuitableBlock == nil {
-		return nil, errors.NewProcessingError("lastSuitableBlock is nil", nil)
+		return nil, errors.NewProcessingError("[Difficulty] lastSuitableBlock is nil", nil)
 	}
+
+	d.logger.Debugf("[Difficulty] lastSuitableBlock.Hash: %s, lastSuitableBlock.Height: %d, lastSuitableBlock.Time: %d", utils.ReverseAndHexEncodeSlice(lastSuitableBlock.Hash), lastSuitableBlock.Height, lastSuitableBlock.Time)
 
 	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, bestBlockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
 		// could be that we don't have a long enough chain to get the ancestor
-		d.logger.Debugf("error getting ancestor block: %v", err)
+		d.logger.Debugf("[Difficulty] error getting ancestor block: %v", err)
 
 		ancestorHash = bestBlockHeader.Hash()
 	}
 
+	d.logger.Debugf("[Difficulty] ancestorHash: %s", ancestorHash.String())
+
 	firstSuitableBlock, err := d.store.GetSuitableBlock(ctx, ancestorHash)
 	if err != nil {
-		return nil, errors.NewStorageError("error getting suitable block", err)
+		return nil, errors.NewStorageError("[Difficulty] error getting suitable block", err)
 	}
 
 	if firstSuitableBlock == nil {
 		return d.powLimitnBits, nil
 	}
 
-	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock)
+	d.logger.Debugf("[Difficulty] firstSuitableBlock.Hash: %s, firstSuitableBlock.Height: %d, firstSuitableBlock.Time: %d", utils.ReverseAndHexEncodeSlice(firstSuitableBlock.Hash), firstSuitableBlock.Height, firstSuitableBlock.Time)
+
+	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock, testnetArgs...)
 	if err != nil {
-		return nil, errors.NewProcessingError("error calculating next required difficulty", err)
+		return nil, errors.NewProcessingError("[Difficulty] error calculating next required difficulty", err)
 	}
 
 	d.lastComputednBits = nBits
@@ -145,7 +139,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 // This function differs from the exported CalcNextRequiredDifficulty in that
 // the exported version uses the current best chain as the previous block node
 // while this function accepts any block node.
-func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
+func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock, testnetArgs ...int64) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regest or simnet we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
@@ -157,15 +151,29 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	// required difficulty once too much time has elapsed without
 	// mining a block.
 	if d.settings.ChainCfgParams.ReduceMinDifficulty {
-		// Return minimum difficulty when more than the desired
-		// amount of time has elapsed without mining a block.
-		reductionTime := int64(d.settings.ChainCfgParams.MinDiffReductionTime /
-			time.Second)
-		allowMinTime := int64(suitableLastBlock.Time) + reductionTime
-		elapsedTime := time.Now().Unix() - int64(suitableLastBlock.Time)
+		var (
+			lastMinedBlockTime int64
+			nextMinedBlockTime int64
+		)
 
-		if elapsedTime > allowMinTime {
-			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.settings.ChainCfgParams.MinDiffReductionTime)
+		switch len(testnetArgs) {
+		case 1:
+			lastMinedBlockTime = testnetArgs[0]
+			nextMinedBlockTime = time.Now().Unix() // We will use the current time as the next mined block time
+		case 2:
+			lastMinedBlockTime = testnetArgs[0]
+			nextMinedBlockTime = testnetArgs[1]
+		default:
+			return nil, errors.NewProcessingError("testnetArgs must be provided: [0] is the time of the last mined block, [1] is optional and is the current time (for testing we pass this historically to calculate the difficulty for a block that would have been mined now)")
+		}
+
+		// Special difficulty rule for testnet:
+		// If the new block's timestamp is more than 2* target spacing then allow
+		// mining of a min-difficulty block.
+		targetSpacing := int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+
+		if nextMinedBlockTime > lastMinedBlockTime+2*targetSpacing {
+			d.logger.Debugf("block time more than 2x target spacing from previous block, returning powLimitBits")
 
 			bytesLittleEndian := make([]byte, 4)
 			binary.LittleEndian.PutUint32(bytesLittleEndian, d.settings.ChainCfgParams.PowLimitBits)
@@ -173,27 +181,12 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 			return powLimitBits, nil
 		}
+	} else if len(testnetArgs) > 0 {
+		return nil, errors.NewProcessingError("testnetArgs not supported for this network")
 	}
 
-	// Get the block node at the beginning of the window (n-144)
-	// firstNode := lastNode.RelativeAncestor(DifficultyAdjustmentWindow)
-	// if firstNode == nil {
-	// 	return nil, errors.New(errors.ERR_ERROR, "unable to obtain previous retarget block")
-	// }
-
-	// Find the suitable blocks to use as the first and last nodes for the
-	// purpose of the difficulty calculation. A suitable block is the median
-	// timestamp out of the three prior.
-	// suitableLastNode, err := b.getSuitableBlock(lastNode)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// suitableFirstNode, err := b.getSuitableBlock(firstNode)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	lastChainwork := new(big.Int).SetBytes(suitableLastBlock.ChainWork)
 	firstChainwork := new(big.Int).SetBytes(suitableFirstBlock.ChainWork)
+	lastChainwork := new(big.Int).SetBytes(suitableLastBlock.ChainWork)
 
 	work := new(big.Int).Sub(lastChainwork, firstChainwork)
 	d.logger.Debugf("work: %s", work.String())
@@ -245,7 +238,11 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	}
 
 	nBitsUint := BigToCompact(newTarget)
-	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
+
+	nb, err := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
+	if err != nil {
+		return nil, err
+	}
 
 	return nb, nil
 }
@@ -384,9 +381,9 @@ func CompactToBig(compact uint32) *big.Int {
 
 	return bn
 }
-func (d *Difficulty) validateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block) error {
+func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block, testnetArgs ...int64) error {
 	// Calculate the expected difficulty for the new block
-	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height)
+	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height, testnetArgs...)
 	if err != nil {
 		return errors.NewError("failed to calculate expected difficulty: %v", err)
 	}

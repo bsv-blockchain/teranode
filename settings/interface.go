@@ -162,6 +162,7 @@ type BlockAssemblySettings struct {
 	DoubleSpendWindow                   time.Duration
 	MaxGetReorgHashes                   int
 	MinerWalletPrivateKeys              []string
+	DifficultyCache                     bool
 }
 
 type BlockValidationSettings struct {

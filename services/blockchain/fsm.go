@@ -120,7 +120,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 			},
 		},
 		callbacks,
-		//fsm.Callbacks{},
+		// fsm.Callbacks{},
 	)
 
 	// apply options

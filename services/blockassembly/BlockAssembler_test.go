@@ -41,6 +41,7 @@ type baTestItems struct {
 
 func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
 	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+
 	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
@@ -528,7 +529,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
-		assert.Equal(t, uint64(999), miningCandidate.SizeWithoutCoinbase)
+		assert.Equal(t, uint64(1079), miningCandidate.SizeWithoutCoinbase)
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
 		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)
@@ -637,7 +638,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
-		assert.Equal(t, uint64(45000), miningCandidate.SizeWithoutCoinbase) // 3 * 1500
+		assert.Equal(t, uint64(45080), miningCandidate.SizeWithoutCoinbase) // 3 * 1500 + 80
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
 		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)

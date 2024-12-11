@@ -357,13 +357,13 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-
-	// prometheusExportBlockDb = promauto.NewHistogram(
-	//	prometheus.HistogramOpts{
-	//		Namespace: "blockchain",
-	//		Name:      "export_block_db",
-	//		Help:      "Histogram of ExportBlockDB calls to the blockchain service",
-	//		Buckets:   util.MetricsBucketsMilliSeconds,
-	//	},
-	//)
 }
+
+// prometheusExportBlockDb = promauto.NewHistogram(
+//	prometheus.HistogramOpts{
+//		Namespace: "blockchain",
+//		Name:      "export_block_db",
+//		Help:      "Histogram of ExportBlockDB calls to the blockchain service",
+//		Buckets:   util.MetricsBucketsMilliSeconds,
+//	},
+//)

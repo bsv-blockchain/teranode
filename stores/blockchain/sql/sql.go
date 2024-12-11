@@ -306,7 +306,6 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 
 	if len(hash) == 0 {
 		wireGenesisBlock := s.chainParams.GenesisBlock
-		// wireGenesisBlock := chaincfg.MainNetParams.GenesisBlock
 
 		genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock)
 		if err != nil {
@@ -353,6 +352,7 @@ type blockchainCache struct {
 
 func NewBlockchainCache() *blockchainCache {
 	cacheSize, _ := gocore.Config().GetInt("blockchain_store_cache_size", 200)
+
 	return &blockchainCache{
 		enabled:     gocore.Config().GetBool("blockchain_store_cache_enabled", true),
 		headers:     make(map[chainhash.Hash]*model.BlockHeader, cacheSize),

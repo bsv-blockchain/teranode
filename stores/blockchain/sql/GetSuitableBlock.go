@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -96,27 +97,22 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 		suitableBlockCandidates = append(suitableBlockCandidates, suitableBlock)
 	}
 
-	if len(suitableBlockCandidates) != 3 {
-		return nil, errors.NewStorageError("not enough candidates for suitable block. have %d, need 3", len(suitableBlockCandidates), err)
-	}
 	// we have 3 candidates - now sort them by time and choose the median
-	b := getMedianBlock(suitableBlockCandidates)
+	b, err := getMedianBlock(suitableBlockCandidates)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to get median block", err)
+	}
 
 	return b, nil
 }
 
-func getMedianBlock(blocks []*model.SuitableBlock) *model.SuitableBlock {
-	if blocks[0].Time > blocks[2].Time {
-		blocks[0], blocks[2] = blocks[2], blocks[0]
+func getMedianBlock(blocks []*model.SuitableBlock) (*model.SuitableBlock, error) {
+	if len(blocks) != 3 {
+		return nil, errors.NewProcessingError("not enough candidates for suitable block. have %d, need 3", len(blocks))
 	}
 
-	if blocks[0].Time > blocks[1].Time {
-		blocks[0], blocks[1] = blocks[1], blocks[0]
-	}
+	util.SortForDifficultyAdjustment(blocks)
 
-	if blocks[1].Time > blocks[2].Time {
-		blocks[1], blocks[2] = blocks[2], blocks[1]
-	}
-
-	return blocks[1]
+	// Return the middle block (out of 3)
+	return blocks[1], nil
 }
