@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	RedpandaImage   = "docker.vectorized.io/vectorized/redpanda"
-	RedpandaVersion = "latest"
+	RedpandaImage   = "redpandadata/redpanda"
+	RedpandaVersion = "v24.3.1"
 )
 
 type TestContainerWrapper struct {

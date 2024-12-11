@@ -71,7 +71,7 @@ services:
 
   kafka-shared:
     container_name: kafka-shared
-    image: vectorized/redpanda:latest
+    image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
       - ubsv-network
