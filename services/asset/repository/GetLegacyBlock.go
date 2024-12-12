@@ -52,11 +52,6 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		}
 
 		if len(block.Subtrees) == 0 {
-			// write number of transactions, which is 1 for only the coinbase tx
-			if _, err = w.Write(bt.VarInt(1)); err != nil {
-				return err
-			}
-
 			// Write the coinbase tx
 			if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
 				_ = w.Close()
