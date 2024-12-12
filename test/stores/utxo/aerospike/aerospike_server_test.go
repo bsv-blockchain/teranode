@@ -724,7 +724,7 @@ func TestCoinbase(t *testing.T) {
 }
 
 // func TestBigOPReturn(t *testing.T) {
-//	client, aeroErr := aerospike.NewClient(aerospikeHost, aerospikePort)
+//	client, aeroErr := uaerospike.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
 //  aeroURL, err := url.Parse(aerospikeURL)
@@ -774,7 +774,7 @@ func TestCoinbase(t *testing.T) {
 
 // func TestMultiUTXORecords(t *testing.T) {
 //	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
-//	client, aeroErr := aerospike.NewClient(aerospikeHost, aerospikePort)
+//	client, aeroErr := uaerospike.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
 //	aeroURL, err := url.Parse(aerospikeURL)
@@ -1045,7 +1045,7 @@ func TestStoreDecorate(t *testing.T) {
 
 // func TestLargeUTXO(t *testing.T) {
 //	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
-//	client, aeroErr := aerospike.NewClient(aerospikeHost, aerospikePort)
+//	client, aeroErr := uaerospike.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
 //	aeroURL, err := url.Parse(fmt.Sprintf(aerospikeURLFormat, aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))

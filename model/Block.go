@@ -24,6 +24,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -982,7 +983,7 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 		return errors.NewConfigurationError("aerospike port error", err)
 	}
 
-	client, aErr := aerospike.NewClient(aeroURL.Host, port)
+	client, aErr := uaerospike.NewClient(aeroURL.Host, port)
 	if aErr != nil {
 		return errors.NewServiceError("aerospike error", aErr)
 	}
