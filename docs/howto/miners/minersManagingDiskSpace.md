@@ -4,7 +4,7 @@ Key considerations and strategies:
 
 1. **Monitoring Disk Usage:**
 - Regularly check available disk space using tools like `df -h` or through the Grafana dashboard.
-- Set up alerts to notify you when disk usage reaches certain thresholds (e.g., 80% full).
+- Set up alerts to notify you when disk usage reaches certain thresholds (e.g., 80% or 85% full).
 
 2. **Understanding Data Growth:**
 - The blockchain data, transaction store, and subtree store will grow over time as new blocks are added to the network.
