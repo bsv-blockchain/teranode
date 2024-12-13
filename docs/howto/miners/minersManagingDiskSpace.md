@@ -13,7 +13,7 @@ Key considerations and strategies:
 
 3. **Pruning Strategies:**
 - Teranode implements regular pruning of old data that's no longer needed for immediate operations.
-- While retention policies for different data types are configurable, this is not documented in this SOP. It is generally not advised to change the defaults for alpha testing purposes.
+- While retention policies for different data types are configurable, this is not documented in this guide.
 
 7. **Log Management:**
 - Consider offloading logs to a separate storage system or log management service.
