@@ -1,6 +1,8 @@
 # How to Install Teranode with Kubernetes Operator
 
+Last modified: 13-December-2024
 
+# Index
 
 - [Introduction](#introduction)
 - [Prerequisites](#prerequisites)
@@ -203,7 +205,21 @@ It must be noted that the `Kubernetes operator` production-like setup does not i
 ##### Configuration Management
 Environment variables and settings are managed using ConfigMaps. The Cluster custom resource specifies a `configMapName` (e.g., "shared-config") which is referenced by the various Teranode components. Users will need to create this ConfigMap before deploying the Cluster resource.
 
+Sample config:
 
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teranode-operator-config
+data:
+  SETTINGS_CONTEXT: operator.testnet
+  KAFKA_HOSTS: ...
+  blockchain_store: 'postgres://...'
+  utxostore: 'aerospike://...'
+```
+
+To review the list of settings you could configure in the ConfigMap, please refer to the list [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf).
 
 ##### Storage Requirements
 Teranode uses PersistentVolumeClaims (PVCs) for storage in some components. For example, the SubtreeValidator specifies storage resources and a storage class. Users should ensure their Kubernetes cluster has the necessary storage classes and capacity available.

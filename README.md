@@ -34,6 +34,7 @@
 6. [Generating Protobuf Files](docs/howto/generatingProtobuf.md)
 7. [Adding new Protobuf Services](docs/howto/addingNewProtobufServices.md)
 8. [Configuring gRPC Logging](docs/howto/configuringGrpcLogging.md)
+9. [Kubernetes - Remote Debugging Guide](docs/howto/howToRemoteDebugTeranode.md)
 
 ### Miners
 
@@ -57,7 +58,7 @@
 6. [Backup Procedures](docs/howto/miners/kubernetes/minersHowToBackup.md)
 7. [Troubleshooting Guide](docs/howto/miners/kubernetes/minersHowToTroubleshooting.md)
 8. [Security Best Practices](docs/howto/miners/kubernetes/minersSecurityBestPractices.md)
-9. [Remote Debugging Guide](docs/howto/miners/kubernetes/minersHowToRemoteDebugTeranode.md)
+
 
 ### Common Tasks
 

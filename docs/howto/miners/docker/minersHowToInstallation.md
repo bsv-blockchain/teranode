@@ -1,5 +1,7 @@
 # How to Install Teranode with Docker Compose
 
+Last modified: 13-December-2024
+
 ## Index
 
 - [Introduction](#introduction)
@@ -16,6 +18,7 @@
         - [Docker Container](#docker-container)
         - [Docker Compose](#docker-compose)
     - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
+- [Reference Settings](#reference---settings)
 
 
 ## Introduction
@@ -276,45 +279,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 **Step 3: Prepare Local Settings**
 
 1. Create a `settings_local.conf` file in the root directory.
-2. Unless instructed otherwise, please put the following content in it.
-
-
-
-```
-PROPAGATION_GRPC_PORT=8084
-PROPAGATION_HTTP_PORT=8833
-VALIDATOR_GRPC_PORT=8081
-BLOCK_ASSEMBLY_GRPC_PORT=8085
-SUBTREE_VALIDATION_GRPC_PORT=8086
-BLOCK_VALIDATION_GRPC_PORT=8088
-BLOCK_VALIDATION_HTTP_PORT=8188
-BLOCKCHAIN_GRPC_PORT=8087
-ASSET_GRPC_PORT=8091
-ASSET_HTTP_PORT=8090
-P2P_HTTP_PORT=9906
-RPC_PORT=9292
-
-propagation_grpcAddresses.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
-propagation_grpcAddress.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
-propagation_httpAddresses.docker.m=http://ubsv-propagation:${PROPAGATION_HTTP_PORT}
-validator_grpcAddress.docker.m=localhost:${VALIDATOR_GRPC_PORT}
-blockassembly_grpcAddress.docker.m=ubsv-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}
-subtreevalidation_grpcAddress.docker.m=ubsv-subtreevalidation:${SUBTREE_VALIDATION_GRPC_PORT}
-blockvalidation_httpAddress.docker.m=http://ubsv-blockvalidation:${BLOCK_VALIDATION_HTTP_PORT}
-blockvalidation_grpcAddress.docker.m=ubsv-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}
-utxostore.docker.m=aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-utxoblaster_utxostore_aerospike.docker.m=aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
-blockchain_grpcAddress.docker.m=ubsv-blockchain:${BLOCKCHAIN_GRPC_PORT}
-blockchain_store.docker.m=postgres://miner1:miner1@postgres:5432/ubsv1
-asset_grpcListenAddress.docker.m=:${ASSET_GRPC_PORT}
-asset_grpcAddress.docker.m=ubsv-asset:${ASSET_GRPC_PORT}
-asset_httpAddress.docker.m=http://ubsv-asset:${ASSET_HTTP_PORT}${asset_apiPrefix}
-p2p_httpListenAddress.docker.m=:${P2P_HTTP_PORT}
-p2p_httpAddress.docker.m=ubsv-p2p:${P2P_HTTP_PORT}
-p2p_static_peers.docker.m=
-rpc_listener_url=:${RPC_PORT}
-```
-
+2. Any overridden settings can be placed in this file. For a list of settings, and their default values, please refer to the reference at the end of this document.
 
 
 **Step 4: Create Data Directories**
@@ -416,3 +381,7 @@ Additional Notes:
 - The `data` directory will contain persistent data. Ensure regular backups.
 - Under no circumstances should you use this `docker compose` approach for production usage.
 - Please discuss with the Teranode support team for advanced configuration options and optimizations not covered in the present document.
+
+## Reference - Settings
+
+You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

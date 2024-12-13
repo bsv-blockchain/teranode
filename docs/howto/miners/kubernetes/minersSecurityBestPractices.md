@@ -7,8 +7,14 @@
 
 Here are some firewall configuration recommendations:
 
+VT - NOTES - include in doc - Assets not exposed directly - nginx reverse proxy or whatever
+    - P2P - outside world
+    - Legacy P2P - port - directly open too
+    - RPC not outside world
+    - Asset - gRPC no longer in scope, remove port and gRPC mentions
 
-1. **Publicly Exposed Ports:**
+
+1. **Exposed Ports:**
 Review the ports exposed in the Kubernetes operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
 - `9292`: RPC Server. Open to receive RPC API requests.
 
@@ -27,7 +33,7 @@ Review the ports exposed in the Kubernetes operator configuration file(s) and en
 
 3. **External Access:**
 
-- Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P, RPC and Asset server ports).
+- Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P and Asset server ports).
 - Use strong authentication for any services that require external access. See the section 4.1 of this document for more details.
 
 4. **Network Segmentation:**

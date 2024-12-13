@@ -1,5 +1,6 @@
 # How to Troubleshoot Teranode (Docker Compose)
 
+Last modified: 13-December-2024
 
 ## Index
 
@@ -154,17 +155,17 @@ docker-compose logs [service_name]
 
 For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
 
-* Propagation Service
-* Blockchain Service
-* Asset Service
-* Block Validation Service
-* P2P Service
-* Block Assembly Service
-* Subtree Validation Service
-* Miner Service
-* RPC Service
-* Block Persister Service
-* UTXO Persister Service
+* Propagation Service (service name: `propagation`)
+* Blockchain Service (service name: `blockchain`)
+* Asset Service (service name: `asset`)
+* Block Validation Service (service name: `block-validator`)
+* P2P Service (service name: `p2p`)
+* Block Assembly Service (service name: `block-assembly`)
+* Subtree Validation Service (service name: `subtree-validator`)
+* Miner Service (service name: `miner`)
+* RPC Service (service name: `rpc`)
+* Block Persister Service (service name: `block-persister`)
+* UTXO Persister Service (service name: `utxo-persister`)
 * Postgres Database    [*Only in Docker*]
 * Aerospike Database  [*Only in Docker*]
 * Kafka                            [*Only in Docker*]
