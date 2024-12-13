@@ -452,6 +452,10 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	return resp, nil
 }
 
+func (ba *BlockAssembly) TxCount() uint64 {
+	return ba.blockAssembler.TxCount()
+}
+
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(ba.stats),
@@ -800,6 +804,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: true,
 	}, nil
+}
+
+func (ba *BlockAssembly) SubtreeCount() int {
+	return ba.blockAssembler.SubtreeCount()
 }
 
 func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Block) (err error) {

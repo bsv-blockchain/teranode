@@ -38,6 +38,7 @@ func TestFilterAddLatest(t *testing.T) {
 
 	// Test encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("encode of MsgFilterAdd failed %v err <%v>", msg, err)
@@ -45,6 +46,7 @@ func TestFilterAddLatest(t *testing.T) {
 
 	// Test decode with latest protocol version.
 	var readmsg MsgFilterAdd
+
 	err = readmsg.Bsvdecode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("decode of MsgFilterAdd failed [%v] err <%v>", buf, err)
@@ -80,7 +82,6 @@ func TestFilterAddCrossProtocol(t *testing.T) {
 	if bytes.Equal(msg.Data, readmsg.Data) {
 		t.Error("should not get same data for cross protocol")
 	}
-
 }
 
 // TestFilterAddMaxDataSize tests the MsgFilterAdd API maximum data size.
@@ -166,6 +167,7 @@ func TestFilterAddWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgFilterAdd
+
 		r := newFixedReader(test.max, test.buf)
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {

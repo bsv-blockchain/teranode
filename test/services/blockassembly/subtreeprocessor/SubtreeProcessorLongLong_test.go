@@ -1,0 +1,306 @@
+//go:build test_all || test_services || test_subtreeprocessor || test_longlong
+
+package subtreeprocessor
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"runtime/pprof"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/model"
+	st "github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
+	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// go test -v -tags test_subtreeprocessor ./test/...
+
+var (
+	coinbaseTx, _   = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1a03a403002f746572616e6f64652f9f9fba46d5a08a6be11ddb2dffffffff0a0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac00000000")
+	prevBlockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
+	blockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevBlockHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+)
+
+func TestMoveUpBlockLarge(t *testing.T) {
+
+	n := 1049576
+	txIds := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		txid, err := generateTxID()
+		if err != nil {
+			t.Errorf("error generating txid: %s", err)
+		}
+
+		txIds[i] = txid
+	}
+
+	newSubtreeChan := make(chan st.NewSubtreeRequest)
+
+	var wg sync.WaitGroup
+
+	wg.Add(4) // we are expecting 4 subtrees
+
+	go func() {
+		for {
+			// just read the subtrees of the processor
+			<-newSubtreeChan
+			wg.Done()
+		}
+	}()
+
+	subtreeStore := blob_memory.New()
+	utxosStore := memory.New(ulogger.TestLogger{})
+
+	settings := test.CreateBaseTestSettings()
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
+
+	stp, _ := st.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
+
+	for i, txid := range txIds {
+		hash, err := chainhash.NewHashFromStr(txid)
+		require.NoError(t, err)
+
+		if i == 0 {
+			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
+		} else {
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
+		}
+	}
+
+	wg.Wait()
+	// sleep for 1 second
+	// this is to make sure the subtrees are added to the chain
+	time.Sleep(1 * time.Second)
+
+	// there should be 4 chained subtrees
+	assert.Equal(t, 4, len(stp.GetChainedSubtrees()))
+	// one of the subtrees should contain 262144 items
+	assert.Equal(t, 262144, stp.GetChainedSubtrees()[0].Size())
+	// there should be no remaining items in the current subtree
+	assert.Equal(t, 1000, stp.GetCurrentSubtree().Length())
+
+	stp.SetCurrentItemsPerFile(65536)
+	_ = stp.GetUtxoStore().SetBlockHeight(1)
+	//nolint:gosec
+	_ = stp.GetUtxoStore().SetMedianBlockTime(uint32(time.Now().Unix()))
+
+	wg.Add(8) // we are expecting 4 subtrees
+
+	stp.SetCurrentBlockHeader(prevBlockHeader)
+
+	timeStart := time.Now()
+
+	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveUpBlock
+	// new items per file is 65536 so there should be 8 subtrees in the chain
+	err := stp.MoveUpBlock(&model.Block{
+		Header: blockHeader,
+		Subtrees: []*chainhash.Hash{
+			stp.GetChainedSubtrees()[0].RootHash(),
+			stp.GetChainedSubtrees()[1].RootHash(),
+		},
+		CoinbaseTx: coinbaseTx,
+	})
+
+	wg.Wait()
+	fmt.Printf("moveUpBlock took %s\n", time.Since(timeStart))
+
+	time.Sleep(1 * time.Second)
+
+	require.NoError(t, err)
+	assert.Equal(t, 8, len(stp.GetChainedSubtrees()))
+	// one of the subtrees should contain 262144 items
+	assert.Equal(t, 65536, stp.GetChainedSubtrees()[0].Size())
+	assert.Equal(t, 1001, stp.GetCurrentSubtree().Length())
+}
+
+func Test_TxIDAndFeeBatch(t *testing.T) {
+
+	batcher := st.NewTxIDAndFeeBatch(1000)
+
+	var wg sync.WaitGroup
+
+	batchCount := atomic.Uint64{}
+
+	for i := 0; i < 10_000; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for j := 0; j < 1_000; j++ {
+				batch := batcher.Add(
+					st.NewTxIDAndFee(
+						util.SubtreeNode{
+							Hash:        chainhash.Hash{},
+							Fee:         1,
+							SizeInBytes: 2,
+						},
+					),
+				)
+				if batch != nil {
+					batchCount.Add(1)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	assert.Equal(t, uint64(10_000), batchCount.Load())
+}
+
+func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
+	t.Run("large", func(t *testing.T) {
+
+		newSubtreeChan := make(chan st.NewSubtreeRequest)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+
+		settings := test.CreateBaseTestSettings()
+		stp, _ := st.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
+
+		subtreeSize := uint64(1024 * 1024)
+		nrSubtrees := 10
+
+		subtrees := make([]*util.Subtree, nrSubtrees)
+
+		block := &model.Block{
+			Header:     prevBlockHeader,
+			Subtrees:   []*chainhash.Hash{},
+			CoinbaseTx: coinbaseTx,
+		}
+
+		for i := 0; i < nrSubtrees; i++ {
+			subtree := createSubtree(t, subtreeSize, i == 0)
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+			require.NoError(t, err)
+
+			block.Subtrees = append(block.Subtrees, subtree.RootHash())
+			subtrees[i] = subtree
+		}
+
+		blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
+		for idx, subtree := range block.Subtrees {
+			blockSubtreesMap[*subtree] = idx
+		}
+
+		_ = blockSubtreesMap
+
+		f, _ := os.Create("cpu.prof")
+		defer f.Close()
+
+		_ = pprof.StartCPUProfile(f)
+		start := time.Now()
+
+		transactionMap, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap)
+		require.NoError(t, err)
+
+		pprof.StopCPUProfile()
+		t.Logf("Time taken: %s\n", time.Since(start))
+
+		f, _ = os.Create("mem.prof")
+		defer f.Close()
+		_ = pprof.WriteHeapProfile(f)
+		//nolint:gosec
+		assert.Equal(t, int(subtreeSize)*nrSubtrees, transactionMap.Length())
+
+		start = time.Now()
+
+		var wg sync.WaitGroup
+
+		for _, subtree := range subtrees {
+			wg.Add(1)
+
+			go func(subtree *util.Subtree) {
+				defer wg.Done()
+				//nolint:gosec
+				for i := 0; i < int(subtreeSize); i++ {
+					assert.True(t, transactionMap.Exists(subtree.Nodes[i].Hash))
+				}
+			}(subtree)
+		}
+
+		wg.Wait()
+		t.Logf("Time taken to read: %s\n", time.Since(start))
+	})
+}
+
+// generateTxID generates a random 32-byte hexadecimal string.
+func generateTxID() (string, error) {
+	b := make([]byte, 32)
+
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", b), nil
+}
+
+func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
+	//nolint:gosec
+	subtree, err := util.NewTreeByLeafCount(int(length))
+	require.NoError(t, err)
+
+	start := uint64(0)
+
+	if createCoinbase {
+		err = subtree.AddCoinbaseNode()
+		require.NoError(t, err)
+
+		start = 1
+	}
+
+	for i := start; i < length; i++ {
+		txHash, err := generateTxHash()
+		require.NoError(t, err)
+		err = subtree.AddNode(txHash, i, i)
+		require.NoError(t, err)
+	}
+	// fmt.Println("done with subtree: ", subtree)
+	return subtree
+}
+
+// generateTxID generates a random chainhash.Hash.
+func generateTxHash() (chainhash.Hash, error) {
+	b := make([]byte, 32)
+
+	_, err := rand.Read(b)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+
+	return chainhash.Hash(b), nil
+}

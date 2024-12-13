@@ -64,6 +64,7 @@ func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts 
 	k.wg.Add(1)
 	go k.watcher()
 	k.ResolveNow(resolver.ResolveNowOptions{})
+
 	return k, nil
 }
 
@@ -80,5 +81,6 @@ func getNamespaceFromHost(host string) (string, string) {
 		namespace = hostParts[1]
 		host = hostParts[0]
 	}
+
 	return namespace, host
 }

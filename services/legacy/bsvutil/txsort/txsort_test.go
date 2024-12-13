@@ -70,14 +70,17 @@ func TestSort(t *testing.T) {
 				test.name, err)
 			continue
 		}
+
 		txBytes, err := hex.DecodeString(string(txHexBytes))
 		if err != nil {
 			t.Errorf("DecodeString (%s): failed to decode tx: %v",
 				test.name, err)
 			continue
 		}
+
 		var tx wire.MsgTx
 		err = tx.Deserialize(bytes.NewReader(txBytes))
+
 		if err != nil {
 			t.Errorf("Deserialize (%s): unexpected error %v",
 				test.name, err)

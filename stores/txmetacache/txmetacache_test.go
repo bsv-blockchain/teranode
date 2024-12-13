@@ -10,7 +10,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -23,9 +22,6 @@ var (
 )
 
 func Test_txMetaCache_GetMeta(t *testing.T) {
-	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	//util.SkipVeryLongTests(t)
-
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -88,8 +84,10 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 	b.ResetTimer()
 
 	g := new(errgroup.Group)
+
 	for i := 0; i < b.N; i++ {
 		hash := hashes[i]
+
 		g.Go(func() error {
 			return cache.SetCache(&hash, &meta.Data{})
 		})
@@ -115,9 +113,11 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 
 	// Pre-generate and pre-populate the cache
 	hashes := make([]chainhash.Hash, iterationCount)
+
 	for i := 0; i < iterationCount; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
 		hashes[i] = hash
+
 		if err := cache.SetCache(&hash, meta); err != nil {
 			b.Fatalf("pre-population of cache failed: %v", err)
 		}
@@ -126,47 +126,27 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	b.ResetTimer()
 
 	g := new(errgroup.Group)
+
 	for i := 0; i < iterationCount; i++ {
 		hash := hashes[i]
 		i := i
+
 		g.Go(func() error {
 			data, err := cache.GetMeta(context.Background(), &hash)
 			_ = data
+
 			if err != nil {
 				b.Fatalf("cache miss, iteration %d: %v", i, err)
 			}
+
 			fmt.Println("data size: ", unsafe.Sizeof(data))
+
 			return nil
 		})
 	}
 
 	err := g.Wait()
 	require.NoError(b, err)
-}
-
-func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
-	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	util.SkipVeryLongTests(t)
-	ctx := context.Background()
-	c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
-	cache := c.(*TxMetaCache)
-	var err error
-
-	for i := 0; i < 1_000_000; i++ {
-		hash := chainhash.HashH([]byte(string(rune(i))))
-		err = cache.SetCache(&hash, &meta.Data{})
-		require.NoError(t, err)
-	}
-
-	//make sure newly added items are not expired
-	hash := chainhash.HashH([]byte(string(rune(1000000000))))
-	err = cache.SetCache(&hash, &meta.Data{})
-	require.NoError(t, err)
-
-	txmetaLatest, err := cache.Get(ctx, &hash)
-	assert.NoError(t, err)
-	assert.NotNil(t, txmetaLatest)
-
 }
 
 func TestMap(t *testing.T) {

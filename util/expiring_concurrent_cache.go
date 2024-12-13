@@ -12,7 +12,7 @@ type ExpiringConcurrentCache[K comparable, V any] struct {
 	mu        sync.RWMutex
 	cache     *expiringmap.ExpiringMap[K, V]
 	wg        map[K]*sync.WaitGroup
-	zeroValue V
+	ZeroValue V
 }
 
 func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *ExpiringConcurrentCache[K, V] {
@@ -58,7 +58,7 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 			return val, nil
 		}
 
-		return c.zeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
+		return c.ZeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
 	}
 
 	// Create a new WaitGroup for the key
@@ -82,7 +82,7 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 	// Perform the fetch
 	result, err := fetchFunc()
 	if err != nil {
-		return c.zeroValue, err
+		return c.ZeroValue, err
 	}
 
 	// Cache the result

@@ -2147,6 +2147,7 @@ func (p *Peer) AssociateConnection(conn net.Conn) {
 			p.Disconnect()
 			return
 		}
+
 		p.na = na
 	}
 

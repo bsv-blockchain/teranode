@@ -31,6 +31,7 @@ func main() {
 
 	fmt.Printf("[P2PNode] peer ID: %s\n", h.ID().String())
 	fmt.Printf("[P2PNode] Connect to me on:\n")
+
 	for _, addr := range h.Addrs() {
 		fmt.Printf("[P2PNode]   %s/p2p/%s\n", addr, h.ID().String())
 	}
@@ -49,6 +50,7 @@ func generateHexEncodedEd25519PrivateKey() (hexString string, err error) {
 
 	// Encode the private key as a hex string.
 	hexEncodedPrivateKey := hex.EncodeToString(raw)
+
 	return hexEncodedPrivateKey, nil
 }
 

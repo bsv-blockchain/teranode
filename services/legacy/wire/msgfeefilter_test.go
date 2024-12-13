@@ -93,10 +93,12 @@ func TestFeeFilterWire(t *testing.T) {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
 		err := test.in.BsvEncode(&buf, test.pver, BaseEncoding)
+
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -107,10 +109,12 @@ func TestFeeFilterWire(t *testing.T) {
 		var msg MsgFeeFilter
 		rbuf := bytes.NewReader(test.buf)
 		err = msg.Bsvdecode(rbuf, test.pver, BaseEncoding)
+
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -151,6 +155,7 @@ func TestFeeFilterWireErrors(t *testing.T) {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
 		err := test.in.BsvEncode(w, test.pver, BaseEncoding)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
 				i, err, test.writeErr)
@@ -171,6 +176,7 @@ func TestFeeFilterWireErrors(t *testing.T) {
 		var msg MsgFeeFilter
 		r := newFixedReader(test.max, test.buf)
 		err = msg.Bsvdecode(r, test.pver, BaseEncoding)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
 				i, err, test.readErr)
@@ -186,6 +192,5 @@ func TestFeeFilterWireErrors(t *testing.T) {
 				continue
 			}
 		}
-
 	}
 }

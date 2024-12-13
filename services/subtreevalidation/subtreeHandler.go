@@ -109,12 +109,13 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			AllowFailFast: true, // allow subtrees to fail fast, when getting from the network, will be retried if in a block
 		}
 
-		// Call the validateSubtreeInternal method
-		if err := u.validateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight); err != nil {
+		// Call the ValidateSubtreeInternal method
+		if err := u.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
-			// Here we return the error directly without further wrapping, as validateSubtreeInternal categorizes the error
+			// Here we return the error directly without further wrapping, as ValidateSubtreeInternal categorizes the error
 			return err
 		}
 	}
+
 	return nil
 }

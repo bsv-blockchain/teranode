@@ -18,6 +18,7 @@ func TestDeDuplicatorDeduplicate(t *testing.T) {
 		fn := func() error {
 			time.Sleep(100 * time.Millisecond)
 			nrCalled.Inc()
+
 			return nil
 		}
 
@@ -37,7 +38,7 @@ func TestDeDuplicatorDeduplicate(t *testing.T) {
 	})
 }
 
-//func TestDeDuplicatorGoroutines(t *testing.T) {
+// func TestDeDuplicatorGoroutines(t *testing.T) {
 //	nrCalled := atomic.NewUint32(0)
 //
 //	fn := func() error {

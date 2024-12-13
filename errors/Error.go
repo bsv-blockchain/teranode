@@ -128,6 +128,7 @@ func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.wrappedErr
 }
 
@@ -135,6 +136,7 @@ func (e *Error) Code() ERR {
 	if e == nil {
 		return ERR_UNKNOWN
 	}
+
 	return e.code
 }
 
@@ -142,6 +144,7 @@ func (e *Error) Message() string {
 	if e == nil {
 		return ""
 	}
+
 	return e.message
 }
 
@@ -149,6 +152,7 @@ func (e *Error) WrappedErr() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.wrappedErr
 }
 
@@ -156,6 +160,7 @@ func (e *Error) Data() ErrDataI {
 	if e == nil {
 		return nil
 	}
+
 	return e.data
 }
 

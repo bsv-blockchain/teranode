@@ -131,6 +131,7 @@ func (vm *Engine) isBranchExecuting() bool {
 	if len(vm.condStack) == 0 {
 		return true
 	}
+
 	return vm.condStack[len(vm.condStack)-1] == OpCondTrue
 }
 
@@ -160,7 +161,6 @@ func (vm *Engine) executeOpcode(pop *parsedOpcode) error {
 				MaxOpsPerScript)
 			return scriptError(ErrTooManyOperations, str)
 		}
-
 	} else if len(pop.data) > MaxScriptElementSize {
 		str := fmt.Sprintf("element size %d exceeds max allowed size %d",
 			len(pop.data), MaxScriptElementSize)
@@ -203,12 +203,14 @@ func (vm *Engine) validPC() error {
 			vm.scriptIdx, vm.scriptOff, len(vm.scripts))
 		return scriptError(ErrInvalidProgramCounter, str)
 	}
+
 	if vm.scriptOff >= len(vm.scripts[vm.scriptIdx]) {
 		str := fmt.Sprintf("past input scripts %v:%v %v:%04d",
 			vm.scriptIdx, vm.scriptOff, vm.scriptIdx,
 			len(vm.scripts[vm.scriptIdx]))
 		return scriptError(ErrInvalidProgramCounter, str)
 	}
+
 	return nil
 }
 
@@ -219,6 +221,7 @@ func (vm *Engine) curPC() (script int, off int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+
 	return vm.scriptIdx, vm.scriptOff, nil
 }
 
@@ -229,6 +232,7 @@ func (vm *Engine) DisasmPC() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return vm.disasm(scriptIdx, scriptOff), nil
 }
 
@@ -246,6 +250,7 @@ func (vm *Engine) DisasmScript(idx int) (string, error) {
 	for i := range vm.scripts[idx] {
 		disstr = disstr + vm.disasm(idx, i) + "\n"
 	}
+
 	return disstr, nil
 }
 
@@ -275,17 +280,21 @@ func (vm *Engine) CheckErrorCondition(finalScript bool) error {
 	if err != nil {
 		return err
 	}
+
 	if !v {
 		// Log interesting data.
 		log.Debugf("%v", newLogClosure(func() string {
 			dis0, _ := vm.DisasmScript(0)
 			dis1, _ := vm.DisasmScript(1)
+
 			return fmt.Sprintf("scripts failed: script0: %s\n"+
 				"script1: %s", dis0, dis1)
 		}))
+
 		return scriptError(ErrEvalFalse,
 			"false stack entry at end of script execution")
 	}
+
 	return nil
 }
 
@@ -301,6 +310,7 @@ func (vm *Engine) Step() (done bool, err error) {
 	if err != nil {
 		return true, err
 	}
+
 	opcode := &vm.scripts[vm.scriptIdx][vm.scriptOff]
 	vm.scriptOff++
 
@@ -318,6 +328,7 @@ func (vm *Engine) Step() (done bool, err error) {
 	if combinedStackSize > MaxStackSize {
 		str := fmt.Sprintf("combined stack size %d > max allowed %d",
 			combinedStackSize, MaxStackSize)
+
 		return false, scriptError(ErrStackOverflow, str)
 	}
 
@@ -331,9 +342,9 @@ func (vm *Engine) Step() (done bool, err error) {
 
 		// Alt stack doesn't persist.
 		_ = vm.astack.DropN(vm.astack.Depth())
-
 		vm.numOps = 0 // number of ops is per script.
 		vm.scriptOff = 0
+
 		if vm.scriptIdx == 0 && vm.bip16 {
 			vm.scriptIdx++
 			vm.savedFirstStack = vm.GetStack()
@@ -348,10 +359,11 @@ func (vm *Engine) Step() (done bool, err error) {
 			}
 
 			script := vm.savedFirstStack[len(vm.savedFirstStack)-1]
-			pops, err := parseScript(script)
+			pops, err := ParseScript(script)
 			if err != nil {
 				return false, err
 			}
+
 			vm.scripts = append(vm.scripts, pops)
 
 			// Set stack to be the stack from first script minus the
@@ -360,15 +372,18 @@ func (vm *Engine) Step() (done bool, err error) {
 		} else {
 			vm.scriptIdx++
 		}
+
 		// there are zero length scripts in the wild
 		if vm.scriptIdx < len(vm.scripts) && vm.scriptOff >= len(vm.scripts[vm.scriptIdx]) {
 			vm.scriptIdx++
 		}
+
 		vm.lastCodeSep = 0
 		if vm.scriptIdx >= len(vm.scripts) {
 			return true, nil
 		}
 	}
+
 	return false, nil
 }
 
@@ -382,6 +397,7 @@ func (vm *Engine) Execute() (err error) {
 			if err != nil {
 				return fmt.Sprintf("stepping (%v)", err)
 			}
+
 			return fmt.Sprintf("stepping %v", dis)
 		}))
 
@@ -396,6 +412,7 @@ func (vm *Engine) Execute() (err error) {
 			if vm.dstack.Depth() != 0 {
 				dstr = "Stack:\n" + vm.dstack.String()
 			}
+
 			if vm.astack.Depth() != 0 {
 				astr = "AltStack:\n" + vm.astack.String()
 			}
@@ -424,6 +441,7 @@ func (vm *Engine) checkHashTypeEncoding(hashType SigHashType) error {
 		sigHashType ^= SigHashForkID
 		if hashType&SigHashForkID == 0 {
 			str := fmt.Sprintf("hash type does not contain uahf forkID 0x%x", hashType)
+
 			return scriptError(ErrInvalidSigHashType, str)
 		}
 	}
@@ -432,6 +450,7 @@ func (vm *Engine) checkHashTypeEncoding(hashType SigHashType) error {
 		str := fmt.Sprintf("invalid hash type 0x%x", hashType)
 		return scriptError(ErrInvalidSigHashType, str)
 	}
+
 	return nil
 }
 
@@ -446,6 +465,7 @@ func (vm *Engine) checkPubKeyEncoding(pubKey []byte) error {
 		// Compressed
 		return nil
 	}
+
 	if len(pubKey) == 65 && pubKey[0] == 0x04 {
 		// Uncompressed
 		return nil
@@ -527,6 +547,7 @@ func (vm *Engine) checkSignatureEncoding(sig []byte) error {
 			minSigLen)
 		return scriptError(ErrSigTooShort, str)
 	}
+
 	if sigLen > maxSigLen {
 		str := fmt.Sprintf("malformed signature: too long: %d > %d", sigLen,
 			maxSigLen)
@@ -562,10 +583,12 @@ func (vm *Engine) checkSignatureEncoding(sig []byte) error {
 	rLen := int(sig[rLenOffset])
 	sTypeOffset := rOffset + rLen
 	sLenOffset := sTypeOffset + 1
+
 	if sTypeOffset >= sigLen {
 		str := "malformed signature: S type indicator missing"
 		return scriptError(ErrSigMissingSTypeID, str)
 	}
+
 	if sLenOffset >= sigLen {
 		str := "malformed signature: S length missing"
 		return scriptError(ErrSigMissingSLen, str)
@@ -659,6 +682,7 @@ func getStack(stack *stack) [][]byte {
 		// PeekByteArry can't fail due to overflow, already checked
 		array[len(array)-i-1], _ = stack.PeekByteArray(int32(i))
 	}
+
 	return array
 }
 
@@ -709,8 +733,8 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 			">= %d", txIdx, len(tx.TxIn))
 		return nil, scriptError(ErrInvalidIndex, str)
 	}
-	scriptSig := tx.TxIn[txIdx].SignatureScript
 
+	scriptSig := tx.TxIn[txIdx].SignatureScript
 	// When both the signature script and public key script are empty the
 	// result is necessarily an error since the stack would end up being
 	// empty which is equivalent to a false top element.  Thus, just return
@@ -755,8 +779,9 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 				"allowed size %d", len(scr), MaxScriptSize)
 			return nil, scriptError(ErrScriptTooBig, str)
 		}
+
 		var err error
-		vm.scripts[i], err = parseScript(scr)
+		vm.scripts[i], err = ParseScript(scr)
 		if err != nil {
 			return nil, err
 		}
@@ -777,6 +802,7 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 		}
 		vm.bip16 = true
 	}
+
 	if vm.hasFlag(ScriptVerifyMinimalData) {
 		vm.dstack.verifyMinimalData = true
 		vm.astack.verifyMinimalData = true

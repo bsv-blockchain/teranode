@@ -144,10 +144,12 @@ func TestAddAddressByIP(t *testing.T) {
 			t.Errorf("TestGood test %d failed expected an error and got none", i)
 			continue
 		}
+
 		if test.err == nil && err != nil {
 			t.Errorf("TestGood test %d failed expected no error and got one", i)
 			continue
 		}
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("TestGood test %d failed got %v, want %v", i,
 				reflect.TypeOf(err), reflect.TypeOf(test.err))
@@ -217,6 +219,7 @@ func TestAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Adding address failed: %v", err)
 	}
+
 	ka := n.GetAddress()
 
 	if !ka.LastAttempt().IsZero() {
@@ -239,6 +242,7 @@ func TestConnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Adding address failed: %v", err)
 	}
+
 	ka := n.GetAddress()
 	na := ka.NetAddress()
 	// make it an hour ago
@@ -255,9 +259,11 @@ func TestNeedMoreAddresses(t *testing.T) {
 	n := addrmgr.New(ulogger.TestLogger{}, "testneedmoreaddresses", lookupFunc)
 	addrsToAdd := 1500
 	b := n.NeedMoreAddresses()
+
 	if !b {
 		t.Errorf("Expected that we need more addresses")
 	}
+
 	addrs := make([]*wire.NetAddress, addrsToAdd)
 
 	var err error
@@ -328,10 +334,12 @@ func TestGetAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Adding address failed: %v", err)
 	}
+
 	ka := n.GetAddress()
 	if ka == nil {
 		t.Fatalf("Did not get an address where there is one in the pool")
 	}
+
 	if ka.NetAddress().IP.String() != someIP {
 		t.Errorf("Wrong IP: got %v, want %v", ka.NetAddress().IP.String(), someIP)
 	}
@@ -342,6 +350,7 @@ func TestGetAddress(t *testing.T) {
 	if ka == nil {
 		t.Fatalf("Did not get an address where there is one in the pool")
 	}
+
 	if ka.NetAddress().IP.String() != someIP {
 		t.Errorf("Wrong IP: got %v, want %v", ka.NetAddress().IP.String(), someIP)
 	}
@@ -469,5 +478,4 @@ func TestNetAddressKey(t *testing.T) {
 			continue
 		}
 	}
-
 }

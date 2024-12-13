@@ -3,7 +3,7 @@ participant "Subtree Validation" as SubtreeValidation
 participant "UtxoStore" as UtxoStore
 
 == Fetch UTXO ==
-SubtreeValidation -> SubtreeValidation: validateSubtreeInternal(ctx, validateSubtree, blockHeight)
+SubtreeValidation -> SubtreeValidation: ValidateSubtreeInternal(ctx, validateSubtree, blockHeight)
 activate SubtreeValidation
 
 SubtreeValidation -> SubtreeValidation: Collect the list of txHashes in the Subtree

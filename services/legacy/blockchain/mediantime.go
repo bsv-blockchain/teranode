@@ -5,11 +5,12 @@
 package blockchain
 
 import (
-	"github.com/labstack/gommon/log"
 	"math"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/labstack/gommon/log"
 )
 
 const (
@@ -97,6 +98,7 @@ func (m *medianTime) AdjustedTime() time.Time {
 
 	// Limit the adjusted time to 1 second precision.
 	now := time.Unix(time.Now().Unix(), 0)
+
 	return now.Add(time.Duration(m.offsetSecs) * time.Second)
 }
 
@@ -113,6 +115,7 @@ func (m *medianTime) AddTimeSample(sourceID string, timeVal time.Time) {
 	if _, exists := m.knownIDs[sourceID]; exists {
 		return
 	}
+
 	m.knownIDs[sourceID] = struct{}{}
 
 	// Truncate the provided offset to seconds and append it to the slice
@@ -126,6 +129,7 @@ func (m *medianTime) AddTimeSample(sourceID string, timeVal time.Time) {
 		m.offsets = m.offsets[1:]
 		numOffsets--
 	}
+
 	m.offsets = append(m.offsets, offsetSecs)
 	numOffsets++
 
@@ -173,6 +177,7 @@ func (m *medianTime) AddTimeSample(sourceID string, timeVal time.Time) {
 			// Find if any time samples have a time that is close
 			// to the local time.
 			var remoteHasCloseTime bool
+
 			for _, offset := range sortedOffsets {
 				if math.Abs(float64(offset)) < similarTimeSecs {
 					remoteHasCloseTime = true

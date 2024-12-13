@@ -93,7 +93,6 @@ func GetListenerInfos() []string {
 }
 
 func (sm *ServiceManager) AddService(name string, service Service) error {
-
 	sm.dependencyChannelsMux.Lock()
 	sm.dependencyChannels = append(sm.dependencyChannels, make(chan bool))
 
@@ -107,6 +106,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	sm.services = append(sm.services, sw)
 
 	sm.logger.Infof("⚪️ Initializing service %s...", name)
+
 	if err := service.Init(sm.ctx); err != nil {
 		return err
 	}
@@ -123,6 +123,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 				return err
 			}
 		}
+
 		sm.dependencyChannelsMux.Lock()
 		close(sm.dependencyChannels[sw.index])
 		sm.dependencyChannelsMux.Unlock()

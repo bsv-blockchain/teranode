@@ -18,7 +18,7 @@ deactivate SubtreeStore
 
 SVS -> SVS: Obtain a lock on the Subtree
 
-SVS -> Validator: validateSubtreeInternal(ctx, validateSubtreeMessage)
+SVS -> Validator: ValidateSubtreeInternal(ctx, validateSubtreeMessage)
 activate Validator
 Validator --> SVS
 deactivate Validator

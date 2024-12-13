@@ -34,6 +34,7 @@ func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff2 *p_mode
 	if err != nil {
 		return err
 	}
+
 	diff1.Trim()
 
 	if diff1 == nil {
@@ -57,6 +58,7 @@ func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff2 *p_mode
 
 func LoadDiff(p *UTXOProcessor, blockHeader *model.BlockHeader) (*p_model.UTXODiff, error) {
 	var utxoDiff *p_model.UTXODiff
+
 	r, err := p.store.GetIoReader(context.Background(), blockHeader.Hash()[:], options.WithFileExtension("utxodiff"))
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting reader from store", err)
@@ -96,6 +98,7 @@ func (p *UTXOProcessor) VerifySet(blockHeader *model.BlockHeader, diff *p_model.
 
 func loadSet(p *UTXOProcessor, blockHash chainhash.Hash) (*p_model.UTXOSet, error) {
 	var utxoSet *p_model.UTXOSet
+
 	r, err := p.store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension("utxoset"))
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting reader from store", err)
@@ -113,6 +116,7 @@ func loadSet(p *UTXOProcessor, blockHash chainhash.Hash) (*p_model.UTXOSet, erro
 	if !utxoSet.BlockHash.IsEqual(&blockHash) {
 		return nil, errors.NewProcessingError("utxoset block hash %s does not match block header hash %s", utxoSet.BlockHash, blockHash)
 	}
+
 	return utxoSet, nil
 }
 

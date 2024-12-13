@@ -29,6 +29,7 @@ func RawTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 	if err != nil {
 		return nil, err
 	}
+
 	signature, err := key.Sign(hash)
 	if err != nil {
 		return nil, fmt.Errorf("cannot sign tx input: %s", err)
@@ -42,11 +43,12 @@ func RawTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 func LegacyTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 	hashType SigHashType, key *bsvec.PrivateKey) ([]byte, error) {
 
-	script, _ := parseScript(subScript)
+	script, _ := ParseScript(subScript)
 	hash, err := calcLegacySignatureHash(script, hashType, tx, idx)
 	if err != nil {
 		return nil, err
 	}
+
 	signature, err := key.Sign(hash)
 	if err != nil {
 		return nil, fmt.Errorf("cannot sign tx input: %s", err)
@@ -71,7 +73,9 @@ func SignatureScript(tx *wire.MsgTx, idx int, amt int64, subscript []byte,
 	}
 
 	pk := (*bsvec.PublicKey)(&privKey.PublicKey)
+
 	var pkData []byte
+
 	if compress {
 		pkData = pk.SerializeCompressed()
 	} else {
@@ -91,7 +95,9 @@ func LegacySignatureScript(tx *wire.MsgTx, idx int, subscript []byte,
 	}
 
 	pk := (*bsvec.PublicKey)(&privKey.PublicKey)
+
 	var pkData []byte
+
 	if compress {
 		pkData = pk.SerializeCompressed()
 	} else {
@@ -128,6 +134,7 @@ func signMultiSig(tx *wire.MsgTx, idx int, amt int64, subScript []byte, hashType
 		if err != nil {
 			continue
 		}
+
 		sig, err := RawTxInSignature(tx, idx, subScript, hashType, key, amt)
 		if err != nil {
 			continue
@@ -138,10 +145,10 @@ func signMultiSig(tx *wire.MsgTx, idx int, amt int64, subScript []byte, hashType
 		if signed == nRequired {
 			break
 		}
-
 	}
 
 	script, _ := builder.Script()
+
 	return script, signed == nRequired
 }
 
@@ -222,11 +229,12 @@ func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 	case ScriptHashTy:
 		// Remove the last push in the script and then recurse.
 		// this could be a lot less inefficient.
-		sigPops, err := parseScript(sigScript)
+		sigPops, err := ParseScript(sigScript)
 		if err != nil || len(sigPops) == 0 {
 			return prevScript, nil
 		}
-		prevPops, err := parseScript(prevScript)
+
+		prevPops, err := ParseScript(prevScript)
 		if err != nil || len(prevPops) == 0 {
 			return sigScript, nil
 		}
@@ -240,8 +248,8 @@ func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 			ExtractPkScriptAddrs(script, chainParams)
 
 		// regenerate scripts.
-		sigScript, _ := unparseScript(sigPops)
-		prevScript, _ := unparseScript(prevPops)
+		sigScript, _ := UnparseScript(sigPops)
+		prevScript, _ := UnparseScript(prevPops)
 
 		// Merge
 		mergedScript, err := mergeScripts(chainParams, tx, idx, amt, script,
@@ -255,6 +263,7 @@ func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 		builder.AddOps(mergedScript)
 		builder.AddData(script)
 		finalScript, _ := builder.Script()
+
 		return finalScript, nil
 	case MultiSigTy:
 		return mergeMultiSig(tx, idx, amt, addresses, nRequired, pkScript,
@@ -270,6 +279,7 @@ func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 		if len(sigScript) > len(prevScript) {
 			return sigScript, nil
 		}
+
 		return prevScript, nil
 	}
 }
@@ -286,14 +296,14 @@ func mergeMultiSig(tx *wire.MsgTx, idx int, amt int64, addresses []bsvutil.Addre
 	// This is an internal only function and we already parsed this script
 	// as ok for multisig (this is how we got here), so if this fails then
 	// all assumptions are broken and who knows which way is up?
-	pkPops, _ := parseScript(pkScript)
+	pkPops, _ := ParseScript(pkScript)
 
-	sigPops, err := parseScript(sigScript)
+	sigPops, err := ParseScript(sigScript)
 	if err != nil || len(sigPops) == 0 {
 		return prevScript, nil
 	}
 
-	prevPops, err := parseScript(prevScript)
+	prevPops, err := ParseScript(prevScript)
 	if err != nil || len(prevPops) == 0 {
 		return sigScript, nil
 	}
@@ -305,6 +315,7 @@ func mergeMultiSig(tx *wire.MsgTx, idx int, amt int64, addresses []bsvutil.Addre
 				sigs = append(sigs, pop.data)
 			}
 		}
+
 		return sigs
 	}
 
@@ -327,9 +338,9 @@ sigLoop:
 		if len(sig) < 1 {
 			continue
 		}
+
 		tSig := sig[:len(sig)-1]
 		hashType := SigHashType(sig[len(sig)-1])
-
 		pSig, err := bsvec.ParseDERSignature(tSig, bsvec.S256())
 		if err != nil {
 			continue
@@ -362,6 +373,7 @@ sigLoop:
 				if _, ok := addrToSig[aStr]; !ok {
 					addrToSig[aStr] = sig
 				}
+
 				continue sigLoop
 			}
 		}
@@ -377,6 +389,7 @@ sigLoop:
 		if !ok {
 			continue
 		}
+
 		builder.AddData(sig)
 		doneSigs++
 		if doneSigs == nRequired {
@@ -390,6 +403,7 @@ sigLoop:
 	}
 
 	script, _ := builder.Script()
+
 	return script, nil
 }
 

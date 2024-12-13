@@ -109,7 +109,6 @@ func main() {
 		//	return nil
 		//})
 	}
-
 }
 
 // getMissingTransactionsBatch gets a batch of transactions from the network

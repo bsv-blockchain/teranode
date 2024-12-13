@@ -155,7 +155,7 @@ func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo 
 }
 
 func TestBlock(t *testing.T) {
-	// util.SkipVeryLongTests(t) // TEMP fix this test
+
 	initPrometheusMetrics()
 
 	// Take block 100,000 from mainnet

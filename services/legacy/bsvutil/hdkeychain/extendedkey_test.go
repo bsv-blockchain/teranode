@@ -624,6 +624,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 				"%v, got %v", i, test.name, test.privKeyErr, err)
 			continue
 		}
+
 		if test.privKeyErr == nil {
 			privKeyStr := hex.EncodeToString(privKey.Serialize())
 			if privKeyStr != test.privKey {
@@ -640,6 +641,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 				test.name, err)
 			continue
 		}
+
 		pubKeyStr := hex.EncodeToString(pubKey.SerializeCompressed())
 		if pubKeyStr != test.pubKey {
 			t.Errorf("ECPubKey #%d (%s): mismatched public key -- "+
@@ -654,6 +656,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 				test.name, err)
 			continue
 		}
+
 		if addr.EncodeAddress() != test.address {
 			t.Errorf("Address #%d (%s): mismatched address -- want "+
 				"%s, got %s", i, test.name, test.address,
@@ -820,10 +823,12 @@ func TestErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateSeed: unexpected error: %v", err)
 	}
+
 	extKey, err := NewMaster(seed, net)
 	if err != nil {
 		t.Fatalf("NewMaster: unexpected error: %v", err)
 	}
+
 	pubKey, err := extKey.Neuter()
 	if err != nil {
 		t.Fatalf("Neuter: unexpected error: %v", err)
@@ -966,6 +971,7 @@ func TestZero(t *testing.T) {
 				testName, err)
 			return false
 		}
+
 		if addr.EncodeAddress() != wantAddr {
 			t.Errorf("Address #%d (%s): mismatched address -- want "+
 				"%s, got %s", i, testName, wantAddr,
@@ -984,6 +990,7 @@ func TestZero(t *testing.T) {
 				i, test.name, err)
 			continue
 		}
+
 		key, err := NewMaster(masterSeed, test.net)
 		if err != nil {
 			t.Errorf("NewMaster #%d (%s): unexpected error when "+
@@ -991,6 +998,7 @@ func TestZero(t *testing.T) {
 				err)
 			continue
 		}
+
 		neuteredKey, err := key.Neuter()
 		if err != nil {
 			t.Errorf("Neuter #%d (%s): unexpected error: %v", i,
@@ -1004,6 +1012,7 @@ func TestZero(t *testing.T) {
 		if !testZeroed(i, test.name+" from seed not neutered", key) {
 			continue
 		}
+
 		neuteredKey.Zero()
 		if !testZeroed(i, test.name+" from seed neutered", key) {
 			continue
@@ -1016,6 +1025,7 @@ func TestZero(t *testing.T) {
 				"error: %v", i, test.name, err)
 			continue
 		}
+
 		neuteredKey, err = key.Neuter()
 		if err != nil {
 			t.Errorf("Neuter #%d (%s): unexpected error: %v", i,
@@ -1029,6 +1039,7 @@ func TestZero(t *testing.T) {
 		if !testZeroed(i, test.name+" deserialized not neutered", key) {
 			continue
 		}
+
 		neuteredKey.Zero()
 		if !testZeroed(i, test.name+" deserialized neutered", key) {
 			continue
@@ -1043,6 +1054,7 @@ func TestZero(t *testing.T) {
 func TestMaximumDepth(t *testing.T) {
 	net := &chaincfg.MainNetParams
 	extKey, err := NewMaster([]byte(`abcd1234abcd1234abcd1234abcd1234`), net)
+
 	if err != nil {
 		t.Fatalf("NewMaster: unexpected error: %v", err)
 	}
@@ -1064,6 +1076,7 @@ func TestMaximumDepth(t *testing.T) {
 		t.Fatalf("Child: mismatched error: want %v, got %v",
 			ErrDeriveBeyondMaxDepth, err)
 	}
+
 	if noKey != nil {
 		t.Fatal("Child: deriving 256th key should not succeed")
 	}

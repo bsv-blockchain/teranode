@@ -16,9 +16,10 @@ import (
 func Stack() string {
 	stack := debug.Stack()
 	scanner := bufio.NewScanner(bytes.NewReader(stack))
+	skip := 2
+
 	var simplifiedStack []string
 	var lastFuncName string
-	skip := 2
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -33,6 +34,7 @@ func Stack() string {
 						skip--
 						break
 					}
+
 					// Get the function name from the last line
 					funcName := lastFuncName
 					// Trim the package name from the function name
@@ -62,8 +64,9 @@ func Stack() string {
 func StackSimple() string {
 	stack := debug.Stack()
 	scanner := bufio.NewScanner(bytes.NewReader(stack))
-	var simplifiedStack []string
 	skip := 2
+
+	var simplifiedStack []string
 
 	for scanner.Scan() {
 		line := scanner.Text()

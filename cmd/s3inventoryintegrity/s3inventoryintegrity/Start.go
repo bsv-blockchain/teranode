@@ -95,7 +95,6 @@ func Start() {
 			}
 			// s3buckets[url.String()] = store
 			s3buckets = append(s3buckets, s3bucket{url.String(), store})
-
 		}
 	}
 
@@ -140,6 +139,7 @@ func Start() {
 			}
 			fileTypesMap[fileType]++
 		}
+
 		for fileType, count := range fileTypesMap {
 			switch fileType {
 			case "block", "utxodiff", "subtree":
@@ -166,7 +166,6 @@ func Start() {
 			verboseLogger.Infof("%s\n", filename)
 		}
 	}
-
 }
 
 func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLogger ulogger.Logger, filenames map[string]bool, s3buckets []s3bucket, blockchainDB blockchain_store.Store, testChainIntegrity bool) {
@@ -191,6 +190,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 		if testChainIntegrity && !blockHeader.HashPrevBlock.IsEqual(&previousHash) && !blockHeader.HashPrevBlock.IsEqual(hashGenesisBlock) {
 			verboseLogger.Infof("block %s has incorrect previous block hash %s\n", blockHeader.Hash(), blockHeader.HashPrevBlock)
 		}
+
 		previousHash = *blockHeader.Hash()
 
 		if filenames[blockHeader.Hash().String()+".block"] {
@@ -200,6 +200,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 				foundBlocks++
 			}
 		}
+
 		delete(filenames, blockHeader.Hash().String()+".block")
 
 		numDiffs++
@@ -210,6 +211,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 				foundDiffs++
 			}
 		}
+
 		delete(filenames, blockHeader.Hash().String()+".utxodiff")
 		delete(filenames, blockHeader.Hash().String()+".utxoset")
 
@@ -224,11 +226,11 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 			if filenames[subtreeHash.String()+".subtree"] {
 				foundSubtrees++
 			} else {
-
 				if existsInAnotherS3Bucket(ctx, s3buckets, *subtreeHash, "subtree", time.Unix(int64(blockHeader.Timestamp), 0), verboseLogger) {
 					foundSubtrees++
 				}
 			}
+
 			delete(filenames, subtreeHash.String()+".subtree")
 		}
 	}
@@ -248,6 +250,7 @@ func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash cha
 			fmt.Printf("failed to check if %s.block exists in %s: %s\n", hash, storeName, err)
 			continue
 		}
+
 		if exists {
 			if i != 0 {
 				// found in m1, skip
@@ -255,24 +258,27 @@ func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash cha
 				// fmt.Printf("%s.%s not found in CSV file but exists in %s\n", hash, extension, storeName)
 				// fmt.Printf("%s.%s %s\n", hash, extension, storeName)
 			}
+
 			found = true
 			break
 		}
 	}
+
 	if !found {
 		verboseLogger.Infof("%s.%s not found in CSV file %s\n", hash, extension, time)
 		// fmt.Printf("%s.%s MISSING\n", hash, extension)
 	}
+
 	return found
 }
 
 func loadFilenames(filename string) map[string]bool {
 	filenames := make(map[string]bool)
-
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("Unable to open CSV file: %v", err)
 	}
+
 	defer file.Close()
 
 	reader := csv.NewReader(file)
@@ -282,6 +288,7 @@ func loadFilenames(filename string) map[string]bool {
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			log.Fatalf("Error reading CSV line: %v", err)
 		}
@@ -296,6 +303,7 @@ func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
+
 	fmt.Printf("Usage: s3inventoryintegrity [-verbose] [-quick] -d <postgres-URL> -f <csv-filename>\n\n")
 	os.Exit(1)
 }

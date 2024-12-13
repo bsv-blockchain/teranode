@@ -73,17 +73,18 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
 	d.IsCoinbase = dataBytes[16] == byte(1)
 	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[17:25])
-
 	buf := bytes.NewReader(dataBytes[25:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
+
 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
 		if err != nil {
 			return nil, errors.NewProcessingError("could not read hash bytes", err)
 		}
+
 		d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:])
 	}
 
@@ -96,6 +97,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 
 	// read the block hashes as the remainder data
 	var blockBytes [4]byte
+
 	d.BlockIDs = make([]uint32, 0)
 	for {
 		_, err = io.ReadFull(buf, blockBytes[:])
@@ -103,6 +105,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 			if err == io.EOF {
 				break
 			}
+
 			return nil, errors.NewProcessingError("could not read block bytes", err)
 		}
 		d.BlockIDs = append(d.BlockIDs, binary.LittleEndian.Uint32(blockBytes[:]))

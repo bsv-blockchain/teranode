@@ -72,7 +72,9 @@ func startServices() {
 	time.Sleep(10 * time.Second)
 	startService(fmt.Sprintf("docker-compose -f %s up -d postgres", composeFilePath))
 	time.Sleep(10 * time.Second)
+
 	ubsvServices, err := getServices("ubsv")
+
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
@@ -182,6 +184,7 @@ func execCommand(name string, args ...string) error {
 	if err != nil {
 		return errors.NewProcessingError("error executing command", err)
 	}
+
 	return nil
 }
 
@@ -201,6 +204,8 @@ func getServices(prefix string) (string, error) {
 			servicesList = append(servicesList, line)
 		}
 	}
+
 	services := strings.Join(servicesList, " ")
+
 	return services, nil
 }

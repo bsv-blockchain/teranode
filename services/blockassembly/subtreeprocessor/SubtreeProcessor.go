@@ -62,7 +62,7 @@ type ResetResponse struct {
 type SubtreeProcessor struct {
 	settings                  *settings.Settings
 	currentItemsPerFile       int
-	txChan                    chan *[]txIDAndFee
+	txChan                    chan *[]TxIDAndFee
 	getSubtreesChan           chan chan []*util.Subtree
 	moveUpBlockChan           chan moveBlockRequest
 	reorgBlockChan            chan reorgBlocksRequest
@@ -76,7 +76,7 @@ type SubtreeProcessor struct {
 	currentBlockHeader        *model.BlockHeader
 	sync.Mutex
 	txCount             atomic.Uint64
-	batcher             *txIDAndFeeBatch
+	batcher             *TxIDAndFeeBatch
 	queue               *LockFreeQueue
 	removeMap           *util.SwissMap
 	subtreeStore        blob.Store
@@ -110,7 +110,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	stp := &SubtreeProcessor{
 		settings:                  tSettings,
 		currentItemsPerFile:       initialItemsPerFile,
-		txChan:                    make(chan *[]txIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
+		txChan:                    make(chan *[]TxIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
 		getSubtreesChan:           make(chan chan []*util.Subtree),
 		moveUpBlockChan:           make(chan moveBlockRequest),
 		reorgBlockChan:            make(chan reorgBlocksRequest),
@@ -121,7 +121,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
 		currentSubtree:            firstSubtree,
-		batcher:                   newTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
+		batcher:                   NewTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 		queue:                     queue,
 		removeMap:                 util.NewSwissMap(0),
 		subtreeStore:              subtreeStore,
@@ -140,7 +140,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	go func() {
 		var (
-			txReq *txIDAndFee
+			txReq *TxIDAndFee
 			err   error
 		)
 
@@ -404,6 +404,22 @@ func (stp *SubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
 	return stp.currentBlockHeader
 }
 
+func (stp *SubtreeProcessor) GetCurrentSubtree() *util.Subtree {
+	return stp.currentSubtree
+}
+
+func (stp *SubtreeProcessor) GetChainedSubtrees() []*util.Subtree {
+	return stp.chainedSubtrees
+}
+
+func (stp *SubtreeProcessor) GetUtxoStore() utxostore.Store {
+	return stp.utxoStore
+}
+
+func (stp *SubtreeProcessor) SetCurrentItemsPerFile(v int) {
+	stp.currentItemsPerFile = v
+}
+
 func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }
@@ -458,7 +474,7 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 
 // Add adds a tx hash to a channel
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
-	stp.queue.enqueue(&txIDAndFee{node: node})
+	stp.queue.enqueue(&TxIDAndFee{node: node})
 }
 
 // Remove prevents a tx to be processed from the queue into a subtree
@@ -980,7 +996,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 		stp.logger.Debugf("[moveUpBlock][%s] processing subtrees into transaction map", block.String())
 
-		if transactionMap, err = stp.createTransactionMap(ctx, blockSubtreesMap); err != nil {
+		if transactionMap, err = stp.CreateTransactionMap(ctx, blockSubtreesMap); err != nil {
 			// TODO revert the created utxos
 			return errors.NewProcessingError("[moveUpBlock][%s] error creating transaction map", block.String(), err)
 		}
@@ -1277,7 +1293,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	return nil
 }
 
-func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (util.TxMap, error) {
+func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (util.TxMap, error) {
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
@@ -1285,7 +1301,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 	concurrentSubtreeReads := stp.settings.BlockAssembly.SubtreeProcessorConcurrentReads
 
 	// TODO this bit is slow !
-	stp.logger.Infof("createTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)
+	stp.logger.Infof("CreateTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)
 
 	mapSize := len(blockSubtreesMap) * stp.currentItemsPerFile // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
@@ -1335,7 +1351,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 		return nil, errors.NewProcessingError("error getting subtrees", err)
 	}
 
-	stp.logger.Infof("createTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
+	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 

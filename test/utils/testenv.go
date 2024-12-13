@@ -145,7 +145,6 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		if err := t.setupAssetURL(node); err != nil {
 			return err
 		}
-
 	}
 
 	return nil

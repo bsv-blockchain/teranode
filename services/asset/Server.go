@@ -195,7 +195,6 @@ func (v *Server) Start(ctx context.Context) error {
 			}
 			return err
 		})
-
 	}
 
 	if v.centrifugeServer != nil {

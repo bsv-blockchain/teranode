@@ -80,6 +80,7 @@ func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating previous block hash from bytes", err)
 	}
+
 	hashMerkleRoot, err := chainhash.NewHash(headerBytes[36:68])
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating merkle root hash from bytes", err)

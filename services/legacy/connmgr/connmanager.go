@@ -316,7 +316,6 @@ out:
 					cm.logger.Debugf("Canceling: %v", connReq)
 					cm.pending.Delete(msg.id)
 					continue
-
 				}
 
 				// An existing connection was located, mark as
@@ -385,6 +384,7 @@ func (cm *ConnManager) NewConnReq() {
 	if atomic.LoadInt32(&cm.stop) != 0 {
 		return
 	}
+
 	if cm.cfg.GetNewAddress == nil {
 		return
 	}
@@ -483,6 +483,7 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 	if atomic.LoadInt32(&cm.stop) != 0 {
 		return
 	}
+
 	if atomic.LoadUint64(&c.id) == 0 {
 		atomic.StoreUint64(&c.id, atomic.AddUint64(&cm.connReqCount, 1))
 
@@ -514,6 +515,7 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 		case cm.requests <- handleFailed{c, err}:
 		case <-cm.quit:
 		}
+
 		return
 	}
 
@@ -649,13 +651,16 @@ func New(logger ulogger.Logger, cfg *Config) (*ConnManager, error) {
 	if cfg.Dial == nil {
 		return nil, ErrDialNil
 	}
+
 	// Default to sane values
 	if cfg.RetryDuration <= 0 {
 		cfg.RetryDuration = defaultRetryDuration
 	}
+
 	if cfg.TargetOutbound == 0 {
 		cfg.TargetOutbound = defaultTargetOutbound
 	}
+
 	cm := ConnManager{
 		logger:   logger,
 		cfg:      *cfg, // Copy so caller can't mutate
@@ -664,5 +669,6 @@ func New(logger ulogger.Logger, cfg *Config) (*ConnManager, error) {
 		pending:  util.NewSyncedMap[uint64, *ConnReq](),
 		conns:    util.NewSyncedMap[uint64, *ConnReq](),
 	}
+
 	return &cm, nil
 }

@@ -112,6 +112,7 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		return NewAddressPubKey(serializedPubKey, defaultNet)
 	}
 
@@ -121,8 +122,10 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 		if err == base58.ErrChecksum {
 			return nil, ErrChecksumMismatch
 		}
+
 		return nil, errors.New("decoded address is of unknown format")
 	}
+
 	switch len(decoded) {
 	case ripemd160.Size: // P2PKH or P2SH
 		isP2PKH := chaincfg.IsPubKeyHashAddrID(netID)
@@ -187,6 +190,7 @@ func newAddressPubKeyHash(pkHash []byte, net *chaincfg.Params) (*AddressPubKeyHa
 
 	addr := &AddressPubKeyHash{prefix: net.CashAddressPrefix}
 	copy(addr.hash[:], pkHash)
+
 	return addr, nil
 }
 
@@ -254,6 +258,7 @@ func newAddressScriptHashFromHash(scriptHash []byte, net *chaincfg.Params) (*Add
 
 	addr := &AddressScriptHash{prefix: net.CashAddressPrefix}
 	copy(addr.hash[:], scriptHash)
+
 	return addr, nil
 }
 
@@ -315,6 +320,7 @@ func newLegacyAddressPubKeyHash(pkHash []byte, netID byte) (*LegacyAddressPubKey
 
 	addr := &LegacyAddressPubKeyHash{netID: netID}
 	copy(addr.hash[:], pkHash)
+
 	return addr, nil
 }
 
@@ -360,6 +366,7 @@ type LegacyAddressScriptHash struct {
 // NewLegacyAddressScriptHash returns a new LegacyAddressScriptHash.
 func NewLegacyAddressScriptHash(serializedScript []byte, net *chaincfg.Params) (*LegacyAddressScriptHash, error) {
 	scriptHash := Hash160(serializedScript)
+
 	return newLegacyAddressScriptHashFromHash(scriptHash, net.LegacyScriptHashAddrID)
 }
 
@@ -382,6 +389,7 @@ func newLegacyAddressScriptHashFromHash(scriptHash []byte, netID byte) (*LegacyA
 
 	addr := &LegacyAddressScriptHash{netID: netID}
 	copy(addr.hash[:], scriptHash)
+
 	return addr, nil
 }
 
@@ -567,6 +575,7 @@ func checkEncodeCashAddress(input []byte, prefix string, t AddressType) string {
 	if err != nil {
 		return ""
 	}
+
 	return encode(prefix, k)
 }
 
@@ -576,19 +585,23 @@ func checkDecodeCashAddress(input string) (result []byte, prefix string, t Addre
 	if err != nil {
 		return data, prefix, AddrTypePayToPubKeyHash, err
 	}
+
 	data, err = convertBits(data, 5, 8, false)
 	if err != nil {
 		return data, prefix, AddrTypePayToPubKeyHash, err
 	}
+
 	if len(data) != 21 {
 		return data, prefix, AddrTypePayToPubKeyHash, errors.New("incorrect data length")
 	}
+
 	switch data[0] {
 	case 0x00:
 		t = AddrTypePayToPubKeyHash
 	case 0x08:
 		t = AddrTypePayToScriptHash
 	}
+
 	return data[1:21], prefix, t, nil
 }
 
@@ -746,6 +759,7 @@ func expandPrefix(prefix string) []byte {
 	}
 
 	ret[len(prefix)] = 0
+
 	return ret
 }
 
@@ -760,10 +774,12 @@ func createChecksum(prefix string, payload []byte) []byte {
 	// Determine what to XOR into those 8 zeroes.
 	mod := polyMod(enc)
 	ret := make([]byte, 8)
+
 	for i := 0; i < 8; i++ {
 		// Convert the 5-bit groups in mod to checksum values.
 		ret[i] = byte((mod >> uint(5*(7-i))) & 0x1f)
 	}
+
 	return ret
 }
 
@@ -840,6 +856,7 @@ func DecodeCashAddress(str string) (string, []byte, error) {
 	// Decode values.
 	valuesSize := len(str) - 1 - prefixSize
 	values := make([]byte, valuesSize)
+
 	for i := 0; i < valuesSize; i++ {
 		c := str[i+prefixSize+1]
 		// We have an invalid char in there.
@@ -868,11 +885,15 @@ func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, err
 	for _, i := range data {
 		uintArr = append(uintArr, uint(i))
 	}
+
 	acc := uint(0)
 	bits := uint(0)
+
 	var ret []uint
+
 	maxv := uint((1 << tobits) - 1)
 	maxAcc := uint((1 << (fromBits + tobits - 1)) - 1)
+
 	for _, value := range uintArr {
 		acc = ((acc << fromBits) | value) & maxAcc
 		bits += fromBits
@@ -881,6 +902,7 @@ func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, err
 			ret = append(ret, (acc>>bits)&maxv)
 		}
 	}
+
 	if pad {
 		if bits > 0 {
 			ret = append(ret, (acc<<(tobits-bits))&maxv)
@@ -888,10 +910,12 @@ func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, err
 	} else if bits >= fromBits || ((acc<<(tobits-bits))&maxv) != 0 {
 		return []byte{}, errors.New("encoding padding error")
 	}
+
 	var dataArr []byte
 	for _, i := range ret {
 		dataArr = append(dataArr, byte(i))
 	}
+
 	return dataArr, nil
 }
 
@@ -900,21 +924,27 @@ func packAddressData(addrType AddressType, addrHash []byte) ([]byte, error) {
 	if addrType != AddrTypePayToPubKeyHash && addrType != AddrTypePayToScriptHash {
 		return nil, errors.New("invalid AddressType")
 	}
+
 	versionByte := uint(addrType) << 3
 	encodedSize := (uint(len(addrHash)) - 20) / 4
+
 	if (len(addrHash)-20)%4 != 0 {
 		return nil, errors.New("invalid address hash size")
 	}
+
 	if encodedSize > 8 {
 		return nil, errors.New("encoded size out of valid range")
 	}
+
 	versionByte |= encodedSize
 	var addrHashUint []byte
 	addrHashUint = append(addrHashUint, addrHash...)
 	data := append([]byte{byte(versionByte)}, addrHashUint...)
 	packedData, err := convertBits(data, 8, 5, true)
+
 	if err != nil {
 		return []byte{}, err
 	}
+
 	return packedData, nil
 }

@@ -22,6 +22,7 @@ func TestAddr(t *testing.T) {
 	// Ensure the command is expected value.
 	wantCmd := "addr"
 	msg := NewMsgAddr()
+
 	if cmd := msg.Command(); cmd != wantCmd {
 		t.Errorf("NewMsgAddr: wrong command - got %v want %v",
 			cmd, wantCmd)
@@ -31,6 +32,7 @@ func TestAddr(t *testing.T) {
 	// Num addresses (varInt) + max allowed addresses.
 	wantPayload := uint64(30009)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -41,9 +43,11 @@ func TestAddr(t *testing.T) {
 	tcpAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8333}
 	na := NewNetAddress(tcpAddr, SFNodeNetwork)
 	err := msg.AddAddress(na)
+
 	if err != nil {
 		t.Errorf("AddAddress: %v", err)
 	}
+
 	if msg.AddrList[0] != na {
 		t.Errorf("AddAddress: wrong address added - got %v, want %v",
 			spew.Sprint(msg.AddrList[0]), spew.Sprint(na))
@@ -62,10 +66,12 @@ func TestAddr(t *testing.T) {
 	for i := 0; i < MaxAddrPerMsg+1; i++ {
 		err = msg.AddAddress(na)
 	}
+
 	if err == nil {
 		t.Errorf("AddAddress: expected error on too many addresses " +
 			"not received")
 	}
+
 	err = msg.AddAddresses(na)
 	if err == nil {
 		t.Errorf("AddAddresses: expected error on too many addresses " +
@@ -78,6 +84,7 @@ func TestAddr(t *testing.T) {
 	pver = NetAddressTimeVersion - 1
 	wantPayload = uint64(26009)
 	maxPayload = msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -90,6 +97,7 @@ func TestAddr(t *testing.T) {
 	pver = MultipleAddressVersion - 1
 	wantPayload = uint64(35)
 	maxPayload = msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -178,10 +186,12 @@ func TestAddrWire(t *testing.T) {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
 		err := test.in.BsvEncode(&buf, test.pver, test.enc)
+
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -192,10 +202,12 @@ func TestAddrWire(t *testing.T) {
 		var msg MsgAddr
 		rbuf := bytes.NewReader(test.buf)
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
+
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -280,6 +292,7 @@ func TestAddrWireErrors(t *testing.T) {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
 		err := test.in.BsvEncode(w, test.pver, test.enc)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
 				i, err, test.writeErr)
@@ -300,6 +313,7 @@ func TestAddrWireErrors(t *testing.T) {
 		var msg MsgAddr
 		r := newFixedReader(test.max, test.buf)
 		err = msg.Bsvdecode(r, test.pver, test.enc)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
 				i, err, test.readErr)
@@ -315,6 +329,5 @@ func TestAddrWireErrors(t *testing.T) {
 				continue
 			}
 		}
-
 	}
 }

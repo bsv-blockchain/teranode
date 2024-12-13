@@ -70,7 +70,6 @@ func TestTraceing(t *testing.T) {
 	deferFn()
 
 	assert.Contains(t, logger.lastLog, "hello world DONE in")
-
 }
 
 func TestStartTracingWithError(t *testing.T) {

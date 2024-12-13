@@ -72,6 +72,7 @@ func TestExtendedTx(t *testing.T) {
 			spew.Sprint(&txIn.PreviousOutPoint),
 			spew.Sprint(prevOut))
 	}
+
 	if !bytes.Equal(txIn.SignatureScript, sigScript) {
 		t.Errorf("NewTxIn: wrong signature script - got %v, want %v",
 			spew.Sdump(txIn.SignatureScript),
@@ -94,11 +95,12 @@ func TestExtendedTx(t *testing.T) {
 		0xac, // OP_CHECKSIG
 	}
 	txOut := NewTxOut(txValue, pkScript)
+
 	if txOut.Value != txValue {
 		t.Errorf("NewTxOut: wrong pk script - got %v, want %v",
 			txOut.Value, txValue)
-
 	}
+
 	if !bytes.Equal(txOut.PkScript, pkScript) {
 		t.Errorf("NewTxOut: wrong pk script - got %v, want %v",
 			spew.Sdump(txOut.PkScript),
@@ -163,12 +165,14 @@ func TestExtendedTxTxHash(t *testing.T) {
 			0xac, // OP_CHECKSIG
 		},
 	}
+
 	msgTx.AddTxIn(&txIn)
 	msgTx.AddTxOut(&txOut)
 	msgTx.LockTime = 0
 
 	// Ensure the hash produced is expected.
 	txHash := msgTx.TxHash()
+
 	if !txHash.IsEqual(wantHash) {
 		t.Errorf("TxHash: wrong hash - got %v, want %v",
 			spew.Sprint(txHash), spew.Sprint(wantHash))
@@ -216,9 +220,11 @@ func TestExtendedTxSerialize(t *testing.T) {
 			// Serialize the transaction.
 			var buf bytes.Buffer
 			err := test.in.Serialize(&buf)
+
 			if err != nil {
 				t.Fatalf("Serialize #%d error %v", i, err)
 			}
+
 			if !bytes.Equal(buf.Bytes(), test.buf) {
 				t.Fatalf("Serialize #%d\n got: %s want: %s", i,
 					spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -228,9 +234,11 @@ func TestExtendedTxSerialize(t *testing.T) {
 			var tx MsgExtendedTx
 			rbuf := bytes.NewReader(test.buf)
 			err = tx.Deserialize(rbuf)
+
 			if err != nil {
 				t.Fatalf("Deserialize #%d error %v", i, err)
 			}
+
 			if !reflect.DeepEqual(&tx, test.out) {
 				t.Fatalf("Deserialize #%d\n got: %s want: %s", i,
 					spew.Sdump(&tx), spew.Sdump(test.out))
@@ -288,6 +296,7 @@ func TestExtendedTxSerializeErrors(t *testing.T) {
 		// Serialize the transaction.
 		w := newFixedWriter(test.max)
 		err := test.in.Serialize(w)
+
 		if err != test.writeErr {
 			t.Errorf("Serialize #%d wrong error got: %v, want: %v",
 				i, err, test.writeErr)
@@ -298,6 +307,7 @@ func TestExtendedTxSerializeErrors(t *testing.T) {
 		var tx MsgTx
 		r := newFixedReader(test.max, test.buf)
 		err = tx.Deserialize(r)
+
 		if err != test.readErr {
 			t.Errorf("Deserialize #%d wrong error got: %v, want: %v",
 				i, err, test.readErr)
@@ -386,6 +396,7 @@ func TestExtendedTxOverflowErrors(t *testing.T) {
 		var msg MsgTx
 		r := bytes.NewReader(test.buf)
 		err := msg.Bsvdecode(r, test.pver, test.enc)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
 				i, err, reflect.TypeOf(test.err))
@@ -395,6 +406,7 @@ func TestExtendedTxOverflowErrors(t *testing.T) {
 		// Decode from wire format.
 		r = bytes.NewReader(test.buf)
 		err = msg.Deserialize(r)
+
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("Deserialize #%d wrong error got: %v, want: %v",
 				i, err, reflect.TypeOf(test.err))

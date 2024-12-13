@@ -43,7 +43,6 @@ func TestNewCustomError(t *testing.T) {
 
 	require.False(t, anotherErr.Is(fourthErr))
 	require.False(t, fifthErr.Is(ErrBlockNotFound))
-
 }
 
 func TestFmtErrorCustomError(t *testing.T) {

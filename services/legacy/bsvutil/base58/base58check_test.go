@@ -62,5 +62,4 @@ func TestBase58Check(t *testing.T) {
 			t.Error("Checkdecode test failed, expected ErrInvalidFormat")
 		}
 	}
-
 }

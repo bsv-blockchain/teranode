@@ -52,7 +52,6 @@ type MsgBlock struct {
 func (msg *MsgBlock) AddTransaction(tx *MsgTx) error {
 	msg.Transactions = append(msg.Transactions, tx)
 	return nil
-
 }
 
 // ClearTransactions removes all transactions from the message.

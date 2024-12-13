@@ -1,12 +1,13 @@
 package tracing
 
 import (
+	"io"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
-	"io"
 )
 
 // InitTracer creates a new instance of a ubsv tracer.
@@ -15,6 +16,7 @@ func InitTracer(serviceName string, samplingRate float64) (io.Closer, error) {
 	if !useTracing {
 		return InitOpenTracer(serviceName, samplingRate)
 	}
+
 	useOtelTracing := gocore.Config().GetBool("use_otel_tracing", false)
 	if useOtelTracing {
 		return InitOtelTracer(serviceName, samplingRate)
@@ -42,7 +44,9 @@ func InitOpenTracer(serviceName string, samplingRate float64) (io.Closer, error)
 	cfg.Sampler.Param = samplingRate
 
 	var tracer opentracing.Tracer
+
 	var closer io.Closer
+
 	tracer, closer, err = cfg.NewTracer()
 	if err != nil {
 		return nil, errors.NewConfigurationError("cannot initialize jaeger tracer", err)

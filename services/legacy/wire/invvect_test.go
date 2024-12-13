@@ -35,7 +35,6 @@ func TestInvTypeStringer(t *testing.T) {
 			continue
 		}
 	}
-
 }
 
 // TestInvVect tests the InvVect API.
@@ -49,11 +48,11 @@ func TestInvVect(t *testing.T) {
 		t.Errorf("NewInvVect: wrong type - got %v, want %v",
 			iv.Type, ivType)
 	}
+
 	if !iv.Hash.IsEqual(&hash) {
 		t.Errorf("NewInvVect: wrong hash - got %v, want %v",
 			spew.Sdump(iv.Hash), spew.Sdump(hash))
 	}
-
 }
 
 // TestInvVectWire tests the InvVect wire encode and decode for various
@@ -244,10 +243,12 @@ func TestInvVectWire(t *testing.T) {
 		// Encode to wire format.
 		var buf bytes.Buffer
 		err := writeInvVect(&buf, test.pver, &test.in)
+
 		if err != nil {
 			t.Errorf("writeInvVect #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("writeInvVect #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -258,10 +259,12 @@ func TestInvVectWire(t *testing.T) {
 		var iv InvVect
 		rbuf := bytes.NewReader(test.buf)
 		err = readInvVect(rbuf, test.pver, &iv)
+
 		if err != nil {
 			t.Errorf("readInvVect #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(iv, test.out) {
 			t.Errorf("readInvVect #%d\n got: %s want: %s", i,
 				spew.Sdump(iv), spew.Sdump(test.out))

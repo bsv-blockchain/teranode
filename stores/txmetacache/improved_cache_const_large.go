@@ -7,7 +7,7 @@ import "github.com/bitcoin-sv/ubsv/ulogger"
 /*
 These const values are suitable for a production machine that needs to manage 1m TPS
 */
-const bucketsCount = 8
+const BucketsCount = 8
 const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
 
 func LogCacheSize() {

@@ -81,7 +81,9 @@ func (ms *Multiset) Hash() chainhash.Hash {
 	}
 
 	h := sha256.Sum256(append(ms.x.Bytes(), ms.y.Bytes()...))
+
 	var reversed [32]byte
+
 	for i, b := range h {
 		reversed[len(h)-i-1] = b
 	}
@@ -107,6 +109,7 @@ func hashToPoint(curve *KoblitzCurve, data []byte) (*big.Int, *big.Int) {
 	var err error
 	h := sha256.Sum256(data)
 	n := make([]byte, 8)
+
 	for {
 		binary.LittleEndian.PutUint64(n, i)
 		h2 := sha256.Sum256(append(n, h[:]...))

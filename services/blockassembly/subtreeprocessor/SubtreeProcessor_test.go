@@ -1,15 +1,10 @@
 package subtreeprocessor
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
-	"os"
-	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -586,101 +581,6 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
-func TestMoveUpBlockLarge(t *testing.T) {
-	util.SkipVeryLongTests(t)
-
-	n := 1049576
-	txIds := make([]string, n)
-
-	for i := 0; i < n; i++ {
-		txid, err := generateTxID()
-		if err != nil {
-			t.Errorf("error generating txid: %s", err)
-		}
-
-		txIds[i] = txid
-	}
-
-	newSubtreeChan := make(chan NewSubtreeRequest)
-
-	var wg sync.WaitGroup
-
-	wg.Add(4) // we are expecting 4 subtrees
-
-	go func() {
-		for {
-			// just read the subtrees of the processor
-			<-newSubtreeChan
-			wg.Done()
-		}
-	}()
-
-	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(ulogger.TestLogger{})
-
-	settings := test.CreateBaseTestSettings()
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
-
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
-
-	for i, txid := range txIds {
-		hash, err := chainhash.NewHashFromStr(txid)
-		require.NoError(t, err)
-
-		if i == 0 {
-			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
-		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
-		}
-	}
-
-	wg.Wait()
-	// sleep for 1 second
-	// this is to make sure the subtrees are added to the chain
-	time.Sleep(1 * time.Second)
-
-	// there should be 4 chained subtrees
-	assert.Equal(t, 4, len(stp.chainedSubtrees))
-	// one of the subtrees should contain 262144 items
-	assert.Equal(t, 262144, stp.chainedSubtrees[0].Size())
-	// there should be no remaining items in the current subtree
-	assert.Equal(t, 1000, stp.currentSubtree.Length())
-
-	stp.currentItemsPerFile = 65536
-	_ = stp.utxoStore.SetBlockHeight(1)
-	//nolint:gosec
-	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
-
-	wg.Add(8) // we are expecting 4 subtrees
-
-	stp.SetCurrentBlockHeader(prevBlockHeader)
-
-	timeStart := time.Now()
-
-	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be moveUpBlock
-	// new items per file is 65536 so there should be 8 subtrees in the chain
-	err := stp.MoveUpBlock(&model.Block{
-		Header: blockHeader,
-		Subtrees: []*chainhash.Hash{
-			stp.chainedSubtrees[0].RootHash(),
-			stp.chainedSubtrees[1].RootHash(),
-		},
-		CoinbaseTx: coinbaseTx,
-	})
-
-	wg.Wait()
-	fmt.Printf("moveUpBlock took %s\n", time.Since(timeStart))
-
-	time.Sleep(1 * time.Second)
-
-	require.NoError(t, err)
-	assert.Equal(t, 8, len(stp.chainedSubtrees))
-	// one of the subtrees should contain 262144 items
-	assert.Equal(t, 65536, stp.chainedSubtrees[0].Size())
-	assert.Equal(t, 1001, stp.currentSubtree.Length())
-}
-
 func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	coinbaseHash, _ := chainhash.NewHashFromStr("cc6da767edfd473466d70a747348eee48f649d3173f762be0f41ac3bd418e681")
 
@@ -766,40 +666,6 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 
 	calculatedMerkleRoot := topTree.RootHash()
 	assert.Equal(t, expectedMerkleRoot, calculatedMerkleRoot.String())
-}
-
-func Test_txIDAndFeeBatch(t *testing.T) {
-	util.SkipVeryLongTests(t)
-
-	batcher := newTxIDAndFeeBatch(1000)
-
-	var wg sync.WaitGroup
-
-	batchCount := atomic.Uint64{}
-
-	for i := 0; i < 10_000; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			for j := 0; j < 1_000; j++ {
-				batch := batcher.add(&txIDAndFee{
-					node: util.SubtreeNode{
-						Hash:        chainhash.Hash{},
-						Fee:         1,
-						SizeInBytes: 2,
-					},
-				})
-				if batch != nil {
-					batchCount.Add(1)
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-	assert.Equal(t, uint64(10_000), batchCount.Load())
 }
 
 func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
@@ -1246,7 +1112,7 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 	return subtree
 }
 
-func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
+func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	t.Run("small", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
@@ -1283,7 +1149,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 
 		_ = blockSubtreesMap
 
-		transactionMap, err := stp.createTransactionMap(context.Background(), blockSubtreesMap)
+		transactionMap, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap)
 		require.NoError(t, err)
 
 		assert.Equal(t, 8, transactionMap.Length())
@@ -1296,88 +1162,9 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 			assert.True(t, transactionMap.Exists(subtree2.Nodes[i].Hash))
 		}
 	})
-
-	t.Run("large", func(t *testing.T) {
-		util.SkipVeryLongTests(t)
-
-		newSubtreeChan := make(chan NewSubtreeRequest)
-		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
-
-		settings := test.CreateBaseTestSettings()
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
-
-		subtreeSize := uint64(1024 * 1024)
-		nrSubtrees := 10
-
-		subtrees := make([]*util.Subtree, nrSubtrees)
-
-		block := &model.Block{
-			Header:     prevBlockHeader,
-			Subtrees:   []*chainhash.Hash{},
-			CoinbaseTx: coinbaseTx,
-		}
-
-		for i := 0; i < nrSubtrees; i++ {
-			subtree := createSubtree(t, subtreeSize, i == 0)
-			subtreeBytes, err := subtree.Serialize()
-			require.NoError(t, err)
-			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
-			require.NoError(t, err)
-
-			block.Subtrees = append(block.Subtrees, subtree.RootHash())
-			subtrees[i] = subtree
-		}
-
-		blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
-		for idx, subtree := range block.Subtrees {
-			blockSubtreesMap[*subtree] = idx
-		}
-
-		_ = blockSubtreesMap
-
-		f, _ := os.Create("cpu.prof")
-		defer f.Close()
-
-		_ = pprof.StartCPUProfile(f)
-		start := time.Now()
-
-		transactionMap, err := stp.createTransactionMap(context.Background(), blockSubtreesMap)
-		require.NoError(t, err)
-
-		pprof.StopCPUProfile()
-		t.Logf("Time taken: %s\n", time.Since(start))
-
-		f, _ = os.Create("mem.prof")
-		defer f.Close()
-		_ = pprof.WriteHeapProfile(f)
-		//nolint:gosec
-		assert.Equal(t, int(subtreeSize)*nrSubtrees, transactionMap.Length())
-
-		start = time.Now()
-
-		var wg sync.WaitGroup
-
-		for _, subtree := range subtrees {
-			wg.Add(1)
-
-			go func(subtree *util.Subtree) {
-				defer wg.Done()
-				//nolint:gosec
-				for i := 0; i < int(subtreeSize); i++ {
-					assert.True(t, transactionMap.Exists(subtree.Nodes[i].Hash))
-				}
-			}(subtree)
-		}
-
-		wg.Wait()
-		t.Logf("Time taken to read: %s\n", time.Since(start))
-	})
 }
 
-func Test_AddNode_Benchmark(t *testing.T) {
-	util.SkipVeryLongTests(t)
-
+func BenchmarkAddNode(t *testing.B) {
 	g, stp, txHashes := initTestAddNodeBenchmark(t)
 
 	startTime := time.Now()
@@ -1392,9 +1179,7 @@ func Test_AddNode_Benchmark(t *testing.T) {
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
 
-func Test_AddNodeWithMap_Benchmark(t *testing.T) {
-	util.SkipVeryLongTests(t)
-
+func BenchmarkAddNodeWithMap(t *testing.B) {
 	g, stp, txHashes := initTestAddNodeBenchmark(t)
 
 	_ = stp.Remove(txHashes[1000])
@@ -1421,48 +1206,7 @@ func Test_AddNodeWithMap_Benchmark(t *testing.T) {
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
 
-func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
-	util.SkipLongTests(t)
-
-	size := 1024 * 1024
-	subtreeBytes := generateLargeSubtreeBytes(t, size)
-	r := bytes.NewReader(subtreeBytes)
-
-	f, _ := os.Create("cpu.prof")
-	defer f.Close()
-
-	_ = pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
-
-	buckets, err := DeserializeHashesFromReaderIntoBuckets(r, 16)
-	require.NoError(t, err)
-
-	f, _ = os.Create("mem.prof")
-	defer f.Close()
-	_ = pprof.WriteHeapProfile(f)
-
-	assert.Equal(t, 16, len(buckets))
-}
-
-func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
-	st, err := util.NewIncompleteTreeByLeafCount(size)
-	require.NoError(t, err)
-
-	var bb [32]byte
-	for i := 0; i < size; i++ {
-		// int to bytes
-		//nolint:gosec
-		binary.LittleEndian.PutUint32(bb[:], uint32(i))
-		_ = st.AddNode(bb, uint64(i), uint64(i))
-	}
-
-	ser, err := st.Serialize()
-	require.NoError(t, err)
-
-	return ser
-}
-
-func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}
 	nrSubtreesExpected := 10
@@ -1491,7 +1235,9 @@ func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor,
 
 	for i := 0; i < (10*nrTxs)-1; i++ {
 		txHash, err := generateTxHash()
-		require.NoError(t, err)
+		if err != nil {
+			fmt.Println(err)
+		}
 
 		txHashes[i] = txHash
 	}

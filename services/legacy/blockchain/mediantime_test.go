@@ -58,6 +58,7 @@ func TestMedianTime(t *testing.T) {
 
 	for i, test := range tests {
 		filter := NewMedianTime()
+
 		for j, offset := range test.in {
 			id := strconv.Itoa(j)
 			now := time.Unix(time.Now().Unix(), 0)
@@ -84,6 +85,7 @@ func TestMedianTime(t *testing.T) {
 			t.Errorf("Offset #%d: unexpected offset -- got %v, "+
 				"want %v or %v", i, gotOffset, wantOffset,
 				wantOffset2)
+
 			continue
 		}
 
@@ -98,6 +100,7 @@ func TestMedianTime(t *testing.T) {
 			t.Errorf("AdjustedTime #%d: unexpected result -- got %v, "+
 				"want %v or %v", i, adjustedTime, wantTime,
 				wantTime2)
+
 			continue
 		}
 	}

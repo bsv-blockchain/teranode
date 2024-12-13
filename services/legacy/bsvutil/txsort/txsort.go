@@ -39,6 +39,7 @@ func Sort(tx *wire.MsgTx) *wire.MsgTx {
 	txCopy := tx.Copy()
 	sort.Sort(sortableInputSlice(txCopy.TxIn))
 	sort.Sort(sortableOutputSlice(txCopy.TxOut))
+
 	return txCopy
 }
 
@@ -48,9 +49,11 @@ func IsSorted(tx *wire.MsgTx) bool {
 	if !sort.IsSorted(sortableInputSlice(tx.TxIn)) {
 		return false
 	}
+
 	if !sort.IsSorted(sortableOutputSlice(tx.TxOut)) {
 		return false
 	}
+
 	return true
 }
 
@@ -71,6 +74,7 @@ func (s sortableInputSlice) Less(i, j int) bool {
 	// Input hashes are the same, so compare the index.
 	ihash := s[i].PreviousOutPoint.Hash
 	jhash := s[j].PreviousOutPoint.Hash
+
 	if ihash == jhash {
 		return s[i].PreviousOutPoint.Index < s[j].PreviousOutPoint.Index
 	}
@@ -82,6 +86,7 @@ func (s sortableInputSlice) Less(i, j int) bool {
 		ihash[b], ihash[hashSize-1-b] = ihash[hashSize-1-b], ihash[b]
 		jhash[b], jhash[hashSize-1-b] = jhash[hashSize-1-b], jhash[b]
 	}
+
 	return bytes.Compare(ihash[:], jhash[:]) == -1
 }
 
@@ -91,5 +96,6 @@ func (s sortableOutputSlice) Less(i, j int) bool {
 	if s[i].Value == s[j].Value {
 		return bytes.Compare(s[i].PkScript, s[j].PkScript) < 0
 	}
+
 	return s[i].Value < s[j].Value
 }

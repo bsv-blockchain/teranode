@@ -88,6 +88,7 @@ func (curve *KoblitzCurve) fieldJacobianToBigAffine(x, y, z *fieldVal) (*big.Int
 	// if the point needs to be converted to affine, go ahead and normalize
 	// the point itself at the same time as the calculation is the same.
 	var zInv, tempZ fieldVal
+
 	zInv.Set(z).Inverse()   // zInv = Z^-1
 	tempZ.SquareVal(&zInv)  // tempZ = Z^-2
 	x.Mul(&tempZ)           // X = X/Z^2 (mag: 1)
@@ -102,6 +103,7 @@ func (curve *KoblitzCurve) fieldJacobianToBigAffine(x, y, z *fieldVal) (*big.Int
 	x3, y3 := new(big.Int), new(big.Int)
 	x3.SetBytes(x.Bytes()[:])
 	y3.SetBytes(y.Bytes()[:])
+
 	return x3, y3
 }
 
@@ -111,10 +113,10 @@ func (curve *KoblitzCurve) fieldJacobianToBigAffine(x, y, z *fieldVal) (*big.Int
 func (curve *KoblitzCurve) IsOnCurve(x, y *big.Int) bool {
 	// Convert big ints to field values for faster arithmetic.
 	fx, fy := curve.bigAffineToField(x, y)
-
 	// Elliptic curve equation for secp256k1 is: y^2 = x^3 + 7
 	y2 := new(fieldVal).SquareVal(fy).Normalize()
 	result := new(fieldVal).SquareVal(fx).Mul(fx).AddInt(7).Normalize()
+
 	return y2.Equals(result)
 }
 
@@ -158,6 +160,7 @@ func (curve *KoblitzCurve) addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *f
 		x3.SetInt(0)
 		y3.SetInt(0)
 		z3.SetInt(0)
+
 		return
 	}
 
@@ -165,6 +168,7 @@ func (curve *KoblitzCurve) addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *f
 	// breakdown above.
 	var h, i, j, r, v fieldVal
 	var negJ, neg2V, negX3 fieldVal
+
 	h.Set(x1).Negate(1).Add(x2)                // H = X2-X1 (mag: 3)
 	i.SquareVal(&h).MulInt(4)                  // I = 4*H^2 (mag: 4)
 	j.Mul2(&h, &i)                             // J = H*I (mag: 1)
@@ -225,6 +229,7 @@ func (curve *KoblitzCurve) addZ1EqualsZ2(x1, y1, z1, x2, y2, x3, y3, z3 *fieldVa
 		x3.SetInt(0)
 		y3.SetInt(0)
 		z3.SetInt(0)
+
 		return
 	}
 
@@ -232,6 +237,7 @@ func (curve *KoblitzCurve) addZ1EqualsZ2(x1, y1, z1, x2, y2, x3, y3, z3 *fieldVa
 	// breakdown above.
 	var a, b, c, d, e, f fieldVal
 	var negX1, negY1, negE, negX3 fieldVal
+
 	negX1.Set(x1).Negate(1)                // negX1 = -X1 (mag: 2)
 	negY1.Set(y1).Negate(1)                // negY1 = -Y1 (mag: 2)
 	a.Set(&negX1).Add(x2)                  // A = X2-X1 (mag: 3)
@@ -281,11 +287,13 @@ func (curve *KoblitzCurve) addZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *fieldV
 	// the assumption made for this function that the second point has a z
 	// value of 1 (z2=1), the first point is already "converted".
 	var z1z1, u2, s2 fieldVal
+
 	x1.Normalize()
 	y1.Normalize()
 	z1z1.SquareVal(z1)                        // Z1Z1 = Z1^2 (mag: 1)
 	u2.Set(x2).Mul(&z1z1).Normalize()         // U2 = X2*Z1Z1 (mag: 1)
 	s2.Set(y2).Mul(&z1z1).Mul(z1).Normalize() // S2 = Y2*Z1*Z1Z1 (mag: 1)
+
 	if x1.Equals(&u2) {
 		if y1.Equals(&s2) {
 			// Since x1 == x2 and y1 == y2, point doubling must be
@@ -300,6 +308,7 @@ func (curve *KoblitzCurve) addZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *fieldV
 		x3.SetInt(0)
 		y3.SetInt(0)
 		z3.SetInt(0)
+
 		return
 	}
 
@@ -307,6 +316,7 @@ func (curve *KoblitzCurve) addZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *fieldV
 	// breakdown above.
 	var h, hh, i, j, r, rr, v fieldVal
 	var negX1, negY1, negX3 fieldVal
+
 	negX1.Set(x1).Negate(1)                // negX1 = -X1 (mag: 2)
 	h.Add2(&u2, &negX1)                    // H = U2-X1 (mag: 3)
 	hh.SquareVal(&h)                       // HH = H^2 (mag: 1)
@@ -376,6 +386,7 @@ func (curve *KoblitzCurve) addGeneric(x1, y1, z1, x2, y2, z2, x3, y3, z3 *fieldV
 		x3.SetInt(0)
 		y3.SetInt(0)
 		z3.SetInt(0)
+
 		return
 	}
 
@@ -383,6 +394,7 @@ func (curve *KoblitzCurve) addGeneric(x1, y1, z1, x2, y2, z2, x3, y3, z3 *fieldV
 	// breakdown above.
 	var h, i, j, r, rr, v fieldVal
 	var negU1, negS1, negX3 fieldVal
+
 	negU1.Set(&u1).Negate(1)               // negU1 = -U1 (mag: 2)
 	h.Add2(&u2, &negU1)                    // H = U2-U1 (mag: 3)
 	i.Set(&h).MulInt(2).Square()           // I = (2*H)^2 (mag: 2)
@@ -414,12 +426,15 @@ func (curve *KoblitzCurve) addJacobian(x1, y1, z1, x2, y2, z2, x3, y3, z3 *field
 		x3.Set(x2)
 		y3.Set(y2)
 		z3.Set(z2)
+
 		return
 	}
+
 	if (x2.IsZero() && y2.IsZero()) || z2.IsZero() {
 		x3.Set(x1)
 		y3.Set(y1)
 		z3.Set(z1)
+
 		return
 	}
 
@@ -457,6 +472,7 @@ func (curve *KoblitzCurve) Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
 	if x1.Sign() == 0 && y1.Sign() == 0 {
 		return x2, y2
 	}
+
 	if x2.Sign() == 0 && y2.Sign() == 0 {
 		return x1, y1
 	}
@@ -582,6 +598,7 @@ func (curve *KoblitzCurve) doubleJacobian(x1, y1, z1, x3, y3, z3 *fieldVal) {
 		x3.SetInt(0)
 		y3.SetInt(0)
 		z3.SetInt(0)
+
 		return
 	}
 
@@ -670,6 +687,7 @@ func (curve *KoblitzCurve) moduloReduce(k []byte) []byte {
 		// Reduce k by performing modulo curve.N.
 		tmpK := new(big.Int).SetBytes(k)
 		tmpK.Mod(tmpK, curve.N)
+
 		return tmpK.Bytes()
 	}
 
@@ -695,6 +713,7 @@ func NAF(k []byte) ([]byte, []byte) {
 	// necessary.  Since we need to know whether adding will cause a carry,
 	// we go from right-to-left in this addition.
 	var carry, curIsOne, nextIsOne bool
+
 	// these default to zero
 	retPos := make([]byte, len(k)+1)
 	retNeg := make([]byte, len(k)+1)
@@ -743,13 +762,17 @@ func NAF(k []byte) ([]byte, []byte) {
 					retPos[i+1] += 1 << j
 				}
 			}
+
 			curByte >>= 1
 		}
 	}
+
 	if carry {
 		retPos[0] = 1
+
 		return retPos, retNeg
 	}
+
 	return retPos[1:], retNeg[1:]
 }
 
@@ -787,6 +810,7 @@ func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big
 	if signK1 == -1 {
 		p1y, p1yNeg = p1yNeg, p1y
 	}
+
 	if signK2 == -1 {
 		p2y, p2yNeg = p2yNeg, p2y
 	}
@@ -810,6 +834,7 @@ func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big
 	// more instances of 0, hence reducing the number of Jacobian additions
 	// at the cost of 1 possible extra doubling.
 	var k1BytePos, k1ByteNeg, k2BytePos, k2ByteNeg byte
+
 	for i := 0; i < m; i++ {
 		// Since we're going left-to-right, pad the front with 0s.
 		if i < m-k1Len {
@@ -819,6 +844,7 @@ func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big
 			k1BytePos = k1PosNAF[i-(m-k1Len)]
 			k1ByteNeg = k1NegNAF[i-(m-k1Len)]
 		}
+
 		if i < m-k2Len {
 			k2BytePos = 0
 			k2ByteNeg = 0
@@ -846,6 +872,7 @@ func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big
 				curve.addJacobian(qx, qy, qz, p2x, p2yNeg, p2z,
 					qx, qy, qz)
 			}
+
 			k1BytePos <<= 1
 			k1ByteNeg <<= 1
 			k2BytePos <<= 1
@@ -876,6 +903,7 @@ func (curve *KoblitzCurve) ScalarBaseMult(k []byte) (*big.Int, *big.Int) {
 		p := curve.bytePoints[diff+i][byteVal]
 		curve.addJacobian(qx, qy, qz, &p[0], &p[1], &p[2], qx, qy, qz)
 	}
+
 	return curve.fieldJacobianToBigAffine(qx, qy, qz)
 }
 
@@ -901,6 +929,7 @@ func fromHex(s string) *big.Int {
 	if !ok {
 		panic("invalid hex in source file: " + s)
 	}
+
 	return r
 }
 

@@ -253,7 +253,6 @@ func GroupKey(na *wire.NetAddress) string {
 	if IsRFC3964(na) {
 		ip := na.IP[2:6]
 		return ip.Mask(net.CIDRMask(16, 32)).String()
-
 	}
 	if IsRFC4380(na) {
 		// teredo tunnels have the last 4 bytes as the v4 address XOR

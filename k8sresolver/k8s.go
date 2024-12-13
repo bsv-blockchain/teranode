@@ -33,10 +33,12 @@ type serviceClient struct {
 
 func newInClusterClient(logger ulogger.Logger, namespace string) (*serviceClient, error) {
 	logger.Debugf("[k8s] newInClusterClient called with namespace: %s", namespace)
+
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, errors.NewServiceError("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
 	}
+
 	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -54,12 +56,15 @@ func newInClusterClient(logger ulogger.Logger, namespace string) (*serviceClient
 func (s *serviceClient) Resolve(ctx context.Context, host string, port string) ([]string, error) {
 	cacheKey := host + ":" + port
 	cachedEps := s.resolveCache.Get(cacheKey, ttlcache.WithDisableTouchOnHit[string, []string]())
+
 	if cachedEps != nil {
 		s.logger.Debugf("[k8s] Resolve returning cached eps for host: %s, port: %s", host, port)
+
 		return cachedEps.Value(), nil
 	}
 
 	s.logger.Debugf("[k8s] Resolve called with host: %s, port: %s", host, port)
+
 	eps := make([]string, 0)
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
@@ -82,6 +87,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 
 func (s *serviceClient) Watch(_ context.Context, host string) (<-chan watch.Event, chan struct{}, error) {
 	s.logger.Debugf("[k8s] Watch called with host: %s", host)
+
 	ev := make(chan watch.Event)
 
 	watchList := cache.NewListWatchFromClient(s.k8s.CoreV1().RESTClient(), "endpoints", s.namespace, fields.OneTermEqualSelector("metadata.name", host))

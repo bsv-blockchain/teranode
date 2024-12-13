@@ -57,7 +57,7 @@ The `BlockAssembler` type is responsible for assembling blocks, managing the cur
 ```go
 type SubtreeProcessor struct {
     currentItemsPerFile       int
-    txChan                    chan *[]txIDAndFee
+    txChan                    chan *[]TxIDAndFee
     getSubtreesChan           chan chan []*util.Subtree
     moveUpBlockChan           chan moveBlockRequest
     reorgBlockChan            chan reorgBlocksRequest
@@ -70,7 +70,7 @@ type SubtreeProcessor struct {
     currentBlockHeader        *model.BlockHeader
     sync.Mutex
     txCount                   atomic.Uint64
-    batcher                   *txIDAndFeeBatch
+    batcher                   *TxIDAndFeeBatch
     queue                     *LockFreeQueue
     removeMap                 *util.SwissMap
     doubleSpendWindowDuration time.Duration
@@ -88,8 +88,8 @@ The `SubtreeProcessor` type manages the processing of transactions into subtrees
 
 ```go
 type LockFreeQueue struct {
-    head        *txIDAndFee
-    tail        atomic.Pointer[txIDAndFee]
+    head        *TxIDAndFee
+    tail        atomic.Pointer[TxIDAndFee]
     queueLength atomic.Int64
 }
 ```
@@ -293,7 +293,7 @@ Creates a new instance of the `LockFreeQueue`.
 #### enqueue
 
 ```go
-func (q *LockFreeQueue) enqueue(v *txIDAndFee)
+func (q *LockFreeQueue) enqueue(v *TxIDAndFee)
 ```
 
 Adds a transaction to the queue.
@@ -301,7 +301,7 @@ Adds a transaction to the queue.
 #### dequeue
 
 ```go
-func (q *LockFreeQueue) dequeue(validFromMillis int64) *txIDAndFee
+func (q *LockFreeQueue) dequeue(validFromMillis int64) *TxIDAndFee
 ```
 
 Removes and returns a transaction from the queue.

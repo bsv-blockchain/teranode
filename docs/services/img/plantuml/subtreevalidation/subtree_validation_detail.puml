@@ -7,7 +7,7 @@ database "Subtree Store" as SubtreeStore
 participant "Util HTTP Request" as Util
 
 
-ValidateSubtree -> ValidateSubtree: validateSubtreeInternal(ctx, validateSubtree)
+ValidateSubtree -> ValidateSubtree: ValidateSubtreeInternal(ctx, validateSubtree)
 
 ' Existing Sequence
 activate ValidateSubtree

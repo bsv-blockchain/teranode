@@ -32,10 +32,12 @@ func (msg *MsgAddr) AddAddress(na *NetAddress) error {
 	if len(msg.AddrList)+1 > MaxAddrPerMsg {
 		str := fmt.Sprintf("too many addresses in message [max %v]",
 			MaxAddrPerMsg)
+
 		return messageError("MsgAddr.AddAddress", str)
 	}
 
 	msg.AddrList = append(msg.AddrList, na)
+
 	return nil
 }
 
@@ -47,6 +49,7 @@ func (msg *MsgAddr) AddAddresses(netAddrs ...*NetAddress) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -72,6 +75,7 @@ func (msg *MsgAddr) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) err
 
 	addrList := make([]NetAddress, count)
 	msg.AddrList = make([]*NetAddress, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		na := &addrList[i]
 		err := readNetAddress(r, pver, na, true)
@@ -80,6 +84,7 @@ func (msg *MsgAddr) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) err
 		}
 		_ = msg.AddAddress(na)
 	}
+
 	return nil
 }
 
@@ -93,8 +98,8 @@ func (msg *MsgAddr) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding) err
 		str := fmt.Sprintf("too many addresses for message of "+
 			"protocol version %v [count %v, max 1]", pver, count)
 		return messageError("MsgAddr.BsvEncode", str)
-
 	}
+
 	if count > MaxAddrPerMsg {
 		str := fmt.Sprintf("too many addresses for message "+
 			"[count %v, max %v]", count, MaxAddrPerMsg)

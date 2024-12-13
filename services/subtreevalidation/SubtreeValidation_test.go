@@ -6,11 +6,7 @@ package subtreevalidation
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"os"
-	"runtime/pprof"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -18,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -52,7 +47,7 @@ func newTx(random uint32) *bt.Tx {
 
 func TestBlockValidationValidateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
-		initPrometheusMetrics()
+		InitPrometheusMetrics()
 
 		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 		defer deferFunc()
@@ -102,14 +97,14 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.validateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
 		require.NoError(t, err)
 	})
 }
 
 // func TestBlockValidation_blessMissingTransaction(t *testing.T) {
 // 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-// 		initPrometheusMetrics()
+// 		InitPrometheusMetrics()
 
 // 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
 // 		defer deferFunc()
@@ -151,75 +146,8 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 	}
 }
 
-func TestBlockValidationValidateBigSubtree(t *testing.T) {
-	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing of the current size in improved cache constants
-	util.SkipVeryLongTests(t)
-	initPrometheusMetrics()
-
-	txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
-	defer deferFunc()
-
-	nilConsumer := &kafka.KafkaConsumerGroup{}
-	tSettings := test.CreateBaseTestSettings()
-
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
-	require.NoError(t, err)
-
-	subtreeValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
-
-	numberOfItems := 1_024 * 1_024
-
-	subtree, err := util.NewTreeByLeafCount(numberOfItems)
-	require.NoError(t, err)
-
-	for i := 0; i < numberOfItems; i++ {
-		tx := bt.NewTx()
-		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
-
-		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
-
-		_, err := subtreeValidation.utxoStore.Create(context.Background(), tx, 0)
-		require.NoError(t, err)
-	}
-
-	nodeBytes, err := subtree.SerializeNodes()
-	require.NoError(t, err)
-
-	// this calculation should not be in the test data, in the real world we would be getting this from the other miner
-	rootHash := subtree.RootHash()
-
-	httpmock.RegisterResponder(
-		"GET",
-		`=~^/subtree/[a-z0-9]+\z`,
-		httpmock.NewBytesResponder(200, nodeBytes),
-	)
-
-	f, _ := os.Create("cpu.prof")
-	defer f.Close()
-
-	_ = pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
-
-	start := time.Now()
-
-	v := ValidateSubtree{
-		SubtreeHash:   *rootHash,
-		BaseURL:       "http://localhost:8000",
-		TxHashes:      nil,
-		AllowFailFast: false,
-	}
-	err = subtreeValidation.validateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
-	require.NoError(t, err)
-
-	t.Logf("Time taken: %s\n", time.Since(start))
-
-	f, _ = os.Create("mem.prof")
-	defer f.Close()
-	_ = pprof.WriteHeapProfile(f)
-}
-
 func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
-	initPrometheusMetrics()
+	InitPrometheusMetrics()
 
 	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
@@ -255,8 +183,8 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		AllowFailFast: false,
 	}
 
-	// Call the validateSubtreeInternal method
-	err = subtreeValidation.validateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
+	// Call the ValidateSubtreeInternal method
+	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
 	require.NoError(t, err)
 }
 

@@ -91,8 +91,7 @@ func NewPeerHandlerCollector(service string, stats *safemap.Safemap[string, *Pee
 
 // Describe writes all descriptors to the prometheus desc channel.
 func (c *PeerHandlerCollector) Describe(ch chan<- *prometheus.Desc) {
-
-	//Update this section with each metric you create for a given prometheusCollector
+	// Update this section with each metric you create for a given prometheusCollector
 	ch <- c.transactionSent
 	ch <- c.transactionAnnouncement
 	ch <- c.transactionRejection
@@ -105,8 +104,8 @@ func (c *PeerHandlerCollector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements required collect function for all prometheus collectors
 func (c *PeerHandlerCollector) Collect(ch chan<- prometheus.Metric) {
-	//Write the latest value for each metric in the prometheus metric channel.
-	//Note that you can pass CounterValue, GaugeValue, or UntypedValue types here.
+	// Write the latest value for each metric in the prometheus metric channel.
+	// Note that you can pass CounterValue, GaugeValue, or UntypedValue types here.
 	c.stats.Each(func(peer string, peerStats *PeerHandlerStats) {
 		ch <- prometheus.MustNewConstMetric(c.transactionSent, prometheus.CounterValue,
 			float64(peerStats.TransactionSent.Load()), peer)

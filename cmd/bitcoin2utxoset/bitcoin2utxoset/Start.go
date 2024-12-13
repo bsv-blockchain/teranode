@@ -480,7 +480,6 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			// Non-Standard (if the script type hasn't been identified and set then it remains as an unknown "non-standard" script)
 			default:
 				scriptType = "non-standard"
-
 			}
 
 			switch scriptType {

@@ -3738,61 +3738,6 @@ func TestPushedData(t *testing.T) {
 	}
 }
 
-// TestHasCanonicalPush ensures the canonicalPush function works as expected.
-func TestHasCanonicalPush(t *testing.T) {
-	t.Parallel()
-
-	for i := 0; i < 65535; i++ {
-		script, err := NewScriptBuilder().AddInt64(int64(i)).Script()
-		if err != nil {
-			t.Errorf("Script: test #%d unexpected error: %v\n", i,
-				err)
-			continue
-		}
-		if result := IsPushOnlyScript(script); !result {
-			t.Errorf("IsPushOnlyScript: test #%d failed: %x\n", i,
-				script)
-			continue
-		}
-		pops, err := parseScript(script)
-		if err != nil {
-			t.Errorf("parseScript: #%d failed: %v", i, err)
-			continue
-		}
-		for _, pop := range pops {
-			if result := canonicalPush(pop); !result {
-				t.Errorf("canonicalPush: test #%d failed: %x\n",
-					i, script)
-				break
-			}
-		}
-	}
-	for i := 0; i <= MaxScriptElementSize; i++ {
-		builder := NewScriptBuilder()
-		builder.AddData(bytes.Repeat([]byte{0x49}, i))
-		script, err := builder.Script()
-		if err != nil {
-			t.Errorf("StandardPushesTests test #%d unexpected error: %v\n", i, err)
-			continue
-		}
-		if result := IsPushOnlyScript(script); !result {
-			t.Errorf("StandardPushesTests IsPushOnlyScript test #%d failed: %x\n", i, script)
-			continue
-		}
-		pops, err := parseScript(script)
-		if err != nil {
-			t.Errorf("StandardPushesTests #%d failed to TstParseScript: %v", i, err)
-			continue
-		}
-		for _, pop := range pops {
-			if result := canonicalPush(pop); !result {
-				t.Errorf("StandardPushesTests TstHasCanonicalPushes test #%d failed: %x\n", i, script)
-				break
-			}
-		}
-	}
-}
-
 // TestGetPreciseSigOps ensures the more precise signature operation counting
 // mechanism which includes signatures in P2SH scripts works as expected.
 func TestGetPreciseSigOps(t *testing.T) {
@@ -3907,12 +3852,14 @@ func TestRemoveOpcodes(t *testing.T) {
 	// raw script, remove the passed opcode, then unparse the result back
 	// into a raw script.
 	tstRemoveOpcode := func(script []byte, opcode byte) ([]byte, error) {
-		pops, err := parseScript(script)
+		pops, err := ParseScript(script)
 		if err != nil {
 			return nil, err
 		}
+
 		pops = removeOpcode(pops, opcode)
-		return unparseScript(pops)
+
+		return UnparseScript(pops)
 	}
 
 	for _, test := range tests {
@@ -4058,12 +4005,14 @@ func TestRemoveOpcodeByData(t *testing.T) {
 	// raw script, remove the passed data, then unparse the result back
 	// into a raw script.
 	tstRemoveOpcodeByData := func(script []byte, data []byte) ([]byte, error) {
-		pops, err := parseScript(script)
+		pops, err := ParseScript(script)
 		if err != nil {
 			return nil, err
 		}
+
 		pops = removeOpcodeByData(pops, data)
-		return unparseScript(pops)
+
+		return UnparseScript(pops)
 	}
 
 	for _, test := range tests {
@@ -4096,7 +4045,7 @@ func TestIsPayToScriptHash(t *testing.T) {
 	}
 }
 
-// TestHasCanonicalPushes ensures the canonicalPush function properly determines
+// TestHasCanonicalPushes ensures the CanonicalPush function properly determines
 // what is considered a canonical push for the purposes of removeOpcodeByData.
 func TestHasCanonicalPushes(t *testing.T) {
 	t.Parallel()
@@ -4121,7 +4070,7 @@ func TestHasCanonicalPushes(t *testing.T) {
 
 	for i, test := range tests {
 		script := mustParseShortForm(test.script)
-		pops, err := parseScript(script)
+		pops, err := ParseScript(script)
 		if err != nil {
 			if test.expected {
 				t.Errorf("TstParseScript #%d failed: %v", i, err)
@@ -4129,8 +4078,8 @@ func TestHasCanonicalPushes(t *testing.T) {
 			continue
 		}
 		for _, pop := range pops {
-			if canonicalPush(pop) != test.expected {
-				t.Errorf("canonicalPush: #%d (%s) wrong result"+
+			if CanonicalPush(pop) != test.expected {
+				t.Errorf("CanonicalPush: #%d (%s) wrong result"+
 					"\ngot: %v\nwant: %v", i, test.name,
 					true, test.expected)
 				break

@@ -1,4 +1,4 @@
-//go:build fullTest
+//go:build test_all || test_services || test_blockassembly || test_longlong
 
 package blockassembly
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -17,17 +18,24 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// go test -v -tags test_blockassembly ./test/...
+
+// TODO : Fix concurent run
+// For now, the ba server seems not to have a mechanism to close properly
+// It is not possible to run all tests here at the same time. Run tests cases
+// Separately works well.
+//
+//	go test -v -tags test_blockassembly -run "TestServer_Performance/1_million_txs_-_1_by_1" ./test/...
+//	go test -v -tags test_blockassembly -run "TestServer_Performance/1_million_txs_-_in_batches" ./test/...
+//	go test -v -tags test_blockassembly -run "TestServer_GetMiningCandidate" ./test/...
 func TestServer_Performance(t *testing.T) {
 	t.Run("1 million txs - 1 by 1", func(t *testing.T) {
-		util.SkipVeryLongTests(t)
-
 		gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
 
 		// this test does not work online, it needs to be run locally
@@ -68,20 +76,18 @@ func TestServer_Performance(t *testing.T) {
 		wg.Wait()
 
 		for {
-			if ba.blockAssembler.TxCount() >= 1_048_576 {
+			if ba.TxCount() >= 1_048_576 {
 				break
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		assert.Equal(t, uint64(1_048_576), ba.blockAssembler.TxCount())
-		assert.Equal(t, 33, ba.blockAssembler.subtreeProcessor.SubtreeCount())
+		assert.Equal(t, uint64(1_048_576), ba.TxCount())
+		assert.Equal(t, 33, ba.SubtreeCount())
 	})
 
 	t.Run("1 million txs - in batches", func(t *testing.T) {
-		util.SkipVeryLongTests(t)
-
 		gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
 
 		// this test does not work online, it needs to be run locally
@@ -128,15 +134,15 @@ func TestServer_Performance(t *testing.T) {
 		wg.Wait()
 
 		for {
-			if ba.blockAssembler.TxCount() >= 1_048_576 {
+			if ba.TxCount() >= 1_048_576 {
 				break
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		assert.Equal(t, uint64(1_048_576), ba.blockAssembler.TxCount())
-		assert.Equal(t, 33, ba.blockAssembler.subtreeProcessor.SubtreeCount())
+		assert.Equal(t, uint64(1_048_576), ba.TxCount())
+		assert.Equal(t, 33, ba.SubtreeCount())
 	})
 }
 
@@ -158,7 +164,7 @@ func TestServer_GetMiningCandidate(t *testing.T) {
 	assert.NotEmpty(t, miningCandidate.Version)
 }
 
-func initMockedServer(t *testing.T) (*BlockAssembly, error) {
+func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	memStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
 
@@ -181,7 +187,7 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	tSettings.Policy.BlockMaxSize = 1000000
 
 	ctx := context.Background()
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)
+	ba := blockassembly.New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)
 
 	err = ba.Init(ctx)
 	require.NoError(t, err)

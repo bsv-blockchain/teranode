@@ -109,7 +109,6 @@ func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	return nil, nil
-
 }
 
 func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
@@ -118,7 +117,6 @@ func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields .
 }
 func (mu *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
-
 }
 
 func (mu *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) {

@@ -45,6 +45,7 @@ func NewClient(hostname string, port int) (*Client, error) {
 
 func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerospike.Host) (*Client, aerospike.Error) {
 	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
+
 	if err != nil {
 		return nil, err
 	}

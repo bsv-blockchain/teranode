@@ -18,7 +18,9 @@ func BenchmarkAddJacobian(b *testing.B) {
 	z2 := new(fieldVal).SetHex("1")
 	x3, y3, z3 := new(fieldVal), new(fieldVal), new(fieldVal)
 	curve := S256()
+
 	b.StartTimer()
+
 	for i := 0; i < b.N; i++ {
 		curve.addJacobian(x1, y1, z1, x2, y2, z2, x3, y3, z3)
 	}
@@ -37,7 +39,9 @@ func BenchmarkAddJacobianNotZOne(b *testing.B) {
 	z2 := new(fieldVal).SetHex("3")
 	x3, y3, z3 := new(fieldVal), new(fieldVal), new(fieldVal)
 	curve := S256()
+
 	b.StartTimer()
+
 	for i := 0; i < b.N; i++ {
 		curve.addJacobian(x1, y1, z1, x2, y2, z2, x3, y3, z3)
 	}
@@ -103,8 +107,10 @@ func BenchmarkSigVerify(b *testing.B) {
 
 	if !sig.Verify(msgHash.Bytes(), &pubKey) {
 		b.Errorf("Signature failed to verify")
+
 		return
 	}
+
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -117,6 +123,7 @@ func BenchmarkSigVerify(b *testing.B) {
 func BenchmarkFieldNormalize(b *testing.B) {
 	// The normalize function is constant time so default value is fine.
 	f := new(fieldVal)
+
 	for i := 0; i < b.N; i++ {
 		f.Normalize()
 	}

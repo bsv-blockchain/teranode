@@ -72,5 +72,6 @@ func normalizeVerString(str string) string {
 			result.WriteRune(r)
 		}
 	}
+
 	return result.String()
 }

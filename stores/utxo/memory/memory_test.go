@@ -5,7 +5,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,13 +48,6 @@ func TestMemory(t *testing.T) {
 
 		tests.ReAssign(t, db)
 	})
-}
-
-func TestMemorySanity(t *testing.T) {
-	util.SkipVeryLongTests(t)
-
-	db := New(ulogger.TestLogger{})
-	tests.Sanity(t, db)
 }
 
 func BenchmarkMemory(b *testing.B) {

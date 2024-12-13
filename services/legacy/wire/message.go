@@ -403,14 +403,15 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 		str := fmt.Sprintf("message payload is too large - header "+
 			"indicates %d bytes (%d extended bytes), but max message payload is %d "+
 			"bytes.", hdr.length, hdr.extLength, maxMessagePayload())
-		return totalBytes, nil, nil, messageError("ReadMessage", str)
 
+		return totalBytes, nil, nil, messageError("ReadMessage", str)
 	}
 
 	// Check for messages from the wrong bitcoin network.
 	if hdr.magic != bsvnet {
 		discardInput(r, uint64(hdr.length))
 		str := fmt.Sprintf("message from other network [%v]", hdr.magic)
+
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
 	}
 
@@ -419,6 +420,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	if !utf8.ValidString(command) {
 		discardInput(r, uint64(hdr.length))
 		str := fmt.Sprintf("invalid command %v", []byte(command))
+
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
 	}
 
@@ -426,6 +428,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	msg, err := makeEmptyMessage(command)
 	if err != nil {
 		discardInput(r, uint64(hdr.length))
+
 		return totalBytes, nil, nil, messageError("ReadMessage",
 			err.Error())
 	}
@@ -439,6 +442,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 		str := fmt.Sprintf("payload exceeds max length - header "+
 			"indicates %v bytes (%v extended bytes), but max payload size for "+
 			"messages of type [%v] is %v.", hdr.length, hdr.extLength, command, mpl)
+
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
 	}
 
@@ -470,6 +474,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 			str := fmt.Sprintf("payload checksum failed - header "+
 				"indicates %v, but actual checksum is %v.",
 				hdr.checksum, checksum)
+
 			return totalBytes, nil, nil, messageError("ReadMessage", str)
 		}
 	}
@@ -502,5 +507,6 @@ func ReadMessageN(r io.Reader, pver uint32, bsvnet BitcoinNet) (int, Message, []
 // API, but it's also useful for callers that don't care about byte counts.
 func ReadMessage(r io.Reader, pver uint32, bsvnet BitcoinNet) (Message, []byte, error) {
 	_, msg, buf, err := ReadMessageN(r, pver, bsvnet)
+
 	return msg, buf, err
 }

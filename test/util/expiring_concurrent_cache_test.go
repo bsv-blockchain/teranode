@@ -1,3 +1,5 @@
+//go:build test_all || test_util
+
 package util
 
 import (
@@ -5,15 +7,18 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	ubsv_util "github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
+// go test -v -tags test_util ./test/...
+
 func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	t.Run("value is already in the cache", func(t *testing.T) {
-		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := ubsv_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 
@@ -55,7 +60,7 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	})
 
 	t.Run("missing value", func(t *testing.T) {
-		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := ubsv_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 
@@ -71,7 +76,7 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 					return 1, errors.NewStorageError("error file does not exist")
 				})
 				require.Error(t, err)
-				require.Equal(t, cache.zeroValue, val)
+				require.Equal(t, cache.ZeroValue, val)
 
 				return nil
 			})

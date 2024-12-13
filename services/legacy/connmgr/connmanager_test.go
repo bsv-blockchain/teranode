@@ -69,6 +69,7 @@ func mockDialer(addr net.Addr) (net.Conn, error) {
 	c := &mockConn{rAddr: addr}
 	c.Reader = r
 	c.Writer = w
+
 	return c, nil
 }
 
@@ -78,9 +79,11 @@ func TestNewConfig(t *testing.T) {
 	if err == nil {
 		t.Fatalf("New expected error: 'Dial can't be nil', got nil")
 	}
+
 	_, err = New(ulogger.TestLogger{}, &Config{
 		Dial: mockDialer,
 	})
+
 	if err != nil {
 		t.Fatalf("New unexpected error: %v", err)
 	}
@@ -150,9 +153,11 @@ func TestConnectMode(t *testing.T) {
 			connected <- c
 		},
 	})
+
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+
 	cr := &ConnReq{
 		addr: &net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
@@ -160,6 +165,7 @@ func TestConnectMode(t *testing.T) {
 		},
 		Permanent: true,
 	}
+
 	cmgr.Start()
 	cmgr.Connect(cr)
 	gotConnReq := <-connected
@@ -168,6 +174,7 @@ func TestConnectMode(t *testing.T) {
 	if gotID != wantID {
 		t.Fatalf("connect mode: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
+
 	gotState := cr.State()
 	wantState := ConnEstablished
 	if gotState != wantState {
@@ -251,8 +258,10 @@ func TestRetryPermanent(t *testing.T) {
 		},
 		Permanent: true,
 	}
+
 	go cmgr.Connect(cr)
 	cmgr.Start()
+
 	gotConnReq := <-connected
 	wantID := cr.ID()
 	gotID := gotConnReq.ID()
@@ -272,6 +281,7 @@ func TestRetryPermanent(t *testing.T) {
 	if gotID != wantID {
 		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
+
 	gotState = cr.State()
 	wantState = ConnPending
 	if gotState != wantState {
@@ -284,6 +294,7 @@ func TestRetryPermanent(t *testing.T) {
 	if gotID != wantID {
 		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
+
 	gotState = cr.State()
 	wantState = ConnEstablished
 	if gotState != wantState {
@@ -297,6 +308,7 @@ func TestRetryPermanent(t *testing.T) {
 	if gotID != wantID {
 		t.Fatalf("retry: %v - want ID %v, got ID %v", cr.GetAddr(), wantID, gotID)
 	}
+
 	gotState = cr.State()
 	wantState = ConnDisconnected
 	if gotState != wantState {
@@ -332,6 +344,7 @@ func TestMaxRetryDuration(t *testing.T) {
 			connected <- c
 		},
 	})
+
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
@@ -343,6 +356,7 @@ func TestMaxRetryDuration(t *testing.T) {
 		},
 		Permanent: true,
 	}
+
 	go cmgr.Connect(cr)
 	cmgr.Start()
 	// retry in 1ms
@@ -377,6 +391,7 @@ func TestNetworkFailure(t *testing.T) {
 			t.Fatalf("network failure: got unexpected connection - %v", c.GetAddr())
 		},
 	})
+
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
@@ -555,7 +570,6 @@ func TestCancelIgnoreDelayedConnection(t *testing.T) {
 		t.Fatalf("on-connect should not be called for canceled req")
 	case <-time.After(5 * retryTimeout):
 	}
-
 }
 
 // mockListener implements the net.Listener interface and is used to test
@@ -574,6 +588,7 @@ func (m *mockListener) Accept() (net.Conn, error) {
 	for conn := range m.provideConn {
 		return conn, nil
 	}
+
 	return nil, errors.New("network connection closed")
 }
 
@@ -633,9 +648,11 @@ func TestListeners(t *testing.T) {
 		},
 		Dial: mockDialer,
 	})
+
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+
 	cmgr.Start()
 
 	// Fake a couple of mock connections to each of the listeners.

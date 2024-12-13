@@ -247,6 +247,7 @@ func TestBlockErrors(t *testing.T) {
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	block100000Bytes := block100000Buf.Bytes()
 
 	// Create a new block from the serialized bytes.

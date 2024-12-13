@@ -200,9 +200,17 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 
 // Init initializes the server metrics and performs any necessary setup.
 func (u *Server) Init(ctx context.Context) (err error) {
-	initPrometheusMetrics()
+	InitPrometheusMetrics()
 
 	return nil
+}
+
+func (u *Server) GetUutxoStore() utxo.Store {
+	return u.utxoStore
+}
+
+func (u *Server) SetUutxoStore(s utxo.Store) {
+	u.utxoStore = s
 }
 
 // Start initializes and starts the server components including Kafka consumers
@@ -365,8 +373,8 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 					AllowFailFast: false,
 				}
 
-				// Call the validateSubtreeInternal method
-				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
+				// Call the ValidateSubtreeInternal method
+				if err = u.ValidateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
 					// u.logger.Errorf("SAO %s", err)
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)
 				}
@@ -383,8 +391,8 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				AllowFailFast: false,
 			}
 
-			// Call the validateSubtreeInternal method
-			if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
+			// Call the ValidateSubtreeInternal method
+			if err = u.ValidateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
 				return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 			}
 

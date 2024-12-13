@@ -7,36 +7,42 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 )
 
-type txIDAndFee struct {
+type TxIDAndFee struct {
 	node util.SubtreeNode
 	time int64
-	next atomic.Pointer[txIDAndFee]
+	next atomic.Pointer[TxIDAndFee]
 }
 
-type txIDAndFeeBatch struct {
-	txs  []*txIDAndFee
+type TxIDAndFeeBatch struct {
+	txs  []*TxIDAndFee
 	size int
 	mu   sync.Mutex
 }
 
-func newTxIDAndFeeBatch(size int) *txIDAndFeeBatch {
-	return &txIDAndFeeBatch{
-		txs:  make([]*txIDAndFee, 0, size),
+func NewTxIDAndFee(n util.SubtreeNode) *TxIDAndFee {
+	return &TxIDAndFee{
+		node: n,
+	}
+}
+
+func NewTxIDAndFeeBatch(size int) *TxIDAndFeeBatch {
+	return &TxIDAndFeeBatch{
+		txs:  make([]*TxIDAndFee, 0, size),
 		size: size,
 	}
 }
 
-func (txs *txIDAndFeeBatch) add(tx *txIDAndFee) *[]*txIDAndFee {
+func (txs *TxIDAndFeeBatch) Add(tx *TxIDAndFee) *[]*TxIDAndFee {
 	txs.mu.Lock()
 	defer txs.mu.Unlock()
 
 	txs.txs = append(txs.txs, tx)
 
 	if len(txs.txs) >= txs.size {
-		txIDAndFees := txs.txs
-		txs.txs = make([]*txIDAndFee, 0, txs.size)
+		TxIDAndFees := txs.txs
+		txs.txs = make([]*TxIDAndFee, 0, txs.size)
 
-		return &txIDAndFees
+		return &TxIDAndFees
 	}
 
 	return nil

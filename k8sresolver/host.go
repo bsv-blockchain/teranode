@@ -30,33 +30,41 @@ func parseTarget(target, defaultPort string) (host, port string, err error) {
 	if target == "" {
 		return "", "", errMissingAddr
 	}
+
 	if ip := net.ParseIP(target); ip != nil {
 		// target is an IPv4 or IPv6(without brackets) address
 		return target, defaultPort, nil
 	}
+
 	if host, port, err = net.SplitHostPort(target); err == nil {
 		if port == "" {
 			// If the port field is empty (target ends with colon), e.g. "[::1]:", this is an error.
 			return "", "", errEndsWithColon
 		}
+
 		// target has port, i.e ipv4-host:port, [ipv6-host]:port, host-name:port
 		if host == "" {
 			// Keep consistent with net.Dial(): If the host is empty, as in ":80", the local system is assumed.
 			host = "localhost"
 		}
+
 		return host, port, nil
 	}
+
 	parsedURL, err := url.Parse(target)
 	if err == nil && parsedURL.Host != "" {
 		port = parsedURL.Port()
 		if port == "" {
 			port = defaultPort
 		}
+
 		return parsedURL.Hostname(), port, nil
 	}
+
 	if host, port, err = net.SplitHostPort(target + ":" + defaultPort); err == nil {
 		// target doesn't have port
 		return host, port, nil
 	}
+
 	return "", "", errors.NewConfigurationError("invalid target address %v, error info", target, err)
 }

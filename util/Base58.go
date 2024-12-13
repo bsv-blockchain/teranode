@@ -33,6 +33,7 @@ func decode(src []byte) ([]byte, int, error) {
 			fmt.Println(b)
 			return []byte(""), 0, errors.NewProcessingError("encoding/base58: invalid character found: ~" + string(b[i]) + "~")
 		}
+
 		idx := big.NewInt(int64(tmp))
 		tmp1 := big.NewInt(0)
 		tmp1.Mul(j, idx)
@@ -52,6 +53,7 @@ func decode(src []byte) ([]byte, int, error) {
 	flen := numZeros + len(tmpval)
 	val := make([]byte, flen)
 	copy(val[numZeros:], tmpval)
+
 	return val, len(val), nil
 }
 
@@ -108,6 +110,7 @@ func encode(src []byte) ([]byte, int) {
 		dst[i], dst[len(dst)-1-i] =
 			dst[len(dst)-1-i], dst[i]
 	}
+
 	return dst, len(dst)
 }
 

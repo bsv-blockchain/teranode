@@ -828,6 +828,7 @@ func TestNAF(t *testing.T) {
 	negOne := big.NewInt(-1)
 	one := big.NewInt(1)
 	two := big.NewInt(2)
+
 	for i, test := range tests {
 		want, _ := new(big.Int).SetString(test, 16)
 		nafPos, nafNeg := NAF(want.Bytes())

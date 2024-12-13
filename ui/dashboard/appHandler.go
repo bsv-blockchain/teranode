@@ -75,5 +75,4 @@ func AppHandler(c echo.Context) error {
 
 	logger.Debugf("Resource %q [%s] - OK", resource, mimeType)
 	return c.Blob(http.StatusOK, mimeType, b)
-
 }

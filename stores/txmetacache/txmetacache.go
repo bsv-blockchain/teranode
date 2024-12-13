@@ -64,6 +64,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating cache", err)
 	}
+
 	m := &TxMetaCache{
 		utxoStore: utxoStore,
 		cache:     cache,
@@ -100,6 +101,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	txMeta.Tx = nil
 	err := t.cache.Set(hash[:], txMeta.MetaBytes())
+
 	if err != nil {
 		return err
 	}
@@ -162,9 +164,13 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
+
 		txmetaData := meta.Data{}
+
 		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+
 		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
+
 		return &txmetaData, nil
 	}
 
@@ -198,12 +204,14 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]stri
 
 		txmetaData := meta.Data{}
 		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+
 		return &txmetaData, nil
 	}
 
 	// if not found in the cache, add it to the cache, record cache miss
 	t.metrics.misses.Add(1)
 	txMeta, err := t.utxoStore.Get(ctx, hash)
+
 	if err != nil {
 		return nil, err
 	}
@@ -268,10 +276,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	// do not update the aerospike tx meta store, it kills the aerospike server
-	//err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
-	//if err != nil {
-	//	return err
-	//}
+	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
+	// if err != nil {
+	//   return err
+	// }
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {
@@ -310,9 +318,11 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockI
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *meta.Data
 	txMeta, err = t.Get(ctx, hash)
+
 	if err != nil {
 		txMeta, err = t.utxoStore.Get(ctx, hash)
 	}
+
 	if err != nil {
 		return err
 	}
@@ -371,6 +381,7 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
+
 	return nil
 }
 

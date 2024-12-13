@@ -216,17 +216,21 @@ func VarInt(i uint64) []byte {
 		b[0] = byte(i)
 		return b[:1]
 	}
+
 	if i < 0x10000 {
 		b[0] = 0xfd
 		binary.LittleEndian.PutUint16(b[1:3], uint16(i))
 		return b[:3]
 	}
+
 	if i < 0x100000000 {
 		b[0] = 0xfe
 		binary.LittleEndian.PutUint32(b[1:5], uint32(i))
 		return b[:5]
 	}
+
 	b[0] = 0xff
 	binary.LittleEndian.PutUint64(b[1:9], i)
+
 	return b
 }

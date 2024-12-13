@@ -325,6 +325,7 @@ func (k *ExtendedKey) Child(i uint32) (*ExtendedKey, error) {
 	// The fingerprint of the parent for the derived child is the first 4
 	// bytes of the RIPEMD160(SHA256(parentPubKey)).
 	parentFP := bsvutil.Hash160(k.pubKeyBytes())[:4]
+
 	return NewExtendedKey(k.version, childKey, childChainCode, parentFP,
 		k.depth+1, i, isPrivate), nil
 }
@@ -372,6 +373,7 @@ func (k *ExtendedKey) ECPrivKey() (*bsvec.PrivateKey, error) {
 	}
 
 	privKey, _ := bsvec.PrivKeyFromBytes(bsvec.S256(), k.key)
+
 	return privKey, nil
 }
 
@@ -379,6 +381,7 @@ func (k *ExtendedKey) ECPrivKey() (*bsvec.PrivateKey, error) {
 // address for the passed network.
 func (k *ExtendedKey) Address(net *chaincfg.Params) (*bsvutil.AddressPubKeyHash, error) {
 	pkHash := bsvutil.Hash160(k.pubKeyBytes())
+
 	return bsvutil.NewAddressPubKeyHash(pkHash, net)
 }
 
@@ -389,6 +392,7 @@ func paddedAppend(size uint, dst, src []byte) []byte {
 	for i := 0; i < int(size)-len(src); i++ {
 		dst = append(dst, 0)
 	}
+
 	return append(dst, src...)
 }
 
@@ -410,6 +414,7 @@ func (k *ExtendedKey) String() string {
 	serializedBytes = append(serializedBytes, k.parentFP...)
 	serializedBytes = append(serializedBytes, childNumBytes[:]...)
 	serializedBytes = append(serializedBytes, k.chainCode...)
+
 	if k.isPrivate {
 		serializedBytes = append(serializedBytes, 0x00)
 		serializedBytes = paddedAppend(32, serializedBytes, k.key)
@@ -419,6 +424,7 @@ func (k *ExtendedKey) String() string {
 
 	checkSum := chainhash.DoubleHashB(serializedBytes)[:4]
 	serializedBytes = append(serializedBytes, checkSum...)
+
 	return base58.Encode(serializedBytes)
 }
 
@@ -497,6 +503,7 @@ func NewMaster(seed []byte, net *chaincfg.Params) (*ExtendedKey, error) {
 	}
 
 	parentFP := []byte{0x00, 0x00, 0x00, 0x00}
+
 	return NewExtendedKey(net.HDPrivateKeyID[:], secretKey, chainCode,
 		parentFP, 0, 0, true), nil
 }

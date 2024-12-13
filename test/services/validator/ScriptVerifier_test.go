@@ -1,24 +1,5 @@
-/*
-Package validator implements Bitcoin SV transaction validation functionality.
+//go:build test_all || test_services || test_validator
 
-This package provides comprehensive transaction validation for Bitcoin SV nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
-
-Key features:
-  - Transaction validation against Bitcoin consensus rules
-  - UTXO spending and creation
-  - Script verification using multiple interpreters
-  - Policy enforcement
-  - Block assembly integration
-  - Kafka integration for transaction metadata
-
-Usage:
-
-	validator := NewTxValidator(logger, policy, params)
-	err := validator.ValidateTransaction(tx, blockHeight)
-*/
 package validator
 
 import (
@@ -34,16 +15,16 @@ import (
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
-// To run the test
-//   go clean -testcache && VERY_LONG_TESTS=1 go test -v -run Test_ScriptVerification ./services/validator/...
+// go test -v -tags test_validator ./test/...
 
 var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
 
@@ -52,9 +33,18 @@ type TxsExtended struct {
 	TxsBin [][]byte
 }
 
-func Test_ScriptVerification(t *testing.T) {
-	util.SkipVeryLongTests(t)
+func createScriptInterpreter(verifierType validator.TxInterpreter, logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) validator.TxScriptInterpreter {
+	createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[verifierType]
+	if !ok {
+		panic(fmt.Errorf("unable to find script interpreter %v", verifierType))
+	}
 
+	return createTxScriptInterpreter(logger, policy, params)
+}
+
+func Test_ScriptVerification(t *testing.T) {
+
+	tSettings := test.CreateBaseTestSettings()
 	testBlockID := "000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9"
 	eBlock, err := getTxs(testBlockID)
 	require.NoError(t, err)
@@ -64,17 +54,17 @@ func Test_ScriptVerification(t *testing.T) {
 	})
 
 	t.Run("BDK Multi Routine", func(t *testing.T) {
-		verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoBDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockMultiRoutines(t, verifier, eBlock.Txs)
 	})
 
 	t.Run("GoSDK Multi Routine", func(t *testing.T) {
-		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoSDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockMultiRoutines(t, verifier, eBlock.Txs)
 	})
 
 	t.Run("GoBt Multi Routine", func(t *testing.T) {
-		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoBT", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockMultiRoutines(t, verifier, eBlock.Txs)
 	})
 
@@ -83,17 +73,17 @@ func Test_ScriptVerification(t *testing.T) {
 	})
 
 	t.Run("BDK Sequential", func(t *testing.T) {
-		verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoBDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockSequential(t, verifier, eBlock.Txs)
 	})
 
 	t.Run("GoSDK Sequential", func(t *testing.T) {
-		verifier := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoSDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockSequential(t, verifier, eBlock.Txs)
 	})
 
 	t.Run("GoBt Sequential", func(t *testing.T) {
-		verifier := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+		verifier := createScriptInterpreter("GoBT", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
 		testBlockSequential(t, verifier, eBlock.Txs)
 	})
 }
@@ -129,7 +119,7 @@ func testVerifyExtendSequential(t *testing.T, txsBin [][]byte) {
 	}
 }
 
-func testBlockMultiRoutines(t *testing.T, verifier TxScriptInterpreter, txs []*bt.Tx) {
+func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
 	g := errgroup.Group{}
 
 	// verify the scripts of all the transactions in parallel
@@ -143,7 +133,7 @@ func testBlockMultiRoutines(t *testing.T, verifier TxScriptInterpreter, txs []*b
 	require.NoError(t, err)
 }
 
-func testBlockSequential(t *testing.T, verifier TxScriptInterpreter, txs []*bt.Tx) {
+func testBlockSequential(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
 	for _, tx := range txs {
 		err := verifier.VerifyScript(tx, 725267)
 		require.NoError(t, err)
@@ -160,7 +150,6 @@ func getTxs(testBlockID string) (*TxsExtended, error) {
 
 	maxNbTx := 44_407 // nb tx at block 000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9
 	txsExtend := &TxsExtended{}
-
 	for {
 		tx := &bt.Tx{}
 		if _, erri := tx.ReadFrom(reader); erri != nil {
@@ -180,7 +169,7 @@ func getTxs(testBlockID string) (*TxsExtended, error) {
 }
 
 func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
-	blockFilename := fmt.Sprintf("testdata/%s.extended.bin", testBlockID)
+	blockFilename := fmt.Sprintf("%s.extended.bin", testBlockID)
 
 	exists, err := os.Stat(blockFilename)
 
@@ -226,6 +215,5 @@ func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return b, nil
 }

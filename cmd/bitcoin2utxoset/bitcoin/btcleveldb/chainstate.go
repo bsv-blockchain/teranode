@@ -25,11 +25,9 @@ func Varint128Read(bytes []byte, offset int) ([]byte, int) { // take a byte arra
 
 	// Return zero bytes read if we haven't managed to read bytes properly
 	return result, 0
-
 }
 
 func Varint128Decode(bytes []byte) int64 { // takes a byte slice, returns an int64 (makes sure it work on 32 bit systems)
-
 	// total
 	var n int64 = 0
 
@@ -37,7 +35,7 @@ func Varint128Decode(bytes []byte) int64 { // takes a byte slice, returns an int
 
 		// 1. shift n left 7 bits (add some extra bits to work with)
 		//                             00000000
-		n = n << 7
+		n <<= 7
 
 		// 2. set the last 7 bits of each byte in to the total value
 		//    AND extracts 7 bits only 10111001  <- these are the bits of each byte
@@ -47,19 +45,17 @@ func Varint128Decode(bytes []byte) int64 { // takes a byte slice, returns an int
 		//                             00000000  <- the result
 		//                              0111001  <- the bits we want to set
 		//                             00111001
-		n = n | int64(v&127)
+		n |= int64(v & 127)
 
 		// 3. add 1 each time (only for the ones where the 8th bit is set)
 		if v&128 != 0 { // 0b10000000 <- AND to check if the 8th bit is set
 			// 1 << 7     <- could always bit shift to get 128
 			n++
 		}
-
 	}
 
 	return n
 	// 11101000000111110110
-
 }
 
 func DecompressValue(x int64) int64 {
@@ -72,14 +68,14 @@ func DecompressValue(x int64) int64 {
 	}
 
 	// Decompress...
-	x = x - 1   // subtract 1 first
+	x--         // subtract 1 first
 	e := x % 10 // remainder mod 10
-	x = x / 10  // quotient mod 10 (reduce x down by 10)
+	x /= 10     // quotient mod 10 (reduce x down by 10)
 
 	// If the remainder is less than 9
 	if e < 9 {
 		d := x % 9       // remainder mod 9
-		x = x / 9        // (reduce x down by 9)
+		x /= 9           // (reduce x down by 9)
 		n = x*10 + d + 1 // work out n
 	} else {
 		n = x + 1
@@ -96,5 +92,4 @@ func DecompressValue(x int64) int64 {
 	// fmt.Println(multiplier)
 
 	return int64(result)
-
 }

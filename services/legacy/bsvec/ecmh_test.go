@@ -75,7 +75,9 @@ func TestMultiset_AddRemove(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		m.Add(data)
+
 		if test.cumulativeHash != "" && m.Hash().String() != test.cumulativeHash {
 			t.Fatal("Multiset-Add returned incorrect hash")
 		}

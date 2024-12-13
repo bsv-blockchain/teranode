@@ -1,4 +1,4 @@
-//go:build test_all || test_util || test_kafka
+//go:build test_all || test_kafka
 
 package kafka
 

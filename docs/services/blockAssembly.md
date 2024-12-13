@@ -322,7 +322,7 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 ├── options.go                 - Configuration options for subtree processing.
 ├── queue.go                   - Queue implementation for subtree processing.
 ├── queue_test.go              - Tests for queue.go.
-└── txIDAndFee.go              - Handling transaction IDs and fees.
+└── TxIDAndFee.go              - Handling transaction IDs and fees.
 ```
 
 ## 7. How to run

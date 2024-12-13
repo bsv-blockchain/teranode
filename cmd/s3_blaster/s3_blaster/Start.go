@@ -33,6 +33,7 @@ func Init() {
 	httpAddr, ok := gocore.Config().Get("profilerAddr")
 	if !ok {
 		log.Printf("Profiler address not set, defaulting to localhost:6060")
+
 		httpAddr = "localhost:6060"
 	}
 
@@ -54,7 +55,6 @@ func Init() {
 	go func() {
 		log.Printf("%v", server.ListenAndServe())
 	}()
-
 }
 
 func Start() {
@@ -71,9 +71,11 @@ func Start() {
 	if err != nil {
 		panic(err)
 	}
+
 	if !found {
 		panic("txstore config not found")
 	}
+
 	txStoreUrl = url
 
 	go func() {
@@ -129,6 +131,7 @@ func generateRandomBytes() []byte {
 	if err != nil {
 		panic(err)
 	}
+
 	return b
 }
 
@@ -137,12 +140,15 @@ func FormatFloat(f float64) string {
 	decimalPart := int((f - float64(intPart)) * 100)
 
 	var sb strings.Builder
+
 	count := 0
 	for intPart > 0 {
 		if count > 0 && count%3 == 0 {
 			sb.WriteString(",")
 		}
+
 		digit := intPart % 10
+
 		sb.WriteString(fmt.Sprintf("%d", digit))
 		intPart /= 10
 		count++

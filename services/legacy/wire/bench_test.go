@@ -339,7 +339,6 @@ func BenchmarkSerializeTx(b *testing.B) {
 	tx := blockOne.Transactions[0]
 	for i := 0; i < b.N; i++ {
 		_ = tx.Serialize(io.Discard)
-
 	}
 }
 

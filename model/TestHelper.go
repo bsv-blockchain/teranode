@@ -26,28 +26,28 @@ import (
 // TODO: this test util is here as importing util/test in the model package causes a circular dependency. Fix this
 
 var (
-	loadMetaToMemoryOnce sync.Once
-	// cachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
-	cachedTxMetaStore utxo.Store
+	TestLoadMetaToMemoryOnce sync.Once
+	// TestCachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
+	TestCachedTxMetaStore utxo.Store
 	// following variables are used to store the file names for the testdata
-	fileDir                      string
-	fileNameTemplate             string
-	fileNameTemplateMerkleHashes string
-	fileNameTemplateBlock        string
-	txMetafileNameTemplate       string
-	subtreeSize                  int
+	TestFileDir                      string
+	TestFileNameTemplate             string
+	TestFileNameTemplateMerkleHashes string
+	TestFileNameTemplateBlock        string
+	TestTxMetafileNameTemplate       string
+	TestSubtreeSize                  int
 )
 
-func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStore, generateNewTestData bool) (*Block, error) {
+func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtreeStore, generateNewTestData bool) (*Block, error) {
 	// create test dir of not exists
-	if _, err := os.Stat(fileDir); os.IsNotExist(err) {
-		if err = os.Mkdir(fileDir, 0755); err != nil {
+	if _, err := os.Stat(TestFileDir); os.IsNotExist(err) {
+		if err = os.Mkdir(TestFileDir, 0755); err != nil {
 			return nil, err
 		}
 	}
 
 	// read block from file and return if exists
-	blockFile, err := os.Open(fileNameTemplateBlock)
+	blockFile, err := os.Open(TestFileNameTemplateBlock)
 	if err == nil && !generateNewTestData {
 		blockBytes, err := io.ReadAll(blockFile)
 		if err != nil {
@@ -63,7 +63,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 		return block, nil
 	}
 
-	txMetastoreFile, err := os.Create(txMetafileNameTemplate)
+	txMetastoreFile, err := os.Create(TestTxMetafileNameTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -75,22 +75,26 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	}()
 
 	var subtreeBytes []byte
-	subtree, err := util.NewTreeByLeafCount(subtreeSize)
+
+	subtree, err := util.NewTreeByLeafCount(TestSubtreeSize)
 	if err != nil {
 		return nil, err
 	}
+
 	_ = subtree.AddCoinbaseNode()
 
 	var subtreeFile *os.File
 	var subtreeFileMerkleHashes *os.File
+
 	subtreeCount := 0
 
 	// create the first files
-	subtreeFile, err = os.Create(fmt.Sprintf(fileNameTemplate, subtreeCount))
+	subtreeFile, err = os.Create(fmt.Sprintf(TestFileNameTemplate, subtreeCount))
 	if err != nil {
 		return nil, err
 	}
-	subtreeFileMerkleHashes, err = os.Create(fileNameTemplateMerkleHashes)
+
+	subtreeFileMerkleHashes, err = os.Create(TestFileNameTemplateMerkleHashes)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +105,8 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	var hash chainhash.Hash
 	fees := uint64(0)
 	var n int
-	for i := 1; i < int(transactionIdCount); i++ {
+
+	for i := 1; i < int(transactionIDCount); i++ { //nolint:gosec
 		binary.LittleEndian.PutUint64(txId, uint64(i))
 		hash = chainhash.Hash(txId)
 
@@ -137,12 +142,12 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 
 			subtreeCount++
 
-			if subtreeFile, err = os.Create(fmt.Sprintf(fileNameTemplate, subtreeCount)); err != nil {
+			if subtreeFile, err = os.Create(fmt.Sprintf(TestFileNameTemplate, subtreeCount)); err != nil {
 				return nil, err
 			}
 
 			// create new tree
-			subtree, err = util.NewTreeByLeafCount(subtreeSize)
+			subtree, err = util.NewTreeByLeafCount(TestSubtreeSize)
 			if err != nil {
 				return nil, err
 			}
@@ -172,6 +177,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	if err != nil {
 		return nil, err
 	}
+
 	coinbase.Outputs = nil
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+fees)
 
@@ -181,15 +187,16 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	var merkleRootsubtreeHashes []*chainhash.Hash
 
 	for i := 0; i < subtreeCount; i++ {
-		subtreeStore.files[*subtreeHashes[i]] = i
+		subtreeStore.Files[*subtreeHashes[i]] = i
 
 		if i == 0 {
 			// read the first subtree into file, replace the coinbase placeholder with the coinbase txid and calculate the merkle root
-			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(subtreeSize)
+			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(TestSubtreeSize)
 			if err != nil {
 				return nil, err
 			}
-			subtreeFile, err = os.Open(fmt.Sprintf(fileNameTemplate, i))
+
+			subtreeFile, err = os.Open(fmt.Sprintf(TestFileNameTemplate, i))
 			if err != nil {
 				return nil, err
 			}
@@ -257,13 +264,13 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	block := &Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: transactionIdCount,
+		TransactionCount: transactionIDCount,
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes,
 		Height:           123,
 	}
 
-	blockFile, err = os.Create(fileNameTemplateBlock)
+	blockFile, err = os.Create(TestFileNameTemplateBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -284,9 +291,9 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	return block, nil
 }
 
-func loadTxMetaIntoMemory() error {
+func LoadTxMetaIntoMemory() error {
 	// create a reader from the txmetacache file
-	file, err := os.Open(txMetafileNameTemplate)
+	file, err := os.Open(TestTxMetafileNameTemplate)
 	if err != nil {
 		return err
 	}
@@ -295,7 +302,7 @@ func loadTxMetaIntoMemory() error {
 	// create a buffered reader for the file
 	bufReader := bufio.NewReaderSize(file, 55*1024*1024)
 
-	if err = ReadTxMeta(bufReader, cachedTxMetaStore.(*txmetacache.TxMetaCache)); err != nil {
+	if err = ReadTxMeta(bufReader, TestCachedTxMetaStore.(*txmetacache.TxMetaCache)); err != nil {
 		return err
 	}
 
@@ -416,32 +423,32 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 	return calculatedMerkleRootHash, nil
 }
 
-type localSubtreeStore struct {
-	files map[chainhash.Hash]int
+type TestLocalSubtreeStore struct {
+	Files map[chainhash.Hash]int
 }
 
-func newLocalSubtreeStore() *localSubtreeStore {
-	return &localSubtreeStore{
-		files: make(map[chainhash.Hash]int),
+func NewLocalSubtreeStore() *TestLocalSubtreeStore {
+	return &TestLocalSubtreeStore{
+		Files: make(map[chainhash.Hash]int),
 	}
 }
 
-func (l localSubtreeStore) Health(_ context.Context, _ bool) (int, string, error) {
+func (l TestLocalSubtreeStore) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "", nil
 }
 
-func (l localSubtreeStore) Exists(_ context.Context, key []byte, opts ...options.FileOption) (bool, error) {
-	_, ok := l.files[chainhash.Hash(key)]
+func (l TestLocalSubtreeStore) Exists(_ context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+	_, ok := l.Files[chainhash.Hash(key)]
 	return ok, nil
 }
 
-func (l localSubtreeStore) Get(_ context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	file, ok := l.files[chainhash.Hash(key)]
+func (l TestLocalSubtreeStore) Get(_ context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
 	}
 
-	subtreeBytes, err := os.ReadFile(fmt.Sprintf(fileNameTemplate, file))
+	subtreeBytes, err := os.ReadFile(fmt.Sprintf(TestFileNameTemplate, file))
 	if err != nil {
 		return nil, err
 	}
@@ -449,13 +456,13 @@ func (l localSubtreeStore) Get(_ context.Context, key []byte, opts ...options.Fi
 	return subtreeBytes, nil
 }
 
-func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
-	file, ok := l.files[chainhash.Hash(key)]
+func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
 	}
 
-	subtreeFile, err := os.Open(fmt.Sprintf(fileNameTemplate, file))
+	subtreeFile, err := os.Open(fmt.Sprintf(TestFileNameTemplate, file))
 	if err != nil {
 		return nil, err
 	}
@@ -463,31 +470,31 @@ func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...op
 	return subtreeFile, nil
 }
 
-func (l localSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
+func (l TestLocalSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
+func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
+func (l TestLocalSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+func (l TestLocalSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
+func (l TestLocalSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
+func (l TestLocalSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
 	panic("not implemented")
 }
 
-func (l localSubtreeStore) Close(_ context.Context) error {
+func (l TestLocalSubtreeStore) Close(_ context.Context) error {
 	return nil
 }
 

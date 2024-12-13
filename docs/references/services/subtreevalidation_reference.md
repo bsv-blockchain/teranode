@@ -105,10 +105,10 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 
 Internal implementation of subtree checking logic.
 
-### validateSubtreeInternal
+### ValidateSubtreeInternal
 
 ```go
-func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) (err error)
+func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) (err error)
 ```
 
 Performs internal validation of a subtree.

@@ -18,7 +18,6 @@ func (mc *MiningCandidate) Stringify(long bool) string {
 
 	if !long {
 		sb.WriteString(fmt.Sprintf("Mining Candidate (%.0f transactions)", math.Pow(2, float64(len(mc.MerkleProof)))))
-
 	} else {
 		sb.WriteString(fmt.Sprintf("Mining Candidate (%.0f transactions)\n\t", math.Pow(2, float64(len(mc.MerkleProof)))))
 		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", utils.ReverseAndHexEncodeSlice(mc.Id)))

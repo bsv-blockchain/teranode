@@ -7,7 +7,7 @@ database "Tx Meta Cache" as TxMetaStore
 database "UTXO Store" as UTXOStore
 participant "Block Assembly" as BlockAssembly
 
-ValidateSubtree -> ValidateSubtree: validateSubtreeInternal(ctx, v ValidateSubtree, blockHeight uint32)
+ValidateSubtree -> ValidateSubtree: ValidateSubtreeInternal(ctx, v ValidateSubtree, blockHeight uint32)
 activate ValidateSubtree
 
 ValidateSubtree -> SubtreeStore: Exists(ctx, subtreeHash[:])

@@ -116,7 +116,6 @@ func TestValidNewMerkleBlockWithTxnSet(t *testing.T) {
 				t.Errorf("Failed merkle proof comparison: "+
 					"got %v want %v", got.Bytes(), want)
 			}
-
 		})
 	}
 }
@@ -172,7 +171,6 @@ func TestInvalidNewMerkleBlockWithTxnSet(t *testing.T) {
 			if len(matchedIndices) != tt.indices {
 				t.Errorf("Indices mismatch, got %d expected %d", len(matchedIndices), tt.indices)
 			}
-
 		})
 	}
 }

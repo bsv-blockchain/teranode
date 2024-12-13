@@ -31,13 +31,16 @@ func (m *mruNonceMap) String() string {
 	lastEntryNum := len(m.nonceMap) - 1
 	curEntry := 0
 	buf := bytes.NewBufferString("[")
+
 	for nonce := range m.nonceMap {
 		buf.WriteString(fmt.Sprintf("%d", nonce))
 		if curEntry < lastEntryNum {
 			buf.WriteString(", ")
 		}
+
 		curEntry++
 	}
+
 	buf.WriteString("]")
 
 	return fmt.Sprintf("<%d>%s", m.limit, buf.String())

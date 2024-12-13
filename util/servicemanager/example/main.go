@@ -90,5 +90,4 @@ func main() {
 	} else {
 		logger.Infof("Service manager returned with no errors")
 	}
-
 }

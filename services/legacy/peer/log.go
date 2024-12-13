@@ -39,6 +39,7 @@ func directionString(inbound bool) string {
 	if inbound {
 		return "inbound"
 	}
+
 	return "outbound"
 }
 
@@ -89,7 +90,6 @@ func locatorSummary(locator []*chainhash.Hash, stopHash *chainhash.Hash) string 
 	}
 
 	return fmt.Sprintf("no locator, stop %s", stopHash)
-
 }
 
 // sanitizeString strips any characters which are even remotely dangerous, such
@@ -105,6 +105,7 @@ func sanitizeString(str string, maxLength uint) string {
 		if strings.ContainsRune(safeChars, r) {
 			return r
 		}
+
 		return -1
 	}, str)
 
@@ -113,6 +114,7 @@ func sanitizeString(str string, maxLength uint) string {
 		str = str[:maxLength]
 		str = str + "..."
 	}
+
 	return str
 }
 
@@ -179,9 +181,11 @@ func messageSummary(msg wire.Message) string {
 		rejReason := sanitizeString(msg.Reason, maxRejectReasonLen)
 		summary := fmt.Sprintf("cmd %v, code %v, reason %v", rejCommand,
 			msg.Code, rejReason)
+
 		if rejCommand == wire.CmdBlock || rejCommand == wire.CmdTx {
 			summary += fmt.Sprintf(", hash %v", msg.Hash)
 		}
+
 		return summary
 	}
 
