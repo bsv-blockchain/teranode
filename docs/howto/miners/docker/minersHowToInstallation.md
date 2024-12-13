@@ -273,7 +273,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    ```
    SETTINGS_CONTEXT_1=docker.m
    ```
-
+3. Authenticate with AWS ECR (please check with your Teranode team for the latest credentials).
 
 
 **Step 3: Prepare Local Settings**
@@ -378,9 +378,10 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 Additional Notes:
 
-- The `data` directory will contain persistent data. Ensure regular backups.
+- The `data` directory will contain persistent data. This includes blockchain data and other persistent storage required by the Teranode components. By default, Docker Compose is configured to mount these directories into the respective containers, ensuring that data persists across restarts and container recreation. Ensure regular backups.
 - Under no circumstances should you use this `docker compose` approach for production usage.
 - Please discuss with the Teranode support team for advanced configuration options and optimizations not covered in the present document.
+
 
 ## Reference - Settings
 

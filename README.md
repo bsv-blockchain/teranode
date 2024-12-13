@@ -65,6 +65,7 @@
 1. [Interacting with Asset Server](docs/howto/miners/minersHowToInteractWithAssetServer.md)
 2. [Interacting with RPC Server](docs/howto/miners/minersHowToInteractWithRPCServer.md)
 3. [Managing Disk Space](docs/howto/miners/minersManagingDiskSpace.md)
+4. [Aerospike Configuration Considerations](docs/howto/miners/minersHowToAerospikeTuning.md)
 
 -----
 
