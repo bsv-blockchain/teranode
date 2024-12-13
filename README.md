@@ -66,6 +66,7 @@
 2. [Interacting with RPC Server](docs/howto/miners/minersHowToInteractWithRPCServer.md)
 3. [Managing Disk Space](docs/howto/miners/minersManagingDiskSpace.md)
 4. [Aerospike Configuration Considerations](docs/howto/miners/minersHowToAerospikeTuning.md)
+5. [How To Reset Teranode](docs/howto/miners/minersHowToResetTeranode.md)
 
 -----
 

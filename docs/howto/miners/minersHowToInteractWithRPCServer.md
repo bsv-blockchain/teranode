@@ -1,5 +1,6 @@
 # How to Interact with the RPC Server
 
+Last Modified: 13-December-2024
 
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods.
 
@@ -71,5 +72,13 @@ Errors are returned as JSON-RPC error objects with a code and message. Common er
 - `-32700`: Parse error
 
 
+**Example Request**
+
+The default credentials are `bitcoin:bitcoin`. The default credentials can be changed via settings.
+
+`curl --user bitcoin:bitcoin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}' -H 'content-type: text/plain;' http://localhost:9292/`
+
+
+------
 
 For detailed information on each method's parameters and return values, refer to the Bitcoin SV protocol documentation or the specific Teranode [RPC Reference](../../references/services/rpc_reference.md).

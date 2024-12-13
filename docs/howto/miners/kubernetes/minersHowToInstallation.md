@@ -366,7 +366,14 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 
 
-**Step 9: Monitoring and Logging**
+**Step 9: Access Monitoring Tools**
+
+_Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
+- **Port**: Exposed on port **8090** of the asset container.
+- **Access URL**: http://localhost:8090/viewer
+
+
+**Step 10: Monitoring and Logging**
 
 - Set up your preferred monitoring stack (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
 - Use standard Kubernetes logging practices to access logs:
@@ -376,7 +383,7 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 
 
-**Step 10: Troubleshooting**
+**Step 11: Troubleshooting**
 
 1. Check pod status:
    ```

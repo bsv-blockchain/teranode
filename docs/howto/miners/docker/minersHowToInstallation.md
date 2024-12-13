@@ -342,6 +342,10 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 3. **Prometheus**: Available internally on port 9090
 
 
+4. **Teranode Blockchain Viewer**: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
+   5. **Port**: Exposed on port **8090** of the asset container.
+   6. **Access URL**: http://localhost:8090/viewer
+
 
 **Step 10: Interact with Teranode**
 
@@ -366,8 +370,23 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    ```
 
 
+**Step 12: Docker Log Rotation**
 
-**Step 12: Stopping the Stack**
+Teranode is very verbose and will output a lot of information, especially with logLevel=DEBUG. Make sure to setup log rotation for the containers to avoid running out of disk space.
+
+```
+sudo bash -c 'cat <<EOF > /etc/docker/daemon.json
+{
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m"
+    }
+}
+EOF'
+sudo systemctl restart docker
+```
+
+**Step 13: Stopping the Stack**
 
 1. To stop all services:
    ```
@@ -381,6 +400,13 @@ Additional Notes:
 - The `data` directory will contain persistent data. This includes blockchain data and other persistent storage required by the Teranode components. By default, Docker Compose is configured to mount these directories into the respective containers, ensuring that data persists across restarts and container recreation. Ensure regular backups.
 - Under no circumstances should you use this `docker compose` approach for production usage.
 - Please discuss with the Teranode support team for advanced configuration options and optimizations not covered in the present document.
+
+
+## Optimizations
+
+When running on a box without a public IP, you should enable `legacy_config_Upnp`, so you don't get banned by the SV Nodes.
+
+If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
 
 
 ## Reference - Settings

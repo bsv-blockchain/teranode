@@ -17,6 +17,10 @@ However, you can change the configuration and override any of the default settin
 
 For a list of settings, and their default values, please refer to the reference at the end of this document.
 
+## Environment Variables
+
+As an alternative to configuring settings in `settings_local.conf`, you can also overwrite any setting using environment variable. Please see the `x-teranode-settings` in your `docker-compose.yml` for an example of how to proceed.
+
 ## Optional vs Required services
 
 While most services are required for the proper functioning of Teranode, some services are optional and can be disabled if not needed. The following table provides an overview of the services and their status:
