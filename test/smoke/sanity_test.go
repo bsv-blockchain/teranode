@@ -87,9 +87,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	}
 
 	newTx := bt.NewTx()
+
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-
 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
 
@@ -107,6 +107,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	if err != nil {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
+
 	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
@@ -114,7 +115,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	delay := testEnv.Nodes[0].Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	height, _ := helper.GetBlockHeight(url)
@@ -128,7 +129,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	// wait for the blocks to be generated
 	time.Sleep(5 * time.Second)
-	require.NoError(t, err, "Failed to generate blocks")
+	require.NoError(t, err, "Failed to generate blocks", err)
 
 	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
@@ -150,6 +151,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 		t.Logf("Testing on Best block meta: %v", meta[0].Height)
 		t.Logf("Testing on BlockstoreURL: %v", testEnv.Nodes[0].BlockstoreURL)
+
 		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
