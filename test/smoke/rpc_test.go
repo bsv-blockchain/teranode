@@ -66,7 +66,6 @@ func (suite *RPCTestSuite) TearDownTest() {
 	stopKafka()
 	stopUbsv()
 }
-
 const (
 	ubsv1RPCEndpoint string = "http://localhost:9292"
 	nullStr          string = "null"
@@ -74,7 +73,7 @@ const (
 )
 
 func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
-	var blockchainInfo BlockchainInfo
+	var blockchainInfo helper.BlockchainInfo
 
 	t := suite.T()
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockchaininfo", []interface{}{})
@@ -102,7 +101,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
 func (suite *RPCTestSuite) TestRPCGetPeerInfo() {
 	t := suite.T()
 
-	var p2pResp P2PRPCResponse
+	var p2pResp helper.P2PRPCResponse
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getpeerinfo", []interface{}{})
 
@@ -128,7 +127,7 @@ func (suite *RPCTestSuite) TestRPCGetPeerInfo() {
 func (suite *RPCTestSuite) TestRPCGetInfo() {
 	t := suite.T()
 
-	var getInfo GetInfo
+	var getInfo helper.GetInfo
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getinfo", []interface{}{})
 
@@ -145,8 +144,8 @@ func (suite *RPCTestSuite) TestRPCGetInfo() {
 	t.Logf("%s", resp)
 
 	if getInfo.Error != nil {
-		if strErr, ok := getInfo.Error.(string); ok && strErr == nullStr {
-			t.Errorf("Test failed: getinfo RPC call returned error: %v", strErr)
+		if getInfo.Error.Message != "" {
+			t.Errorf("Test failed: getinfo RPC call returned error: %v", getInfo.Error.Message)
 		} else {
 			t.Errorf("Test failed: getinfo RPC call returned an unexpected error type: %v", getInfo.Error)
 		}
@@ -158,7 +157,7 @@ func (suite *RPCTestSuite) TestRPCGetInfo() {
 func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 	t := suite.T()
 
-	var getDifficulty GetDifficultyResponse
+	var getDifficulty helper.GetDifficultyResponse
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getdifficulty", []interface{}{})
 
@@ -175,8 +174,8 @@ func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 	t.Logf("%s", resp)
 
 	if getDifficulty.Error != nil {
-		if strErr, ok := getDifficulty.Error.(string); ok && strErr == "null" {
-			t.Errorf("Test failed: getdifficulty RPC call returned error: %v", strErr)
+		if getDifficulty.Error.Message != nullStr {
+			t.Errorf("Test failed: getdifficulty RPC call returned error: %v", getDifficulty.Error.Message)
 		} else {
 			t.Errorf("Test failed: getdifficulty RPC call returned an unexpected error type: %v", getDifficulty.Error)
 		}
@@ -194,7 +193,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	var getBlockHash GetBlockHashResponse
+	var getBlockHash helper.GetBlockHashResponse
 
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
@@ -218,8 +217,8 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	t.Logf("%s", resp)
 
 	if getBlockHash.Error != nil {
-		if strErr, ok := getBlockHash.Error.(string); ok && strErr == "null" {
-			t.Errorf("Test failed: getBlockHash RPC call returned error: %v", strErr)
+		if getBlockHash.Error.Message != nullStr {
+			t.Errorf("Test failed: getBlockHash RPC call returned error: %v", getBlockHash.Error.Message)
 		} else {
 			t.Errorf("Test failed: getBlockHash RPC call returned an unexpected error type: %v", getBlockHash.Error)
 		}
@@ -242,7 +241,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 	defer cancel()
 
-	var getBlockByHeightResp GetBlockByHeightResponse
+	var getBlockByHeightResp helper.GetBlockByHeightResponse
 
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
@@ -271,7 +270,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 }
 
 func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
-	var miningInfoResp GetMiningInfoResponse
+	var miningInfoResp helper.GetMiningInfoResponse
 
 	t := suite.T()
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getmininginfo", []interface{}{})
@@ -449,57 +448,47 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	t.Logf("blockStoreURL: %s", blockStoreURL.String())
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
 	require.NoError(t, err, "Error creating blockstore")
-
-	bl := false
 
 	targetHeight := height + 1
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate blocks: %v", err)
 	}
 
-	for i := 0; i < 2; i++ {
-		err := helper.WaitForBlockHeight(url, targetHeight, 60)
-		if err != nil {
-			t.Errorf("Failed to wait for block height: %v", err)
-		}
+	err = helper.WaitForBlockHeight(url, 202, 60)
+	require.NoError(t, err)
 
-		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-		if err != nil {
-			t.Errorf("Failed to get block headers: %v", err)
-		}
+	t.Logf("Target height: %d", targetHeight)
 
-		t.Logf("Testing on Best block header at height: %v %d", header[0].Hash(), meta[0].Height)
+	block, err := blockchainClient.GetBlockByHeight(ctx, targetHeight)
+	require.NoError(t, err)
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, blockStoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
-		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
-		}
+	assert.Greater(t, len(block.SubtreeSlices), 0, "Block not found in blockstore")
 
-		if bl {
-			break
-		}
+	blFound := false
 
-		targetHeight++
+	for i := 0; i < len(block.SubtreeSlices); i++ {
+		subtree := block.SubtreeSlices[i]
+		for _, node := range subtree.Nodes {
+			t.Logf("node.Hash: %s", node.Hash.String())
+			t.Logf("tx.TxIDChainHash().String(): %s", tx.TxIDChainHash().String())
 
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
-		require.NoError(t, err, "Failed to generate blocks")
-
-		if err != nil {
-			t.Errorf("Failed to mine block: %v", err)
+			if node.Hash.String() == tx.TxIDChainHash().String() {
+				blFound = true
+				break
+			}
 		}
 	}
 
-	assert.Equal(t, true, bl, "Test Tx not found in block")
+	assert.True(t, blFound, "TX not found in the blockstore")
 }
 
 func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
-	var bestBlockHash BestBlockHashResp
+	var bestBlockHash helper.BestBlockHashResp
 
-	var respInvalidateBlock InvalidBlockResp
+	var respInvalidateBlock helper.InvalidBlockResp
 
 	tSettings := test.CreateBaseTestSettings()
 
@@ -553,9 +542,9 @@ func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
 }
 
 func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
-	var bestBlockHash BestBlockHashResp
+	var bestBlockHash helper.BestBlockHashResp
 
-	var respReconsiderBlock InvalidBlockResp
+	var respReconsiderBlock helper.InvalidBlockResp
 
 	t := suite.T()
 
@@ -794,7 +783,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	var miningCandidate MiningCandidate
+	var miningCandidate helper.MiningCandidate
 
 	require.NoError(t, err, "Failed to marshal mining candidate")
 
@@ -854,7 +843,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
 	require.NoError(t, err, "Failed to submit mining solution")
 
-	var getBlockHash GetBlockHashResponse
+	var getBlockHash helper.GetBlockHashResponse
 
 	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
 
@@ -1013,7 +1002,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	var miningCandidate MiningCandidate
+	var miningCandidate helper.MiningCandidate
 
 	require.NoError(t, err, "Failed to marshal mining candidate")
 
@@ -1076,7 +1065,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
 	require.NoError(t, err, "Failed to submit mining solution")
 
-	var getBlockHash GetBlockHashResponse
+	var getBlockHash helper.GetBlockHashResponse
 
 	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
 
@@ -1183,7 +1172,7 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 	return hash
 }
 
-func CreateCoinbaseTxCandidate(m MiningCandidate) (*bt.Tx, error) {
+func CreateCoinbaseTxCandidate(m helper.MiningCandidate) (*bt.Tx, error) {
 	tSettings := test.CreateBaseTestSettings()
 
 	arbitraryText := tSettings.Coinbase.ArbitraryText
