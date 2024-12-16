@@ -1,5 +1,16 @@
 package utils
 
+import "fmt"
+
+type JSONError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (je *JSONError) Error() string {
+	return fmt.Sprintf("code: %d, message: %s", je.Code, je.Message)
+}
+
 type BlockchainInfo struct {
 	Result struct {
 		BestBlockHash        string   `json:"bestblockhash"`
@@ -13,7 +24,7 @@ type BlockchainInfo struct {
 		Softforks            []string `json:"softforks"`
 		VerificationProgress float64  `json:"verificationprogress"`
 	} `json:"result"`
-	Error interface{} `json:"error"`
+	Error *JSONError  `json:"error"`
 	ID    interface{} `json:"id"`
 }
 
@@ -42,7 +53,7 @@ type P2PNode struct {
 
 type P2PRPCResponse struct {
 	Result []P2PNode   `json:"result"`
-	Error  interface{} `json:"error"`
+	Error  *JSONError  `json:"error"`
 	ID     interface{} `json:"id"`
 }
 
@@ -59,20 +70,20 @@ type GetInfo struct {
 		TimeOffset      int     `json:"timeoffset"`
 		Version         int     `json:"version"`
 	} `json:"result"`
-	Error interface{} `json:"error"`
-	ID    int         `json:"id"`
+	Error *JSONError `json:"error"`
+	ID    int        `json:"id"`
 }
 
 type GetDifficultyResponse struct {
-	Result float64     `json:"result"`
-	Error  interface{} `json:"error"`
-	ID     int         `json:"id"`
+	Result float64    `json:"result"`
+	Error  *JSONError `json:"error"`
+	ID     int        `json:"id"`
 }
 
 type GetBlockHashResponse struct {
-	Result string      `json:"result"`
-	Error  interface{} `json:"error"`
-	ID     int         `json:"id"`
+	Result string     `json:"result"`
+	Error  *JSONError `json:"error"`
+	ID     int        `json:"id"`
 }
 
 type GetBlockByHeightStatus struct {
@@ -108,8 +119,8 @@ type GetBlockByHeightResponse struct {
 		Nextblockhash     string                 `json:"nextblockhash"`
 		Status            GetBlockByHeightStatus `json:"status"`
 	}
-	Error interface{} `json:"error"`
-	ID    int         `json:"id"`
+	Error *JSONError `json:"error"`
+	ID    int        `json:"id"`
 }
 
 type GetMiningInfoResponse struct {
@@ -122,8 +133,8 @@ type GetMiningInfoResponse struct {
 		NetworkHashPs    float64 `json:"networkhashps"`
 		Chain            string  `json:"chain"`
 	}
-	Error interface{} `json:"error"`
-	ID    int         `json:"id"`
+	Error *JSONError `json:"error"`
+	ID    int        `json:"id"`
 }
 
 type MiningCandidate struct {
@@ -140,24 +151,24 @@ type MiningCandidate struct {
 		NumTxs              uint32   `json:"num_txs"`
 		SizeWithoutCoinbase uint64   `json:"sizeWithoutCoinbase"`
 	}
-	Error interface{} `json:"error"`
-	ID    int         `json:"id"`
+	Error *JSONError `json:"error"`
+	ID    int        `json:"id"`
 }
 
 type InvalidBlockResp struct {
 	Result interface{} `json:"result"`
-	Error  interface{} `json:"error"`
+	Error  *JSONError  `json:"error"`
 	ID     int         `json:"id"`
 }
 
 type BestBlockHashResp struct {
-	Result string      `json:"result"`
-	Error  interface{} `json:"error"`
-	ID     int         `json:"id"`
+	Result string     `json:"result"`
+	Error  *JSONError `json:"error"`
+	ID     int        `json:"id"`
 }
 
 type CreateRawTransactionResp struct {
-	Result string      `json:"result"`
-	Error  interface{} `json:"error"`
-	ID     int         `json:"id"`
+	Result string     `json:"result"`
+	Error  *JSONError `json:"error"`
+	ID     int        `json:"id"`
 }

@@ -107,9 +107,10 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 				"message": "Method not found"
 		}
 	*/
+
 	// Check if the response body contains an error
 	var jsonResponse struct {
-		Error interface{} `json:"error"`
+		Error *JSONError `json:"error"`
 	}
 
 	if err := json.Unmarshal(body, &jsonResponse); err != nil {

@@ -439,8 +439,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
+	if err != nil {
+		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.Hash().String(), err)
+	}
+
 	if !headerValid {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] invalid block header: %s", b.Hash().String(), b.Header.Hash().String(), err)
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.Hash().String())
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
