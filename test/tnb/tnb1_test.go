@@ -1,5 +1,18 @@
 //go:build test_all || test_tnb
 
+// How to run tests:
+//
+// Run all tests in the suite:
+// go test -v -tags test_tnb ./test/tnb
+//
+// Run a specific test:
+// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$" ./test/tnb
+// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestNoReformattingRequired$" ./test/tnb
+//
+// Run with test coverage:
+// go test -v -tags test_tnb -coverprofile=coverage.out ./test/tnb
+// go tool cover -html=coverage.out
+
 //Settings:
 // Uses validator_sendBatchSize.docker.ubsv.test.tnb1Test=10
 
@@ -142,6 +155,108 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 			require.True(t, found, "txHash not found in txHashesFromSubtree")
 		}
 	}
+}
+
+func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
+	t := suite.T()
+	node := testEnv.Nodes[0]
+	logger := testEnv.Logger
+
+	// Create a transaction with Extended Format
+	tx, err := helper.CreateAndSendTx(ctx, node)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
+
+	_, err = helper.GenerateBlocks(ctx, node, 1, logger)
+	require.NoError(t, err)
+
+	// Wait for block processing
+	time.Sleep(5 * time.Second)
+
+	// Verify transaction exists in block
+	block, err := helper.GetBestBlockV2(ctx, node)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+
+	// Get and validate subtrees
+	err = block.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	require.NoError(t, err)
+
+	// Check if transaction exists in the block's subtrees
+	found := false
+
+	for _, subtree := range block.SubtreeSlices {
+		for _, txHash := range subtree.Nodes {
+			if txHash.Hash.String() == tx.String() {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			break
+		}
+	}
+
+	require.True(t, found, "Transaction not found in block's subtrees")
+}
+
+func (suite *TNB1TestSuite) TestNoReformattingRequired() {
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
+	t := suite.T()
+	node := testEnv.Nodes[0]
+	logger := testEnv.Logger
+
+	// Create multiple transactions with different characteristics
+	txHashes := make([]chainhash.Hash, 0)
+	for i := 0; i < 5; i++ {
+		txHash, err := helper.CreateAndSendTx(ctx, node)
+		require.NoError(t, err)
+		txHashes = append(txHashes, txHash)
+	}
+
+	// Generate a block
+	_, err := helper.GenerateBlocks(ctx, node, 1, logger)
+	require.NoError(t, err)
+
+	// Wait for block processing
+	time.Sleep(5 * time.Second)
+
+	// Get the block and verify transactions
+	block, err := helper.GetBestBlockV2(ctx, node)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+
+	// Get and validate subtrees
+	err = block.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	require.NoError(t, err)
+
+	// Create a map to track which transactions we've found
+	foundTxs := make(map[string]bool)
+	for _, txHash := range txHashes {
+		foundTxs[txHash.String()] = false
+	}
+
+	// Check each subtree for transactions
+	for _, subtree := range block.SubtreeSlices {
+		for _, node := range subtree.Nodes {
+			if _, exists := foundTxs[node.Hash.String()]; exists {
+				foundTxs[node.Hash.String()] = true
+			}
+		}
+	}
+
+	// Verify all transactions were found
+	missingTxs := make([]string, 0)
+	for txHash, found := range foundTxs {
+		if !found {
+			missingTxs = append(missingTxs, txHash)
+		}
+	}
+	require.Empty(t, missingTxs, "Transactions not found in block's subtrees: %v", missingTxs)
 }
 
 func TestTNB1TestSuite(t *testing.T) {

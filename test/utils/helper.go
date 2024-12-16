@@ -1073,6 +1073,31 @@ func CreateTransaction(utxo *bt.UTXO, address string, satoshis uint64, privateKe
 	return tx, nil
 }
 
+// CreateTransactionObject creates a transaction object from a node's coinbase funds without sending it
+func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, address string, amount uint64, privateKey *bec.PrivateKey) (*bt.Tx, error) {
+	coinbaseClient := node.CoinbaseClient
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address, true)
+	if err != nil {
+		return nil, errors.NewProcessingError("Failed to request funds", err)
+	}
+
+	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		return nil, errors.NewProcessingError("Failed to send faucet transaction", err)
+	}
+
+	output := faucetTx.Outputs[0]
+	u := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	return CreateTransaction(u, address, amount, privateKey)
+}
+
 func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{

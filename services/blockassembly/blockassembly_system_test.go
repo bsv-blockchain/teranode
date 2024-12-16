@@ -492,7 +492,6 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
-
 	t.Logf("Creating block assembler...")
 
 	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
@@ -594,7 +593,6 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	t.Log("Waiting for transactions to be processed...")
 	time.Sleep(2 * time.Second)
-
 
 	// Get mining candidate with timeout context
 	t.Log("Getting mining candidate...")
@@ -722,9 +720,9 @@ func TestShouldHandleReorg(t *testing.T) {
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         1,
-		Bits:          *chainABits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          1,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	// Create chain B (competing chain) with higher difficulty
@@ -734,9 +732,9 @@ func TestShouldHandleReorg(t *testing.T) {
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         3,
-		Bits:          *chainBBits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          3,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	// Add transactions
@@ -876,36 +874,36 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         1,
-		Bits:          *chainABits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          1,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	chainAHeader2 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  chainAHeader1.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         2,
-		Bits:          *chainABits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          2,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	chainAHeader3 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  chainAHeader2.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         3,
-		Bits:          *chainABits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          3,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	chainAHeader4 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  chainAHeader3.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         4,
-		Bits:          *chainABits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          4,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	// Create chain B (competing chain) with higher difficulty
@@ -915,9 +913,9 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:         10,
-		Bits:          *chainBBits,
-		Timestamp:     uint32(time.Now().Unix()),
+		Nonce:          10,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
 	}
 
 	// Add transactions

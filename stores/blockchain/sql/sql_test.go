@@ -23,7 +23,7 @@ var (
 	block3PrevBlockHash, _  = chainhash.NewHashFromStr("484e58c7bf0208d787314710535ef7be8ca31748bc9fef5e1ee2de67ebda757a")
 	block3MerkleRootHash, _ = chainhash.NewHashFromStr("d1de05a65845a49ad63eed887c4cf7cc824e02b5d10de82829f740b748b9737f")
 	coinbaseTx3, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030300002f6d312d65752fb670097da68d1b768d8b21f6ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-		block1                  = &model.Block{
+	block1                  = &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
 			Timestamp:      1729259727,

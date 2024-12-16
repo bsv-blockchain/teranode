@@ -100,6 +100,8 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 	if !skipSetUpTestClient {
 		var err error
 
+		time.Sleep(10 * time.Second)
+
 		err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
 		if err != nil {
 			suite.T().Fatal(err)

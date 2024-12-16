@@ -41,3 +41,27 @@ func TestBuildMerkleRootFromCoinbase(t *testing.T) {
 		assert.Equal(t, "596907991495a39471b16d4d69804372d7dc2d7d64bf9255767db34f36f5669f", merkleRootHash.String())
 	})
 }
+
+func TestBuildMerkleRootFromCoinbaseOnlyTransaction(t *testing.T) {
+	t.Run("ternanode block 1 - coinbase only", func(t *testing.T) {
+		merkleBranchesStr := []string{}
+
+		merkleBranches := make([][]byte, len(merkleBranchesStr))
+
+		for i, s := range merkleBranchesStr {
+			hash, err := chainhash.NewHashFromStr(s)
+			require.NoError(t, err)
+
+			merkleBranches[i] = hash.CloneBytes()
+		}
+
+		coinbaseHash, err := chainhash.NewHashFromStr("370b0097df4dc2caeaadae5cb703bc39dca5599b9d3443bb02387fc050f40b0d")
+		require.NoError(t, err)
+
+		merkleRoot := BuildMerkleRootFromCoinbase(coinbaseHash.CloneBytes(), merkleBranches)
+		merkleRootHash, err := chainhash.NewHash(merkleRoot)
+		require.NoError(t, err)
+
+		assert.Equal(t, "370b0097df4dc2caeaadae5cb703bc39dca5599b9d3443bb02387fc050f40b0d", merkleRootHash.String())
+	})
+}

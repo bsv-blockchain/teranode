@@ -6,9 +6,14 @@ package subtreevalidation
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -21,7 +26,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
 	"github.com/bitcoin-sv/ubsv/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,11 +80,6 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		_, err = txMetaStore.Create(context.Background(), tx4, 0)
 		require.NoError(t, err)
 
-		t.Log(tx1.TxIDChainHash().String())
-		t.Log(tx2.TxIDChainHash().String())
-		t.Log(tx3.TxIDChainHash().String())
-		t.Log(tx4.TxIDChainHash().String())
-
 		nodeBytes, err := subtree.SerializeNodes()
 		require.NoError(t, err)
 
@@ -101,22 +105,6 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
-
-// func TestBlockValidation_blessMissingTransaction(t *testing.T) {
-// 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-// 		InitPrometheusMetrics()
-
-// 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
-// 		defer deferFunc()
-
-// 		blockValidation := NewSubtreeValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
-// 		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
-// 		require.NoError(t, err)
-
-// 		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
-// 		require.NoError(t, err)
-// 	})
-// }
 
 func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
@@ -234,4 +222,251 @@ func TestServer_prepareTxsPerLevel(t *testing.T) {
 			assert.Equal(t, tc.expectedTxMapLen, allParents)
 		})
 	}
+}
+
+func createSpendingTx(t *testing.T, prevTx *bt.Tx, vout uint32, amount uint64, address *bscript.Address, privateKey *bec.PrivateKey) *bt.Tx {
+	tx := bt.NewTx()
+	err := tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      prevTx.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: prevTx.Outputs[vout].LockingScript,
+		Satoshis:      prevTx.Outputs[vout].Satoshis,
+	})
+	require.NoError(t, err)
+
+	err = tx.AddP2PKHOutputFromAddress(address.AddressString, amount)
+	require.NoError(t, err)
+
+	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	require.NoError(t, err)
+
+	return tx
+}
+
+func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	// Create coinbase transaction
+	coinbaseTx := bt.NewTx()
+	err = coinbaseTx.From(
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		0xffffffff,
+		"",
+		0,
+	)
+	require.NoError(t, err)
+
+	blockHeight := uint32(100)
+	blockHeightBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockHeightBytes, blockHeight)
+
+	arbitraryData := []byte{}
+	arbitraryData = append(arbitraryData, 0x03)
+	arbitraryData = append(arbitraryData, blockHeightBytes[:3]...)
+	arbitraryData = append(arbitraryData, []byte("/Test miner/")...)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+
+	err = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	require.NoError(t, err)
+
+	// Create tx1 with multiple outputs for the chain
+	tx1 := bt.NewTx()
+	err = tx1.FromUTXOs(&bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: coinbaseTx.Outputs[0].LockingScript,
+		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
+	})
+	require.NoError(t, err)
+
+	// Create enough outputs for the chain
+	outputAmount := uint64(20 * 100000000)
+	remainingAmount := coinbaseTx.Outputs[0].Satoshis
+
+	for i := 0; i < count-1; i++ {
+		if i == count-2 {
+			// Last output gets remaining amount minus fees
+			outputAmount = remainingAmount - 100000 // Leave some for fees
+		}
+
+		err = tx1.AddP2PKHOutputFromAddress(address.AddressString, outputAmount)
+		require.NoError(t, err)
+
+		remainingAmount -= outputAmount
+	}
+
+	err = tx1.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	require.NoError(t, err)
+
+	// Create the chain of transactions
+	result := []*bt.Tx{coinbaseTx, tx1}
+
+	for i := 0; i < count-2; i++ {
+		//nolint:gosec
+		tx := createSpendingTx(t, tx1, uint32(i), 15*100000000, address, privateKey)
+		result = append(result, tx)
+	}
+
+	return result
+}
+
+// TNE-1.1: If Teranode has already validated the same transaction it is not required to perform
+// the same validation again. The transaction can already be considered valid.
+func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
+	t.Run("test get subtree tx hashes", func(t *testing.T) {
+		InitPrometheusMetrics()
+		// Setup test
+		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+		defer deferFunc()
+
+		// Create test transactions
+		txs := createTestTransactionChainWithCount(t, 7)
+		coinbaseTx, tx1, tx2, tx3, tx4, tx5, tx6 := txs[0], txs[1], txs[2], txs[3], txs[4], txs[5], txs[6]
+
+		// Store initial transactions in txMetaStore
+		_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 1)
+		_, _ = txMetaStore.Create(context.Background(), tx1, 1)
+		_, _ = txMetaStore.Create(context.Background(), tx2, 1)
+		_, _ = txMetaStore.Create(context.Background(), tx3, 1)
+		_, _ = txMetaStore.Create(context.Background(), tx4, 1)
+
+		// Create subtrees
+		subtree1, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		subtree2, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		// Add transactions to subtrees
+		hash1 := tx1.TxIDChainHash()
+		hash2 := tx2.TxIDChainHash()
+		hash3 := tx3.TxIDChainHash()
+		hash4 := tx4.TxIDChainHash()
+		hash5 := tx5.TxIDChainHash()
+		hash6 := tx6.TxIDChainHash()
+
+		// Create subtree1 with tx1, tx2, tx3, tx4
+		require.NoError(t, subtree1.AddNode(*hash1, 121, 0))
+		require.NoError(t, subtree1.AddNode(*hash2, 122, 0))
+		require.NoError(t, subtree1.AddNode(*hash3, 123, 0))
+		require.NoError(t, subtree1.AddNode(*hash4, 124, 0))
+
+		// Create subtree2 with tx1, tx2, tx5, tx6
+		require.NoError(t, subtree2.AddNode(*hash1, 121, 0))
+		require.NoError(t, subtree2.AddNode(*hash2, 122, 0))
+		require.NoError(t, subtree2.AddNode(*hash5, 123, 0))
+		require.NoError(t, subtree2.AddNode(*hash6, 124, 0))
+
+		// Setup HTTP mocks
+		nodes1Bytes, err := subtree1.SerializeNodes()
+		require.NoError(t, err)
+		nodes2Bytes, err := subtree2.SerializeNodes()
+		require.NoError(t, err)
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("/subtree/%s", subtree1.RootHash().String()),
+			httpmock.NewBytesResponder(200, nodes1Bytes),
+		)
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("/subtree/%s", subtree2.RootHash().String()),
+			httpmock.NewBytesResponder(200, nodes2Bytes),
+		)
+
+		// Setup batch transaction responder
+		httpmock.RegisterResponder(
+			"POST",
+			"/txs",
+			func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					return nil, err
+				}
+
+				numHashes := len(body) / 32
+
+				var responseBytes []byte
+
+				for i := 0; i < numHashes; i++ {
+					hashBytes := body[i*32 : (i+1)*32]
+
+					hash, err := chainhash.NewHash(hashBytes)
+					require.NoError(t, err)
+
+					var tx *bt.Tx
+
+					switch hash.String() {
+					case tx5.TxIDChainHash().String():
+						tx = tx5
+					case tx6.TxIDChainHash().String():
+						tx = tx6
+					default:
+						return nil, errors.NewError("unexpected hash in request: " + hash.String())
+					}
+
+					responseBytes = append(responseBytes, tx.ExtendedBytes()...)
+				}
+
+				return httpmock.NewBytesResponse(200, responseBytes), nil
+			},
+		)
+
+		// Setup and run validation
+		nilConsumer := &kafka.KafkaConsumerGroup{}
+		tSettings := test.CreateBaseTestSettings()
+		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+		require.NoError(t, err)
+
+		// Validate subtree1
+		v1 := ValidateSubtree{
+			SubtreeHash:   *subtree1.RootHash(),
+			BaseURL:       "http://localhost:8000",
+			TxHashes:      nil,
+			AllowFailFast: false,
+		}
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100)
+		require.NoError(t, err)
+
+		// Verify initial cache state
+		_, err = txMetaStore.Get(context.Background(), hash1)
+		require.NoError(t, err, "tx1 should be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash2)
+		require.NoError(t, err, "tx2 should be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash3)
+		require.NoError(t, err, "tx3 should be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash4)
+		require.NoError(t, err, "tx4 should be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash5)
+		require.Error(t, err, "tx5 should NOT be in cache before processing subtree2")
+		_, err = txMetaStore.Get(context.Background(), hash6)
+		require.Error(t, err, "tx6 should NOT be in cache before processing subtree2")
+
+		// Validate subtree2
+		v2 := ValidateSubtree{
+			SubtreeHash:   *subtree2.RootHash(),
+			BaseURL:       "http://localhost:8000",
+			TxHashes:      nil,
+			AllowFailFast: false,
+		}
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100)
+		require.NoError(t, err)
+
+		// Verify final cache state
+		_, err = txMetaStore.Get(context.Background(), hash1)
+		require.NoError(t, err, "tx1 should still be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash2)
+		require.NoError(t, err, "tx2 should still be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash3)
+		require.NoError(t, err, "tx3 should still be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash4)
+		require.NoError(t, err, "tx4 should still be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash5)
+		require.NoError(t, err, "tx5 should now be in cache")
+		_, err = txMetaStore.Get(context.Background(), hash6)
+		require.NoError(t, err, "tx6 should now be in cache")
+	})
 }
