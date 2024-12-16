@@ -10,8 +10,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -36,6 +34,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -49,23 +48,182 @@ type RPCTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *RPCTestSuite) SetupTest() {
-	removeDataDirectory()
+// waitForProcessToStop waits for a process matching the given pattern to stop
+func waitForProcessToStop(pattern string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("pgrep", "-f", pattern)
+		if err := cmd.Run(); err != nil {
+			// Process not found, which means it has stopped
+			return nil
+		}
 
-	if err := startKafka("kafka.log"); err != nil {
-		log.Fatalf("Failed to start Kafka: %v", err)
+		time.Sleep(100 * time.Millisecond)
 	}
 
+	return errors.NewProcessingError("process did not stop within timeout")
+}
+
+func startKafka(logFile string, logger ulogger.Logger) error {
+	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
+	kafkaLog, err := os.Create(logFile)
+
+	if err != nil {
+		return err
+	}
+
+	defer kafkaLog.Close()
+
+	kafkaCmd.Stdout = kafkaLog
+	kafkaCmd.Stderr = kafkaLog
+
+	return kafkaCmd.Start()
+}
+
+func startApp(logFile string, logger ulogger.Logger) error {
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	err := helper.RemoveDataDirectory("../../data", isGitHubActions)
+
+	if err != nil {
+		return err
+	}
+
+	appCmd := exec.Command("go", "run", "../../.")
+
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.rpc")
+
+	appLog, err := os.Create(logFile)
+	if err != nil {
+		return err
+	}
+	defer appLog.Close()
+
+	appCmd.Stdout = appLog
+	appCmd.Stderr = appLog
+
+	logger.Infof("Starting app in the background...")
+
+	if err := appCmd.Start(); err != nil {
+		return err
+	}
+
+	appPID = appCmd.Process.Pid
+
+	logger.Infof("Waiting for app to be ready...")
+
+	for {
+		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness")
+		if err == nil {
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	logger.Infof("App ready")
+
+	return nil
+}
+
+func stopKafka(logger ulogger.Logger) {
+	logger.Infof("Stopping Kafka...")
+
+	// First stop the container
+	stopCmd := exec.Command("docker", "stop", "kafka-server")
+	if err := stopCmd.Run(); err != nil {
+		logger.Infof("Failed to stop Kafka container: %v\n", err)
+	}
+
+	// Wait for container to fully stop
+	time.Sleep(2 * time.Second)
+
+	// Remove the container
+	rmCmd := exec.Command("docker", "rm", "-f", "kafka-server")
+	if err := rmCmd.Run(); err != nil {
+		logger.Infof("Failed to remove Kafka container: %v\n", err)
+	} else {
+		logger.Infof("Kafka container removed successfully")
+	}
+
+	// Remove any leftover Kafka data
+	if err := os.RemoveAll("./kafka-data"); err != nil {
+		logger.Infof("Failed to remove Kafka data directory: %v\n", err)
+	}
+
+	logger.Infof("Kafka cleanup completed")
+}
+
+func stopUbsv(logger ulogger.Logger) {
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+
+	logger.Infof("Stopping UBSV...")
+
+	// First try graceful shutdown using SIGTERM
+	termCmd := exec.Command("pkill", "-TERM", "-f", "ubsv")
+	if err := termCmd.Run(); err != nil {
+		logger.Infof("Failed to stop UBSV gracefully: %v\n", err)
+
+		// If graceful shutdown fails, try SIGINT
+		intCmd := exec.Command("pkill", "-INT", "-f", "ubsv")
+		if err := intCmd.Run(); err != nil {
+			logger.Infof("Failed to stop UBSV with SIGINT: %v\n", err)
+
+			// As a last resort, force kill
+			killCmd := exec.Command("pkill", "-9", "-f", "ubsv")
+			if err := killCmd.Run(); err != nil {
+				logger.Infof("Failed to force stop UBSV: %v\n", err)
+			}
+		}
+	}
+
+	// Wait up to 5 seconds for the process to fully stop
+	if err := waitForProcessToStop("ubsv", 5*time.Second); err != nil {
+		logger.Infof("Warning: UBSV process may not have fully stopped: %v\n", err)
+	}
+
+	// Remove data directory with proper error handling
+	if err := helper.RemoveDataDirectory("./data", isGitHubActions); err != nil {
+		logger.Infof("Failed to remove data directory: %v\n", err)
+	} else {
+		logger.Infof("Data directory removed successfully")
+	}
+
+	logger.Infof("UBSV cleanup completed")
+}
+
+func (suite *RPCTestSuite) SetupTest() {
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+
+	if err := startKafka("kafka.log", log); err != nil {
+		log.Errorf("Failed to start Kafka: %v", err)
+	}
+
+	// Wait for Kafka to be fully ready
+	time.Sleep(2 * time.Second)
+
 	// Start the app
-	if err := startApp("app.log"); err != nil {
-		log.Fatalf("Failed to start app: %v", err)
+	if err := startApp("app.log", log); err != nil {
+		log.Errorf("Failed to start app: %v", err)
+		// If app fails to start, make sure to clean up Kafka
+		stopKafka(log)
 	}
 }
 
 func (suite *RPCTestSuite) TearDownTest() {
-	stopKafka()
-	stopUbsv()
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
+	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+	// First stop UBSV
+	stopUbsv(log)
+
+	// Wait for UBSV to fully stop before stopping Kafka
+	time.Sleep(2 * time.Second)
+
+	// Then stop Kafka
+	stopKafka(log)
+
 }
+
 const (
 	ubsv1RPCEndpoint string = "http://localhost:9292"
 	nullStr          string = "null"
@@ -295,60 +453,6 @@ func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
 	}
 }
 
-func startKafka(logFile string) error {
-	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
-	kafkaLog, err := os.Create(logFile)
-
-	if err != nil {
-		return err
-	}
-
-	defer kafkaLog.Close()
-
-	kafkaCmd.Stdout = kafkaLog
-	kafkaCmd.Stderr = kafkaLog
-
-	return kafkaCmd.Start()
-}
-
-func startApp(logFile string) error {
-	appCmd := exec.Command("go", "run", "../../.")
-
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.rpc")
-
-	appLog, err := os.Create(logFile)
-	if err != nil {
-		return err
-	}
-	defer appLog.Close()
-
-	appCmd.Stdout = appLog
-	appCmd.Stderr = appLog
-
-	log.Println("Starting app in the background...")
-
-	if err := appCmd.Start(); err != nil {
-		return err
-	}
-
-	appPID = appCmd.Process.Pid
-
-	log.Println("Waiting for app to be ready...")
-
-	for {
-		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness")
-		if err == nil {
-			break
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	log.Println("App ready")
-
-	return nil
-}
-
 func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	tSettings := test.CreateBaseTestSettings()
 
@@ -436,7 +540,6 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	}
 
 	height, _ := helper.GetBlockHeight(url)
-	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
@@ -764,7 +867,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
 	height, _ := helper.GetBlockHeight(url)
-	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
@@ -983,7 +1085,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
 	height, _ := helper.GetBlockHeight(url)
-	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
@@ -1128,39 +1229,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
-}
-
-func stopKafka() {
-	log.Println("Stopping Kafka...")
-
-	cmd := exec.Command("docker", "stop", "kafka-server")
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to stop Kafka: %v\n", err)
-	} else {
-		log.Println("Kafka stopped successfully")
-	}
-}
-
-func stopUbsv() {
-	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-
-	log.Println("Stopping UBSV...")
-
-	cmd := exec.Command("pkill", "-f", "ubsv")
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to stop UBSV: %v\n", err)
-	} else {
-		log.Println("UBSV stopped successfully")
-	}
-
-	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
-}
-
-func removeDataDirectory() {
-	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
 }
 
 func newHashFromStr(hexStr string) *chainhash.Hash {
