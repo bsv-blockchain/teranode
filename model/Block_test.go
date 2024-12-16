@@ -7,12 +7,14 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -462,64 +464,81 @@ func TestT(t *testing.T) {
 
 // tests for msgBlock
 func TestNewBlockFromMsgBlock(t *testing.T) {
-	// Create a mock wire.MsgBlock
-	prevBlockHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-	merkleRootHash, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+	t.Run("test NewBlockFromMsgBlock", func(t *testing.T) {
+		// Create a mock wire.MsgBlock
+		prevBlockHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+		merkleRootHash, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
 
-	msgBlock := &wire.MsgBlock{
-		Header: wire.BlockHeader{
-			Version:    1,
-			PrevBlock:  *prevBlockHash,
-			MerkleRoot: *merkleRootHash,
-			Timestamp:  time.Unix(1231006505, 0),
-			Bits:       0x1d00ffff,
-			Nonce:      2083236893,
-		},
-		Transactions: []*wire.MsgTx{
-			{
-				Version: 1,
-				TxIn: []*wire.TxIn{
-					{
-						PreviousOutPoint: wire.OutPoint{
-							Hash:  chainhash.Hash{},
-							Index: 0xffffffff,
-						},
-						SignatureScript: []byte{0x04, 0xff, 0xff, 0x00, 0x1d, 0x01, 0x04},
-						Sequence:        0xffffffff,
-					},
-				},
-				TxOut: []*wire.TxOut{
-					{
-						Value:    5000000000,
-						PkScript: []byte{0x41, 0x04, 0x67, 0x8a, 0xfd, 0xb0},
-					},
-				},
-				LockTime: 0,
+		msgBlock := &wire.MsgBlock{
+			Header: wire.BlockHeader{
+				Version:    1,
+				PrevBlock:  *prevBlockHash,
+				MerkleRoot: *merkleRootHash,
+				Timestamp:  time.Unix(1231006505, 0),
+				Bits:       0x1d00ffff,
+				Nonce:      2083236893,
 			},
-		},
-	}
+			Transactions: []*wire.MsgTx{
+				{
+					Version: 1,
+					TxIn: []*wire.TxIn{
+						{
+							PreviousOutPoint: wire.OutPoint{
+								Hash:  chainhash.Hash{},
+								Index: 0xffffffff,
+							},
+							SignatureScript: []byte{0x04, 0xff, 0xff, 0x00, 0x1d, 0x01, 0x04},
+							Sequence:        0xffffffff,
+						},
+					},
+					TxOut: []*wire.TxOut{
+						{
+							Value:    5000000000,
+							PkScript: []byte{0x41, 0x04, 0x67, 0x8a, 0xfd, 0xb0},
+						},
+					},
+					LockTime: 0,
+				},
+			},
+		}
 
-	// Call the function
-	block, err := NewBlockFromMsgBlock(msgBlock)
+		// Call the function
+		block, err := NewBlockFromMsgBlock(msgBlock)
 
-	// Assert no error
-	assert.NoError(t, err)
+		// Assert no error
+		assert.NoError(t, err)
 
-	expectedBits, err := NewNBitFromString("1d00ffff")
-	assert.NoError(t, err)
+		expectedBits, err := NewNBitFromString("1d00ffff")
+		assert.NoError(t, err)
 
-	// Assert block properties
-	assert.Equal(t, uint32(1), block.Header.Version)
-	assert.Equal(t, prevBlockHash, block.Header.HashPrevBlock)
-	assert.Equal(t, merkleRootHash, block.Header.HashMerkleRoot)
-	assert.Equal(t, uint32(1231006505), block.Header.Timestamp)
-	assert.Equal(t, *expectedBits, block.Header.Bits)
-	assert.Equal(t, uint32(2083236893), block.Header.Nonce)
+		// Assert block properties
+		assert.Equal(t, uint32(1), block.Header.Version)
+		assert.Equal(t, prevBlockHash, block.Header.HashPrevBlock)
+		assert.Equal(t, merkleRootHash, block.Header.HashMerkleRoot)
+		assert.Equal(t, uint32(1231006505), block.Header.Timestamp)
+		assert.Equal(t, *expectedBits, block.Header.Bits)
+		assert.Equal(t, uint32(2083236893), block.Header.Nonce)
 
-	assert.Equal(t, uint64(1), block.TransactionCount)
-	assert.NotNil(t, block.CoinbaseTx)
-	assert.Equal(t, uint64(msgBlock.SerializeSize()), block.SizeInBytes) // nolint: gosec
-	assert.Empty(t, block.Subtrees)
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.NotNil(t, block.CoinbaseTx)
+		assert.Equal(t, uint64(msgBlock.SerializeSize()), block.SizeInBytes) // nolint: gosec
+		assert.Empty(t, block.Subtrees)
+	})
+
+	t.Run("test NewBlockFromMsgBlock incorrect merkle root", func(t *testing.T) {
+		msgBlock, err := os.ReadFile("./testdata/000000000e511cb16e3a0dda35c9cf813f6f020d3e42394623b12ba2a8f73b8a.msgBlock")
+		require.NoError(t, err)
+
+		reader := bytes.NewReader(msgBlock)
+
+		block, err := bsvutil.NewBlockFromReader(reader)
+		require.NoError(t, err)
+
+		assert.NotNil(t, block)
+
+		coinbaseTxStr := block.MsgBlock().Transactions[0].TxHash().String()
+		assert.NotNil(t, coinbaseTxStr)
+	})
 }
 
 func TestNewBlockFromMsgBlockAndModelBlock(t *testing.T) {

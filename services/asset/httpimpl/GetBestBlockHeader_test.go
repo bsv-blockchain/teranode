@@ -29,6 +29,7 @@ func TestGetBestBlockHeader(t *testing.T) {
 		}
 
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+		assert.Equal(t, "application/json; charset=UTF-8", responseRecorder.Header().Get("Content-Type"))
 
 		var response map[string]interface{}
 		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
@@ -47,6 +48,8 @@ func TestGetBestBlockHeader(t *testing.T) {
 		assert.Equal(t, "Miner", response["miner"])
 		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", response["previousblockhash"])
 		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", response["merkleroot"])
+
+		mockRepo.AssertNumberOfCalls(t, "GetBestBlockHeader", 1)
 	})
 
 	t.Run("Valid BINARY_STREAM mode", func(t *testing.T) {
