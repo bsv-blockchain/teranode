@@ -868,7 +868,7 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 func (c *Client) Run(ctx context.Context, source string) error {
 	currentState := ""
 
-	state := c.fmsState.Load()
+	state, _ := c.GetFSMCurrentState(ctx)
 	if state != nil {
 		// check whether the current state is the same as the target state
 		if *state == FSMStateRUNNING {

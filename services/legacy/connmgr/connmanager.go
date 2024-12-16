@@ -22,7 +22,7 @@ import (
 const maxFailedAttempts = 25
 
 var (
-	//ErrDialNil is used to indicate that Dial cannot be nil in the configuration.
+	// ErrDialNil is used to indicate that Dial cannot be nil in the configuration.
 	ErrDialNil = errors.New("Config: Dial cannot be nil")
 
 	// maxRetryDuration is the max duration of time retrying of a persistent
@@ -611,7 +611,7 @@ func (cm *ConnManager) Start() {
 				// try to connect to new address every minute, we might have disconnected or have new addresses
 				//nolint:gosec
 				connectionsOpen := uint32(cm.conns.Length())
-				cm.logger.Infof("checking active connections: %d", connectionsOpen)
+				cm.logger.Debugf("checking active connections: %d", connectionsOpen)
 
 				for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound-connectionsOpen); i++ {
 					go cm.NewConnReq()

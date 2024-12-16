@@ -505,10 +505,14 @@ func (p *Peer) String() string {
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 	p.statsMtx.Lock()
+
+	p.logger.Debugf("Updating last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
+
 	if newHeight > p.lastBlock {
-		p.logger.Infof("Updating last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 		p.lastBlock = newHeight
+		p.logger.Infof("Updated last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 	}
+
 	p.statsMtx.Unlock()
 }
 
@@ -1107,8 +1111,7 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	}
 
 	// Write the message to the peer.
-	n, err := wire.WriteMessageWithEncodingN(p.conn, msg,
-		p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
+	n, err := wire.WriteMessageWithEncodingN(p.conn, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
 	atomic.AddUint64(&p.bytesSent, uint64(n))
 	if p.cfg.Listeners.OnWrite != nil {
 		p.cfg.Listeners.OnWrite(p, n, msg, err)
@@ -1239,8 +1242,7 @@ out:
 			case sccSendMessage:
 				// Add a deadline for the expected response
 				// message if needed.
-				p.maybeAddDeadline(pendingResponses,
-					msg.message.Command())
+				p.maybeAddDeadline(pendingResponses, msg.message.Command())
 
 			case sccReceiveMessage:
 				// Remove received messages from the expected
@@ -1312,9 +1314,7 @@ out:
 					continue
 				}
 
-				p.logger.Debugf("Peer %s appears to be stalled or "+
-					"misbehaving, %s timeout -- "+
-					"disconnecting", p, command)
+				p.logger.Debugf("Peer %s appears to be stalled or misbehaving, %s timeout -- disconnecting", p, command)
 				p.Disconnect()
 				break
 			}
@@ -1353,11 +1353,9 @@ cleanup:
 	p.logger.Debugf("Peer stall handler done for %s", p)
 }
 
-// inHandler handles all incoming messages for the peer.  It must be run as a
-// goroutine.
+// inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
-	// The timer is stopped when a new message is received and reset after it
-	// is processed.
+	// The timer is stopped when a new message is received and reset after it is processed.
 	idleTimer := time.AfterFunc(idleTimeout, func() {
 		p.logger.Warnf("Peer %s no answer for %s -- disconnecting", p, idleTimeout)
 		p.Disconnect()
@@ -1396,8 +1394,7 @@ out:
 				// at least that much of the message was valid, but that is not
 				// currently exposed by wire, so just used malformed for the
 				// command.
-				p.PushRejectMsg("malformed", wire.RejectMalformed, errMsg, nil,
-					true)
+				p.PushRejectMsg("malformed", wire.RejectMalformed, errMsg, nil, true)
 
 				p.Disconnect()
 			}
@@ -1411,8 +1408,7 @@ out:
 		switch msg := rmsg.(type) {
 		case *wire.MsgVersion:
 			// Limit to one version message per peer.
-			p.PushRejectMsg(msg.Command(), wire.RejectDuplicate,
-				"duplicate version message", nil, true)
+			p.PushRejectMsg(msg.Command(), wire.RejectDuplicate, "duplicate version message", nil, true)
 			break out
 
 		case *wire.MsgVerAck:
@@ -1526,8 +1522,7 @@ out:
 			}
 
 		default:
-			p.logger.Debugf("Received unhandled message of type %v "+
-				"from %v", rmsg.Command(), p)
+			p.logger.Debugf("Received unhandled message of type %v from %v", rmsg.Command(), p)
 		}
 		p.stallControl <- stallControlMsg{sccHandlerDone, rmsg}
 

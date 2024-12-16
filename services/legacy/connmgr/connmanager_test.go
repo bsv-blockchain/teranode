@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -197,12 +198,29 @@ func TestTargetOutbound(t *testing.T) {
 	targetOutbound := uint32(10)
 	connected := make(chan *ConnReq)
 
+	takenAddresses := make(map[int32]struct{})
+	takenAddressesMu := sync.Mutex{}
+
 	cmgr, err := New(ulogger.TestLogger{}, &Config{
 		TargetOutbound: targetOutbound,
 		Dial:           mockDialer,
 		GetNewAddress: func() (net.Addr, error) {
-			//nolint:gosec
-			newAddress := rand.Int32N(255)
+			var newAddress int32
+
+			for {
+				takenAddressesMu.Lock()
+
+				//nolint:gosec
+				newAddress = rand.Int32N(255)
+				if _, ok := takenAddresses[newAddress]; !ok {
+					takenAddresses[newAddress] = struct{}{}
+					takenAddressesMu.Unlock()
+					break
+				}
+
+				takenAddressesMu.Unlock()
+			}
+
 			return &net.TCPAddr{
 				IP:   net.ParseIP(fmt.Sprintf("127.0.0.%d", newAddress)),
 				Port: 18555,

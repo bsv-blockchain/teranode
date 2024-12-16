@@ -263,7 +263,7 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-// checkSubtree validates a subtree and its transactions based on the provided request.
+// CheckSubtree validates a subtree and its transactions based on the provided request.
 // It handles both legacy and current validation paths, managing locks to prevent
 // duplicate processing.
 //
@@ -290,6 +290,9 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 }
 
 // checkSubtree is the internal function used to check a subtree
+// This function expects a subtree to have been stored in the subtree store with an extension of .subtreeToCheck
+// compared to the normal .subtree extension. This is done so that the subtree validation does not think that the subtree
+// is a valid subtree and has already been checked.
 func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (ok bool, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
@@ -344,12 +347,13 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 
 			var subtree *util.Subtree
 
+			// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 			if request.BaseUrl == "legacy" {
 				// read from legacy store
 				subtreeBytes, err := u.subtreeStore.Get(
 					ctx,
 					hash[:],
-					options.WithFileExtension("subtree"),
+					options.WithFileExtension("subtreeToCheck"),
 				)
 				if err != nil {
 					return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
@@ -373,9 +377,9 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 					AllowFailFast: false,
 				}
 
-				// Call the ValidateSubtreeInternal method
-				if err = u.ValidateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
-					// u.logger.Errorf("SAO %s", err)
+				// Call the validateSubtreeInternal method
+				// making sure to skip policy checks, since we are validating a block that has already been mined
+				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight, validator.WithSkipPolicyChecks(true)); err != nil {
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)
 				}
 
@@ -392,7 +396,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 			}
 
 			// Call the ValidateSubtreeInternal method
-			if err = u.ValidateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
+			if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
 				return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 			}
 

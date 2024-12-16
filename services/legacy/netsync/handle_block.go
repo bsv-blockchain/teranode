@@ -152,6 +152,12 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
 
+	// pre-check that there is enough proof of work on the block, before we do any other processing
+	headerValid, _, err := teranodeBlock.Header.HasMetTargetDifficulty()
+	if !headerValid {
+		return errors.NewBlockInvalidError("invalid block header: %s", teranodeBlock.Header.Hash().String(), err)
+	}
+
 	// call the process block wrapper, which will add tracing and logging
 	err = sm.ProcessBlock(ctx, teranodeBlock)
 	if err != nil {
@@ -283,17 +289,24 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 		}
 
-		if legacyMode {
+		catchingBlocks, err := sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_CATCHINGBLOCKS)
+		if err != nil {
+			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+		}
+
+		if legacyMode || catchingBlocks {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
 			if err = sm.validateTransactionsLegacyMode(ctx, txMap, block); err != nil {
 				return nil, err
 			}
-		} else {
-			maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
-			if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
-				return nil, err
-			}
+
+			// } else {
+			// do not validate transactions, just create the subtree and send to block validation
+			// maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
+			// if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
+			// 	return nil, err
+			// }
 		}
 
 		var subtreeBytes []byte
@@ -306,7 +319,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err = sm.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			subtreeBytes,
-			options.WithFileExtension("subtree"),
+			options.WithFileExtension("subtreeToCheck"),
 			options.WithTTL(120*time.Minute),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return nil, errors.NewStorageError("failed to store subtree", err)

@@ -1426,6 +1426,25 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		delete(state.banned, host)
 	}
 
+	// check whether we are already connected to this peer
+	for _, outboundPeer := range state.outboundPeers {
+		if outboundPeer.Addr() == sp.Addr() {
+			s.logger.Infof("[handleAddPeerMsg] Already connected to outbound peer %s, disconnecting in favor of new connection", sp)
+			outboundPeer.Disconnect()
+			// remove from state.outboundPeers
+			delete(state.outboundPeers, outboundPeer.ID())
+		}
+	}
+
+	for _, inboundPeer := range state.inboundPeers {
+		if inboundPeer.Addr() == sp.Addr() {
+			s.logger.Infof("[handleAddPeerMsg] Already connected to inbound peer %s, disconnecting in favor of new connection", sp)
+			inboundPeer.Disconnect()
+			// remove from state.inboundPeers
+			delete(state.inboundPeers, inboundPeer.ID())
+		}
+	}
+
 	// Limit max number of total peers per ip.
 	if state.CountIP(host) >= cfg.MaxPeersPerIP {
 		s.logger.Infof("Max peers per IP reached [%d] - disconnecting peer %s",

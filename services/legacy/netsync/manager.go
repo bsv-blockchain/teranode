@@ -382,11 +382,13 @@ func (sm *SyncManager) startSync() {
 		// check whether we are in sync with this peer and send RUNNING FSM state
 		// nolint:gosec // the height will never exceed int32.Max
 		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
-			sm.logger.Infof("peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
+			sm.logger.Debugf("peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
 			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
 			}
+
+			return
 		}
 
 		// Clear the requestedBlocks if the sync peer changes, otherwise
@@ -400,7 +402,16 @@ func (sm *SyncManager) startSync() {
 			return
 		}
 
-		sm.logger.Infof("Syncing to block height %d from peer %v", bestPeer.LastBlock(), bestPeer.String())
+		sm.logger.Infof("Syncing from block height %d to block height %d using peer %v", bestBlockHeaderMeta.Height, bestPeer.LastBlock(), bestPeer.String())
+
+		// If we are behind the peer more than 10 blocks, move to CATCHING BLOCKS
+		//nolint:gosec
+		if bestPeer.LastBlock()-int32(bestBlockHeaderMeta.Height) > 10 {
+			// move FSM state to CATCHING BLOCKS, we are behind the peer more than 10 blocks
+			if err = sm.blockchainClient.CatchUpBlocks(sm.ctx); err != nil {
+				sm.logger.Errorf("failed to set blockchain state to catching blocks: %v", err)
+			}
+		}
 
 		// When the current height is less than a known checkpoint we
 		// can use block headers to learn about which blocks comprise
@@ -572,6 +583,10 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 // topBlock returns the best chains top block height
 func (sm *SyncManager) topBlock() int32 {
+	if sm.syncPeer == nil {
+		return 0
+	}
+
 	if sm.syncPeer.LastBlock() > sm.syncPeer.StartingHeight() {
 		return sm.syncPeer.LastBlock()
 	}
@@ -692,8 +707,8 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
 	timeStart := time.Now()
-	// nolint:gosec
-	err = sm.validationClient.Validate(ctx, btTx, uint32(sm.topBlock()))
+	// passing in block height 0, which will default to utxo store block height in validator
+	err = sm.validationClient.Validate(ctx, btTx, 0)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -776,8 +791,8 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		}
 
 		// validate the orphan transaction
-		// nolint:gosec
-		err := sm.validationClient.Validate(ctx, orphanTx.tx, uint32(sm.topBlock()))
+		// passing in block height 0, which will default to utxo store block height in validator
+		err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) {
 				// silently exit, we will accept this transaction when the parent comes in
@@ -859,7 +874,7 @@ func (sm *SyncManager) current() bool {
 
 // handleBlockMsg handles block messages from all peers.
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
-	sm.logger.Debugf("[handleBlockMsg][%s] received block from %s", bmsg.blockHash, bmsg.peer)
+	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
 	peer := bmsg.peer
 
 	state, exists := sm.peerStates[peer]
@@ -972,6 +987,17 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	heightUpdate = bmsg.blockHeight
 	blkHashUpdate = &bmsg.blockHash
+
+	if heightUpdate <= 0 {
+		// get the height of the new block from the blockchain store
+		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &bmsg.blockHash)
+		if err != nil {
+			sm.logger.Errorf("Failed to get block header for block %v: %v", bmsg.blockHash, err)
+		} else {
+			//nolint:gosec
+			heightUpdate = int32(blockHeaderMeta.Height)
+		}
+	}
 
 	// Clear the rejected transactions.
 	sm.rejectedTxns = make(map[chainhash.Hash]struct{})
@@ -1836,8 +1862,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// this will be called when an orphan transaction is evicted from the map
 	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
 		// try to process one last time
-		// nolint:gosec
-		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
+		// passing in block height 0, which will default to utxo store block height in validator
+		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
 			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
@@ -1972,7 +1998,7 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
 		}
 
-		sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
+		sm.logger.Debugf("Received INV message from Kafka from peer %s", wireInvMsg.peer)
 
 		// Queue the INV message on the internal message channel
 		sm.msgChan <- wireInvMsg

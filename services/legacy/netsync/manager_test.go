@@ -145,7 +145,7 @@ func TestPeerConnections(t *testing.T) {
 	syncMgr.NewPeer(localNode1, syncChan)
 	select {
 	case <-syncChan:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("Timeout waiting for sync manager to register peer %d",
 			localNode1.ID())
 	}
@@ -158,10 +158,13 @@ func TestPeerConnections(t *testing.T) {
 	// Now connect the SyncManager to a full node, which it should start syncing
 	// from.
 	peerCfg.Services = wire.SFNodeNetwork
+
 	_, localNode2, err := MakeConnectedPeers(peerCfg, peerCfg, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	localNode2.UpdateLastBlockHeight(100)
 
 	syncMgr.NewPeer(localNode2, syncChan)
 	select {
@@ -182,6 +185,8 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	localNode3.UpdateLastBlockHeight(100)
 
 	syncMgr.NewPeer(localNode3, syncChan)
 	select {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -208,7 +209,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata if validation succeeds
 //   - error: Any error encountered during validation
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32, validationOptions ...validator.Option) (txMeta *meta.Data, err error) {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
@@ -228,7 +229,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 	// this should spend utxos, create the tx meta and create new utxos
 	// TODO return tx meta data
 	// u.logger.Debugf("[blessMissingTransaction][%s] validating transaction (pq:)", tx.TxID())
-	err = u.validatorClient.Validate(ctx, tx, blockHeight)
+	err = u.validatorClient.Validate(ctx, tx, blockHeight, validationOptions...)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
 		return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
@@ -263,9 +264,9 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-// ValidateSubtreeInternal performs the actual validation of a subtree.
+// validateSubtreeInternal performs the actual validation of a subtree.
 // It handles transaction validation, metadata management, and subtree storage.
-func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) (err error) {
+func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) (err error) {
 	startTotal := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
@@ -417,7 +418,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
 
-			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseURL, txMetaSlice, blockHeight)
+			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseURL, txMetaSlice, blockHeight, validationOptions...)
 			if err != nil {
 				// u.logger.Errorf("SAO %s", err)
 				// Don't wrap the error again, processMissingTransactions returns the correctly formatted error.
@@ -596,7 +597,8 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 // processMissingTransactions handles the retrieval and validation of missing transactions
 // in a subtree. It supports both file-based and network-based transaction retrieval.
-func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32) (err error) {
+func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
+	baseURL string, txMetaSlice []*meta.Data, blockHeight uint32, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions")
 	defer func() {
 		deferFn(err)
@@ -655,7 +657,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 			}
 
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, mTx.tx, blockHeight)
+				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, mTx.tx, blockHeight, validationOptions...)
 				if err != nil {
 					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 				}
@@ -790,7 +792,14 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		options.WithFileExtension("subtree"),
 	)
 	if err != nil {
-		return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtree from store", err)
+		// try getting the subtree from the store, marked as to be checked from the legacy service
+		subtreeReader, err = u.subtreeStore.GetIoReader(ctx,
+			subtreeHash[:],
+			options.WithFileExtension("subtreeToCheck"),
+		)
+		if err != nil {
+			return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtree from store", err)
+		}
 	}
 	defer subtreeReader.Close()
 
