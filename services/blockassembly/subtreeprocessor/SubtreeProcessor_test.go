@@ -3,7 +3,9 @@ package subtreeprocessor
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -410,6 +412,50 @@ func TestMoveUpBlock(t *testing.T) {
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
 	assert.Equal(t, 1, stp.currentSubtree.Length())
+}
+
+// TestMoveUpBlock tests the moveUpBlock method
+// bug #1817
+func TestMoveUpBlock_LeftInQueue(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	subtreeStore := blob_memory.New()
+	utxosStore := memory.New(logger)
+
+	subtreeHash, _ := chainhash.NewHashFromStr("fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b")
+
+	subtreeBytes, err := os.ReadFile("./testdata/fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b.subtree")
+	require.NoError(t, err)
+
+	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), subtreeBytes, options.WithFileExtension("subtree"))
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings()
+	// tSettings.BlockAssembly.DoubleSpendWindow = 10 * time.Millisecond
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
+
+	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, utxosStore, nil)
+	require.NoError(t, err)
+
+	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
+	subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 1, SizeInBytes: 294})
+
+	assert.Equal(t, 1, len(subtreeProcessor.currentSubtree.Nodes))
+	// assert.Equal(t, subtreeHash.String(), subtreeProcessor.currentSubtree.RootHash().String())
+
+	// Move up the block
+	blockBytes, err := hex.DecodeString("000000206a21d13c3d2656557493b4652f67a763f835b86bf90107a60f412c290000000083ba48026c405d5a4b4d5aa3f10cee9de605a012e9a25f72a19aa9fe123380c689505c67c874461cc6dda18002fde501016b104579e34c5c12fad8899035be27f7605f8ff95db814ba02fbc49397a761fd01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1903af32190000000000205f7c477c327c437c5f200001000000ffffffff01e50b5402000000001976a9147a112f6a373b80b4ebb2b02acef97f35aef7494488ac00000000feaf321900")
+	require.NoError(t, err)
+
+	block, err := model.NewBlockFromBytes(blockBytes)
+	require.NoError(t, err)
+
+	err = subtreeProcessor.moveUpBlock(ctx, block, true)
+	require.NoError(t, err)
+
+	assert.Len(t, subtreeProcessor.chainedSubtrees, 0)
+	assert.Len(t, subtreeProcessor.currentSubtree.Nodes, 1)
+	assert.Equal(t, *util.CoinbasePlaceholderHash, subtreeProcessor.currentSubtree.Nodes[0].Hash)
 }
 
 func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
