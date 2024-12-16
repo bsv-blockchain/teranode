@@ -190,10 +190,11 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	if len(params) > 0 {
 		lastParam := params[len(params)-1]
 
-		if err, ok := lastParam.(*Error); ok {
+		switch err := lastParam.(type) {
+		case *Error:
 			wErr = err
 			params = params[:len(params)-1]
-		} else if err, ok := lastParam.(error); ok {
+		case error:
 			wErr = &Error{message: err.Error()}
 			params = params[:len(params)-1]
 		}
