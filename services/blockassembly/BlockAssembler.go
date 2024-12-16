@@ -495,10 +495,14 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var coinbaseMerkleProofBytes [][]byte
 
-	// set the size without the coinbase to the size of the blockheader
+	// set the size without the coinbase to the size of the block header
+	// This should probably have the size of the varint for the tx count as well
+	// but bitcoin-sv node doesn't do that.
 	sizeWithoutCoinbase = 80
 
-	if len(subtrees) > 0 {
+	if len(subtrees) == 0 {
+		txCount = 1
+	} else {
 		currentBlockSize := uint64(0)
 
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
