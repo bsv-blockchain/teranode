@@ -6,12 +6,12 @@
 package legacy
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -43,7 +43,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -258,6 +258,7 @@ type server struct {
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
 	tempStore         blob.Store
+	concurrentStore   *blob.ConcurrentBlob[chainhash.Hash]
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	blockAssembly     *blockassembly.Client
@@ -1210,30 +1211,14 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
-	// check if we already have the block cached locally
-	blockBytes, err := s.tempStore.Get(s.ctx,
-		hash.CloneBytes(),
-		options.WithFileExtension("msgBlock"),
-		options.WithSubDirectory("blocks"),
-	)
-	if err != nil || len(blockBytes) == 0 {
+	// use a concurrent store to make sure we do not request the legacy block multiple times
+	// for different peers. This makes sure we serve the block from a local cache store and not from the utxo store.
+	reader, err := s.concurrentStore.Get(s.ctx, *hash, func() (io.ReadCloser, error) {
 		url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
-
-		blockBytes, err = util.DoHTTPRequest(s.ctx, url)
-		if err != nil {
-			sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
-
-			if doneChan != nil {
-				doneChan <- struct{}{}
-			}
-
-			return err
-		}
-	}
-
-	var msgBlock wire.MsgBlock
-	if err = msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
-		sp.server.logger.Infof("Unable to deserialize requested block hash %v: %v", hash, err)
+		return util.DoHTTPRequestBodyReader(s.ctx, url)
+	})
+	if err != nil {
+		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1242,17 +1227,19 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		return err
 	}
 
-	// store block temporarily in local cache, for other peers to be able to fetch it
-	// we do this after verifying the block is valid by deserializing it first with the wire package
-	if err = s.tempStore.Set(s.ctx,
-		hash.CloneBytes(),
-		blockBytes,
-		options.WithTTL(90*time.Minute),
-		options.WithFileExtension("msgBlock"),
-		options.WithSubDirectory("blocks"),
-		options.WithAllowOverwrite(true),
-	); err != nil {
-		sp.server.logger.Errorf("unable to store block in local cache: %v", err)
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	var msgBlock wire.MsgBlock
+	if err = msgBlock.Deserialize(reader); err != nil {
+		sp.server.logger.Infof("Unable to deserialize requested block hash %v: %v", hash, err)
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
 	}
 
 	// Once we have fetched data wait for any previous operation to finish.
@@ -2461,12 +2448,19 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
 		tempStore:            tempStore,
-		subtreeValidation:    subtreeValidation,
-		blockValidation:      blockValidation,
-		blockAssembly:        blockAssembly,
-		assetHTTPAddress:     assetHTTPAddress,
-		banList:              banList,
-		banChan:              banChan,
+		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
+			tempStore,
+			blob_options.WithTTL(90*time.Minute),
+			blob_options.WithFileExtension("msgBlock"),
+			blob_options.WithSubDirectory("blocks"),
+			blob_options.WithAllowOverwrite(true),
+		),
+		subtreeValidation: subtreeValidation,
+		blockValidation:   blockValidation,
+		blockAssembly:     blockAssembly,
+		assetHTTPAddress:  assetHTTPAddress,
+		banList:           banList,
+		banChan:           banChan,
 	}
 
 	s.syncManager, err = netsync.New(

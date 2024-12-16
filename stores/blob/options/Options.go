@@ -41,13 +41,14 @@ func NewFileOptions(opts ...FileOption) *Options {
 	return options
 }
 
-// Store creation options
+// WithDefaultTTL configures the default TTL for the store.
 func WithDefaultTTL(ttl time.Duration) StoreOption {
 	return func(s *Options) {
 		s.TTL = &ttl
 	}
 }
 
+// WithDefaultSubDirectory configures the default subdirectory for the store.
 func WithDefaultSubDirectory(subDirectory string) StoreOption {
 	return func(s *Options) {
 		s.SubDirectory = subDirectory
@@ -69,30 +70,36 @@ func WithHashPrefix(length int) StoreOption {
 }
 
 // Per-call options
+
+// WithTTL configures the TTL for the file.
 func WithTTL(ttl time.Duration) FileOption {
 	return func(s *Options) {
 		s.TTL = &ttl
 	}
 }
 
+// WithFilename configures the filename for the file.
 func WithFilename(name string) FileOption {
 	return func(s *Options) {
 		s.Filename = name
 	}
 }
 
+// WithFileExtension configures the file extension for the file.
 func WithFileExtension(extension string) FileOption {
 	return func(s *Options) {
 		s.Extension = extension
 	}
 }
 
+// WithSubDirectory configures the subdirectory for the file.
 func WithSubDirectory(subDirectory string) FileOption {
 	return func(s *Options) {
 		s.SubDirectory = subDirectory
 	}
 }
 
+// WithAllowOverwrite configures whether to allow overwriting of the file.
 func WithAllowOverwrite(allowOverwrite bool) FileOption {
 	return func(s *Options) {
 		s.AllowOverwrite = allowOverwrite
