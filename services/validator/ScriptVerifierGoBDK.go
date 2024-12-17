@@ -84,14 +84,18 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		logger: l,
 		policy: po,
 		params: pa,
+		whiteList: map[string]struct{}{
+			"7be4fa421844154ec4105894def768a8bcd80da25792947d585274ce38c07105": {}, // See https://github.com/bitcoin-sv/ubsv/issues/1776
+		},
 	}
 }
 
 // scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
 type scriptVerifierGoBDK struct {
-	logger ulogger.Logger
-	policy *settings.PolicySettings
-	params *chaincfg.Params
+	logger    ulogger.Logger
+	policy    *settings.PolicySettings
+	params    *chaincfg.Params
+	whiteList map[string]struct{}
 }
 
 // VerifyScript implements script verification using the Go-BDK library
@@ -113,10 +117,13 @@ type scriptVerifierGoBDK struct {
 //
 // Note: Empty scripts and special cases are handled with appropriate logging
 func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error {
+	txID := tx.TxID()
+	if _, has := v.whiteList[txID]; has {
+		return nil
+	}
+
 	eTxBytes := tx.ExtendedBytes()
-
-	err := bdkscript.VerifyExtend(eTxBytes, blockHeight+1)
-
+	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1)
 	if err != nil {
 		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)
 		v.logger.Warnf(errorLogMsg)
