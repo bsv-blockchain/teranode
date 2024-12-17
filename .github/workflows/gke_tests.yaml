@@ -7,6 +7,20 @@ env:
   ECR_REGION: eu-north-1
 
 jobs:
+
+
+  go-buildtest:
+    name: build non-unit tests
+    runs-on: ubsv-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+          cache: "false"
+      - name: Build Go tests in test directory
+        run: make buildtest
+
   go-longtests:
     name: Go longtests
     runs-on: ubsv-runner

@@ -147,6 +147,10 @@ else
 	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags "testtxmetacache" -count=1 $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
+.PHONY: buildtest
+buildtest:
+	mkdir -p test/build && go test -tags test_all -c -o test/build ./test/...
+
 .PHONY: longtests
 longtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)

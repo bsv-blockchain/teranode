@@ -27,6 +27,18 @@ jobs:
           only-new-issues: true
           args: --timeout=5m
 
+  buildtest:
+    name: build non-unit tests
+    runs-on: ubsv-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+          cache: "false"
+      - name: Build Go tests in test directory
+        run: make buildtest
+
   test:
     name: test
     runs-on: ubsv-runner

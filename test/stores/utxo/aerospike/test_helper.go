@@ -115,7 +115,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *ubsv_aerospike.Store, cont
 	require.NoError(t, err)
 
 	// raw client to be able to do gets and cleanup
-	client, aeroErr := uaerospike.NewClient(host, port)
+	client, aeroErr := aerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
 
 	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)

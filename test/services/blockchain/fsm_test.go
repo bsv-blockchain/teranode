@@ -32,7 +32,7 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL)
+	blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 	require.NoError(t, err)
 
 	ctx := context.Background()

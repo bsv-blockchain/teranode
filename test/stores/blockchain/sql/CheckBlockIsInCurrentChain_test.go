@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
 	storesql "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
@@ -31,7 +32,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// No blocks stored, should return false
@@ -53,7 +54,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1
@@ -83,7 +84,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1 and block2
@@ -128,7 +129,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1
@@ -154,7 +155,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1, block2, and an alternative block (block2Alt)
@@ -209,7 +210,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1, block2, and an alternative block (block2Alt)
@@ -264,7 +265,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
-		s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 		require.NoError(t, err)
 
 		// Store block1 and block2

@@ -264,9 +264,9 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-// validateSubtreeInternal performs the actual validation of a subtree.
+// ValidateSubtreeInternal performs the actual validation of a subtree.
 // It handles transaction validation, metadata management, and subtree storage.
-func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) (err error) {
+func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) (err error) {
 	startTotal := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),

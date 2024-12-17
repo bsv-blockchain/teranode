@@ -101,7 +101,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.validateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
 		require.NoError(t, err)
 	})
 }
@@ -172,7 +172,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the ValidateSubtreeInternal method
-	err = subtreeValidation.validateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
+	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
 	require.NoError(t, err)
 }
 
@@ -428,7 +428,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.validateSubtreeInternal(context.Background(), v1, 100)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100)
 		require.NoError(t, err)
 
 		// Verify initial cache state
@@ -452,7 +452,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.validateSubtreeInternal(context.Background(), v2, 100)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100)
 		require.NoError(t, err)
 
 		// Verify final cache state

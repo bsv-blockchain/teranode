@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	storesql "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -32,7 +33,7 @@ func Test_SetGetFSMState(t *testing.T) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	s, err := storesql.New(ulogger.TestLogger{}, storeURL)
+	s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
 	require.NoError(t, err)
 
 	err = s.SetFSMState(context.Background(), "CATCHING_BLOCKS")
