@@ -6,6 +6,7 @@ import (
 	reflect "reflect"
 	"strings"
 
+	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -43,10 +44,27 @@ func (e *Error) Error() string {
 		dataMsg = e.data.Error()
 	}
 
+	if gocore.Config().GetBool("brief_errors", false) {
+		if e.WrappedErr() == nil {
+			if dataMsg == "" {
+				return fmt.Sprintf("%s (%d): %v", e.code.Enum(), e.code, e.message)
+			}
+
+			return fmt.Sprintf("%d: %v %q", e.code, e.message, dataMsg)
+		}
+
+		if dataMsg == "" {
+			return fmt.Sprintf("%s (%d): %v -> %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
+		}
+
+		return fmt.Sprintf("%s (%d): %v -> %v %q", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
+	}
+
 	if e.WrappedErr() == nil {
 		if dataMsg == "" {
 			return fmt.Sprintf("Error: %s (error code: %d), Message: %v", e.code.Enum(), e.code, e.message)
 		}
+
 		return fmt.Sprintf("%d: %v, data: %s", e.code, e.message, dataMsg)
 	}
 
@@ -54,7 +72,6 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
 	}
 
-	fmt.Println("Returning: ", fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg))
 	return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
 }
 
@@ -113,6 +130,7 @@ func (e *Error) As(target interface{}) bool {
 		if reflect.ValueOf(e.wrappedErr).IsNil() {
 			return false
 		}
+
 		return errors.As(e.wrappedErr, target)
 	}
 
