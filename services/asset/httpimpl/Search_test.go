@@ -98,7 +98,7 @@ func TestSearch(t *testing.T) {
 
 		assert.Equal(t, float64(400), responseJSON["status"])
 		assert.Equal(t, float64(1), responseJSON["code"])
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: missing query parameter", responseJSON["error"])
+		assert.Equal(t, "INVALID_ARGUMENT (1): missing query parameter", responseJSON["error"])
 	})
 
 	t.Run("Search invalid hash", func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestSearch(t *testing.T) {
 		// Check response fields
 		assert.Equal(t, float64(400), responseJSON["status"])
 		assert.Equal(t, float64(1), responseJSON["code"])
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: query must be a valid hash or block height", responseJSON["error"])
+		assert.Equal(t, "INVALID_ARGUMENT (1): query must be a valid hash or block height", responseJSON["error"])
 	})
 
 	t.Run("Search invalid hash format", func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestSearch(t *testing.T) {
 		// Check response fields
 		assert.Equal(t, float64(400), responseJSON["status"])
 		assert.Equal(t, float64(1), responseJSON["code"])
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: error reading hash, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", responseJSON["error"])
+		assert.Equal(t, "INVALID_ARGUMENT (1): error reading hash -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", responseJSON["error"])
 	})
 
 	t.Run("Search nothing found", func(t *testing.T) {
@@ -184,7 +184,7 @@ func TestSearch(t *testing.T) {
 
 		assert.Equal(t, float64(404), responseJSON["status"])
 		assert.Equal(t, float64(3), responseJSON["code"])
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: no matching entity found", responseJSON["error"])
+		assert.Equal(t, "NOT_FOUND (3): no matching entity found", responseJSON["error"])
 	})
 
 	t.Run("Search invalid query format", func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestSearch(t *testing.T) {
 		// Check response fields
 		assert.Equal(t, float64(400), responseJSON["status"])
 		assert.Equal(t, float64(1), responseJSON["code"])
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: block height must be greater than or equal to 0", responseJSON["error"])
+		assert.Equal(t, "INVALID_ARGUMENT (1): block height must be greater than or equal to 0", responseJSON["error"])
 	})
 
 	t.Run("Search find transaction", func(t *testing.T) {
@@ -342,6 +342,6 @@ func TestSearch(t *testing.T) {
 		require.NotNil(t, response)
 		assert.Equal(t, float64(404), response["status"])
 		assert.Equal(t, float64(3), response["code"])
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: block not found", response["error"])
+		assert.Equal(t, "NOT_FOUND (3): block not found", response["error"])
 	})
 }

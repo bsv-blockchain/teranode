@@ -140,7 +140,7 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid UTXO hash format", func(t *testing.T) {
@@ -160,7 +160,7 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash format, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("UTXO not found", func(t *testing.T) {
@@ -183,7 +183,7 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: UTXO not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): UTXO not found", echoErr.Message)
 	})
 
 	t.Run("UTXO not found status", func(t *testing.T) {
@@ -208,7 +208,7 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: UTXO not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): UTXO not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: repository error", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): repository error", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
@@ -262,6 +262,6 @@ func TestGetUTXO(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: bad read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
 }

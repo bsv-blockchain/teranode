@@ -61,7 +61,7 @@ func TestGetLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid hash format", func(t *testing.T) {
@@ -79,7 +79,7 @@ func TestGetLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash format, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Block not found", func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestGetLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: block not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): block not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestGetLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting block", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting block", echoErr.Message)
 	})
 }
 
@@ -174,7 +174,7 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid hash string", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash string, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Invalid hash extension", func(t *testing.T) {
@@ -210,7 +210,7 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash extension", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash extension", echoErr.Message)
 	})
 
 	t.Run("Block not found", func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: block not found, Wrapped err: Error: NOT_FOUND (error code: 3), Message: block not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): block not found -> NOT_FOUND (3): block not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -252,6 +252,6 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting block, Wrapped err: Error: PROCESSING (error code: 4), Message: error getting block", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting block -> PROCESSING (4): error getting block", echoErr.Message)
 	})
 }

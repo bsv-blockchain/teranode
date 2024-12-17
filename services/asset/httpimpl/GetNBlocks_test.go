@@ -217,7 +217,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid number of blocks", func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid number of blocks, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid number of blocks -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting blocks, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error getting block", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting blocks -> STORAGE_ERROR (59): error getting block", echoErr.Message)
 	})
 
 	t.Run("Repository not found", func(t *testing.T) {
@@ -286,7 +286,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: blocks not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): blocks not found", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
@@ -314,6 +314,6 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: bad read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
 }

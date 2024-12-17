@@ -715,8 +715,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 
-	expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49)"
-	// Message [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found, Wrapped err: Error: UNKNOWN (error code: 0), Message: sql: no rows in result set"
+	expectedErrorMessage := "SERVICE_ERROR (49)"
 	require.Contains(t, err.Error(), expectedErrorMessage)
 }
 
@@ -776,8 +775,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
-
-		// Create a replicated subtree to calculate the merkle root with the coinbase
+		// now create a subtree with the coinbase to calculate the merkle root
 		replicatedSubtree := subtree.Duplicate()
 		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
 
@@ -834,9 +832,6 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	// Then: An error should be received because the chain does not connect to the Genesis block
 	require.Error(t, err)
-	// expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49), [ValidateBlock][" + blocks[len(blocks)-1].Header.Hash().String() + "] failed to store block: Error: STORAGE_ERROR (error code: 59), error storing block " + blocks[len(blocks)-1].Header.Hash().String() + " as previous block " + blocks[0].Header.HashPrevBlock.String() + " not found: 0: sql: no rows in result set"
-	// require.Contains(t, err.Error(), expectedErrorMessage)
-
 	t.Logf("Error received as expected: %s", err.Error())
 	t.Logf("Time taken: %s\n", time.Since(start))
 }

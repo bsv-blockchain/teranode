@@ -79,7 +79,7 @@ func TestGetBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid offset format, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid offset format -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Invalid limit parameter", func(t *testing.T) {
@@ -98,7 +98,7 @@ func TestGetBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid limit format, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid limit format -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("No blocks found", func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestGetBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: blocks not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): blocks not found", echoErr.Message)
 	})
 
 	t.Run("Best block header retrieval failure", func(t *testing.T) {
@@ -145,6 +145,6 @@ func TestGetBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting best block header, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error getting best block header", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting best block header -> STORAGE_ERROR (59): error getting best block header", echoErr.Message)
 	})
 }

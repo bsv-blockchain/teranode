@@ -97,7 +97,7 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid limit parameter", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid limit parameter", echoErr.Message)
 	})
 
 	t.Run("Invalid block hash length", func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid block hash format", func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid block hash format, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+007A 'z'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+007A 'z'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -144,6 +144,6 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: error getting block header", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (59): error getting block header", echoErr.Message)
 	})
 }

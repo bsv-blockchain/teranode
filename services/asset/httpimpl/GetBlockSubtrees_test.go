@@ -116,7 +116,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid hash string", func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash string, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Block not found", func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: block not found", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (59): block not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: repository error", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (59): repository error", echoErr.Message)
 	})
 
 	t.Run("Invalid limit parameter", func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid limit format, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid limit format -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
@@ -235,6 +235,6 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: bad read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
 }

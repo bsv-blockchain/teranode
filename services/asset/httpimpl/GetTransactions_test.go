@@ -79,7 +79,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error reading request body, Wrapped err: Error: UNKNOWN (error code: 0), Message: unexpected EOF", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error reading request body -> UNKNOWN (0): unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Transaction not found", func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: transaction not found, Wrapped err: Error: NOT_FOUND (error code: 3), Message: transaction not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): transaction not found -> NOT_FOUND (3): transaction not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -125,6 +125,6 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting transaction, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error getting transaction", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting transaction -> STORAGE_ERROR (59): error getting transaction", echoErr.Message)
 	})
 }

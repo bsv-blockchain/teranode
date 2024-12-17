@@ -90,7 +90,7 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid 'n' parameter, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.ParseInt: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid 'n' parameter -> UNKNOWN (0): strconv.ParseInt: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Invalid 'fromHeight' parameter", func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid 'fromHeight' parameter, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.ParseUint: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid 'fromHeight' parameter -> UNKNOWN (0): strconv.ParseUint: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -133,14 +133,14 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: error getting last N blocks", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (59): error getting last N blocks", echoErr.Message)
 	})
 
 	t.Run("No blocks found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetLastNBlocks", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("no blocks found"))
+		mockRepo.On("GetLastNBlocks", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("blocks not found"))
 
 		// set echo context
 		echoContext.SetPath("/blocks/last")
@@ -154,7 +154,7 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: no blocks found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): blocks not found", echoErr.Message)
 	})
 }
 

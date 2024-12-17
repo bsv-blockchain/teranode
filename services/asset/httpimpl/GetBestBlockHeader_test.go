@@ -102,7 +102,7 @@ func TestGetBestBlockHeader(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid read mode", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -119,6 +119,6 @@ func TestGetBestBlockHeader(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting best block header", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting best block header", echoErr.Message)
 	})
 }

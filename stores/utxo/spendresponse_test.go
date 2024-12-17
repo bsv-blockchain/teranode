@@ -66,5 +66,5 @@ func TestSpendResponse_FromBytes_InvalidLength(t *testing.T) {
 	err := sr.FromBytes(data)
 
 	assert.Error(t, err)
-	assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid byte length", err.Error())
+	assert.Equal(t, "INVALID_ARGUMENT (1): invalid byte length", err.Error())
 }

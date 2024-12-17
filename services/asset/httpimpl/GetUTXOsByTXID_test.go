@@ -75,7 +75,7 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid transaction hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid transaction hash length", echoErr.Message)
 	})
 
 	t.Run("Transaction not found", func(t *testing.T) {
@@ -98,7 +98,7 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: TX_NOT_FOUND (error code: 30), Message: transaction not found", echoErr.Message)
+		assert.Equal(t, "TX_NOT_FOUND (30): transaction not found", echoErr.Message)
 	})
 
 	t.Run("Invalid transaction hash format", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid transaction hash format, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid transaction hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -141,6 +141,6 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: error getting transaction", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (59): error getting transaction", echoErr.Message)
 	})
 }

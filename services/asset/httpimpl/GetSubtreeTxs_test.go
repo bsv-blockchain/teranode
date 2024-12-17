@@ -68,7 +68,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid hash string", func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash string, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Invalid offset", func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid offset format, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid offset format -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Invalid limit", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid limit format, Wrapped err: Error: UNKNOWN (error code: 0), Message: strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid limit format -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Subtree not found", func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): not found", echoErr.Message)
 	})
 
 	t.Run("Transaction meta not found", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 	t.Run("Repository error", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("error getting subtree"))
+		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("error getting subtree transactions"))
 
 		echoContext.SetPath("/subtree/txs/:hash")
 		echoContext.SetParamNames("hash")
@@ -180,7 +180,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting subtree", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting subtree transactions", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
@@ -197,6 +197,6 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: bad read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
 }

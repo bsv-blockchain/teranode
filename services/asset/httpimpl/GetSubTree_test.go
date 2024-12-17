@@ -156,7 +156,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: subtree could not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): subtree could not found", echoErr.Message)
 	})
 
 	t.Run("SubtreeReader not found", func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: NOT_FOUND (error code: 3), Message: subtree could not found", echoErr.Message)
+		assert.Equal(t, "NOT_FOUND (3): subtree could not found", echoErr.Message)
 	})
 
 	t.Run("invalid subtree reader", func(t *testing.T) {
@@ -204,7 +204,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: SUBTREE_ERROR (error code: 29), Message: unable to read subtree root information, Wrapped err: Error: UNKNOWN (error code: 0), Message: unexpected EOF", echoErr.Message)
+		assert.Equal(t, "SUBTREE_ERROR (29): unable to read subtree root information -> UNKNOWN (0): unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Invalid hash length", func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash length", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash length", echoErr.Message)
 	})
 
 	t.Run("Invalid hash format", func(t *testing.T) {
@@ -244,7 +244,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: invalid hash string, Wrapped err: Error: UNKNOWN (error code: 0), Message: encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {
@@ -274,7 +274,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: bad read mode", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
 }
 

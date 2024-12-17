@@ -121,7 +121,7 @@ func TestGetBlockGraphData(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: INVALID_ARGUMENT (error code: 1), Message: a valid period is required", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): a valid period is required", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -144,6 +144,6 @@ func TestGetBlockGraphData(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "Error: PROCESSING (error code: 4), Message: error getting block graph data", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting block graph data", echoErr.Message)
 	})
 }
