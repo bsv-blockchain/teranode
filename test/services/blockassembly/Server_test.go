@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -26,24 +27,33 @@ import (
 
 // go test -v -tags test_blockassembly ./test/...
 
-// TODO : Fix concurent run
-// For now, the ba server seems not to have a mechanism to close properly
-// It is not possible to run all tests here at the same time. Run tests cases
-// Separately works well.
-//
-//	go test -v -tags test_blockassembly -run "TestServer_Performance/1_million_txs_-_1_by_1" ./test/...
-//	go test -v -tags test_blockassembly -run "TestServer_Performance/1_million_txs_-_in_batches" ./test/...
-//	go test -v -tags test_blockassembly -run "TestServer_GetMiningCandidate" ./test/...
 func TestServer_Performance(t *testing.T) {
-	t.Run("1 million txs - 1 by 1", func(t *testing.T) {
-		gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
+	// Create a single blockassembly grpc server for multiple test case here
+	// because there are only 1 possible port for ba server
+	// We accumulated measurement for each test case and run them sequentially
 
-		// this test does not work online, it needs to be run locally
-		ba, err := initMockedServer(t)
+	gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
+	ba, err := initMockedServer(t)
+	require.NoError(t, err)
+
+	t.Run("GetMiningCandidate", func(t *testing.T) {
+		ctx := context.Background()
+		miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
+		require.NotNil(t, miningCandidate)
 
+		assert.NotEmpty(t, miningCandidate.Id)
+		assert.NotEmpty(t, miningCandidate.PreviousHash)
+		assert.NotEmpty(t, miningCandidate.NBits)
+		assert.NotEmpty(t, miningCandidate.Time)
+		assert.NotEmpty(t, miningCandidate.Version)
+	})
+
+	prevTxCount := uint64(0)
+	prevSubtreeCount := 0
+
+	t.Run("1 million txs - 1 by 1", func(t *testing.T) {
 		var wg sync.WaitGroup
-
 		for n := uint64(0); n < 1_024; n++ {
 			bytesN := make([]byte, 8)
 			binary.LittleEndian.PutUint64(bytesN, n)
@@ -83,17 +93,15 @@ func TestServer_Performance(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		assert.Equal(t, uint64(1_048_576), ba.TxCount())
-		assert.Equal(t, 33, ba.SubtreeCount())
+		prevTxCount = ba.TxCount()
+		prevSubtreeCount = ba.SubtreeCount()
+
+		assert.Equal(t, uint64(1_048_576), prevTxCount)
+		assert.Equal(t, 33, prevSubtreeCount)
+		prevSubtreeCount -= 1 // Decrement 1 so the next test accumulate with it has already decrease 1
 	})
 
 	t.Run("1 million txs - in batches", func(t *testing.T) {
-		gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
-
-		// this test does not work online, it needs to be run locally
-		ba, err := initMockedServer(t)
-		require.NoError(t, err)
-
 		var wg sync.WaitGroup
 
 		for n := uint64(0); n < 1_024; n++ {
@@ -134,34 +142,16 @@ func TestServer_Performance(t *testing.T) {
 		wg.Wait()
 
 		for {
-			if ba.TxCount() >= 1_048_576 {
+			if ba.TxCount() >= prevTxCount+1_048_576 {
 				break
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		assert.Equal(t, uint64(1_048_576), ba.TxCount())
-		assert.Equal(t, 33, ba.SubtreeCount())
+		assert.Equal(t, prevTxCount+uint64(1_048_576), ba.TxCount()) // TxCount now is accumulated with the previous test case
+		assert.Equal(t, prevSubtreeCount+33, ba.SubtreeCount())      // SubtreeCount now is accumulated with the previous test case
 	})
-}
-
-func TestServer_GetMiningCandidate(t *testing.T) {
-	ba, err := initMockedServer(t)
-	require.NoError(t, err)
-
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})
-	require.NoError(t, err)
-	require.NotNil(t, miningCandidate)
-
-	assert.NotEmpty(t, miningCandidate.Id)
-	assert.NotEmpty(t, miningCandidate.PreviousHash)
-	assert.NotEmpty(t, miningCandidate.NBits)
-	assert.NotEmpty(t, miningCandidate.Time)
-	assert.NotEmpty(t, miningCandidate.Version)
 }
 
 func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
@@ -171,7 +161,7 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	tracing.SetGlobalMockTracer()
 
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, &chaincfg.MainNetParams)
 	if err != nil {
 		return nil, err
 	}
