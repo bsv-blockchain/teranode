@@ -58,7 +58,7 @@ func (m MockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.
 	panic("implement me")
 }
 
-func (m MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error) {
+func (m MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, bool, error) {
 	panic("implement me")
 }
 

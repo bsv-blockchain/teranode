@@ -17,7 +17,6 @@ service BlockchainAPI {
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
   rpc GetBlocks (GetBlocksRequest) returns (GetBlocksResponse) {}
   rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
-  rpc GetBlockInChainByHeightHash (GetBlockInChainByHeightHashRequest) returns (GetBlockResponse) {}
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
@@ -113,6 +112,7 @@ message GetBlockResponse {
   uint32 id = 7;
 }
 
+// swagger:model GetBlockInChainByHeightHashResponse
 message GetFullBlockResponse {
   bytes full_block_bytes = 1;
 }

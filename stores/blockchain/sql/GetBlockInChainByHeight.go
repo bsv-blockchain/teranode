@@ -17,7 +17,7 @@ import (
 GetBlockInChainByHeightHash returns a block by height for a chain determined by the start hash.
 This is useful for getting the block at a given height in a chain that may have a different tip.
 */
-func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error) {
+func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (block *model.Block, invalid bool, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockInChainByHeightHash")
 	defer deferFn()
 
@@ -28,7 +28,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
 			s.logger.Debugf("GetBlockByHeight cache hit")
-			return cacheData, nil
+			return cacheData, false, nil
 		}
 	}
 
@@ -39,8 +39,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, height
 			FROM blocks
-			WHERE invalid = false
-			AND hash = $2
+			WHERE hash = $2
 			
 			UNION ALL
 			
@@ -48,7 +47,6 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 			FROM blocks bb
 			JOIN ChainBlocks cb ON bb.id = cb.parent_id
 			WHERE bb.id != cb.id
-			  AND bb.invalid = false
 		)
 		SELECT
 		 b.ID
@@ -63,6 +61,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		,b.coinbase_tx
 		,b.subtree_count
 		,b.subtrees
+		,b.invalid
 		FROM blocks b
 		WHERE b.id IN (
 			SELECT id FROM ChainBlocks
@@ -71,7 +70,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		)
 	`
 
-	block := &model.Block{
+	block = &model.Block{
 		Header: &model.BlockHeader{},
 	}
 
@@ -84,7 +83,6 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		hashMerkleRoot   []byte
 		coinbaseTx       []byte
 		nBits            []byte
-		err              error
 	)
 
 	if err = s.db.QueryRowContext(ctx, q, height, startHash.CloneBytes()).Scan(
@@ -100,12 +98,13 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		&coinbaseTx,
 		&subtreeCount,
 		&subtreeBytes,
+		&invalid,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.NewBlockNotFoundError("failed to get block by height", err)
+			return nil, false, errors.NewBlockNotFoundError("failed to get block by height", err)
 		}
 
-		return nil, errors.NewStorageError("failed to get block by height", err)
+		return nil, false, errors.NewStorageError("failed to get block by height", err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)
@@ -113,12 +112,12 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+		return nil, false, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
 	}
 
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
+		return nil, false, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
 	}
 
 	block.TransactionCount = transactionCount
@@ -127,16 +126,16 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	if len(coinbaseTx) > 0 {
 		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 		if err != nil {
-			return nil, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
+			return nil, false, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
 		}
 	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert subtrees", err)
+		return nil, false, errors.NewInvalidArgumentError("failed to convert subtrees", err)
 	}
 
 	s.responseCache.Set(cacheID, block, s.cacheTTL)
 
-	return block, nil
+	return block, invalid, nil
 }
