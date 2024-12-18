@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -195,6 +196,8 @@ func (suite *RPCTestSuite) SetupTest() {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
 	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
 
+	stopUbsv(log)
+
 	if err := startKafka("kafka.log", log); err != nil {
 		log.Errorf("Failed to start Kafka: %v", err)
 	}
@@ -214,7 +217,7 @@ func (suite *RPCTestSuite) TearDownTest() {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
 	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
 	// First stop UBSV
-	stopUbsv(log)
+	// stopUbsv(log)
 
 	// Wait for UBSV to fully stop before stopping Kafka
 	time.Sleep(2 * time.Second)
@@ -568,13 +571,23 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	block, err := blockchainClient.GetBlockByHeight(ctx, targetHeight)
 	require.NoError(t, err)
 
-	assert.Greater(t, len(block.SubtreeSlices), 0, "Block not found in blockstore")
+	subtreeStore, err := blob.NewStore(logger, tSettings.SubtreeValidation.SubtreeStore, options.WithHashPrefix(2))
+	require.NoError(t, err)
+
+	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
+		return block.SubTreesFromBytes(subtreeHash[:])
+	}
+
+	time.Sleep(30 * time.Second)
+
+	subtree, err := block.GetSubtrees(ctx, logger, subtreeStore, fallbackGetFunc)
+	require.NoError(t, err)
 
 	blFound := false
 
-	for i := 0; i < len(block.SubtreeSlices); i++ {
-		subtree := block.SubtreeSlices[i]
-		for _, node := range subtree.Nodes {
+	for i := 0; i < len(subtree); i++ {
+		st := subtree[i]
+		for _, node := range st.Nodes {
 			t.Logf("node.Hash: %s", node.Hash.String())
 			t.Logf("tx.TxIDChainHash().String(): %s", tx.TxIDChainHash().String())
 

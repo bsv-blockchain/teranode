@@ -71,3 +71,5 @@ scripts/k8s/testing/image_name.tmp
 
 /generate_protos.sh
 /custom_template.tmpl
+
+node*-data

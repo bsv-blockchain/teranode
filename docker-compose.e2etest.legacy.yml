@@ -1,0 +1,262 @@
+x-ubsv-base: &ubsv-base
+  image: ubsv:latest
+  depends_on:
+    - postgres
+    - kafka-shared
+  networks:
+    - ubsv-network
+  volumes:
+    - ./data/test:/app/data
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-7.2.0.3_1
+  networks:
+    - ubsv-network
+  command: --config-file /etc/aerospike.conf
+
+networks:
+  ubsv-network:
+    name: ubsv-network-test
+
+services:
+  ubsv-builder:
+    image: ubsv:latest
+    build:
+      context: .
+      dockerfile: ci.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
+    networks:
+      - ubsv-network
+    entrypoint: [ "pwd" ]
+
+  postgres:
+    container_name: postgres-test
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - "7432:5432"
+    volumes:
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/test/postgres:/var/lib/postgresql/data
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared-test
+    image: redpandadata/redpanda:latest
+    mem_limit: 256m
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - "48081:8081"
+      - "49092:9092"
+      - "49093:9093"
+    volumes:
+      - ./data/test/kafka:/var/lib/kafka
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - "18080:8080"
+    depends_on:
+      - kafka-shared
+
+  aerospike-1:
+    <<: *aerospike-base
+    container_name: aerospike-1-test
+    ports:
+      - "13100:13100"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - ./data/test/aerospike-1/data:/opt/aerospike/data
+
+  aerospike-2:
+    <<: *aerospike-base
+    container_name: aerospike-2-test
+    ports:
+      - "13200:13200"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - ./data/test/aerospike-2/data:/opt/aerospike/data
+
+  aerospike-3:
+    <<: *aerospike-base
+    container_name: aerospike-3-test
+    ports:
+      - "13300:13300"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - ./data/test/aerospike-3/data:/opt/aerospike/data
+
+  node1:
+    container_name: node1
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    ports:
+      - "18332:18332"
+    expose:
+      - "18332"
+      - "18333"
+      - "28332"
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      - ./node1-data:/data
+    command: [ "/entrypoint.sh", "bitcoind", "-connect=node2:18333", "-connect=node3:18333" ]
+    networks:
+    - ubsv-network
+
+  node2:
+    container_name: node2
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    ports:
+      - "48332:18332"
+    expose:
+      - "18332"
+      - "18333"
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      - ./node2-data:/data
+    command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node3:18333" ]
+    networks:
+    - ubsv-network
+
+  node3:
+    container_name: node3
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    ports:
+      - "58332:18332"
+    expose:
+      - "18332"
+      - "18333"
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      - ./node3-data:/data
+    command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node2:18333" ]
+    networks:
+    - ubsv-network
+
+  ubsv1:
+    <<: *ubsv-base
+    container_name: ubsv1-test
+    image: ubsv:latest
+    depends_on:
+      - aerospike-1
+      - postgres
+      - kafka-shared
+      - node1
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1.test.legacy}
+      logLevel: "DEBUG"
+    ports:
+      - "10000:8000"
+      - "10081-10097:8081-8097"
+      - "10099:8099"
+      - "11091:9091"
+      - "11905:9905"
+      - "11292:9292"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/test/ubsv1/txstore:/app/data/txstore
+      - ./data/test/ubsv1/subtreestore:/app/data/subtreestore
+      - ./data/test/ubsv1/blockstore:/app/data/blockstore
+      - ./data/test/ubsv1/external:/app/data/ubsv1/external
+
+  ubsv2:
+    <<: *ubsv-base
+    container_name: ubsv2-test
+    image: ubsv:latest
+    depends_on:
+      - aerospike-2
+      - postgres
+      - kafka-shared
+      - node1
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2.test.legacy}
+      logLevel: "DEBUG"
+    ports:
+      - "12000:8000"
+      - "12081-12097:8081-8097"
+      - "12099:8099"
+      - "13091:9091"
+      - "13905:9905"
+      - "13292:9292"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/test/ubsv2/txstore:/app/data/txstore
+      - ./data/test/ubsv2/subtreestore:/app/data/subtreestore
+      - ./data/test/ubsv2/blockstore:/app/data/blockstore
+      - ./data/test/ubsv2/external:/app/data/ubsv2/external
+
+  ubsv3:
+    <<: *ubsv-base
+    container_name: ubsv3-test
+    image: ubsv:latest
+    depends_on:
+      - aerospike-3
+      - postgres
+      - kafka-shared
+      - node1
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3.test.legacy}
+      logLevel: "DEBUG"
+      JAEGER_SERVICE_NAME: ubsv-3
+      JAEGER_AGENT_HOST: jaeger
+      JAEGER_AGENT_PORT: 6831
+    ports:
+      - "14000:8000"
+      - "14081-14097:8081-8097"
+      - "14099:8099"
+      - "15091:9091"
+      - "15905:9905"
+      - "15292:9292"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/test/ubsv3/txstore:/app/data/txstore
+      - ./data/test/ubsv3/subtreestore:/app/data/subtreestore
+      - ./data/test/ubsv3/blockstore:/app/data/blockstore
+      - ./data/test/ubsv3/external:/app/data/ubsv3/external
