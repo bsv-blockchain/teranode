@@ -1,5 +1,9 @@
 //go:build test_all || test_tec || test_tec_blk_6
 
+// How to run this test manually:
+// $ cd test/tec
+// $ go test -v -run "^TestTECBlk6TestSuite$/TestAssetServerRecoverability$" -tags test_tec_blk_6
+
 package tec
 
 import (
@@ -16,9 +20,9 @@ type TECBlk6TestSuite struct {
 
 func (suite *TECBlk6TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec6",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tec6",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tec6",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tec6",
+		"SETTINGS_CONTEXT_2": "docker.ubsv1.test.tec6",
+		"SETTINGS_CONTEXT_3": "docker.ubsv1.test.tec6",
 	}
 }
 

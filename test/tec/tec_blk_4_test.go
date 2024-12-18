@@ -1,5 +1,9 @@
 //go:build test_all || test_tec || test_tec_blk_4
 
+// How to run this test manually:
+// $ cd test/tec
+// $ go test -v -run "^TestTECBlk4TestSuite$/TestBlockValidationRecoverability$" -tags test_tec_blk_4
+
 package tec
 
 import (
@@ -16,9 +20,9 @@ type TECBlk4TestSuite struct {
 
 func (suite *TECBlk4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec4",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tec4",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tec4",
+		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tec4",
+		"SETTINGS_CONTEXT_2": "docker.ubsv1.test.tec4",
+		"SETTINGS_CONTEXT_3": "docker.ubsv1.test.tec4",
 	}
 }
 
