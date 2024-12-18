@@ -341,6 +341,7 @@ func NewSettings() *Settings {
 			OutpointBatcherConcurrency: getInt("legacy_outpointBatcherConcurrency", 32),
 			PrintInvMessages:           getBool("legacy_printInvMessages", false),
 			GRPCAddress:                getString("legacy_grpcAddress", ""),
+			AllowBlockPriority:         getBool("legacy_allowBlockPriority", false),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:        getString("ipv6_addresses", ""),

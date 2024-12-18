@@ -341,6 +341,7 @@ type LegacySettings struct {
 	OutpointBatcherConcurrency int
 	PrintInvMessages           bool
 	GRPCAddress                string
+	AllowBlockPriority         bool
 }
 
 type PropagationSettings struct {

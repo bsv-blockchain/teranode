@@ -529,25 +529,13 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 		tracing.WithHistogram(peerServerMetrics["OnProtoconf"]),
 	)
 
-	// Check that the num of fields.
-	if msg.NumberOfFields == 0 {
-		sp.numberOfFields.Store(msg.NumberOfFields)
+	sp.numberOfFields.Store(msg.NumberOfFields)
 
-		return
-	}
-
-	if msg.NumberOfFields == 1 {
-		sp.numberOfFields.Store(msg.NumberOfFields)
+	if msg.NumberOfFields > 0 {
 		sp.maxRecvPayloadLength.Store(msg.MaxRecvPayloadLength)
 
 		sp.server.logger.Debugf("Peer %v sent a valid protoconf '%v'", sp.String(), msg)
-
-		return
 	}
-
-	sp.server.logger.Warnf("Peer %v sent an invalid protoconf '%v' -- disconnecting", sp, msg)
-
-	sp.Disconnect()
 }
 
 // OnMemPool is invoked when a peer receives a mempool bitcoin message.

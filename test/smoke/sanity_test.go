@@ -129,7 +129,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
 	// wait for the blocks to be generated
 	time.Sleep(5 * time.Second)
-	require.NoError(t, err, "Failed to generate blocks", err)
+	require.NoError(t, err, "Failed to generate blocks: %v", err)
 
 	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient

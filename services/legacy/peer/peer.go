@@ -281,6 +281,10 @@ type Config struct {
 	// connection detecting and disconnect logic since they intentionally
 	// do so for testing purposes.
 	TstAllowSelfConnection bool
+
+	// AllowBlockPriority is used to signal that the peer has the ability to
+	// receive block priority messages via connection streaming.
+	AllowBlockPriority bool
 }
 
 // minUint32 is a helper function to return the minimum of two uint32s.
@@ -1421,6 +1425,7 @@ out:
 			p.flagsMtx.Lock()
 			p.verAckReceived = true
 			p.flagsMtx.Unlock()
+
 			if p.cfg.Listeners.OnVerAck != nil {
 				p.cfg.Listeners.OnVerAck(p, msg)
 			}
@@ -2116,6 +2121,12 @@ func (p *Peer) start() error {
 
 	// Send our verack message now that the IO processing machinery has started.
 	p.QueueMessage(wire.NewMsgVerAck(), nil)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		p.QueueMessage(wire.NewMsgProtoconf(0, p.cfg.AllowBlockPriority), nil)
+	}()
+
 	return nil
 }
 
@@ -2182,6 +2193,8 @@ func newPeerBase(logger ulogger.Logger, tSettings *settings.Settings, origCfg *C
 	if cfg.TrickleInterval <= 0 {
 		cfg.TrickleInterval = DefaultTrickleInterval
 	}
+
+	cfg.AllowBlockPriority = tSettings.Legacy.AllowBlockPriority
 
 	p := Peer{
 		inbound:         inbound,
