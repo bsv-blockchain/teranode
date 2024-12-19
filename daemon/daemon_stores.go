@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"context"
@@ -75,9 +75,12 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 	}
 
 	var err error
+
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+
 	if localValidator {
 		logger.Infof("[Validator] Using local validator")
+
 		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator client", err)
@@ -103,7 +106,6 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator", err)
 		}
-
 	} else {
 		mainValidatorClient, err = validator.NewClient(ctx, logger, tSettings)
 		if err != nil {
@@ -123,6 +125,7 @@ func getTxStore(logger ulogger.Logger) (blob.Store, error) {
 	if err != nil {
 		return nil, errors.NewConfigurationError("txstore setting error", err)
 	}
+
 	if !found {
 		return nil, errors.NewConfigurationError("no txstore setting found")
 	}
@@ -140,15 +143,16 @@ func getSubtreeStore(logger ulogger.Logger) (blob.Store, error) {
 		return mainSubtreestore, nil
 	}
 
-	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+	subtreeStoreURL, err, found := gocore.Config().GetURL("subtreestore")
 	if err != nil {
 		return nil, errors.NewConfigurationError("subtreestore setting error", err)
 	}
+
 	if !found {
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(2))
+	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(2))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
@@ -183,15 +187,16 @@ func getBlockStore(logger ulogger.Logger) (blob.Store, error) {
 		return mainBlockStore, nil
 	}
 
-	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
 	if err != nil {
 		return nil, errors.NewConfigurationError("blockstore setting error", err)
 	}
+
 	if !found {
 		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
 
-	mainBlockStore, err = blob.NewStore(logger, blockStoreUrl)
+	mainBlockStore, err = blob.NewStore(logger, blockStoreURL)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}

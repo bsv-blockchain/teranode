@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"github.com/ordishs/gocore"
@@ -10,7 +10,7 @@ func datadogProfiler() func() {
 		profiler.WithService("ubsv"),
 		profiler.WithEnv(gocore.Config().GetContext()),
 		profiler.WithVersion("0.1.0"),
-		//profiler.WithTags("context:"+gocore.Config().GetContext()),
+		// profiler.WithTags("context:"+gocore.Config().GetContext()),
 		profiler.WithProfileTypes(
 			profiler.CPUProfile,
 			profiler.HeapProfile,

@@ -181,6 +181,7 @@ func (sm *ServiceManager) Wait() error {
 	sm.logger.Infof("🛑 All services stopped.")
 
 	return err // This is the original error
+
 }
 
 func (sm *ServiceManager) HealthHandler(ctx context.Context, checkLiveness bool) (int, string, error) {
