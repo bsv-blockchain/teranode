@@ -137,6 +137,34 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 
 			if allRunning {
 				logger.Infof("All nodes are in RUNNING state")
+				goto mine
+			}
+		}
+	}
+
+mine:
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+	require.NoError(t, err)
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for nodes to reach RUNNING state")
+		case <-ticker.C:
+			allRunning := true
+
+			for i, node := range framework.Nodes {
+				state := node.BlockchainClient.GetFSMCurrentStateForE2ETestMode()
+				logger.Infof("Node %d state: %s", i, state)
+
+				if state != blockchain_api.FSMStateType_RUNNING {
+					allRunning = false
+					break
+				}
+			}
+
+			if allRunning {
+				logger.Infof("All nodes are in RUNNING state")
 				goto checkHeaders
 			}
 		}
