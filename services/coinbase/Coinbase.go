@@ -61,6 +61,7 @@ type Coinbase struct {
 	g                *errgroup.Group
 	gCtx             context.Context
 	stats            *gocore.Stat
+	malformedConfig  *MalformedUTXOConfig // Configuration for generating malformed UTXOs
 	minConfirmations uint16
 }
 
@@ -693,24 +694,54 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 	amountRemaining := utxo.Satoshis
 
+	// Calculate how many outputs should be malformed
+	malformedCount := 0
+
+	if c.malformedConfig != nil && c.malformedConfig.Percentage > 0 {
+		totalOutputs := int(amountRemaining / splitSatoshis) //nolint:gosec // G115: integer overflow conversion int -> uint32
+		if amountRemaining%splitSatoshis > 0 {
+			totalOutputs++
+		}
+
+		malformedCount = (totalOutputs * c.malformedConfig.Percentage) / 100
+	}
+
+	outputCount := 0
+
 	for amountRemaining > splitSatoshis {
 		select {
 		case <-ctx.Done():
 			return errors.NewContextCanceledError("timeout splitting the satoshis")
 		default:
-			tx.AddOutput(&bt.Output{
+			output := &bt.Output{
 				LockingScript: utxo.LockingScript,
 				Satoshis:      splitSatoshis,
-			})
+			}
 
+			// Apply malformation if configured and this output should be malformed
+			if c.malformedConfig != nil && outputCount < malformedCount {
+				MalformOutput(output, c.malformedConfig.Type)
+			}
+
+			tx.AddOutput(output)
+
+			outputCount++
 			amountRemaining -= splitSatoshis
 		}
 	}
 
-	tx.AddOutput(&bt.Output{
+	// Handle the remaining amount
+	output := &bt.Output{
 		LockingScript: utxo.LockingScript,
 		Satoshis:      amountRemaining,
-	})
+	}
+
+	// Apply malformation if configured and this is the last malformed output
+	if c.malformedConfig != nil && outputCount < malformedCount {
+		MalformOutput(output, c.malformedConfig.Type)
+	}
+
+	tx.AddOutput(output)
 
 	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
 	if err := tx.FillAllInputs(ctx, &unlockerGetter); err != nil {

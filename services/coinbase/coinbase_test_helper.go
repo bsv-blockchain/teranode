@@ -10,9 +10,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -24,7 +26,40 @@ type TestSubtrees struct {
 	Subtrees      []*util.Subtree
 }
 
-func GenerateTestBlock(noOfTxs uint64, subtreeSize int, numberOfSpendableOutputs uint64, hashOfPreviousBlock *chainhash.Hash) (*model.Block, error) {
+// MalformedUTXOConfig specifies how to generate malformed UTXOs during the splitting phase
+type MalformedUTXOConfig struct {
+	// Percentage of UTXOs that should be malformed (0-100)
+	Percentage int
+	// Type of malformation to apply
+	Type MalformationType
+}
+
+// MalformationType specifies how to malform the UTXO
+type MalformationType int
+
+// NOTE:
+// We are not able to modify the locking script to be invalid, as this is deemed invalid when genereating transaction in splitUtxo
+// So following malformations are not possible:
+// 1. EmptyLockingScript
+// 2. InvalidLockingScript
+// 3. OversizedLockingScript
+// 4. NonStandardScript
+// We are also not able to make satoshis amount negative.
+
+const (
+	// ZeroSatoshis sets the satoshi amount to 0
+	ZeroSatoshis MalformationType = iota
+)
+
+// MalformOutput applies the specified malformation to a transaction output
+func MalformOutput(output *bt.Output, malformType MalformationType) {
+	if malformType == ZeroSatoshis {
+		output.Satoshis = 0
+	}
+}
+
+// func GenerateTestBlock(noOfTxs uint64, subtreeSize int, numberOfSpendableOutputs uint64, hashOfPreviousBlock *chainhash.Hash) (*model.Block, error) {
+func GenerateTestBlock(blockHeight uint32, noOfTxs uint64, subtreeSize int, numberOfSpendableOutputs uint64, hashOfPreviousBlock *chainhash.Hash) (*model.Block, error) {
 	testSubtrees, err := GenerateTestSubtrees(noOfTxs, subtreeSize)
 	if err != nil {
 		return nil, err
@@ -32,10 +67,8 @@ func GenerateTestBlock(noOfTxs uint64, subtreeSize int, numberOfSpendableOutputs
 
 	coinbaseTx := bt.NewTx()
 
-	height := uint32(100)
-
 	blockHeightBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(blockHeightBytes, height)
+	binary.LittleEndian.PutUint32(blockHeightBytes, blockHeight)
 
 	arbitraryData := []byte{}
 	arbitraryData = append(arbitraryData, 0x03)
@@ -240,4 +273,67 @@ func SetupPostgresContainer() (string, func() error, error) {
 	}
 
 	return connStr, teardown, nil
+}
+
+// GenerateInsertValidBlocksToCoinbase generates and inserts a sequence of valid blocks into the coinbase service
+func GenerateInsertValidBlocksToCoinbase(ctx context.Context, c *Coinbase, numBlocks int) error {
+	genesisBlock, err := c.store.GetBlockByHeight(ctx, 0)
+	if err != nil {
+		return errors.NewProcessingError("failed to get genesis block: %v", err)
+	}
+
+	prevBlockHash := genesisBlock.Hash()
+
+	for i := 0; i < numBlocks; i++ {
+		// Generate a block with 2048 transactions, 1024 subtree size, and 500 spendable outputs
+		block, err := GenerateTestBlock(uint32(i), 2048, 1024, 500, prevBlockHash) // #nosec G115 -- i is bounded by numBlocks
+		if err != nil {
+			return errors.NewProcessingError("failed to generate test block %d: %v", i+1, err)
+		}
+
+		// Store the block in coinbase
+		if err := c.storeBlock(ctx, block); err != nil {
+			return errors.NewProcessingError("failed to store block %d: %v", i+1, err)
+		}
+
+		// Update previous block hash for next iteration
+		prevBlockHash = block.Hash()
+	}
+
+	return nil
+}
+
+// TrySpendUTXOs attempts to spend the given UTXOs in transactions
+// Returns an error if spending fails, nil if successful
+func TrySpendUTXOs(tx *bt.Tx, privateKey *bec.PrivateKey) error {
+	// Create a new transaction
+	spendingTx := bt.NewTx()
+
+	// Add all outputs from the input tx as inputs to our spending tx
+	for i, output := range tx.Outputs {
+		// Create UTXO from the output
+		utxo := &bt.UTXO{
+			TxIDHash:      tx.TxIDChainHash(),
+			Vout:          uint32(i), //nolint:gosec // G115: integer overflow conversion int -> uint32
+			LockingScript: output.LockingScript,
+			Satoshis:      output.Satoshis,
+		}
+
+		if err := spendingTx.FromUTXOs(utxo); err != nil {
+			return errors.NewProcessingError("failed to add UTXO to transaction: %v", err)
+		}
+	}
+
+	// Add a simple P2PKH output to spend to
+	if err := spendingTx.AddP2PKHOutputFromAddress("1Jp7AZdMQ3hyfMfk3kJe31TDj8oppZLYdK", tx.TotalOutputSatoshis()); err != nil {
+		return errors.NewProcessingError("failed to add output to transaction: %v", err)
+	}
+
+	// Try to fill all inputs (sign the transaction)
+	unlockerGetter := unlocker.Getter{PrivateKey: privateKey}
+	if err := spendingTx.FillAllInputs(context.Background(), &unlockerGetter); err != nil {
+		return errors.NewProcessingError("failed to fill inputs: %v", err)
+	}
+
+	return nil
 }
