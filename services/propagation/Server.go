@@ -196,23 +196,6 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 // Returns:
 //   - error: error if server fails to start
 func (ps *PropagationServer) Start(ctx context.Context) (err error) {
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if ps.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		if err = ps.blockchainClient.Restore(ctx); err != nil {
-			ps.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		ps.logger.Infof("[Faucet] Node is restoring, waiting for FSM to transition to Running state")
-		_ = ps.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		ps.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
-	}
-
 	ipv6Addresses := ps.settings.Propagation.IPv6Addresses
 	if ipv6Addresses != "" {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)

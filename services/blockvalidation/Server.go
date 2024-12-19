@@ -434,24 +434,6 @@ func (u *Server) Start(ctx context.Context) error {
 	// start blocks kafka consumer
 	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if u.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := u.blockchainClient.Restore(ctx)
-		if err != nil {
-			u.logger.Errorf("[Block Validation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		u.logger.Infof("[Block Validation] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		u.logger.Infof("[Block Validation] Node finished restoring and has transitioned to Running state, continuing to start Block Validation service")
-	}
-
 	httpAddress := u.settings.BlockValidation.HTTPListenAddress
 	if httpAddress != "" {
 		err := u.httpServer(ctx, httpAddress)

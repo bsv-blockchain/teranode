@@ -122,7 +122,7 @@ func Test_GetFSMCurrentState(t *testing.T) {
 	response, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
 	require.NoError(t, err)
 	require.NotNil(t, response)
-	assert.Equal(t, blockchain_api.FSMStateType_STOPPED, response.State, "Expected FSM state did not match")
+	assert.Equal(t, blockchain_api.FSMStateType_IDLE, response.State, "Expected FSM state did not match")
 }
 
 type testContext struct {

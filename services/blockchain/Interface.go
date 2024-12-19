@@ -51,10 +51,7 @@ type ClientI interface {
 	// SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 	Run(ctx context.Context, source string) error
 	CatchUpBlocks(ctx context.Context) error
-	CatchUpTransactions(ctx context.Context) error
-	Restore(ctx context.Context) error
 	LegacySync(ctx context.Context) error
-	Unavailable(ctx context.Context) error
 
 	// new legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)

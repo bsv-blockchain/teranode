@@ -106,24 +106,6 @@ func (f *Faucet) Init(ctx context.Context) error {
 }
 
 func (f *Faucet) Start(ctx context.Context) error {
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if f.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := f.blockchainClient.Restore(ctx)
-		if err != nil {
-			f.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		f.logger.Infof("[Faucet] Node is restoring, waiting for FSM to transition to Running state")
-		_ = f.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		f.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
-	}
-
 	addr := f.settings.Faucet.HTTPListenAddress
 	if addr == "" {
 		return errors.NewConfigurationError("faucet_httpListenAddress is required")

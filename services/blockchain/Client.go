@@ -51,13 +51,10 @@ type NotificationMetadata = blockchain_api.NotificationMetadata
 type FSMStateType = blockchain_api.FSMStateType
 
 const (
-	FSMStateSTOPPED        = blockchain_api.FSMStateType_STOPPED
+	FSMStateIDLE           = blockchain_api.FSMStateType_IDLE
 	FSMStateRUNNING        = blockchain_api.FSMStateType_RUNNING
 	FSMStateCATCHINGBLOCKS = blockchain_api.FSMStateType_CATCHINGBLOCKS
-	FSMStateCATCHINGTXS    = blockchain_api.FSMStateType_CATCHINGTXS
-	FSMStateRESTORING      = blockchain_api.FSMStateType_RESTORING
 	FSMStateLEGACYSYNCING  = blockchain_api.FSMStateType_LEGACYSYNCING
-	FSMStateUNAVAILABLE    = blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE
 )
 
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (ClientI, error) {
@@ -846,7 +843,7 @@ func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	currentState, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
 		c.logger.Errorf("[Blockchain Client] Failed to get FSM current state: %v", err)
-		return FSMStateSTOPPED
+		return FSMStateIDLE
 	}
 
 	return currentState.State
@@ -908,46 +905,6 @@ func (c *Client) CatchUpBlocks(ctx context.Context) error {
 	return nil
 }
 
-// CatchUpTransactions sends a catchup transactions FSM event to the blockchain service.
-func (c *Client) CatchUpTransactions(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateCATCHINGTXS {
-			return nil
-		}
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
-
-	_, err := c.client.CatchUpTransactions(ctx, &emptypb.Empty{})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Restore sends a restore FSM event to the blockchain service.
-func (c *Client) Restore(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateRESTORING {
-			return nil
-		}
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Restore event")
-
-	_, err := c.client.Restore(ctx, &emptypb.Empty{})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // LegacySync sends a legacy sync FSM event to the blockchain service.
 func (c *Client) LegacySync(ctx context.Context) error {
 	currentState := c.fmsState.Load()
@@ -961,26 +918,6 @@ func (c *Client) LegacySync(ctx context.Context) error {
 	c.logger.Infof("[Blockchain Client] Sending Legacy Sync event")
 
 	_, err := c.client.LegacySync(ctx, &emptypb.Empty{})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Unavailable sends a resource unavailable FSM event to the blockchain service.
-func (c *Client) Unavailable(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateUNAVAILABLE {
-			return nil
-		}
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Resource Unavailable event")
-
-	_, err := c.client.Unavailable(ctx, &emptypb.Empty{})
 	if err != nil {
 		return err
 	}

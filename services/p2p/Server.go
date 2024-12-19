@@ -270,23 +270,6 @@ func (s *Server) Start(ctx context.Context) error {
 
 	var err error
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if s.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		if err = s.blockchainClient.Restore(ctx); err != nil {
-			s.logger.Errorf("[Start] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		s.logger.Infof("[Start] Node is restoring, waiting for FSM to transition to Running state")
-		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		s.logger.Infof("[Start] Node finished restoring and has transitioned to Running state, continuing to start p2p service")
-	}
-
 	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, s.settings, "p2p")
 	if err != nil {
 		return errors.NewServiceError("could not create block validation client [%w]", err)

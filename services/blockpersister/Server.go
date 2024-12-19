@@ -158,24 +158,6 @@ func (u *Server) Start(ctx context.Context) error {
 		}()
 	}
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if u.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := u.blockchainClient.Restore(ctx)
-		if err != nil {
-			u.logger.Errorf("[Block Persister] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		u.logger.Infof("[Block Persister] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
-	}
-
 	// Start the processing loop in a goroutine
 	go func() {
 		for {

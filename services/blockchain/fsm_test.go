@@ -22,15 +22,14 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 
 	fsm := blockchainClient.NewFiniteStateMachine()
 	require.NotNil(t, fsm)
-	require.Equal(t, "STOPPED", fsm.Current())
+	require.Equal(t, "IDLE", fsm.Current())
 	require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 
 	// Test transitions
-	t.Run("Transition from Stopped to Running", func(t *testing.T) {
+	t.Run("Transition from Idle to Running", func(t *testing.T) {
 		err := fsm.Event(ctx, blockchain_api.FSMEventType_RUN.String())
 		require.NoError(t, err)
 		require.Equal(t, "RUNNING", fsm.Current())
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_CATCHUPTXS.String()))
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_CATCHUPBLOCKS.String()))
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
@@ -39,35 +38,6 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS.String())
 		require.NoError(t, err)
 		require.Equal(t, "CATCHINGBLOCKS", fsm.Current())
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_CATCHUPTXS.String()))
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
-	})
-
-	t.Run("Transition from Catch up Blocks to Catch up Transactions", func(t *testing.T) {
-		require.Equal(t, "CATCHINGBLOCKS", fsm.Current())
-		err = fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPTXS.String())
-		require.NoError(t, err)
-		require.Equal(t, "CATCHINGTXS", fsm.Current())
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
-	})
-
-	t.Run("Transition from Catch up Transactions to Running", func(t *testing.T) {
-		require.Equal(t, "CATCHINGTXS", fsm.Current())
-		err = fsm.Event(ctx, blockchain_api.FSMEventType_RUN.String())
-		require.NoError(t, err)
-		require.Equal(t, "RUNNING", fsm.Current())
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_CATCHUPBLOCKS.String()))
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_CATCHUPTXS.String()))
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
-	})
-
-	t.Run("Transition from Running to Catch up Transactions", func(t *testing.T) {
-		require.Equal(t, "RUNNING", fsm.Current())
-		err = fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPTXS.String())
-		require.NoError(t, err)
-		require.Equal(t, "CATCHINGTXS", fsm.Current())
-		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 }

@@ -220,25 +220,6 @@ func (u *Server) Start(ctx context.Context) error {
 	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
 	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-
-	if u.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := u.blockchainClient.Restore(ctx)
-		if err != nil {
-			u.logger.Errorf("[Subtreevalidation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		u.logger.Infof("[Subtreevalidation] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		u.logger.Infof("[Subtreevalidation] Node finished restoring and has transitioned to Running state, continuing to start Subtreevalidation service")
-	}
-
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)

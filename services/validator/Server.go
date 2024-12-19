@@ -170,43 +170,25 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - error: Any startup errors
 func (v *Server) Start(ctx context.Context) error {
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if v.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := v.blockchainClient.Restore(ctx)
-		if err != nil {
-			v.logger.Errorf("[Validator] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		v.logger.Infof("[Validator] Node is restoring, waiting for FSM to transition to Running state")
-		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
-	}
-
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+		// currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		// if err != nil {
+		// 	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
 
-			return err
-		}
+		// 	return err
+		// }
 
-		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
-			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
-			time.Sleep(1 * time.Second) // Wait and check again in 1 second
+		// for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
+		// 	v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
+		// 	time.Sleep(1 * time.Second) // Wait and check again in 1 second
 
-			currentState, err = v.blockchainClient.GetFSMCurrentState(ctx)
-			if err != nil {
-				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+		// 	currentState, err = v.blockchainClient.GetFSMCurrentState(ctx)
+		// 	if err != nil {
+		// 		v.logger.Errorf("[Validator] Failed to get current state: %s", err)
 
-				return err
-			}
-		}
+		// 		return err
+		// 	}
+		// }
 
 		data, err := NewTxValidationDataFromBytes(msg.Value)
 		if err != nil {

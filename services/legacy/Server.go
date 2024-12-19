@@ -217,24 +217,6 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("[Legacy Server] Starting...")
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if s.settings.BlockChain.FSMStateRestore {
-		// Send Restore event to FSM
-		err := s.blockchainClient.Restore(ctx)
-		if err != nil {
-			s.logger.Errorf("[Legacy Server] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		s.logger.Infof("[Legacy Server] Node is restoring, waiting for FSM to transition to Running state")
-		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		s.logger.Infof("[Legacy Server] Node finished restoring and has transitioned to Running state, continuing to start Legacy service")
-	}
-
 	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
 	err := s.blockchainClient.LegacySync(ctx)
 	if err != nil {

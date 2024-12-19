@@ -53,33 +53,23 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 
 	// Create the finite state machine, with states and transitions
 	finiteStateMachine := fsm.NewFSM(
-		blockchain_api.FSMStateType_STOPPED.String(),
+		blockchain_api.FSMStateType_IDLE.String(),
 		fsm.Events{
 			{
 				Name: blockchain_api.FSMEventType_RUN.String(),
 				Src: []string{
-					blockchain_api.FSMStateType_STOPPED.String(),
-					blockchain_api.FSMStateType_RESTORING.String(),
+					blockchain_api.FSMStateType_IDLE.String(),
 					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-					blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
 				},
 				Dst: blockchain_api.FSMStateType_RUNNING.String(),
 			},
 			{
 				Name: blockchain_api.FSMEventType_LEGACYSYNC.String(),
 				Src: []string{
-					blockchain_api.FSMStateType_STOPPED.String(),
+					blockchain_api.FSMStateType_IDLE.String(),
 				},
 				Dst: blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-			},
-			{
-				Name: blockchain_api.FSMEventType_RESTORE.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_STOPPED.String(),
-				},
-				Dst: blockchain_api.FSMStateType_RESTORING.String(),
 			},
 			{
 				Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
@@ -89,34 +79,13 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 			},
 			{
-				Name: blockchain_api.FSMEventType_CATCHUPTXS.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-				},
-				Dst: blockchain_api.FSMStateType_CATCHINGTXS.String(),
-			},
-			{
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_RESTORING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
 				},
-				Dst: blockchain_api.FSMStateType_STOPPED.String(),
-			},
-			{
-				Name: blockchain_api.FSMEventType_UNAVAILABLE.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
-					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-					blockchain_api.FSMStateType_RESTORING.String(),
-					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
-				},
-				Dst: blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
+				Dst: blockchain_api.FSMStateType_IDLE.String(),
 			},
 		},
 		callbacks,
@@ -145,17 +114,11 @@ func CheckFSM(blockchainClient ClientI) func(ctx context.Context, checkLiveness 
 		switch *state {
 		case blockchain_api.FSMStateType_CATCHINGBLOCKS:
 			status = http.StatusOK
-		case blockchain_api.FSMStateType_CATCHINGTXS:
-			status = http.StatusOK
 		case blockchain_api.FSMStateType_LEGACYSYNCING:
-			status = http.StatusOK
-		case blockchain_api.FSMStateType_RESTORING:
 			status = http.StatusOK
 		case blockchain_api.FSMStateType_RUNNING:
 			status = http.StatusOK
-		case blockchain_api.FSMStateType_STOPPED:
-			status = http.StatusServiceUnavailable
-		case blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE:
+		case blockchain_api.FSMStateType_IDLE:
 			status = http.StatusServiceUnavailable
 		default:
 			status = http.StatusOK
