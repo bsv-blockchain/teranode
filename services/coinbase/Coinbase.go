@@ -61,7 +61,7 @@ type Coinbase struct {
 	g                *errgroup.Group
 	gCtx             context.Context
 	stats            *gocore.Stat
-	minConfirmations uint64
+	minConfirmations uint16
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -111,7 +111,7 @@ func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchain
 
 	peerStatusTimeout := tSettings.Coinbase.PeerStatusTimeout
 
-	minConfirmations := tSettings.BlockValidation.MaxPreviousBlockHeadersToCheck
+	minConfirmations := tSettings.ChainCfgParams.CoinbaseMaturity
 
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
@@ -659,7 +659,10 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		utxo := utxo
 		// create the utxos in the background
 		// we don't have a method to revert anything that goes wrong anyway
+		ch := make(chan struct{})
 		c.g.Go(func() error {
+			defer close(ch)
+
 			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
 				return errors.NewProcessingError("could not split utxo", err)
 			}
@@ -670,6 +673,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 			return nil
 		})
+		<-ch
 	}
 
 	return nil
@@ -715,8 +719,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 	c.logger.Infof("[splitUtxo] sending splitting tx %s for coinbase tx %s vout %d", tx.TxIDChainHash().String(), utxo.TxIDHash, utxo.Vout)
 
-	if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
-		return errors.NewServiceError("error sending splitting tx %s for coinbase tx %s vout %d", tx.TxIDChainHash().String(), utxo.TxIDHash, utxo.Vout, err)
+	if !c.settings.Coinbase.TestMode {
+		if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
+			return errors.NewServiceError("error sending splitting tx %s for coinbase tx %s vout %d", tx.TxIDChainHash().String(), utxo.TxIDHash, utxo.Vout, err)
+		}
 	}
 
 	// Insert the spendable utxos....

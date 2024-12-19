@@ -299,6 +299,7 @@ type CoinbaseSettings struct {
 	PeerStatusTimeout           time.Duration
 	SlackChannel                string
 	SlackToken                  string
+	TestMode                    bool
 }
 
 type SubtreeValidationSettings struct {

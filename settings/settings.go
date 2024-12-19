@@ -301,6 +301,7 @@ func NewSettings() *Settings {
 			PeerStatusTimeout:           getDuration("peerStatus_timeout", 30*time.Second),
 			SlackChannel:                getString("slack_channel", ""),
 			SlackToken:                  getString("slack_token", ""),
+			TestMode:                    getBool("coinbase_test_mode", false),
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second),
