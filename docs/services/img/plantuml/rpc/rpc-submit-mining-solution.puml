@@ -7,7 +7,6 @@ participant "Block Assembly Client" as BlockAssembly
 Client -> RPC : SubmitMiningSolutionCmd(JsonString)
 activate RPC
 
-
 RPC -> Unmarshaler : Unmarshal JSON to MiningSolution
 activate Unmarshaler
 Unmarshaler --> RPC : return MiningSolution or error
@@ -15,7 +14,6 @@ deactivate Unmarshaler
 
 alt If JSON Unmarshaling Fails
     RPC -> Client : Return unmarshaling error
-    deactivate RPC
 else If JSON Unmarshaling Succeeds
     RPC -> RPC : Log debug information
 
@@ -26,12 +24,17 @@ else If JSON Unmarshaling Succeeds
 
     alt If Submission Fails
         RPC -> Client : Return submission error
-        deactivate RPC
     else If Submission Succeeds
         RPC -> Client : Return nil (success)
-        deactivate RPC
+        note right
+        Response fields:
+        - Returns nil on success
+        end note
     end
 end
 
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

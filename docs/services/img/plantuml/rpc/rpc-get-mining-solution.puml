@@ -13,10 +13,26 @@ deactivate BlockAssembly
 
 alt If Retrieval Fails
     RPC -> Client : Return error
-    deactivate RPC
 else If Retrieval Succeeds
     RPC -> Client : Return MiningCandidate
-    deactivate RPC
+    note right
+    Response fields:
+    - id: Hex-encoded mining candidate ID
+    - prevhash: Previous block hash
+    - coinbaseValue: Coinbase value
+    - version: Block version
+    - nBits: Encoded difficulty target
+    - time: Current timestamp
+    - height: Block height
+    - num_tx: Transaction count
+    - sizeWithoutCoinbase: Block size
+    - merkleProof: Merkle proof hashes
+    - coinbase: Optional coinbase tx
+    end note
 end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

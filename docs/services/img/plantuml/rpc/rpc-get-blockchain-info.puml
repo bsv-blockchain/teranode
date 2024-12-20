@@ -1,0 +1,30 @@
+@startuml rpc-get-blockchain-info
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : Request: GetBlockchainInfo()
+activate RPC
+
+RPC -> Blockchain : GetBestBlockHeader()
+activate Blockchain
+Blockchain --> RPC : bestBlockHeader, bestBlockMeta
+deactivate Blockchain
+
+RPC -> RPC : Construct response object
+note right
+- chain name
+- block count
+- headers
+- best block hash
+- difficulty
+- chainwork
+- other metadata
+end note
+
+RPC -> Client : Response with blockchain info
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

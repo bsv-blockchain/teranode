@@ -164,7 +164,7 @@
 
 ---
 
-**Copyright © 2024 BSV Blockchain Org.**
+**Copyright © 2025 BSV Blockchain org.**
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this software except in compliance with the License.

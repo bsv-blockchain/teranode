@@ -10,7 +10,7 @@ Last modified: 13-December-2024
 
 ## Configuring Setting Files
 
-The following settings can be configured in the custom operator ConfigMap. You can refer to the notes on the installation and ConfigMap setup [here](./minersHowToInstallation.md).
+The following settings can be configured in the custom operator ConfigMap. You can refer to the notes on the installation and ConfigMap setup [here](kubernetes/minersHowToInstallation.md).
 
 For a list of settings, and their default values, please refer to the reference at the end of this document.
 

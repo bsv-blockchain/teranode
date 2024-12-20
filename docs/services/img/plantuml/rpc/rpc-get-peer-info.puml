@@ -1,0 +1,42 @@
+@startuml rpc-get-peer-info
+participant Client
+participant "RPC Server" as RPC
+participant "Legacy Peer Client" as LegacyPeer
+participant "P2P Client" as P2P
+
+Client -> RPC : Request: GetPeerInfo()
+activate RPC
+
+RPC -> LegacyPeer : GetPeers()
+activate LegacyPeer
+LegacyPeer --> RPC : legacy peer info
+deactivate LegacyPeer
+
+RPC -> P2P : GetPeers()
+activate P2P
+P2P --> RPC : new peer info
+deactivate P2P
+
+RPC -> RPC : Combine peer information
+note right
+For each peer:
+- connection details
+- network stats
+- version info
+- state info
+end note
+
+alt If Legacy Peer info fails
+    RPC -> RPC : Log as info (non-critical)
+end
+
+alt If P2P info fails
+    RPC -> RPC : Log as error
+end
+
+RPC -> Client : Response with combined peer info
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

@@ -1,0 +1,34 @@
+@startuml rpc-get-info
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : Request: GetInfo()
+activate RPC
+
+RPC -> Blockchain : GetBestHeightAndTime()
+activate Blockchain
+Blockchain --> RPC : height, time
+deactivate Blockchain
+
+RPC -> RPC : Construct info object
+note right
+- version
+- protocol version
+- block height
+- network status
+- connection info
+- network type
+- relay fee
+end note
+
+alt If GetBestHeightAndTime fails
+    RPC -> RPC : Set height to 0
+end
+
+RPC -> Client : Response with node info
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

@@ -2,7 +2,7 @@
 participant Client
 participant "RPC Server" as RPC
 
-Client -> RPC : CreateRawTransactionCmd( inputs, amounts, lockTime)
+Client -> RPC : CreateRawTransactionCmd(inputs, amounts, lockTime)
 activate RPC
 
 RPC -> RPC : Validate lockTime
@@ -35,10 +35,17 @@ else valid lockTime
     RPC -> RPC : Serialize transaction to hex
     alt serialization successful
         RPC -> Client : Returns serialized transaction hex
+        note right
+        Response fields:
+        - Returns hex-encoded string of raw transaction
+        end note
     else serialization failed
         RPC -> Client : Error: "Failed to serialize transaction"
     end
 end
 
 deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
 @enduml

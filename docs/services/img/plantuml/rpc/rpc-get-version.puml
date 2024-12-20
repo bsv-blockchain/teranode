@@ -9,6 +9,16 @@ RPC -> RPC : handleVersion()
 activate RPC
 
 RPC -> Client : Response with Version Info
+note right
+Response fields:
+- btcdjsonrpcapi:
+  - versionString: Semantic version
+  - major: Major version number
+  - minor: Minor version number
+  - patch: Patch version number
+end note
 deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

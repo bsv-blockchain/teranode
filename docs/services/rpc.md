@@ -143,18 +143,47 @@ The `version` command is used to retrieve the version information of the RPC ser
 
 ![rpc-get-version.svg](img/plantuml/rpc/rpc-get-version.svg)
 
+#### (Success) Response Fields:
+- **btcdjsonrpcapi**: Object containing version information
+    - **versionString**: Semantic version string
+    - **major**: Major version number
+    - **minor**: Minor version number
+    - **patch**: Patch version number
+
 ### 3.3. Command - Get Best Block Hash
 
 The `getbestblockhash` command is used to retrieve the hash of the best (most recent) block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the hash of the best block.
 
 ![rpc-get-best-block-height.svg](img/plantuml/rpc/rpc-get-best-block-height.svg)
 
+#### (Success) Response Fields:
+- **hash**: The hex-encoded hash of the best block in the main chain
 
 ### 3.4. Command - Get Block
 
 The `getblock` command is used to retrieve information about a specific block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the block data based on the provided block hash.
 
 ![rpc-get-block.svg](img/plantuml/rpc/rpc-get-block.svg)
+
+#### (Success) Response Fields:
+When verbosity=0:
+- Returns hex-encoded serialized block data
+
+When verbosity=1 or 2:
+- **hash**: The block hash (same as provided)
+- **confirmations**: Number of confirmations
+- **size**: The block size in bytes
+- **height**: The block height
+- **version**: The block version
+- **versionHex**: The block version in hexadecimal
+- **merkleroot**: Root hash of the merkle tree
+- **time**: Block time in Unix epoch
+- **nonce**: The block nonce
+- **bits**: The bits which represent the block difficulty
+- **difficulty**: The proof-of-work difficulty
+- **previousblockhash**: Hash of the previous block
+- **nextblockhash**: Hash of the next block (if available)
+
 
 
 ### 3.5. Command - Generate
@@ -189,6 +218,8 @@ if err != nil {
   - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
   - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
 
+#### (Success) Response Fields:
+- Returns nil on success
 
 ### 3.6. Command - Create Raw Transaction
 
@@ -274,7 +305,7 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
   - If broadcasting fails, it returns an error indicating that the transaction was rejected along with a message detailing the reason (e.g., network errors, validation failures on the network side).
 
 6. **Success Response**:
-  - If the transaction is successfully broadcast, the function returns a success response, which might include the transaction ID or a success message.
+  - If the transaction is successfully broadcast, the function returns a success response, which includes the transaction ID of the broadcast transaction
 
 
 ### 3.8. Command - Submit Mining Solution
@@ -308,6 +339,10 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
   - The Block Assembly validates the solution and, if successful, propagates it to other nodes in the network.
   - If submission fails, it returns an error indicating why the solution was rejected (e.g., invalid solution, network errors).
 
+#### (Success) Response Fields:
+- Returns nil on success
+
+
 ### 3.9. Command - Get Mining Candidate
 
 The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candidate block for mining. This command allows miners to obtain the necessary information to attempt mining a new block.
@@ -336,6 +371,167 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 3. **Response**:
   - If successful, the function returns the mining candidate object (`mc`).
 
+#### (Success) Response Fields:
+- **id**: Hex-encoded mining candidate ID
+- **prevhash**: Previous block hash
+- **coinbaseValue**: Value for coinbase transaction
+- **version**: Block version
+- **nBits**: Encoded current difficulty target
+- **time**: Current timestamp
+- **height**: Block height
+- **num_tx**: Number of transactions
+- **sizeWithoutCoinbase**: Block size excluding coinbase
+- **merkleProof**: Array of merkle proof hashes
+- **coinbase**: Hex-encoded coinbase transaction (if requested)
+
+
+### 3.10. Command - Get Blockchain Info
+
+The `getblockchaininfo` command returns information about the current blockchain state, including network name, block count, and other blockchain-related data.
+
+
+#### Function Overview
+- **Purpose**: To retrieve comprehensive information about the current state of the blockchain.
+- **Parameters**: None
+- **Return Value**:
+  - On success: Returns a JSON object containing blockchain state information
+  - On failure: Returns an error describing what went wrong
+
+#### Process Flow
+
+![rpc-getblockchaininfo.svg](img/plantuml/rpc/rpc-get-blockchain-info.svg)
+
+
+1. **Request Processing**:
+  - Receives request for blockchain information
+  - No parameters to validate
+
+2. **Blockchain Query**:
+  - Retrieves the best block header and metadata from the blockchain service
+  - If retrieval fails, returns an error
+
+3. **Response Construction**:
+  - Constructs response object containing:
+    - Chain name (main, test, regtest)
+    - Current block count
+    - Header count
+    - Best block hash
+    - Current difficulty
+    - Chain work
+    - Additional metadata (pruning status, soft fork information)
+
+#### (Success) Response Fields:
+- **chain**: The name of the blockchain network (main, test, regtest)
+- **blocks**: The current number of blocks in the chain
+- **headers**: Number of headers in the chain (currently hardcoded to 863341)
+- **bestblockhash**: Hash of the current best block
+- **difficulty**: Current mining difficulty
+- **mediantime**: Median time of the chain (currently 0)
+- **verificationprogress**: Chain verification progress (currently 0)
+- **chainwork**: Total accumulated work in the chain
+- **pruned**: Whether the node is running in pruned mode (currently false)
+- **softforks**: Array of active soft forks (currently empty)
+
+
+### 3.11. Command - Get Info
+
+The `getinfo` command returns general information about the node's state, including version information, network status, and blockchain details.
+
+#### Function Overview
+- **Purpose**: To retrieve general information about the node's current state and configuration.
+- **Parameters**: None
+- **Return Value**:
+  - On success: Returns a JSON object containing node state information
+  - On failure: Returns an error if blockchain height cannot be retrieved
+
+#### Process Flow
+
+![rpc-get-info.svg](img/plantuml/rpc/rpc-get-info.svg)
+
+1. **Height Retrieval**:
+  - Queries blockchain service for current best height and time
+  - If query fails, sets height to 0 and logs error
+
+2. **Response Construction**:
+  - Builds response containing:
+    - Server version
+    - Protocol version
+    - Current block height
+    - Network time offset
+    - Connection count
+    - Network type (testnet/mainnet/stn)
+    - Minimum relay fee
+
+#### (Success) Response Fields:
+- **version**: Server version (currently 1)
+- **protocolversion**: Protocol version being used
+- **blocks**: Current block height
+- **timeoffset**: Network time offset (currently 1)
+- **connections**: Number of peer connections (currently 1)
+- **proxy**: Proxy being used, if any (currently "host:port")
+- **difficulty**: Current mining difficulty (currently 1)
+- **testnet**: Whether running on testnet
+- **stn**: Whether running on the Scaling Test Network
+- **relayfee**: Minimum relay fee for transactions (currently 100 sat/KB)
+
+
+### 3.12. Command - Get Peer Info
+
+The `getpeerinfo` command returns data about each connected network peer as an array of JSON objects.
+
+- **Purpose**: To retrieve detailed information about all connected peers, both legacy and new P2P connections.
+- **Parameters**: None
+- **Return Value**:
+  - On success: Returns an array of peer information objects
+  - On failure: Returns partial information if at least one peer service responds
+
+#### Process Flow
+
+![rpc-get-peer-info.svg](img/plantuml/rpc/rpc-get-peer-info.svg)
+
+
+1. **Legacy Peer Information**:
+  - Queries legacy peer service for connected peer information
+  - If query fails, logs as non-critical error
+  - Processes legacy peer data if available
+
+2. **P2P Information**:
+  - Queries new P2P service for connected peer information
+  - If query fails, logs as error
+  - Processes P2P data if available
+
+3. **Information Aggregation**:
+  - Combines information from both sources
+  - Creates unified peer information objects
+  - Includes connection details, network stats, and state information
+
+4. **Response Construction**:
+  - Returns array of peer information objects
+  - Each object contains available peer details based on connection type
+
+#### (Success) Response Fields:
+For each peer:
+- **id**: Peer ID
+- **addr**: The IP address and port of the peer
+- **addrlocal**: Local address (legacy peers only)
+- **servicesStr**: Services supported by the peer
+- **lastsend**: Time of last sent message (legacy peers only)
+- **lastrecv**: Time of last received message (legacy peers only)
+- **bytessent**: Total bytes sent (legacy peers only)
+- **bytesrecv**: Total bytes received (legacy peers only)
+- **conntime**: Connection time (legacy peers only)
+- **pingtime**: Ping time in seconds (legacy peers only)
+- **timeoffset**: Time offset with peer (legacy peers only)
+- **version**: Protocol version (legacy peers only)
+- **subver**: Peer subversion string (legacy peers only)
+- **inbound**: Whether connection is inbound (legacy peers only)
+- **startingheight**: Starting height of peer (legacy peers only)
+- **currentheight**: Current height of peer (legacy peers only)
+- **banscore**: Ban score (legacy peers only)
+- **whitelisted**: Whether peer is whitelisted (legacy peers only)
+- **feefilter**: Minimum fee rate for transactions to be announced (legacy peers only)
+
+The command aggregates peer information from both the legacy P2P service and the new P2P service, providing a comprehensive view of all connected peers.
 
 
 ## 4. Technology

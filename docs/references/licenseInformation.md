@@ -35,7 +35,7 @@ When using or distributing the software, you must:
 When you use this software in your own projects, please provide attribution:
 
 ```
-Copyright © 2024 BSV Blockchain Org.
+Copyright © 2025 BSV Blockchain org.
 Licensed under the Apache License, Version 2.0
 ```
 

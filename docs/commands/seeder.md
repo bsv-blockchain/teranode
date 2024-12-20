@@ -15,7 +15,7 @@
 
 ## 1. Description
 
-The Seeder is a command-line tool designed to populate the UTXO store with data up to and including a specific block. It reads a UTXO set (as produced by the `UTXO Persister` service) and writes all the necessary records to the configured storage system (e.g., Aerospike). This tool is crucial for initializing or updating the UTXO state of a Bitcoin node.
+The Seeder is a command-line tool designed to populate the UTXO store with data up to and including a specific block. It reads a UTXO set (as produced by the `UTXO Persister` service) and writes all the necessary records to the configured UTXO and Blockchain storage system (e.g., Aerospike and Postgres). This tool is crucial for initializing or updating the UTXO state of a Bitcoin node.
 
 Key features:
 1. Processes block headers and stores them in the blockchain store.

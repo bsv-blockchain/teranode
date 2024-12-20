@@ -10,12 +10,18 @@ RPC -> RPC: handleGetBestBlockHash()
 activate RPC
 RPC -> Blockchain : GetBestBlockHeader()
 
-
 activate Blockchain
 Blockchain -> RPC : best block hash
 deactivate Blockchain
 
 deactivate RPC
 RPC -> Client : Response with BestBlockHash
+note right
+Response fields:
+- hash: Hex-encoded hash of the best block
+end note
 deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
 @enduml

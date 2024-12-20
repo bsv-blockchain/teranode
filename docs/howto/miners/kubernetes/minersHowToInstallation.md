@@ -1,6 +1,6 @@
 # How to Install Teranode with Kubernetes Operator
 
-Last modified: 13-December-2024
+Last modified: 18-December-2024
 
 # Index
 
@@ -128,7 +128,7 @@ Teranode requires an initial block synchronization to function properly. There a
 #### Initial Data Set Installation
 
 
-To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data.
+To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](../minersHowToSyncTheNode.md) guide.
 
 Pros:
 
@@ -140,38 +140,6 @@ Cons:
 
 - Requires additional steps
 - The data set must be validated, to ensure it has not been tampered with
-
-
-##### Option 1 - Seed Teranode from a bitcoind instance
-
-
-Precondition: You must have a bitcoind instance running.
-
-1. Stop your bitcoind instance.
-2. Export the level DB from the bitcoind instance, and mount it in a location accessible to Teranode.
-3. Run the Teranode legacy seeder:
-
-**TODO** <-----------
-
-4. Start Teranode.
-
-
-##### Option 2
-
-- Receive and install an initial data set comprising two files:
-    1. Initial UTXO (Unspent Transaction Output) set
-    2. Blockchain DB dump
-       **TODO** <-----------
-
-- Start the application at a given block height and sync up from there
-
-
-To keep the initial data sets up-to-date for new nodes, the BSV Association, directly or through its partners, will continuously create and exports new data sets.
-
-- Teranode typically makes available the UTXO set for a block 100 blocks prior to the current block
-- This ensures the UTXO set won't change (is finalized)
-- The data set is approximately 3/4 of a day old
-- New nodes still need to catch up on the most recent blocks
 
 
 Where possible, BSV recommends using the Initial Data Set Installation approach.
@@ -412,3 +380,15 @@ Additional Notes:
 - Ensure proper network policies and security contexts are in place for your Kubernetes environment.
 - Regularly back up any persistent data stored in PersistentVolumeClaims.
 - The Teranode operator manages the lifecycle of the Teranode services. Direct manipulation of the underlying resources is not recommended.
+
+
+## Optimizations
+
+When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings), so you don't get banned by the SV Nodes.
+
+If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
+
+
+## Reference - Settings
+
+You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

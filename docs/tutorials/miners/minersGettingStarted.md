@@ -23,7 +23,7 @@
 
 ## Introduction
 
-This tutorial will guide you through your first steps with Teranode using Docker Compose. By the end of this guide, you'll have a running Teranode instance suitable for testing and development.
+This tutorial will guide you through your first steps with Teranode using Docker Compose. By the end of this guide, you'll have a running **testnet** **Teranode** instance suitable for testing and development.
 
 ## Prerequisites
 
@@ -39,7 +39,7 @@ Before you begin, ensure you have:
 ## What is Teranode?
 
 Teranode is a scalable Bitcoin SV node implementation that:
--
+
 - Processes over 1 million transactions per second
 - Uses a microservices architecture
 - Maintains full Bitcoin protocol compatibility
@@ -47,6 +47,7 @@ Teranode is a scalable Bitcoin SV node implementation that:
 ## Components Overview
 
 Your Teranode Docker Compose setup will include:
+
 1. **Core Teranode Services**
 
 - Asset Server
@@ -74,49 +75,33 @@ Your Teranode Docker Compose setup will include:
 
 ### Step 1: Prepare Your Environment
 
-1. Create your project directory:
+1. Checkout the Teranode public repository:
 ```bash
-mkdir teranode
-cd teranode
+cd $YOUR_WORKING_DIR
+git clone git@github.com:bitcoin-sv/teranode-public.git
+cd teranode-public
 ```
 
-2. Create required data directories:
+
+### Step 2: Initial Setup
+
+1. Go to the testnet docker compose path:
+
 ```bash
-mkdir -p data/ubsv/txstore \
-data/ubsv/subtreestore \
-data/ubsv/blockstore \
-data/postgres \
-data/aerospike/data
+cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
 ```
 
-### Step 2: Configure Teranode
-
-1. Create a `.env` file:
-```bash
-echo "SETTINGS_CONTEXT_1=docker.m" > .env
-```
-
-2. Create `settings_local.conf`:
-```conf
-# Basic configuration - copy the provided default settings
-PROPAGATION_GRPC_PORT=8084
-PROPAGATION_HTTP_PORT=8833
-# ... (additional settings as provided)
-```
-
-### Step 3: Initial Setup
-
-1. Pull required images:
+2. Pull required images:
 ```bash
 docker-compose pull
 ```
 
-2. Build Teranode:
+3. Build Teranode:
 ```bash
 docker-compose build ubsv-builder
 ```
 
-### Step 4: Start Teranode
+### Step 3: Start Teranode
 
 1. Launch all services:
 ```bash
@@ -134,7 +119,7 @@ docker-compose logs asset-server
 docker-compose logs blockchain
 ```
 
-### Step 5: Verify Installation
+### Step 4: Verify Installation
 
 1. Check service health:
 ```bash

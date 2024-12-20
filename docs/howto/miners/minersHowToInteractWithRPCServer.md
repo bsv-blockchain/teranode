@@ -19,12 +19,14 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 2. `generate`: Generates new blocks.
 3. `getbestblockhash`: Returns the hash of the best (tip) block in the longest blockchain.
 4. `getblock`: Retrieves a block by its hash.
-5. `getminingcandidate`: Obtain a mining candidate from the node.
-6. `sendrawtransaction`: Submits a raw transaction to the network.
-7. `submitminingsolution`: Submits a new mining solution.
-8. `stop`: Stops the Teranode server.
-9. `version`: Returns version information about the RPC server.
-
+5. `getblockchaininfo`: Returns information about the blockchain.
+6. `getinfo`: Returns information about the node.
+7. `getpeerinfo`: Returns information about connected peers.
+8. `getminingcandidate`: Obtain a mining candidate from the node.
+9. `sendrawtransaction`: Submits a raw transaction to the network.
+10. `submitminingsolution`: Submits a new mining solution.
+11. `stop`: Stops the Teranode server.
+12. `version`: Returns version information about the RPC server.
 
 
 **Authentication**

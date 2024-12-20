@@ -16,9 +16,28 @@ alt valid hash
     deactivate Blockchain
 
     RPC -> Client : Response with Block Data
+    note right
+    Response fields (verbosity=1,2):
+    - hash: Block hash
+    - confirmations: Number of confirmations
+    - size: Block size in bytes
+    - height: Block height
+    - version: Block version
+    - versionHex: Version in hex
+    - merkleroot: Merkle root hash
+    - time: Block time
+    - nonce: Block nonce
+    - bits: Difficulty bits
+    - difficulty: PoW difficulty
+    - previousblockhash: Previous block hash
+    - nextblockhash: Next block hash
+    end note
 else invalid or not found
     RPC -> Client : Error: Block not found
 end
 
 deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
 @enduml
