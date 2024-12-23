@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/magiconair/properties/assert"
@@ -29,7 +29,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 	defer deferFn()
 
 	t.Run("TestStore_GetTxFromExternalStore", func(t *testing.T) {
-		s := &ubsv_aerospike.Store{}
+		s := &teranode_aerospike.Store{}
 		s.SetExternalStore(memory.New())
 		s.SetClient(&uaerospike.Client{Client: client})
 		s.SetNamespace(aerospikeNamespace)
@@ -62,7 +62,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 	})
 
 	t.Run("TestStore_GetTxFromExternalStore concurrent", func(t *testing.T) {
-		s := &ubsv_aerospike.Store{}
+		s := &teranode_aerospike.Store{}
 		s.SetExternalStore(memory.New())
 		s.SetClient(&uaerospike.Client{Client: client})
 		s.SetNamespace(aerospikeNamespace)

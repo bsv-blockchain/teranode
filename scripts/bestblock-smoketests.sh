@@ -29,13 +29,13 @@ while true; do
   echo ""
   
   if [[ $(cat $tmp1) == $(cat $tmp2) ]] && [[ $(cat $tmp2) == $(cat $tmp3) ]]; then
-    echo -e "\033[32m  ubsv-1: $(cat $tmp1)  \033[0m"
-    echo -e "\033[32m  ubsv-2: $(cat $tmp2)  \033[0m"
-    echo -e "\033[32m  ubsv-3: $(cat $tmp3)  \033[0m"
+    echo -e "\033[32m  teranode-1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[32m  teranode-2: $(cat $tmp2)  \033[0m"
+    echo -e "\033[32m  teranode-3: $(cat $tmp3)  \033[0m"
   else
-    echo -e "\033[31m  ubsv-1: $(cat $tmp1)  \033[0m"
-    echo -e "\033[31m  ubsv-2: $(cat $tmp2)  \033[0m"
-    echo -e "\033[31m  ubsv-3: $(cat $tmp3)  \033[0m"
+    echo -e "\033[31m  teranode-1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[31m  teranode-2: $(cat $tmp2)  \033[0m"
+    echo -e "\033[31m  teranode-3: $(cat $tmp3)  \033[0m"
   fi
   echo ""
 

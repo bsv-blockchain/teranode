@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,7 +63,7 @@ func TestAlertSystem(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, frozenUTXO, 64)
 		assert.Equal(t, utxoHash0[:], frozenUTXO[:32])
-		assert.Equal(t, ubsv_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:64])
+		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:64])
 
 		// try to spend the UTXO
 		err = db.Spend(context.Background(), spends, 0)
@@ -90,7 +90,7 @@ func TestAlertSystem(t *testing.T) {
 
 		utxoBytes := make([]byte, 64)
 		copy(utxoBytes[:32], utxoHash0[:])
-		copy(utxoBytes[32:64], ubsv_aerospike.GetFrozenUTXOBytes())
+		copy(utxoBytes[32:64], teranode_aerospike.GetFrozenUTXOBytes())
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{

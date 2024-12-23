@@ -3,7 +3,7 @@ package util
 import (
 	"sort"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 // timeSorter implements sort.Interface to allow a slice of timestamps to

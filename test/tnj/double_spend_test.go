@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +35,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	blockchainNode1 := testEnv.Nodes[0].BlockchainClient
 	blockchainNode2 := testEnv.Nodes[1].BlockchainClient
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -77,7 +77,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -133,7 +133,7 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	assert.NoError(t, err, "Failed to mine block for faucet transaction")
 
 	// Disable P2P on second node to create network partition
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
@@ -208,7 +208,7 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	assert.NoError(t, err, "Failed to mine block on node2")
 
 	// Re-enable P2P on second node
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}

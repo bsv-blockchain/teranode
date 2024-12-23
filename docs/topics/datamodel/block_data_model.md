@@ -4,7 +4,7 @@ The Teranode BSV model introduces a novel approach to block propagation, optimiz
 
 Teranode Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, this allows for quick validation of blocks.
 
-![UBSV_Block.png](../../architecture/img/UBSV_Block.png)
+![TERANODE_Block.png](../../architecture/img/TERANODE_Block.png)
 
 Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
 

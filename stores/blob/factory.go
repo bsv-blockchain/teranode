@@ -5,17 +5,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
-	"github.com/bitcoin-sv/ubsv/stores/blob/file"
-	"github.com/bitcoin-sv/ubsv/stores/blob/http"
-	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
-	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
-	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/blob/null"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/blob/batcher"
+	"github.com/bitcoin-sv/teranode/stores/blob/file"
+	"github.com/bitcoin-sv/teranode/stores/blob/http"
+	"github.com/bitcoin-sv/teranode/stores/blob/localttl"
+	"github.com/bitcoin-sv/teranode/stores/blob/lustre"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/blob/null"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/blob/s3"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
@@ -45,7 +45,7 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	case "lustre":
 		// storeUrl is an s3 url
-		// lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3
+		// lustre://s3.com/teranode?localDir=/data/subtrees&localPersist=s3
 		dir := storeURL.Query().Get("localDir")
 		persistDir := storeURL.Query().Get("localPersist")
 

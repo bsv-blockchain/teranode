@@ -1,12 +1,12 @@
-{{ define "ubsvService" }}
-  ubsv-{{ .Index }}:
-    <<: *ubsv-base
-    command: ["/app/ubsv.run"]
+{{ define "teranodeService" }}
+  teranode-{{ .Index }}:
+    <<: *teranode-base
+    command: ["/app/teranode.run"]
     ports:
       - "{{ .Ports }}"
     volumes:
-      - ./data/ubsv{{ .Index }}/txstore:/app/data/ubsv{{ .Index }}/txstore
-      - ./data/ubsv{{ .Index }}/subtreestore:/app/data/ubsv{{ .Index }}/subtreestore
+      - ./data/teranode{{ .Index }}/txstore:/app/data/teranode{{ .Index }}/txstore
+      - ./data/teranode{{ .Index }}/subtreestore:/app/data/teranode{{ .Index }}/subtreestore
     environment:
       - SETTINGS_CONTEXT=docker
       - subtree_store={{ .SubtreeStore }}
@@ -14,7 +14,7 @@
       - validator_grpcAddress={{ .ValidatorGRPCAddress }}
       - asset_httpAddress={{ .AssetHTTPAddress }}
       - asset_grpcAddress={{ .AssetGRPCAddress }}
-      - clientName=ubsv-{{ .Index }}
+      - clientName=teranode-{{ .Index }}
       - blockchain_grpcAddress={{ .BlockchainGRPCAddress }}
       - blockchain_store=postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
       - utxostore=postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}
@@ -22,7 +22,7 @@
       - blockvalidation_httpAddress={{ .BlockValidationHTTPAddress }}
       - coinbase_store=postgres://postgres:postgres@postgres:5432/coinbase{{ .Index }}
       - coinbase_wallet_private_key={{ .CoinbaseWalletPrivateKey }}
-      - coinbase_arbitrary_text=ubsv-{{ .Index }}
+      - coinbase_arbitrary_text=teranode-{{ .Index }}
       - coinbase_assetGrpcAddress={{ .CoinbaseAssetGRPCAddress }}
       - coinbase_grpcAddress={{ .CoinbaseGRPCAddress }}
       - coinbase_p2p_private_key={{ .CoinbaseP2PPrivateKey }}

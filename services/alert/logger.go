@@ -3,7 +3,7 @@ package alert
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 type Logger struct {

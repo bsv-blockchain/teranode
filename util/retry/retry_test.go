@@ -2,11 +2,12 @@ package retry
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
+	"github.com/bitcoin-sv/teranode/errors"
+
+	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
 	"github.com/stretchr/testify/assert"
 )
 

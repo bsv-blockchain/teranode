@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -132,7 +132,7 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 		logger:            logger,
 		settings:          tSettings,
 		host:              h,
-		bitcoinProtocolID: "ubsv/bitcoin/1.0.0",
+		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
 	}

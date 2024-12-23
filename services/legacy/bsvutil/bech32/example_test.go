@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bech32"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bech32"
 )
 
 // This example demonstrates how to decode a bech32 encoded string.

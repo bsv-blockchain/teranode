@@ -268,7 +268,7 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 
 
 - **Alert Store Operator URL (`alert_store.operator`)**: The URL for the operator's database connection, typically a PostgreSQL database.
-  Example: `alert_store.operator = postgres://ubsv:ubsv@server:5432/alert`
+  Example: `alert_store.operator = postgres://teranode:teranode@server:5432/alert`
 
 
 - **Genesis Keys (`alert_genesis_keys`)**: A pipe-separated list of public keys used for genesis alerts. These keys are crucial for the initial setup and security of the alert system.

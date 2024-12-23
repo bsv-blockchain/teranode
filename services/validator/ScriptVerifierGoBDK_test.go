@@ -24,9 +24,9 @@ package validator
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ type TestTx struct {
 	ExtendedTx  string
 }
 
-// https://github.com/bitcoin-sv/ubsv/issues/1326
+// https://github.com/bitcoin-sv/teranode/issues/1326
 var testTxs = []TestTx{
 	{
 		BlockHeight: 478558,

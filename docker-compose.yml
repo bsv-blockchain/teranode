@@ -1,22 +1,22 @@
-# Define a common base configuration for ubsv nodes
-x-ubsv-base: &ubsv-base
-  image: ubsv:latest
+# Define a common base configuration for teranode nodes
+x-teranode-base: &teranode-base
+  image: teranode:latest
   depends_on:
     - postgres
     - kafka-shared
   networks:
-    - ubsv-network
+    - teranode-network
   volumes:
     - ./data:/app/data
   expose:
     - 8081-8093
 
 networks:
-  ubsv-network:
-    name: my-ubsv-network
+  teranode-network:
+    name: my-teranode-network
 services:
-  ubsv-builder:
-    image: ubsv:latest
+  teranode-builder:
+    image: teranode:latest
     build:
       context: .
       dockerfile: local.Dockerfile
@@ -24,7 +24,7 @@ services:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
     networks:
-      - ubsv-network
+      - teranode-network
     entrypoint: [ "pwd" ]
 
   jaeger:
@@ -44,13 +44,13 @@ services:
     environment:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
     networks:
-      - ubsv-network
+      - teranode-network
 
   postgres:
     container_name: postgres
     image: postgres:latest
     networks:
-      - ubsv-network
+      - teranode-network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
@@ -74,7 +74,7 @@ services:
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
-      - ubsv-network
+      - teranode-network
     command:
       - redpanda start
       - --smp 1
@@ -93,7 +93,7 @@ services:
     container_name: kafka-console-shared
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
-      - ubsv-network
+      - teranode-network
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
@@ -110,27 +110,27 @@ services:
     depends_on:
       - kafka-shared
 
-  ubsv1:
-    <<: *ubsv-base
-    container_name: ubsv1
+  teranode1:
+    <<: *teranode-base
+    container_name: teranode1
     depends_on:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      # blockchain_store: postgres://miner1:miner1@postgres:5432/teranode1
       # coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      JAEGER_SERVICE_NAME: ubsv1
+      JAEGER_SERVICE_NAME: teranode1
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
+      - ./data/teranode1/txstore:/app/data/txstore
+      - ./data/teranode1/subtreestore:/app/data/subtreestore
+      - ./data/teranode1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -138,27 +138,27 @@ services:
       - "19905:9905"
       - "19292:9292"
 
-  ubsv2:
-    <<: *ubsv-base
-    container_name: ubsv2
+  teranode2:
+    <<: *teranode-base
+    container_name: teranode2
     depends_on:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      # blockchain_store: postgres://miner2:miner2@postgres:5432/teranode2
       # coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      JAEGER_SERVICE_NAME: ubsv2
+      JAEGER_SERVICE_NAME: teranode2
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv2/txstore:/app/data/txstore
-      - ./data/ubsv2/subtreestore:/app/data/subtreestore
-      - ./data/ubsv2/blockstore:/app/data/blockstore
+      - ./data/teranode2/txstore:/app/data/txstore
+      - ./data/teranode2/subtreestore:/app/data/subtreestore
+      - ./data/teranode2/blockstore:/app/data/blockstore
     ports:
       - "28081-28089:8081-8089"
       - "28090-28093:8090-8093"
@@ -166,27 +166,27 @@ services:
       - "29905:9905"
       - "29292:9292"
 
-  ubsv3:
-    <<: *ubsv-base
-    container_name: ubsv3
+  teranode3:
+    <<: *teranode-base
+    container_name: teranode3
     depends_on:
       - kafka-shared
       - postgres
       - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run" ]
+    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      # blockchain_store: postgres://miner3:miner3@postgres:5432/teranode3
       # coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      JAEGER_SERVICE_NAME: ubsv3
+      JAEGER_SERVICE_NAME: teranode3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv3/txstore:/app/data/txstore
-      - ./data/ubsv3/subtreestore:/app/data/subtreestore
-      - ./data/ubsv3/blockstore:/app/data/blockstore
+      - ./data/teranode3/txstore:/app/data/txstore
+      - ./data/teranode3/subtreestore:/app/data/subtreestore
+      - ./data/teranode3/blockstore:/app/data/blockstore
     ports:
       - "38081-38089:8081-8089"
       - "38090-38093:8090-8093"
@@ -195,57 +195,57 @@ services:
       - "39292:9292"
 
   miner1:
-    <<: *ubsv-base
+    <<: *teranode-base
     container_name: miner1
     depends_on:
-      - ubsv1
+      - teranode1
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1}
-    command: [ "/app/wait.sh", "ubsv1", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/ubsv1/", "-rpcport", "9292", "-rpcconnect", "ubsv1" ]
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1}
+    command: [ "/app/wait.sh", "teranode1", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "9292", "-rpcconnect", "teranode1" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/miner1:/app/data
 
   miner2:
-    <<: *ubsv-base
+    <<: *teranode-base
     container_name: miner2
     depends_on:
-      - ubsv2
+      - teranode2
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2}
-    command: [ "/app/wait.sh", "ubsv2", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/ubsv2/", "-rpcport", "9292", "-rpcconnect", "ubsv2" ]
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2}
+    command: [ "/app/wait.sh", "teranode2", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/teranode2/", "-rpcport", "9292", "-rpcconnect", "teranode2" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/miner2:/app/data
 
   miner3:
-    <<: *ubsv-base
+    <<: *teranode-base
     container_name: miner3
     depends_on:
-      - ubsv3
+      - teranode3
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3}
-    command: [ "/app/wait.sh", "ubsv3", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/ubsv3/", "-rpcport", "9292", "-rpcconnect", "ubsv3" ]
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3}
+    command: [ "/app/wait.sh", "teranode3", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/teranode3/", "-rpcport", "9292", "-rpcconnect", "teranode3" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/miner3:/app/data
 
   txblaster1:
-    <<: *ubsv-base
+    <<: *teranode-base
     container_name: txblaster1
     depends_on:
-      - ubsv1
-      - ubsv2
-      - ubsv3
+      - teranode1
+      - teranode2
+      - teranode3
     environment:
-      SETTINGS_CONTEXT: "docker.ubsv1"
+      SETTINGS_CONTEXT: "docker.teranode1"
       tx_blaster_profilerAddr: ":9092"
       BLASTER_ARGS: "-workers=2"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
-      propagation_quicAddresses: https://ubsv1:8384 | https://ubsv2:8384 | https://ubsv3:8384
+      propagation_quicAddresses: https://teranode1:8384 | https://teranode2:8384 | https://teranode3:8384
     command: [ "/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false" ]
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data
@@ -257,7 +257,7 @@ services:
     ports:
       - "19090:9090"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
@@ -268,7 +268,7 @@ services:
     ports:
       - "29090:9090"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
@@ -279,7 +279,7 @@ services:
     ports:
       - "39090:9090"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
 
@@ -289,7 +289,7 @@ services:
     ports:
       - "3000:3000"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
       - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
@@ -305,8 +305,8 @@ services:
       context: .
       dockerfile: Dockerfile.grpc-client
     depends_on:
-      - ubsv1
-      - ubsv2
-      - ubsv3
+      - teranode1
+      - teranode2
+      - teranode3
     networks:
-      - ubsv-network
+      - teranode-network

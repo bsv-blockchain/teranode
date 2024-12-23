@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 )
 
 // TestHelpReflectInternals ensures the various help functions which deal with

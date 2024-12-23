@@ -3,7 +3,7 @@ package model
 import (
 	"crypto/rand"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"

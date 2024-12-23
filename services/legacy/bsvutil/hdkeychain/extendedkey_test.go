@@ -16,7 +16,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/teranode/chaincfg"
 )
 
 // TestBIP0032Vectors tests the vectors provided by [BIP32] to ensure the

@@ -35,7 +35,7 @@ $ docker stats
 
 ## run with a subset of services (this example sparks up a single node)
 ```
-$ docker compose up ubsv-1 -d
+$ docker compose up teranode-1 -d
 ```
 
 
@@ -45,7 +45,7 @@ $ docker compose up ubsv-1 -d
 $ ./scripts/bestblock-docker.sh
 ```
 
-Occasionally, ubsv-1, ubsv-2 or ubsv-3 fail to start because aerospike/postgres wasn’t ready at that moment. Just run the ‘up’ command again. (If anyone knows how to make ubsv containers wait for their dependent services to be ‘ready’…)
+Occasionally, teranode-1, teranode-2 or teranode-3 fail to start because aerospike/postgres wasn’t ready at that moment. Just run the ‘up’ command again. (If anyone knows how to make teranode containers wait for their dependent services to be ‘ready’…)
 
 ## To delete everything
 If you are using the default compose then postgres is used to store txmeta and utxo. These are persisted in data/postgres
@@ -59,9 +59,9 @@ $ docker compose down
 ## Note, if you need to run tx-baster separately on a cmd shell use
 ```
 $ cd cmd/txblaster
-$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
-$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
-$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.teranode1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.teranode2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.teranode3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
 ```
 
 ## To override the base compose to use Aerospike services
@@ -96,7 +96,7 @@ $ docker compose logs
 
 ## To tail the log files of a specific service
 ```
-$ docker compose logs ubsv-1
+$ docker compose logs teranode-1
 ```
 
 ## When using 'network: host' in Docker Desktop

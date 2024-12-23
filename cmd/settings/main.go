@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/settings/settings"
+	"github.com/bitcoin-sv/teranode/cmd/settings/settings"
 )
 
 func main() {

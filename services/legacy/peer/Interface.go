@@ -3,7 +3,7 @@ package peer
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer_api"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 )
 
 type ClientI interface {

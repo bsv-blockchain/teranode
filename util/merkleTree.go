@@ -2,9 +2,10 @@ package util
 
 import (
 	sha256 "crypto/sha256"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"sync"
+
+	"github.com/bitcoin-sv/teranode/errors"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 )

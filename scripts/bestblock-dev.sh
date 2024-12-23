@@ -19,7 +19,7 @@ while true; do
   echo -ne "\033c"
   echo $(date -u)
   echo ""
-  echo -e "\033[32m  ubsv-1: $(cat $tmp1)  \033[0m"
+  echo -e "\033[32m  teranode-1: $(cat $tmp1)  \033[0m"
   echo ""
 
   # Clean up temporary files

@@ -2,8 +2,8 @@
 
 function get_block_header() {
   local node=$1
-  https://eu-central-1-teranode-teranet-prod-1.ubsv.dev/
-  local url="https://$node.ubsv.dev/api/v1/bestblockheader/json"
+  https://eu-central-1-teranode-teranet-prod-1.teranode.dev/
+  local url="https://$node.teranode.dev/api/v1/bestblockheader/json"
   local output=$(curl -s "$url")
 
   if [[ -z $output ]]; then

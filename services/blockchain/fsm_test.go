@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	blockchain_service "github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	blockchain_service "github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
 	"github.com/stretchr/testify/require"
 )
 

@@ -3,11 +3,11 @@ package blockchain
 import (
 	"net/url"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 
-	"github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 func NewStore(logger ulogger.Logger, storeURL *url.URL, chainParams *chaincfg.Params) (Store, error) {

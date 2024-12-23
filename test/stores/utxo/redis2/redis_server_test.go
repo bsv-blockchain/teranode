@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	storeRedis "github.com/bitcoin-sv/teranode/stores/utxo/redis2"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	redisTest "github.com/bitcoin-sv/testcontainers-redis-go"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	storeRedis "github.com/bitcoin-sv/ubsv/stores/utxo/redis2"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	redis_db "github.com/redis/go-redis/v9"
@@ -735,7 +735,7 @@ func TestStoreDecorate(t *testing.T) {
 //	aeroURL, err := url.Parse(fmt.Sprintf(aerospikeURLFormat, aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 //	require.NoError(t, err)
 //
-//	// ubsv db client
+//	// teranode db client
 //	var db *storeRedis.Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
@@ -857,7 +857,7 @@ func initRedis(t *testing.T) (*storeRedis.Store, context.Context, func()) {
 	redisURL, err := url.Parse(redisContainerURL)
 	require.NoError(t, err)
 
-	// ubsv redisStore client
+	// teranode redisStore client
 	var redisStore *storeRedis.Store
 	redisStore, err = storeRedis.New(ctx, ulogger.TestLogger{}, redisURL)
 	require.NoError(t, err)

@@ -10,7 +10,7 @@ package validator
 import (
 	"encoding/binary"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 // TxValidationData encapsulates the data required for transaction validation

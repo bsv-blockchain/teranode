@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
 type Store interface {

@@ -10,14 +10,14 @@ import (
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
-	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/test"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -95,8 +95,8 @@ var (
 	}}
 )
 
-func initAerospike(t *testing.T) (*aerospike.Client, *ubsv_aerospike.Store, context.Context, func()) {
-	ubsv_aerospike.InitPrometheusMetrics()
+func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
+	teranode_aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
 
@@ -124,9 +124,9 @@ func initAerospike(t *testing.T) (*aerospike.Client, *ubsv_aerospike.Store, cont
 
 	tSettings := test.CreateBaseTestSettings()
 
-	// ubsv db client
-	var db *ubsv_aerospike.Store
-	db, err = ubsv_aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
+	// teranode db client
+	var db *teranode_aerospike.Store
+	db, err = teranode_aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
 	require.NoError(t, err)
 
 	db.SetClient(&uaerospike.Client{Client: client})
@@ -250,8 +250,8 @@ func printArray(name string, ifc interface{}) {
 	}
 }
 
-func setupStore(_ *testing.T, client *aerospike.Client) *ubsv_aerospike.Store {
-	s := &ubsv_aerospike.Store{}
+func setupStore(_ *testing.T, client *aerospike.Client) *teranode_aerospike.Store {
+	s := &teranode_aerospike.Store{}
 	s.SetUtxoBatchSize(100)
 	s.SetClient(&uaerospike.Client{Client: client})
 	s.SetExternalStore(memory.New())
@@ -272,7 +272,7 @@ func readTransaction(t *testing.T, filePath string) *bt.Tx {
 	return tx
 }
 
-func prepareBatchStoreItem(t *testing.T, s *ubsv_aerospike.Store, tx *bt.Tx, blockHeight uint32, blockIDs []uint32) (*ubsv_aerospike.BatchStoreItem, [][]*aerospike.Bin, bool) {
+func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx, blockHeight uint32, blockIDs []uint32) (*teranode_aerospike.BatchStoreItem, [][]*aerospike.Bin, bool) {
 	txHash := tx.TxIDChainHash()
 	isCoinbase := tx.IsCoinbase()
 
@@ -280,7 +280,7 @@ func prepareBatchStoreItem(t *testing.T, s *ubsv_aerospike.Store, tx *bt.Tx, blo
 	require.NoError(t, err)
 	require.NotNil(t, binsToStore)
 
-	bItem := ubsv_aerospike.NewBatchStoreItem(
+	bItem := teranode_aerospike.NewBatchStoreItem(
 		txHash,
 		isCoinbase,
 		tx,

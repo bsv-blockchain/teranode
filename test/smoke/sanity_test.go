@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -124,9 +124,9 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	const ubsv1RPCEndpoint = "http://localhost:11292"
+	const teranode1RPCEndpoint = "http://localhost:11292"
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	// wait for the blocks to be generated
 	time.Sleep(5 * time.Second)
 	require.NoError(t, err, "Failed to generate blocks: %v", err)

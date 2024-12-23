@@ -68,7 +68,7 @@ spec:
             - "--headless=true"
             - "--api-version=2"
             - "exec"
-            - "./ubsv.run"
+            - "./teranode.run"
             - "--"
           args:
             - "-legacy=1"

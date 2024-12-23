@@ -1,6 +1,6 @@
 package main
 
-import "github.com/bitcoin-sv/ubsv/cmd/blockpersisterintegrity/blockpersisterintegrity"
+import "github.com/bitcoin-sv/teranode/cmd/blockpersisterintegrity/blockpersisterintegrity"
 
 func main() {
 	blockpersisterintegrity.Start()

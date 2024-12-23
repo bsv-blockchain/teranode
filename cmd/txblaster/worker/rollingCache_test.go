@@ -3,7 +3,7 @@ package worker_test
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/cmd/txblaster/worker"
+	"github.com/bitcoin-sv/teranode/cmd/txblaster/worker"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -5,17 +5,17 @@ import (
 	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-//go:embed ubsv.lua
-var ubsvLUA []byte
+//go:embed teranode.lua
+var teranodeLUA []byte
 
-var LuaPackage = "ubsv_v19" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v19" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]

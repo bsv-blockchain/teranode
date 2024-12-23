@@ -3,11 +3,11 @@ package blockpersister
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/utxopersister"
-	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/utxopersister"
+	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )

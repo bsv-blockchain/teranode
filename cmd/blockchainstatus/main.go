@@ -1,6 +1,6 @@
 package main
 
-import "github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
+import "github.com/bitcoin-sv/teranode/cmd/blockchainstatus/blockchainstatus"
 
 func main() {
 	blockchainstatus.Init()

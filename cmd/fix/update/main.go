@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/usql"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/usql"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 )
@@ -21,7 +21,7 @@ func main() {
 
 	policy := util.GetAerospikeReadPolicy()
 
-	db, err := usql.Open("postgres", "user=ubsv password=ubsv dbname=ubsv sslmode=disable host=localhost port=5432")
+	db, err := usql.Open("postgres", "user=teranode password=teranode dbname=teranode sslmode=disable host=localhost port=5432")
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		return

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +76,7 @@ func TestFileNilS3(t *testing.T) {
 func TestFileGet(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
 		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/teranode-tests", "persist")
 		require.NoError(t, err)
 
 		s3Client.Set(nil, fs.ErrNotExist)
@@ -122,13 +122,13 @@ func TestFileGet(t *testing.T) {
 
 	t.Run("ttl", func(t *testing.T) {
 		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/teranode-tests", "persist")
 		require.NoError(t, err)
 
 		s3Client.Set(nil, fs.ErrNotExist)
 
-		filename := "/tmp/ubsv-tests/79656b"
-		persistFilename := "/tmp/ubsv-tests/persist/79656b"
+		filename := "/tmp/teranode-tests/79656b"
+		persistFilename := "/tmp/teranode-tests/persist/79656b"
 
 		// should not exist
 		exists, err := f.Exists(context.Background(), []byte("key"))
@@ -309,7 +309,7 @@ func TestFileGetFromReader(t *testing.T) {
 }
 
 func TestFileNew(t *testing.T) {
-	url, err := url.ParseRequestURI("lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3")
+	url, err := url.ParseRequestURI("lustre://s3.com/teranode?localDir=/data/subtrees&localPersist=s3")
 	require.NoError(t, err)
 
 	store, err := New(ulogger.TestLogger{}, url, "data", "persist")
@@ -355,7 +355,7 @@ func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Fi
 }
 
 func TestFileNameForPersist(t *testing.T) {
-	url, err := url.ParseRequestURI("lustre://s3.com/ubsv")
+	url, err := url.ParseRequestURI("lustre://s3.com/teranode")
 	require.NoError(t, err)
 
 	store, err := New(ulogger.TestLogger{}, url, "data", "persist", options.WithHashPrefix(2), options.WithDefaultSubDirectory("sub"))

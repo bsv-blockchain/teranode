@@ -13,12 +13,12 @@ import (
 
 	bdkconfig "github.com/bitcoin-sv/bdk/module/gobdk/config"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -26,7 +26,7 @@ import (
 
 // go test -v -tags test_validator ./test/...
 
-var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
+var testStoreURL = "https://teranode-public.s3.eu-west-1.amazonaws.com/testdata"
 
 type TxsExtended struct {
 	Txs    []*bt.Tx

@@ -15,10 +15,10 @@ import (
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
 	bdkconfig "github.com/bitcoin-sv/bdk/module/gobdk/config"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -30,7 +30,7 @@ func init() {
 	log.Println("Registered scriptVerifierGoBDK")
 }
 
-// getBDKChainNameFromParams maps chain names from ubsv format to BDK format (bsv C++)
+// getBDKChainNameFromParams maps chain names from teranode format to BDK format (bsv C++)
 // Parameters:
 //   - pa: Chain parameters containing the network name
 //
@@ -43,7 +43,7 @@ func init() {
 //   - regtest  -> regtest
 //   - stn      -> stn
 func getBDKChainNameFromParams(pa *chaincfg.Params) string {
-	// ubsv : mainnet  testnet   regtest  stn
+	// teranode : mainnet  testnet   regtest  stn
 	// bdk  :    main      test  regtest  stn
 	chainNameMap := map[string]string{
 		"mainnet": "main",
@@ -85,7 +85,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		policy: po,
 		params: pa,
 		whiteList: map[string]struct{}{
-			"7be4fa421844154ec4105894def768a8bcd80da25792947d585274ce38c07105": {}, // See https://github.com/bitcoin-sv/ubsv/issues/1776
+			"7be4fa421844154ec4105894def768a8bcd80da25792947d585274ce38c07105": {}, // See https://github.com/bitcoin-sv/teranode/issues/1776
 		},
 	}
 }

@@ -2,7 +2,7 @@
 
 package txmetacache
 
-import "github.com/bitcoin-sv/ubsv/ulogger"
+import "github.com/bitcoin-sv/teranode/ulogger"
 
 /*
 These const values are suitable for a dev machine that does NOT need to cope with 1m TPS

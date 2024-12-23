@@ -98,7 +98,7 @@ docker-compose pull
 
 3. Build Teranode:
 ```bash
-docker-compose build ubsv-builder
+docker-compose build teranode-builder
 ```
 
 ### Step 3: Start Teranode
@@ -129,7 +129,7 @@ curl http://localhost:8090/health
 2. Access monitoring dashboard:
 - Open Grafana: http://localhost:3005
 - Login with default credentials: admin/admin
-- Navigate to the "UBSV Service Overview" dashboard
+- Navigate to the "TERANODE Service Overview" dashboard
 
 ### Common Issues
 
@@ -187,7 +187,7 @@ curl http://localhost:8090/api/v1/tx/<txid>
 
 1. Access Grafana dashboards:
 - Open http://localhost:3005
-- Navigate to "UBSV Service Overview"
+- Navigate to "TERANODE Service Overview"
 
 2. Key metrics to watch:
 - Block queue length (should be near 0)

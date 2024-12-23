@@ -1,6 +1,6 @@
-# UBSV Docker Setup Guide
+# TERANODE Docker Setup Guide
 
-This guide will walk you through the steps to set up and run ubsv Docker containers for our project.
+This guide will walk you through the steps to set up and run teranode Docker containers for our project.
 
 ## Prerequisites
 
@@ -16,23 +16,23 @@ If you are running for the first time or have made changes to the `modules/p2pBo
 docker-compose -f docker-compose-ci-template.yml up p2p-bootstrap-1
 ```
 
-## Step 2: Start ubsv-1 with miner and ubsv-2 with no miner
+## Step 2: Start teranode-1 with miner and teranode-2 with no miner
 
 If you are running for the first time or have made changes to the `local.Dockerfile`, use the --build option. Otherwise, you can skip it.
 Before building a new image use `export GITHUB_SHA=<GITHUB_SHA to test>`
 ```bash
-docker-compose -f docker-compose-ci-template.yml up postgres ubsv-1 ubsv-2
+docker-compose -f docker-compose-ci-template.yml up postgres teranode-1 teranode-2
 
 curl http://localhost:18091/lastblocks?n=1, http://localhost:18091/lastblocks?n=1 and get the latest block from `height` field
 Check if both nodes are in sync and have 300 blocks each
 ```
 
-## Step 3: Start ubsv-1-coinbase and ubsv-2-coinbase
+## Step 3: Start teranode-1-coinbase and teranode-2-coinbase
 
-Start the coinbase services for both nodes. This time, you can start ubsv-2-coinbase with the miner service if required.
+Start the coinbase services for both nodes. This time, you can start teranode-2-coinbase with the miner service if required.
 
 ```bash
-docker-compose -f docker-compose-ci-template.yml up ubsv-1-coinbase ubsv-2-coinbase
+docker-compose -f docker-compose-ci-template.yml up teranode-1-coinbase teranode-2-coinbase
 
 curl http://localhost:18091/lastblocks?n=1, http://localhost:18091/lastblocks?n=1 and get the latest block from `height` field
 Check if both nodes are in sync and have 310 blocks each

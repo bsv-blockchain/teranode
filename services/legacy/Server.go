@@ -4,20 +4,20 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer_api"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
+	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -33,7 +33,7 @@ type Server struct {
 	lastHash *chainhash.Hash
 	height   uint32
 
-	// ubsv stores
+	// teranode stores
 	blockchainClient    blockchain.ClientI
 	validationClient    validator.Interface
 	subtreeStore        blob.Store

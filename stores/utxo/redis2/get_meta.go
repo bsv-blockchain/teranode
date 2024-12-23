@@ -3,7 +3,7 @@ package redis2
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

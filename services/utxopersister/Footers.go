@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 func GetFooter(r io.Reader) (uint64, uint64, error) {

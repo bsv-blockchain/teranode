@@ -513,9 +513,9 @@ func UnwrapGRPC(err error) error {
     }
 
     for _, detail := range st.Details() {
-        var ubsvErr TError
-        if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
-            return New(ubsvErr.Code, ubsvErr.Message)
+        var teranodeErr TError
+        if err := anypb.UnmarshalTo(detail.(*anypb.Any), &teranodeErr, proto.UnmarshalOptions{}); err == nil {
+            return New(teranodeErr.Code, teranodeErr.Message)
         }
     }
 

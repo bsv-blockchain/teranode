@@ -1,4 +1,4 @@
-# Define a common base configuration for ubsv nodes
+# Define a common base configuration for teranode nodes
 services:
   kafka-shared:
     container_name: kafka-shared

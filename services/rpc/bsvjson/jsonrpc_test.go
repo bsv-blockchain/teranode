@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 )
 
 // TestIsValidIDType ensures the IsValidIDType function behaves as expected.

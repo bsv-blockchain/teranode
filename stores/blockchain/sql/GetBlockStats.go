@@ -3,10 +3,10 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/tracing"
 )
 
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {

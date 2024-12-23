@@ -29,8 +29,8 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 1. **set_debug_flags**: Configures debug flags based on the `DEBUG` variable.
 2. **all**: Executes the following tasks in order: `deps`, `install`, `lint`, `build`, and `test`.
 3. **deps**: Downloads required Go modules.
-4. **dev**: Runs both the `dev-dashboard` and `dev-ubsv` concurrently.
-5. **dev-ubsv**: Executes the Go project.
+4. **dev**: Runs both the `dev-dashboard` and `dev-teranode` concurrently.
+5. **dev-teranode**: Executes the Go project.
 6. **dev-dashboard**: Installs and runs the Node.js dashboard project located in `./ui/dashboard`.
 7. **build**: Builds both the dashboard and Teranode.
 8. **test**: Executes Go tests excluding the playground and PoC directories.
@@ -64,14 +64,14 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 
 ### Development:
 
-- `dev`: Runs both `dev-dashboard` and `dev-ubsv`.
-- `dev-ubsv`: Executes the main Go project.
+- `dev`: Runs both `dev-dashboard` and `dev-teranode`.
+- `dev-teranode`: Executes the main Go project.
 - `dev-dashboard`: Installs and runs a Node.js project located in `./ui/dashboard`.
 
 ### Building:
 
-- `build`: A composite task that runs `build-dashboard` and `build-ubsv`.
-- `build-ubsv`: Builds the main Teranode project with certain tags and linker flags.
+- `build`: A composite task that runs `build-dashboard` and `build-teranode`.
+- `build-teranode`: Builds the main Teranode project with certain tags and linker flags.
 - `build-dashboard`: Installs npm dependencies and builds a dashboard UI.
 
 Other specific build tasks for different components:

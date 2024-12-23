@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

@@ -1,43 +1,43 @@
 
-x-ubsv-base: &ubsv-base
-  image: ubsv:latest
+x-teranode-base: &teranode-base
+  image: teranode:latest
   depends_on:
     - postgres
     - kafka-shared
   networks:
-    - ubsv-network
+    - teranode-network
   volumes:
     - ./data:/app/data
   expose:
     - 8081-8093
 
-x-ubsv-base-1: &ubsv-base-1
-  <<: *ubsv-base
-  container_name: ubsv-base-1
+x-teranode-base-1: &teranode-base-1
+  <<: *teranode-base
+  container_name: teranode-base-1
   depends_on:
     - kafka-shared
     - postgres
     - jaeger
   networks:
-    - ubsv-network
+    - teranode-network
   environment:
-    SETTINGS_CONTEXT: docker.ss.ubsv1
+    SETTINGS_CONTEXT: docker.ss.teranode1
     logLevel: "DEBUG"
     JAEGER_AGENT_HOST: jaeger
     JAEGER_AGENT_PORT: 6831
   volumes:
     - ./settings_local.conf:/app/settings_local.conf
-    - ./data/ubsv1/txstore:/app/data/txstore
-    - ./data/ubsv1/subtreestore:/app/data/subtreestore
-    - ./data/ubsv1/blockstore:/app/data/blockstore
+    - ./data/teranode1/txstore:/app/data/txstore
+    - ./data/teranode1/subtreestore:/app/data/subtreestore
+    - ./data/teranode1/blockstore:/app/data/blockstore
 
 networks:
-  ubsv-network:
-    name: my-ubsv-network
+  teranode-network:
+    name: my-teranode-network
 
 services:
-  ubsv-builder:
-    image: ubsv:latest
+  teranode-builder:
+    image: teranode:latest
     build:
       context: .
       dockerfile: local.Dockerfile
@@ -45,7 +45,7 @@ services:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
     networks:
-      - ubsv-network
+      - teranode-network
     entrypoint: ["pwd"]
 
   jaeger:
@@ -61,13 +61,13 @@ services:
       - "14269:14269"
       - "9411:9411"
     networks:
-      - ubsv-network
+      - teranode-network
 
   postgres:
     container_name: postgres
     image: postgres:latest
     networks:
-      - ubsv-network
+      - teranode-network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
@@ -91,7 +91,7 @@ services:
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
-      - ubsv-network
+      - teranode-network
     command:
       - redpanda start
       - --smp 1
@@ -110,7 +110,7 @@ services:
     container_name: kafka-console-shared
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
-      - ubsv-network
+      - teranode-network
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
@@ -128,7 +128,7 @@ services:
       - kafka-shared
 
   blockchain-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: blockchain-1
     entrypoint:
       [
@@ -142,12 +142,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-blockchain=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: blockchain-1
     ports:
       - "8082:8082"
@@ -159,7 +159,7 @@ services:
     #   - "19292:9292"
 
   p2p-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: p2p-1
     entrypoint:
       [
@@ -173,12 +173,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-p2p=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: p2p-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -188,7 +188,7 @@ services:
     #   - "19292:9292"
 
   validator-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: validator-1
     entrypoint:
       [
@@ -202,12 +202,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-validator=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: validator-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -217,7 +217,7 @@ services:
     #   - "19292:9292"
 
   propagation-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: propagation-1
     entrypoint:
       [
@@ -231,12 +231,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-propagation=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: propagation-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -246,7 +246,7 @@ services:
     #   - "19292:9292"
 
   blockassembly-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: blockassembly-1
     entrypoint:
       [
@@ -260,12 +260,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-blockassembly=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: blockassembly-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -275,7 +275,7 @@ services:
     #   - "19292:9292"
 
   subtreevalidation-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: subtreevalidation-1
     entrypoint:
       [
@@ -289,12 +289,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-subtreevalidation=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: subtreevalidation-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -304,7 +304,7 @@ services:
     #   - "19292:9292"
 
   blockvalidation-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: blockvalidation-1
     entrypoint:
       [
@@ -318,12 +318,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-blockvalidation=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: blockvalidation-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -333,7 +333,7 @@ services:
     #   - "19292:9292"
 
   asset-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: asset-1
     entrypoint:
       [
@@ -347,12 +347,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-asset=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: asset-1
     ports:
       - "8090:8090"
@@ -363,7 +363,7 @@ services:
     #   - "19292:9292"
 
   coinbase-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: coinbase-1
     entrypoint:
       [
@@ -377,12 +377,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-coinbase=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: coinbase-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -392,7 +392,7 @@ services:
     #   - "19292:9292"
 
   blockpersister-1:
-    <<: *ubsv-base-1
+    <<: *teranode-base-1
     container_name: blockpersister-1
     entrypoint:
       [
@@ -406,12 +406,12 @@ services:
         "9092",
         "0",
         "--",
-        "/app/ubsv.run",
+        "/app/teranode.run",
         "-all=0",
         "-blockpersister=1",
       ]
     environment:
-      SETTINGS_CONTEXT: docker.ss.ubsv1
+      SETTINGS_CONTEXT: docker.ss.teranode1
       JAEGER_SERVICE_NAME: blockpersister-1
     # ports:
     #   - "18081-18089:8081-8089"
@@ -427,7 +427,7 @@ services:
     ports:
       - "19090:9090"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
@@ -437,7 +437,7 @@ services:
     ports:
       - "3000:3000"
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
       - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml

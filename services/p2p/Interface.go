@@ -3,7 +3,7 @@ package p2p
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
+	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 )
 
 type ClientI interface {

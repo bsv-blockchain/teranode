@@ -9,18 +9,18 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/health"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
-	"github.com/bitcoin-sv/ubsv/util/p2p"
-	"github.com/bitcoin-sv/ubsv/util/servicemanager"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/health"
+	"github.com/bitcoin-sv/teranode/util/kafka"
+	"github.com/bitcoin-sv/teranode/util/p2p"
+	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -155,7 +155,7 @@ func NewServer(
 		P2PNode:                       p2pNode,
 		logger:                        logger,
 		settings:                      tSettings,
-		bitcoinProtocolID:             "ubsv/bitcoin/1.0.0",
+		bitcoinProtocolID:             "teranode/bitcoin/1.0.0",
 		notificationCh:                make(chan *notificationMsg),
 		blockchainClient:              blockchainClient,
 		banList:                       banlist,

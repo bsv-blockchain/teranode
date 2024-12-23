@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 type UTXOValue struct {

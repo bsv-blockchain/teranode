@@ -5,9 +5,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

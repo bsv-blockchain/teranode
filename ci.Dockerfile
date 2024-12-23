@@ -25,7 +25,7 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-RUN RACE=true TXMETA_SMALL_TAG=true make build-ubsv-ci -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build-teranode-ci -j 32
 RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 ENV GOPATH=/go
@@ -34,14 +34,14 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
-COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
 FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
-COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
@@ -61,16 +61,16 @@ COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
 
-# RUN ln -s ubsv.run chainintegrity.run
-# RUN ln -s ubsv.run blaster.run
-# RUN ln -s ubsv.run propagationblaster.run
-# RUN ln -s ubsv.run blockassemblyblaster.run
-# RUN ln -s ubsv.run utxostoreblaster.run
-# RUN ln -s ubsv.run aerospiketest.run
-# RUN ln -s ubsv.run s3blaster.run
-RUN ln -s ubsv.run miner.run
+# RUN ln -s teranode.run chainintegrity.run
+# RUN ln -s teranode.run blaster.run
+# RUN ln -s teranode.run propagationblaster.run
+# RUN ln -s teranode.run blockassemblyblaster.run
+# RUN ln -s teranode.run utxostoreblaster.run
+# RUN ln -s teranode.run aerospiketest.run
+# RUN ln -s teranode.run s3blaster.run
+RUN ln -s teranode.run miner.run
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 
 # Set the entrypoint to the library
-#ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
+#ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./teranode.run", "--"]

@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	_ "github.com/bitcoin-sv/teranode/k8sresolver"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/gocore"
 )
 

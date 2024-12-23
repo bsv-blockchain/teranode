@@ -34,12 +34,12 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
-COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/teranode.run ./teranode.run
 
 # Don't do anything different for ARM64 (for now)
 FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
-COPY --from=0 /app/ubsv.run ./ubsv.run
+COPY --from=0 /app/teranode.run ./teranode.run
 
 ENV TARGETARCH=${TARGETARCH}
 ENV TARGETOS=${TARGETOS}
@@ -53,28 +53,28 @@ COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
 
-RUN ln -s ubsv.run chainintegrity.run
-RUN ln -s ubsv.run blaster.run
-RUN ln -s ubsv.run propagationblaster.run
-RUN ln -s ubsv.run blockassemblyblaster.run
-RUN ln -s ubsv.run utxostoreblaster.run
-RUN ln -s ubsv.run aerospiketest.run
-RUN ln -s ubsv.run s3blaster.run
-RUN ln -s ubsv.run filereader.run
-RUN ln -s ubsv.run s3inventoryintegrity.run
-RUN ln -s ubsv.run txblockidcheck.run
-RUN ln -s ubsv.run aerospike_reader.run
-RUN ln -s ubsv.run utxopersister.run
-RUN ln -s ubsv.run seeder.run
-RUN ln -s ubsv.run bitcoin2utxoset.run
-RUN ln -s ubsv.run settings.run
-RUN ln -s ubsv.run unspend.run
-RUN ln -s ubsv.run recovertx.run
-RUN ln -s ubsv.run miner.run
+RUN ln -s teranode.run chainintegrity.run
+RUN ln -s teranode.run blaster.run
+RUN ln -s teranode.run propagationblaster.run
+RUN ln -s teranode.run blockassemblyblaster.run
+RUN ln -s teranode.run utxostoreblaster.run
+RUN ln -s teranode.run aerospiketest.run
+RUN ln -s teranode.run s3blaster.run
+RUN ln -s teranode.run filereader.run
+RUN ln -s teranode.run s3inventoryintegrity.run
+RUN ln -s teranode.run txblockidcheck.run
+RUN ln -s teranode.run aerospike_reader.run
+RUN ln -s teranode.run utxopersister.run
+RUN ln -s teranode.run seeder.run
+RUN ln -s teranode.run bitcoin2utxoset.run
+RUN ln -s teranode.run settings.run
+RUN ln -s teranode.run unspend.run
+RUN ln -s teranode.run recovertx.run
+RUN ln -s teranode.run miner.run
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV PATH=/app:$PATH
 
 # Set the entrypoint to the library
-ENTRYPOINT ["./ubsv.run"]
-#ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
+ENTRYPOINT ["./teranode.run"]
+#ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./teranode.run", "--"]

@@ -372,7 +372,7 @@ txmeta_store.{ENVIRONMENT}=memory://localhost:${TX_META_GRPC_PORT}
 
 - For a PostgreSQL datastore:
 ```
-txmeta_store.{ENVIRONMENT}=postgres://ubsv:ubsv@localhost:5432/ubsv
+txmeta_store.{ENVIRONMENT}=postgres://teranode:teranode@localhost:5432/teranode
 ```
 
 - For a Redis datastore:

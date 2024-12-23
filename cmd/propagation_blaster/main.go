@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
+	"github.com/bitcoin-sv/teranode/cmd/propagation_blaster/propagation_blaster"
 )
 
 func main() {

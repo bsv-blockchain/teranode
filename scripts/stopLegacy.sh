@@ -9,11 +9,11 @@ else
     echo "No startLooper.sh process found"
 fi
 
-# Kill the ubsv.run process
-ubsv_run_pid=$(ps -ef | grep './ubsv.run' | grep -v grep | awk '{print $2}')
-if [ -n "$ubsv_run_pid" ]; then
-    kill $ubsv_run_pid
-    echo "Killed ubsv.run process with PID $ubsv_run_pid"
+# Kill the teranode.run process
+teranode_run_pid=$(ps -ef | grep './teranode.run' | grep -v grep | awk '{print $2}')
+if [ -n "$teranode_run_pid" ]; then
+    kill $teranode_run_pid
+    echo "Killed teranode.run process with PID $teranode_run_pid"
 else
-    echo "No ubsv.run process found"
+    echo "No teranode.run process found"
 fi

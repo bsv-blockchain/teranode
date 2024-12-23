@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 )
 
 // TestAssignField tests the assignField function handles supported combinations

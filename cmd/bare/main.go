@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
+	"github.com/bitcoin-sv/teranode/cmd/bare/bare"
 )
 
 func main() {

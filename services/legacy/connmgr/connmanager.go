@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 // maxFailedAttempts is the maximum number of successive failed connection
@@ -210,7 +210,7 @@ type ConnManager struct {
 	// conns represents the set of all actively connected peers.
 	conns *util.SyncedMap[uint64, *ConnReq]
 
-	// ubsv addition
+	// teranode addition
 	logger ulogger.Logger
 }
 

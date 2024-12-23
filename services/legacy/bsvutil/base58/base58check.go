@@ -7,7 +7,7 @@ package base58
 import (
 	"crypto/sha256"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 // ErrChecksum indicates that the checksum of a check-encoded string does not verify against

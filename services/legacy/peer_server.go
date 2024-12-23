@@ -24,30 +24,30 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
-	blockchain2 "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
-	"github.com/bitcoin-sv/ubsv/services/legacy/connmgr"
-	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
-	"github.com/bitcoin-sv/ubsv/services/legacy/version"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/p2p"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/legacy/addrmgr"
+	blockchain2 "github.com/bitcoin-sv/teranode/services/legacy/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bloom"
+	"github.com/bitcoin-sv/teranode/services/legacy/connmgr"
+	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
+	"github.com/bitcoin-sv/teranode/services/legacy/version"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/p2p"
+	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
+	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	blob_options "github.com/bitcoin-sv/teranode/stores/blob/options"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -252,7 +252,7 @@ type server struct {
 	cfCheckptCaches    map[wire.FilterType][]cfHeaderKV
 	cfCheckptCachesMtx sync.RWMutex
 
-	// ubsv additions
+	// teranode additions
 	logger            ulogger.Logger
 	blockchainClient  blockchain.ClientI
 	utxoStore         utxostore.Store
@@ -2379,7 +2379,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		cfg.Upnp = true
 	}
 
-	// /UBSV CONFIG
+	// /TERANODE CONFIG
 
 	services := defaultServices
 	// cfg.NoPeerBloomFilters

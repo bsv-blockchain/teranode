@@ -14,7 +14,7 @@
 // go tool cover -html=coverage.out
 
 //Settings:
-// Uses validator_sendBatchSize.docker.ubsv.test.tnb1Test=10
+// Uses validator_sendBatchSize.docker.teranode.test.tnb1Test=10
 
 //Steps:
 // 1. Create and send transactions concurrently
@@ -35,10 +35,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -50,9 +50,9 @@ type TNB1TestSuite struct {
 
 func (suite *TNB1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnb1Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnb1Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnb1Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnb1Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnb1Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnb1Test",
 	}
 }
 

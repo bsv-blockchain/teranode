@@ -7,10 +7,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -57,7 +57,7 @@ func caller() string {
 				folders = folders[1:]
 			}
 
-			if folders[0] == "ubsv" {
+			if folders[0] == "teranode" {
 				folders = folders[1:]
 			}
 		}

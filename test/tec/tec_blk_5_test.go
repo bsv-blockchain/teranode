@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	helpler "github.com/bitcoin-sv/ubsv/test/utils"
+	helpler "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -20,9 +20,9 @@ type TECBlk5TestSuite struct {
 
 func (suite *TECBlk5TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tec5",
-		"SETTINGS_CONTEXT_2": "docker.ubsv1.test.tec5",
-		"SETTINGS_CONTEXT_3": "docker.ubsv1.test.tec5",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tec5",
+		"SETTINGS_CONTEXT_2": "docker.teranode1.test.tec5",
+		"SETTINGS_CONTEXT_3": "docker.teranode1.test.tec5",
 	}
 }
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 )
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {

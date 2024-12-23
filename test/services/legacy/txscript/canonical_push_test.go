@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
+	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 )
 
 // go test -v -tags test_txscript ./test/...

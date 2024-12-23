@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 // hexToBytes converts the passed hex string into bytes and will panic if there

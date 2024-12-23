@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/stores/blockchain"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 

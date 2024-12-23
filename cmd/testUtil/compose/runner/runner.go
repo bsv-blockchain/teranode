@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -73,13 +73,13 @@ func startServices() {
 	startService(fmt.Sprintf("docker-compose -f %s up -d postgres", composeFilePath))
 	time.Sleep(10 * time.Second)
 
-	ubsvServices, err := getServices("ubsv")
+	teranodeServices, err := getServices("teranode")
 
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
-	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, ubsvServices))
+	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, teranodeServices))
 	time.Sleep(10 * time.Second)
 
 	time.Sleep(10 * time.Second)

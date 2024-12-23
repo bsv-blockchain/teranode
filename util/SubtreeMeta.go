@@ -3,10 +3,11 @@ package util
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"io"
 	"math"
+
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type SubtreeMeta struct {

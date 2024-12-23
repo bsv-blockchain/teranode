@@ -9,7 +9,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 )
 
 // TestUsageFlagStringer tests the stringized output for the UsageFlag type.

@@ -1,26 +1,26 @@
-x-ubsv-base: &ubsv-base
-  image: ubsv:latest
+x-teranode-base: &teranode-base
+  image: teranode:latest
   depends_on:
     - postgres
     - kafka-shared
   networks:
-    - ubsv-network
+    - teranode-network
   volumes:
     - ./data/test:/app/data
 
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
   networks:
-    - ubsv-network
+    - teranode-network
   command: --config-file /etc/aerospike.conf
 
 networks:
-  ubsv-network:
-    name: ubsv-network-test
+  teranode-network:
+    name: teranode-network-test
 
 services:
-  ubsv-builder:
-    image: ubsv:latest
+  teranode-builder:
+    image: teranode:latest
     build:
       context: .
       dockerfile: ci.Dockerfile
@@ -28,14 +28,14 @@ services:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
     networks:
-      - ubsv-network
+      - teranode-network
     entrypoint: [ "pwd" ]
 
   postgres:
     container_name: postgres-test
     image: postgres:latest
     networks:
-      - ubsv-network
+      - teranode-network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
@@ -57,7 +57,7 @@ services:
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
-      - ubsv-network
+      - teranode-network
     command:
       - redpanda start
       - --smp 1
@@ -78,7 +78,7 @@ services:
     container_name: kafka-console-shared
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
-      - ubsv-network
+      - teranode-network
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
@@ -122,17 +122,17 @@ services:
       - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/aerospike-3/data:/opt/aerospike/data
 
-  ubsv1:
-    <<: *ubsv-base
-    container_name: ubsv1-test
-    image: ubsv:latest
+  teranode1:
+    <<: *teranode-base
+    container_name: teranode1-test
+    image: teranode:latest
     depends_on:
       - aerospike-1
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}
       logLevel: "DEBUG"
     ports:
       - "10000:8000"
@@ -143,22 +143,22 @@ services:
       - "11292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/ubsv1/txstore:/app/data/txstore
-      - ./data/test/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/test/ubsv1/blockstore:/app/data/blockstore
-      - ./data/test/ubsv1/external:/app/data/ubsv1/external
+      - ./data/test/teranode1/txstore:/app/data/txstore
+      - ./data/test/teranode1/subtreestore:/app/data/subtreestore
+      - ./data/test/teranode1/blockstore:/app/data/blockstore
+      - ./data/test/teranode1/external:/app/data/teranode1/external
 
-  ubsv2:
-    <<: *ubsv-base
-    container_name: ubsv2-test
-    image: ubsv:latest
+  teranode2:
+    <<: *teranode-base
+    container_name: teranode2-test
+    image: teranode:latest
     depends_on:
       - aerospike-2
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test}
       logLevel: "DEBUG"
     ports:
       - "12000:8000"
@@ -169,24 +169,24 @@ services:
       - "13292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/ubsv2/txstore:/app/data/txstore
-      - ./data/test/ubsv2/subtreestore:/app/data/subtreestore
-      - ./data/test/ubsv2/blockstore:/app/data/blockstore
-      - ./data/test/ubsv2/external:/app/data/ubsv2/external
+      - ./data/test/teranode2/txstore:/app/data/txstore
+      - ./data/test/teranode2/subtreestore:/app/data/subtreestore
+      - ./data/test/teranode2/blockstore:/app/data/blockstore
+      - ./data/test/teranode2/external:/app/data/teranode2/external
 
-  ubsv3:
-    <<: *ubsv-base
-    container_name: ubsv3-test
-    image: ubsv:latest
+  teranode3:
+    <<: *teranode-base
+    container_name: teranode3-test
+    image: teranode:latest
     depends_on:
       - aerospike-3
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test}
       logLevel: "DEBUG"
-      JAEGER_SERVICE_NAME: ubsv-3
+      JAEGER_SERVICE_NAME: teranode-3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     ports:
@@ -198,10 +198,10 @@ services:
       - "15292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/ubsv3/txstore:/app/data/txstore
-      - ./data/test/ubsv3/subtreestore:/app/data/subtreestore
-      - ./data/test/ubsv3/blockstore:/app/data/blockstore
-      - ./data/test/ubsv3/external:/app/data/ubsv3/external
+      - ./data/test/teranode3/txstore:/app/data/txstore
+      - ./data/test/teranode3/subtreestore:/app/data/subtreestore
+      - ./data/test/teranode3/blockstore:/app/data/blockstore
+      - ./data/test/teranode3/external:/app/data/teranode3/external
   # prometheus-1:
   #   container_name: prometheus-1-test
   #   image: prom/prometheus:v2.44.0
@@ -210,7 +210,7 @@ services:
   #   ports:
   #     - "16090:9090"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network
   #   volumes:
   #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
@@ -222,7 +222,7 @@ services:
   #   ports:
   #     - "16091:9090"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network
   #   volumes:
   #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
@@ -234,6 +234,6 @@ services:
   #   ports:
   #     - "16092:9090"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network
   #   volumes:
   #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml

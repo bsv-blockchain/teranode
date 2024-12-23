@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/ordishs/gocore"
 )

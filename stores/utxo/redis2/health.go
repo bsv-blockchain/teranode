@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {

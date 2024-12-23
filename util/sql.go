@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/usql"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/usql"
 	"github.com/labstack/gommon/random"
 	"github.com/ordishs/gocore"
 )

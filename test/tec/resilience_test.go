@@ -5,8 +5,8 @@ package tec
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -21,12 +21,12 @@ func (suite *TECTestSuite) TestShutDownPropagationService() {
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	err := testenv.StartNode("ubsv2")
+	err := testenv.StartNode("teranode2")
 	if err != nil {
 		t.Errorf("Failed to start node: %v", err)
 	}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc1"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc1"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -64,7 +64,7 @@ func (suite *TECTestSuite) TestShutDownBlockAssembly() {
 	settingsMap := suite.SettingsMap
 	ctx := testenv.Context
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc2"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc2"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
@@ -94,7 +94,7 @@ func (suite *TECTestSuite) TestShutDownBlockValidation() {
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc3"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc3"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
@@ -139,7 +139,7 @@ func (suite *TECTestSuite) TestShutDownBlockchain() {
 		}
 	}()
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc4"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc4"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
@@ -169,7 +169,7 @@ func (suite *TECTestSuite) TestShutDownP2P() {
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc5"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc5"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}
@@ -207,7 +207,7 @@ func (suite *TECTestSuite) TestShutDownAsset() {
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc6"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc6"
 	if err := testenv.RestartDockerNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
 	}

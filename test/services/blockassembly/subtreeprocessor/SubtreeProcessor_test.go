@@ -9,8 +9,8 @@ import (
 	"runtime/pprof"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

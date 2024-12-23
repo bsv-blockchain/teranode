@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 )
 
 // TestBtcdExtCustomResults ensures any results that have custom marshalling

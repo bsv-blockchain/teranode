@@ -3,8 +3,8 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

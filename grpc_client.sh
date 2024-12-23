@@ -33,17 +33,17 @@ wait_for_service() {
     exit 1
 }
 
-# Wait for ubsv services to be ready
-wait_for_service ubsv3 8090
-wait_for_service ubsv2 8090
-wait_for_service ubsv1 8090
+# Wait for teranode services to be ready
+wait_for_service teranode3 8090
+wait_for_service teranode2 8090
+wait_for_service teranode1 8090
 
-# Send gRPC requests to each ubsv container
+# Send gRPC requests to each teranode container
 echo "Sending gRPC requests..."
 
 # Replace `your.package.Service/YourMethod` with the actual service and method names
-grpcurl -plaintext ubsv3:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv2:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv1:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext teranode3:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext teranode2:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext teranode1:8087 blockchain_api.BlockchainAPI.Run
 
 echo "gRPC requests sent."

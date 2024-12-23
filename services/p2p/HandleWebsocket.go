@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/teranode/services/asset/asset_api"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )

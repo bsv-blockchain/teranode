@@ -22,7 +22,7 @@ type ZLoggerWrapper struct {
 
 func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	if service == "" {
-		service = "ubsv"
+		service = "teranode"
 	}
 
 	opts := DefaultOptions()

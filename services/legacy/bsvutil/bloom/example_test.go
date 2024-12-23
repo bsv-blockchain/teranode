@@ -6,10 +6,11 @@ package bloom_test
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"math/rand/v2"
+
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bloom"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // This example demonstrates how to create a new bloom filter, add a transaction

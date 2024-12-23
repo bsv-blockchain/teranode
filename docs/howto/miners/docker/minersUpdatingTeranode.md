@@ -15,7 +15,7 @@ docker-compose pull
 If there are changes to the Dockerfile or local build context:
 
 ```
-docker-compose build ubsv-builder
+docker-compose build teranode-builder
 ```
 
 4. **Stop the Current Stack**

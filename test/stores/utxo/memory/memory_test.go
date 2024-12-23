@@ -5,9 +5,9 @@ package memory
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 // go test -v -tags test_memory ./test/...

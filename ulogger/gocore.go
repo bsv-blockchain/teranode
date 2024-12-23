@@ -11,7 +11,7 @@ type GoCoreLogger struct {
 
 func NewGoCoreLogger(service string, options ...Option) *GoCoreLogger {
 	if service == "" {
-		service = "ubsv"
+		service = "teranode"
 	}
 
 	opts := DefaultOptions()

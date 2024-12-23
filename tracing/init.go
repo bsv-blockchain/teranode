@@ -3,14 +3,14 @@ package tracing
 import (
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 )
 
-// InitTracer creates a new instance of a ubsv tracer.
+// InitTracer creates a new instance of a teranode tracer.
 func InitTracer(serviceName string, samplingRate float64) (io.Closer, error) {
 	useTracing := gocore.Config().GetBool("use_open_tracing", true)
 	if !useTracing {

@@ -55,20 +55,20 @@ If a specific service isn't starting correctly, check its logs:
 ```
 docker-compose logs [service-name]
 ```
-Replace [service-name] with services like ubsv-blockchain, ubsv-asset, etc.
+Replace [service-name] with services like teranode-blockchain, teranode-asset, etc.
 
 8. **Verify Network Connections:**
 Once all services are up, ensure the node is connecting to the BSV network:
 
 ```
-docker-compose exec ubsv-p2p /app/ubsv.run -p2p=1 getpeerinfo
+docker-compose exec teranode-p2p /app/teranode.run -p2p=1 getpeerinfo
 ```
 
 9. **Check Synchronization Status:**
 Monitor the blockchain synchronization process:
 
 ```
-docker-compose exec ubsv-blockchain /app/ubsv.run -blockchain=1 getblockchaininfo
+docker-compose exec teranode-blockchain /app/teranode.run -blockchain=1 getblockchaininfo
 ```
 
 10. **Access Monitoring Tools:**
@@ -132,7 +132,7 @@ If you need to stop only specific services:
 ```
 docker-compose stop [service-name]
 ```
-Replace [service-name] with the specific service you want to stop, e.g., ubsv-blockchain.
+Replace [service-name] with the specific service you want to stop, e.g., teranode-blockchain.
 
 6. **Forced Shutdown (use with caution!):**
 If services aren't responding to the normal shutdown command:

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 

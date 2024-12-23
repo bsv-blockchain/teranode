@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -29,9 +29,9 @@ type TNA2TestSuite struct {
 
 func (suite *TNA2TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tna1Test",
 	}
 }
 

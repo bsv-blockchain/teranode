@@ -7,13 +7,13 @@ permissions:
   pull-requests: read
 
 env:
-  REPO: ubsv
+  REPO: teranode
   ECR_REGION: eu-north-1
 
 jobs:
   golangci:
     name: lint
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,7 +29,7 @@ jobs:
 
   buildtest:
     name: build non-unit tests
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,7 +41,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +72,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     env:
       GITHUB_ACTIONS: true
     steps:
@@ -116,7 +116,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     needs: test
     steps:
       - name: Checkout
@@ -148,7 +148,7 @@ jobs:
         uses: sonarsource/sonarqube-scan-action@v2.0.2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarqube.ubsv.dev
+          SONAR_HOST_URL: https://sonarqube.teranode.dev
 
   # Get version tag
   get_tag:
@@ -176,7 +176,7 @@ jobs:
     secrets: inherit
     with:
       arch: amd64
-      repo: ubsv
+      repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
 
@@ -187,6 +187,6 @@ jobs:
     secrets: inherit
     with:
       arch: arm64
-      repo: ubsv
+      repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1

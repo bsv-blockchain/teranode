@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

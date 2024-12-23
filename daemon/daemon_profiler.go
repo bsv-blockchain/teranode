@@ -7,7 +7,7 @@ import (
 
 func datadogProfiler() func() {
 	if err := profiler.Start(
-		profiler.WithService("ubsv"),
+		profiler.WithService("teranode"),
 		profiler.WithEnv(gocore.Config().GetContext()),
 		profiler.WithVersion("0.1.0"),
 		// profiler.WithTags("context:"+gocore.Config().GetContext()),

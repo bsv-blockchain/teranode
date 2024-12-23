@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -20,9 +20,9 @@ type TECBlk4TestSuite struct {
 
 func (suite *TECBlk4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tec4",
-		"SETTINGS_CONTEXT_2": "docker.ubsv1.test.tec4",
-		"SETTINGS_CONTEXT_3": "docker.ubsv1.test.tec4",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tec4",
+		"SETTINGS_CONTEXT_2": "docker.teranode1.test.tec4",
+		"SETTINGS_CONTEXT_3": "docker.teranode1.test.tec4",
 	}
 }
 

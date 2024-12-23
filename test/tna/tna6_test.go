@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -47,9 +47,9 @@ type TNA6TestSuite struct {
 // Each node is configured with a unique docker context for isolated testing.
 func (suite *TNA6TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tna1Test",
 	}
 }
 

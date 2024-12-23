@@ -1,6 +1,6 @@
 package main
 
-import "github.com/bitcoin-sv/ubsv/cmd/chainextracts/chainextracts"
+import "github.com/bitcoin-sv/teranode/cmd/chainextracts/chainextracts"
 
 func main() {
 	chainextracts.Start()

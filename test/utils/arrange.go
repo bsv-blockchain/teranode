@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util/retry"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -27,9 +27,9 @@ func (suite *TeranodeTestSuite) DefaultComposeFiles() []string {
 
 func (suite *TeranodeTestSuite) DefaultSettingsMap() map[string]string {
 	return map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
 	}
 }
 
@@ -65,7 +65,7 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
 	var err error
 
-	const ubsv1RPCEndpoint = "http://localhost:11292"
+	const teranode1RPCEndpoint = "http://localhost:11292"
 
 	suite.ComposeFiles = composeFiles
 	suite.SettingsMap = settingsMap
@@ -139,7 +139,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			context.Background(),
 			suite.TeranodeTestEnv.Logger,
 			func() (string, error) {
-				return CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+				return CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 			},
 		)
 		if err != nil {

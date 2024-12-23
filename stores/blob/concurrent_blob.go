@@ -5,8 +5,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/errors"
+	blob_options "github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

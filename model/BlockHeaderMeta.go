@@ -3,7 +3,7 @@ package model
 import (
 	"encoding/binary"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 type BlockHeaderMeta struct {

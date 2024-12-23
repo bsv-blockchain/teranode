@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/ordishs/gocore"
 )
 

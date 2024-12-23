@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -48,7 +48,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		mu sync.Mutex
 	)
 
-	err := framework.StopNode("ubsv2")
+	err := framework.StopNode("teranode2")
 	if err != nil {
 		t.Errorf("Failed to stop node: %v", err)
 	}
@@ -66,7 +66,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		require.NoError(t, err)
 	}
 
-	err = framework.StartNode("ubsv2")
+	err = framework.StartNode("teranode2")
 	if err != nil {
 		t.Errorf("Failed to start node: %v", err)
 	}
@@ -108,11 +108,11 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 				if state == blockchain_api.FSMStateType_RUNNING {
 					if _, exists := stateSet[blockchain_api.FSMStateType_CATCHINGBLOCKS]; exists {
-						// take a note of the best block header of node 0 (ubsv1)
+						// take a note of the best block header of node 0 (teranode1)
 						blockHeaderNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
 						require.NoError(t, err)
 
-						// check if the block of node 0 (ubsv1) is synced to node 1 (ubsv2)
+						// check if the block of node 0 (teranode1) is synced to node 1 (teranode2)
 						_, err = blockchainNode1.GetBlockExists(ctx, blockHeaderNode0.Hash())
 						if !errors.Is(err, errors.ErrBlockNotFound) {
 							return
@@ -144,9 +144,9 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 /* Description */
 // This test suite is used to test the FSM states of the blockchain node.
-// Start the chain of 3 nodes, 2nd node starts with p2p off startP2P.docker.ci.ubsv2.tc3=false
+// Start the chain of 3 nodes, 2nd node starts with p2p off startP2P.docker.ci.teranode2.tc3=false
 // Send transactions to the 1st node and mine blocks for 5 times
-// Re-Start the 2nd node with the p2p on startP2P.docker.ci.ubsv2.tc1=true
+// Re-Start the 2nd node with the p2p on startP2P.docker.ci.teranode2.tc1=true
 // Check if the 2nd node catches up with the 1st node
 // The test captures the intermediate states of the 2nd node and checks if the node wa in the catch-up state
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
@@ -165,7 +165,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -209,7 +209,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		}
 	}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -244,11 +244,11 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 				if state == blockchain_api.FSMStateType_RUNNING {
 					if _, exists := stateSet[blockchain_api.FSMStateType_CATCHINGBLOCKS]; exists {
-						// take a note of the best block header of node 0 (ubsv1)
+						// take a note of the best block header of node 0 (teranode1)
 						blockHeaderNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
 						require.NoError(t, err)
 
-						// check if the block of node 0 (ubsv1) is synced to node 1 (ubsv2)
+						// check if the block of node 0 (teranode1) is synced to node 1 (teranode2)
 						_, err = blockchainNode1.GetBlockExists(ctx, blockHeaderNode0.Hash())
 						if !errors.Is(err, errors.ErrBlockNotFound) {
 							return
@@ -281,7 +281,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 /* Description */
 // This test suite is used to test the FSM states of the blockchain node with p2p initially off.
-// 1. Start the chain of 3 nodes with p2p off for ubsv2 and ubsv3
+// 1. Start the chain of 3 nodes with p2p off for teranode2 and teranode3
 // 2. Send transactions concurrently to all nodes in batches
 // 3. Turn on p2p for all nodes
 // 4. Check if nodes catch up and have matching best block headers
@@ -303,9 +303,9 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitchOff() {
 		stateSetNode2 = make(map[blockchain_api.FSMStateType]struct{})
 	)
 
-	// Start nodes with p2p off for ubsv2 and ubsv3
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
-	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test.stopP2P"
+	// Start nodes with p2p off for teranode2 and teranode3
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test.stopP2P"
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -355,8 +355,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitchOff() {
 	wg.Wait()
 
 	// Turn on p2p for all nodes by resetting to default settings
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
-	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test"
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes with p2p on: %v", err)
 	}

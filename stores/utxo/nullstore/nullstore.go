@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

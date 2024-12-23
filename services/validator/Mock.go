@@ -24,7 +24,7 @@ package validator
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 )
 

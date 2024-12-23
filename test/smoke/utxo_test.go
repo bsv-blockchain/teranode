@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -740,7 +740,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	logger := framework.Logger
 	ctx := framework.Context
 
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.test.TestFreezeAndUnfreezeUtxos"
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.teranode1.test.TestFreezeAndUnfreezeUtxos"
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
@@ -917,7 +917,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	logger := framework.Logger
 	ctx := framework.Context
 
-	framework.StopNode("ubsv2")
+	framework.StopNode("teranode2")
 
 	txDistributor := &framework.Nodes[0].DistributorClient
 
@@ -943,16 +943,16 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 
 	time.Sleep(10 * time.Second)
 
-	srcFile := fmt.Sprintf("../../data/test/ubsv1/external/%s.tx", faucetTx.TxID())
+	srcFile := fmt.Sprintf("../../data/test/teranode1/external/%s.tx", faucetTx.TxID())
 
-	destFile := fmt.Sprintf("../../data/test/ubsv2/external/%s.tx", faucetTx.TxID())
+	destFile := fmt.Sprintf("../../data/test/teranode2/external/%s.tx", faucetTx.TxID())
 
 	err = helper.CopyFile(srcFile, destFile)
 	if err != nil {
 		t.Errorf("Failed to copy file from %s to %s: %v", srcFile, destFile, err)
 	}
 
-	framework.StartNode("ubsv2")
+	framework.StartNode("teranode2")
 	time.Sleep(10 * time.Second)
 
 	err = framework.Nodes[1].BlockchainClient.Run(framework.Context, "test")
@@ -990,7 +990,7 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	logger := testenv.Logger
 	ctx := testenv.Context
 
-	const ubsv1RPCEndpoint = "http://localhost:11292"
+	const teranode1RPCEndpoint = "http://localhost:11292"
 
 	node1 := testenv.Nodes[0]
 
@@ -1019,7 +1019,7 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	// Mine a block
 	// _, err = helper.MineBlock(ctx, node1.BlockassemblyClient, logger)
 	// assert.NoError(t, err, "Failed to mine block")
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(1 * time.Second)
 
@@ -1045,7 +1045,7 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	assert.NoError(t, err, "Failed to reassign UTXOs")
 	logger.Infof("Alice to Bob Transaction reassigned to Charles", reassignTx.TxID())
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1000})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1000})
 	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(60 * time.Second)
 

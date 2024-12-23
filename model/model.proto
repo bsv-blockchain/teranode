@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "github.com/bitcoin-sv/ubsv/model";
+option go_package = "github.com/bitcoin-sv/teranode/model";
 
 import "google/protobuf/timestamp.proto";
 

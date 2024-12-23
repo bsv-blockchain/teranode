@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/ordishs/go-utils/expiringmap"
 )
 

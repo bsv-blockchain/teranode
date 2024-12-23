@@ -1,4 +1,4 @@
-# Understanding the UBSV Testing Framework
+# Understanding the TERANODE Testing Framework
 
 ## Architectural Philosophy
 

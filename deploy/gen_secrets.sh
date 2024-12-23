@@ -15,7 +15,7 @@ cat <<'EOB'
 apiVersion: v1
 kind: Secret
 metadata:
-  name: ubsv-secrets
+  name: teranode-secrets
 type: Opaque
 data:
 EOB

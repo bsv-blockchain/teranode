@@ -3,7 +3,7 @@ package coinbase
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 

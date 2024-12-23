@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, kafkaControlChan chan bool, kafkaConfigURL *url.URL,

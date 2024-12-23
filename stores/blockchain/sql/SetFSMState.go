@@ -3,7 +3,7 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {

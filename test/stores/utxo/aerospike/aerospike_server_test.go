@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -258,14 +258,14 @@ func TestAerospike(t *testing.T) {
 		wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
-		ret, aErr := client.Execute(wPolicy, txKey, ubsv_aerospike.LuaPackage, "spend",
+		ret, aErr := client.Execute(wPolicy, txKey, teranode_aerospike.LuaPackage, "spend",
 			aerospike.NewIntegerValue(int(spends[0].Vout)),
 			aerospike.NewValue(spends[0].UTXOHash[:]),
 			aerospike.NewValue(spends[0].SpendingTxID[:]),
 			aerospike.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, ubsv_aerospike.LuaOk, ubsv_aerospike.LuaReturnValue(ret.(string)))
+		assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
@@ -294,14 +294,14 @@ func TestAerospike(t *testing.T) {
 		wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 		for _, s := range spendsAll {
-			ret, aErr := client.Execute(wPolicy, txKey, ubsv_aerospike.LuaPackage, "spend",
+			ret, aErr := client.Execute(wPolicy, txKey, teranode_aerospike.LuaPackage, "spend",
 				aerospike.NewIntegerValue(int(s.Vout)),
 				aerospike.NewValue(s.UTXOHash[:]),
 				aerospike.NewValue(s.SpendingTxID[:]),
 				aerospike.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, ubsv_aerospike.LuaOk, ubsv_aerospike.LuaReturnValue(ret.(string)))
+			assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
 		}
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -325,7 +325,7 @@ func TestAerospike(t *testing.T) {
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aerospike.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
-		ret, aErr := client.Execute(wPolicy, fakeKey, ubsv_aerospike.LuaPackage, "spend",
+		ret, aErr := client.Execute(wPolicy, fakeKey, teranode_aerospike.LuaPackage, "spend",
 			aerospike.NewIntegerValue(int(spends[0].Vout)),
 			aerospike.NewValue(spends[0].UTXOHash[:]),
 			aerospike.NewValue(spends[0].SpendingTxID[:]),
@@ -730,7 +730,7 @@ func TestCoinbase(t *testing.T) {
 //  aeroURL, err := url.Parse(aerospikeURL)
 //	require.NoError(t, err)
 //
-//	// ubsv db client
+//	// teranode db client
 //	var db *Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
@@ -780,7 +780,7 @@ func TestCoinbase(t *testing.T) {
 //	aeroURL, err := url.Parse(aerospikeURL)
 //	require.NoError(t, err)
 //
-//	// ubsv db client
+//	// teranode db client
 //	var db *Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)
@@ -1051,7 +1051,7 @@ func TestStoreDecorate(t *testing.T) {
 //	aeroURL, err := url.Parse(fmt.Sprintf(aerospikeURLFormat, aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 //	require.NoError(t, err)
 //
-//	// ubsv db client
+//	// teranode db client
 //	var db *Store
 //	db, err = New(ulogger.TestLogger{}, aeroURL)
 //	require.NoError(t, err)

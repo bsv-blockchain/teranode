@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/model"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

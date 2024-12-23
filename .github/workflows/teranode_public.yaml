@@ -17,7 +17,7 @@ jobs:
     with:
       arch: amd64
       region: eu-north-1
-      src_repo: ubsv
+      src_repo: teranode
       dest_repo: teranode-public
 
   # Pull/push image for ARM64 (Graviton and Darwin)
@@ -27,7 +27,7 @@ jobs:
     with:
       arch: arm64
       region: eu-north-1
-      src_repo: ubsv
+      src_repo: teranode
       dest_repo: teranode-public
 
   # Isolate version from release tag

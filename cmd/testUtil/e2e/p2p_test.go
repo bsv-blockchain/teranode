@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	p2p "github.com/bitcoin-sv/ubsv/util/p2p"
+	model "github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	p2p "github.com/bitcoin-sv/teranode/util/p2p"
 )
 
 var (

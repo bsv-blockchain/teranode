@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/teranode/model"
 )
 
 // blockHeaderResponse represents a formatted block header response that includes

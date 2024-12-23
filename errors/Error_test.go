@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
+	"github.com/bitcoin-sv/teranode/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -209,7 +209,7 @@ func TestGRPCErrorsRoundTrip(t *testing.T) {
 	require.True(t, unwrappedError.Is(originalErr))
 }
 
-// Helper function to create a gRPC error with UBSVError details
+// Helper function to create a gRPC error with TERANODEError details
 func createGRPCError(code ERR, msg string) *Error {
 	grpcCode := ErrorCodeToGRPCCode(code)
 	detail := &TError{
@@ -218,7 +218,7 @@ func createGRPCError(code ERR, msg string) *Error {
 	}
 	anyDetail, err := anypb.New(detail)
 	if err != nil {
-		panic("failed to create anypb.Any from UBSVError")
+		panic("failed to create anypb.Any from TERANODEError")
 	}
 
 	st := status.New(grpcCode, "error with details")

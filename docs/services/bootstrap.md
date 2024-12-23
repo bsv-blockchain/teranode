@@ -292,7 +292,7 @@ Key technologies involved:
     - A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
     - The primary language used for implementing the service's logic.
 
-2. **github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api** for Bitcoin SV bootstrap-related API functionalities.
+2. **github.com/bitcoin-sv/teranode/services/bootstrap/bootstrap_api** for Bitcoin SV bootstrap-related API functionalities.
 
 3. **gRPC (Google Remote Procedure Call)**:
     - A high-performance, open-source framework developed by Google.

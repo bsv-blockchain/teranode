@@ -19,5 +19,5 @@ txinfo -utxostore <utxo-store-URL> -blockchainstore <blockchain-store-URL> -subt
 # Example
 
 ```
-cmd/txblockidcheck$ go run . -utxostore="aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8" -blockchainstore=postgres://miner2:miner2@localhost:15432/ubsv2 -subtreestore=file:///data/ubsv2/subtreestore -txhash=bf8f820d97a657d218b6b86fe8390f59b6505cc881f9c733ead9734461599216
+cmd/txblockidcheck$ go run . -utxostore="aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8" -blockchainstore=postgres://miner2:miner2@localhost:15432/teranode2 -subtreestore=file:///data/teranode2/subtreestore -txhash=bf8f820d97a657d218b6b86fe8390f59b6505cc881f9c733ead9734461599216
 ```

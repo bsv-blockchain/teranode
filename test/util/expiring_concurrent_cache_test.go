@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	ubsv_util "github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	teranode_util "github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +18,7 @@ import (
 
 func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	t.Run("value is already in the cache", func(t *testing.T) {
-		cache := ubsv_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := teranode_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 
@@ -60,7 +60,7 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	})
 
 	t.Run("missing value", func(t *testing.T) {
-		cache := ubsv_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := teranode_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 

@@ -1,4 +1,4 @@
-#!lua name=ubsv____VERSION___
+#!lua name=teranode____VERSION___
 
 --                           _
 --  ___ _ __   ___ _ __   __| |
@@ -8,54 +8,47 @@
 --     |_|
 --
 local function spend____VERSION___(keys, args)
-    local tx_key = keys[1] -- LUA indeces are 1-based
+    local tx_key = keys[1] -- LUA is 1-based
     local offset = tonumber(args[1])
     local utxoHash = args[2]
     local spendingTxID = args[3]
     local currentBlockHeight = tonumber(args[4])
     local ttl = tonumber(args[5])
 
-    -- redis.log(redis.LOG_WARNING, "spend____VERSION___ 1:", tx_key, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
-
-    -- Get specific fields we need
-    local tx = redis.call('HMGET', tx_key,
-        'frozen',
-        'spendingHeight',
-        'utxo:' .. offset,
-        'spendableIn:' .. offset,
-        'spentUtxos',
-        'nrUtxos',
-        'blockIDs'
-    )
+    -- Get all transaction data in one call
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
-    
-    local frozen = tx[1] -- LUA indeces are 1-based
-    local spendingHeight = tonumber(tx[2])
-    local utxo = tx[3]
-    if not utxo then
-        return "ERROR:UTXO not found"
+
+    -- Convert array of key-value pairs to a table for easier access
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
     end
 
-    local spendableIn = tonumber(tx[4])
-    local spentUtxos = tonumber(tx[5]) or 0
-    local nrUtxos = tonumber(tx[6])
-    local blockIDs = tx[7] or ""
-
-    -- redis.log(redis.LOG_WARNING, "spend____VERSION___ 2:", frozen, spendingHeight, utxo, spendableIn, spentUtxos, nrUtxos, blockIDs)
-
     -- Check if frozen
-    if frozen == "1" then
+    if tx_data['frozen'] == "1" then
         return "FROZEN:TX is frozen"
     end
 
     -- Check coinbase spending rules
+    local spendingHeight = tonumber(tx_data['spendingHeight'])
+
     if spendingHeight and spendingHeight > 0 and spendingHeight > currentBlockHeight then
         return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. spendingHeight
     end
 
+    -- Get UTXO data
+    local utxo = tx_data['utxo:' .. offset]
+
+    if not utxo then
+        return "ERROR:UTXO not found"
+    end
+
     -- Check spendable height
+    local spendableIn = tonumber(tx_data['spendableIn:' .. offset])
+
     if spendableIn and spendableIn > currentBlockHeight then
         return "ERROR:UTXO is not spendable until block " .. spendableIn
     end
@@ -85,13 +78,16 @@ local function spend____VERSION___(keys, args)
     redis.call('HSET', tx_key, 'utxo:' .. offset, newUtxo)
     
     -- Update spent count
-    spentUtxos = spentUtxos + 1
-    
+    local spentUtxos = tonumber(tx_data['spentUtxos'] or 0) + 1
     redis.call('HSET', tx_key, 'spentUtxos', spentUtxos)
 
     -- Handle TTL
+    local nrUtxos = tonumber(tx_data['nrUtxos'])
+    
+    -- redis.log(redis.LOG_WARNING, "ttl: " .. ttl)
 
-    redis.log(redis.LOG_WARNING, "spend____VERSION___ 3:", nrUtxos, spentUtxos)
+    
+    local blockIDs = tx_data['blockIDs'] or ""
 
     if nrUtxos == spentUtxos and blockIDs ~= "" then
         -- ttl is in seconds
@@ -115,23 +111,23 @@ local function unSpend____VERSION___(keys, args)
     local offset = tonumber(args[1])
     local utxoHash = args[2]
 
-    -- Get specific fields we need
-    local tx = redis.call('HMGET', tx_key,
-        'utxo:' .. offset,
-        'spentUtxos',
-        'nrUtxos'
-    )
+    -- Get all transaction data in one call
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
 
-    local utxo = tx[1]
+    -- Convert array of key-value pairs to a table
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
+    end
+
+    -- Get UTXO data
+    local utxo = tx_data['utxo:' .. offset]
     if not utxo then
         return "ERROR:UTXO not found"
     end
-
-    local spentUtxos = tonumber(tx[2]) or 0
-    local nrUtxos = tonumber(tx[3])
 
     -- Verify UTXO hash
     local existingUTXOHash = string.sub(utxo, 1, 64)
@@ -145,6 +141,8 @@ local function unSpend____VERSION___(keys, args)
     -- If the utxo has been spent, remove the spendingTxID
     if #utxo == 128 then
         local newUtxo = string.sub(utxo, 1, 64)
+        local nrUtxos = tonumber(tx_data['nrUtxos'])
+        local spentUtxos = tonumber(tx_data['spentUtxos'])
 
         -- Check if all UTXOs were spent
         if nrUtxos == spentUtxos then
@@ -176,20 +174,19 @@ local function setMined____VERSION___(keys, args)
     local ttl = tonumber(args[2])
 
     -- Get all transaction data in one call
-    local tx = redis.call('HMGET', tx_key,
-        'blockIDs',
-        'nrUtxos',
-        'spentUtxos'
-    )
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
 
-    local blockIDs = tx[1] or ""
-    local nrUtxos = tonumber(tx[2])
-    local spentUtxos = tonumber(tx[3]) or 0
+    -- Convert array of key-value pairs to a table
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
+    end
 
     -- Get or initialize blockIDs string
+    local blockIDs = tx_data['blockIDs'] or ""
     if blockIDs ~= "" then
         blockIDs = blockIDs .. ","
     end
@@ -200,6 +197,8 @@ local function setMined____VERSION___(keys, args)
 
     -- Handle TTL
     local signal = ""
+    local nrUtxos = tonumber(tx_data['nrUtxos'])
+    local spentUtxos = tonumber(tx_data['spentUtxos'] or 0)
     
     if nrUtxos == spentUtxos then
        -- ttl is in seconds
@@ -316,23 +315,22 @@ local function freeze____VERSION___(keys, args)
     local utxoHash = args[2]
 
     -- Get all transaction data in one call
-    local tx = redis.call('HMGET', tx_key,
-        'utxo:' .. offset,
-        'nrUtxos',
-        'spentUtxos'
-    )
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
 
-    local utxo = tx[1]
+    -- Convert array of key-value pairs to a table
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
+    end
+
+    -- Get UTXO data
+    local utxo = tx_data['utxo:' .. offset]
     if not utxo then
         return "ERROR:UTXO not found"
     end
-
-    local nrUtxos = tonumber(tx[2])
-    local spentUtxos = tonumber(tx[3]) or 0
-
 
     -- Verify UTXO hash
     local existingUTXOHash = string.sub(utxo, 1, 64)
@@ -371,16 +369,19 @@ local function unfreeze____VERSION___(keys, args)
     local utxoHash = args[2]
 
     -- Get all transaction data in one call
-    local tx = redis.call('HMGET', tx_key,
-        'utxo:' .. offset,
-        'nrUtxos',
-        'spentUtxos'
-    )
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
 
-    local utxo = tx[1]
+    -- Convert array of key-value pairs to a table
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
+    end
+
+    -- Get UTXO data
+    local utxo = tx_data['utxo:' .. offset]
     if not utxo then
         return "ERROR:UTXO not found"
     end
@@ -423,24 +424,22 @@ local function reassign____VERSION___(keys, args)
     local spendableAfter = tonumber(args[5])
 
     -- Get all transaction data in one call
-    local tx = redis.call('HMGET', tx_key,
-        'utxo:' .. offset,
-        'nrUtxos',
-        'spentUtxos',
-        'reassignments'
-    )
+    local tx = redis.call('HGETALL', tx_key)
     if #tx == 0 then
         return "ERROR:TX not found"
     end
 
-    local utxo = tx[1]
+    -- Convert array of key-value pairs to a table
+    local tx_data = {}
+    for i = 1, #tx, 2 do
+        tx_data[tx[i]] = tx[i + 1]
+    end
+
+    -- Get UTXO data
+    local utxo = tx_data['utxo:' .. offset]
     if not utxo then
         return "ERROR:UTXO not found"
     end
-
-    local nrUtxos = tonumber(tx[2])
-    local spentUtxos = tonumber(tx[3]) or 0
-    local reassignments = tx[4] and cjson.decode(tx[4]) or {}
 
     -- Verify UTXO hash
     local existingUTXOHash = string.sub(utxo, 1, 64)
@@ -460,6 +459,7 @@ local function reassign____VERSION___(keys, args)
     end
 
     -- Get or initialize reassignments list
+    local reassignments = tx_data['reassignments'] and cjson.decode(tx_data['reassignments']) or {}
     table.insert(reassignments, {
         offset = offset,
         utxoHash = utxoHash,
@@ -472,7 +472,7 @@ local function reassign____VERSION___(keys, args)
         'utxo:' .. offset, newUtxoHash,
         'reassignments', cjson.encode(reassignments),
         'spendableIn:' .. offset, blockHeight + spendableAfter,
-        'nrUtxos', nrUtxos + 1
+        'nrUtxos', tonumber(tx_data['nrUtxos'] or 0) + 1
     )
 
     return 'OK'

@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
 type Memory struct {

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 )
 
 type binReader struct {

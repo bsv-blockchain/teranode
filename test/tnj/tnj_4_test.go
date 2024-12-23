@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -18,9 +18,9 @@ type TNJ4TestSuite struct {
 
 func (suite *TNJ4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnj4Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnj4Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnj4Test",
+		"SETTINGS_CONTEXT_1": "docker.ci.teranode1.tnj4Test",
+		"SETTINGS_CONTEXT_2": "docker.ci.teranode2.tnj4Test",
+		"SETTINGS_CONTEXT_3": "docker.ci.teranode3.tnj4Test",
 	}
 }
 

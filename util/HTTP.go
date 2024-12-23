@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/ordishs/gocore"
 )
 

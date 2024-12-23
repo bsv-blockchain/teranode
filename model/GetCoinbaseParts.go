@@ -40,8 +40,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.

@@ -7,7 +7,7 @@ package addrmgr
 import (
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 // KnownAddress tracks information about a known network address that is used

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	ubsv_util "github.com/bitcoin-sv/ubsv/util"
+	teranode_util "github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -33,7 +33,7 @@ func Test_Deserialize(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	subtree, err := ubsv_util.NewTreeByLeafCount(size)
+	subtree, err := teranode_util.NewTreeByLeafCount(size)
 	require.NoError(t, err)
 
 	err = subtree.Deserialize(subtreeBytes)
@@ -57,7 +57,7 @@ func Test_DeserializeFromReader(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	subtree, err := ubsv_util.NewTreeByLeafCount(size)
+	subtree, err := teranode_util.NewTreeByLeafCount(size)
 	require.NoError(t, err)
 
 	err = subtree.DeserializeFromReader(r)
@@ -71,7 +71,7 @@ func Test_DeserializeFromReader(t *testing.T) {
 func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
 
 	numberOfItems := 1_024 * 1_024
-	subtree, err := ubsv_util.NewTreeByLeafCount(numberOfItems)
+	subtree, err := teranode_util.NewTreeByLeafCount(numberOfItems)
 	require.NoError(t, err)
 
 	for i := 0; i < numberOfItems; i++ {
@@ -88,7 +88,7 @@ func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
 
 	start := time.Now()
 
-	hashes, err := ubsv_util.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	hashes, err := teranode_util.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
 	require.NoError(t, err)
 
 	rootHash, err := chainhash.NewHash((*hashes)[len(*hashes)-1][:])
@@ -104,7 +104,7 @@ func Test_BuildMerkleTreeStoreFromBytesBig(t *testing.T) {
 }
 
 func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
-	st, err := ubsv_util.NewIncompleteTreeByLeafCount(size)
+	st, err := teranode_util.NewIncompleteTreeByLeafCount(size)
 	require.NoError(t, err)
 
 	var bb [32]byte

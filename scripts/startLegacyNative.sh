@@ -3,7 +3,7 @@
 cd $(dirname "$0")/..
 
 # Build the project
-make build-ubsv
+make build-teranode
 
 LOGFILE=$(date -u +%Y-%m-%dT%H:%M:%S).log
 

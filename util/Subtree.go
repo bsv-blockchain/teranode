@@ -8,8 +8,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

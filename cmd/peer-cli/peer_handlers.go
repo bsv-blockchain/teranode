@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 func OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {

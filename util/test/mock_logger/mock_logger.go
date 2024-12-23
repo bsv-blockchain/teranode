@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 type MockLogger struct {

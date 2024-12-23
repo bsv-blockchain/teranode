@@ -2,45 +2,45 @@ services:
 
   blockchain-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   p2p-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   validator-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   propagation-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   blockassembly-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   subtreevalidation-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   blockvalidation-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   asset-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   coinbase-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   miner-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
   blockpersister-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 

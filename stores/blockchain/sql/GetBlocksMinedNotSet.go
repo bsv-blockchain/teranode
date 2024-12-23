@@ -3,8 +3,8 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/tracing"
 )
 
 func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {

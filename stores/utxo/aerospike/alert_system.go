@@ -4,10 +4,10 @@ import (
 	"context"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 )
 
 // FreezeUTXOs will freeze the UTXOs by setting the spendingTxID to FF...FF

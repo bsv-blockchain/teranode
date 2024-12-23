@@ -1,4 +1,4 @@
-name: build-ubsv
+name: build-teranode
 on:
   workflow_call:
     inputs:
@@ -22,7 +22,7 @@ on:
 jobs:
   build-docker:
     name: Build Docker image
-    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "ubsv-runner-arm" ]') || fromJSON('[ "ubsv-runner" ]') }}
+    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "teranode-runner-arm" ]') || fromJSON('[ "teranode-runner" ]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

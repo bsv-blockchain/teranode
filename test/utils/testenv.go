@@ -7,18 +7,18 @@ import (
 	"os"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
-	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
-	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/settings"
-	blob "github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	bcs "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/errors"
+	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
+	bc "github.com/bitcoin-sv/teranode/services/blockchain"
+	cb "github.com/bitcoin-sv/teranode/services/coinbase"
+	"github.com/bitcoin-sv/teranode/settings"
+	blob "github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	bcs "github.com/bitcoin-sv/teranode/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	distributor "github.com/bitcoin-sv/teranode/util/distributor"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -87,9 +87,9 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 
 		t.Compose = compose
 
-		nodeNames := []string{"ubsv1", "ubsv2", "ubsv3"}
+		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
-		defaultSettings := []string{"docker.ubsv1.test", "docker.ubsv2.test", "docker.ubsv3.test"}
+		defaultSettings := []string{"docker.teranode1.test", "docker.teranode2.test", "docker.teranode3.test"}
 
 		for idx, key := range order {
 			os.Setenv("SETTINGS_CONTEXT", envSettings[key])

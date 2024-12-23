@@ -52,7 +52,7 @@ kubectl logs <legacy-pod-name>
 ```
 - The `getblockchaininfo` command can provide detailed sync status:
 ```
-kubectl exec <blockchain-pod-name> -- /app/ubsv.run -blockchain=1 getblockchaininfo
+kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockchaininfo
 ```
 
 (if using Docker Compose, please adapt the commands above accordingly)
@@ -77,7 +77,7 @@ First, you need to generate the UTXO set from the SV Node. You can do this by ru
 docker run -it \
   -v /mnt/teranode/seed:/mnt/teranode/seed \
   --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.50 \
+  434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv-public:v0.5.50 \
   /app/bitcoin2utxoset.run -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
 ```
 
@@ -97,7 +97,7 @@ docker run -it \
   -v /mnt/teranode/seed:/mnt/teranode/seed \
   --network my-teranode-network \
   --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.50 \
+  434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv-public:v0.5.50 \
   /app/seeder.run -inputDir /mnt/teranode/seed -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 ```
 
@@ -150,7 +150,7 @@ Teranode is designed to be resilient and can recover from various types of downt
 - Monitor the recovery process using the same methods as the initial sync:
 ```
 kubectl logs <peer-pod-name>
-kubectl exec <blockchain-pod-name> -- /app/ubsv.run -blockchain=1 getblockchaininfo
+kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockchaininfo
 kubectl logs <legacy-pod-name>
 ```
 

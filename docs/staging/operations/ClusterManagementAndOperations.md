@@ -11,19 +11,19 @@ This document describes the processes involved in configuring, deploying, and ma
 ## Docker and Kubernetes Setup
 
 - **Dockerfile Location**: Within the GitHub project repository, the Dockerfile is located at `./Dockerfile`. This file specifies all requirements for the core set of Teranode microservices, including necessary software packages and environment variables.
-- **Compilation Process**: The Dockerfile builds a single executable binary named `ubsv.run` to be included in the image.
-- **Deployment to Kubernetes**: The image, including the `ubsv.run` binary, is deployed across our Kubernetes instances. This ensures the binary is consistently deployed and managed across all instances.
-- **Execution by Kubernetes**: Kubernetes executes a specific command for each microservice application, as defined in their respective Kubernetes manifest files (e.g., Deployment or Pod specifications). This flexibility allows a single binary to be used in multiple contexts by leveraging symbolic links (symlinks) to point to `ubsv.run`.
+- **Compilation Process**: The Dockerfile builds a single executable binary named `teranode.run` to be included in the image.
+- **Deployment to Kubernetes**: The image, including the `teranode.run` binary, is deployed across our Kubernetes instances. This ensures the binary is consistently deployed and managed across all instances.
+- **Execution by Kubernetes**: Kubernetes executes a specific command for each microservice application, as defined in their respective Kubernetes manifest files (e.g., Deployment or Pod specifications). This flexibility allows a single binary to be used in multiple contexts by leveraging symbolic links (symlinks) to point to `teranode.run`.
 - **Filesystem Configuration Example**:
     ```bash
     root@blockassembly1-7874b7bf7c-668bk:/app# ls -ltr
     total 141072
     ...
-    -rwxr-xr-x 1 root root 125468128 Jan 29 23:37 ubsv.run
-    lrwxrwxrwx 1 root root         8 Jan 29 23:38 utxostoreblaster.run -> ubsv.run
+    -rwxr-xr-x 1 root root 125468128 Jan 29 23:37 teranode.run
+    lrwxrwxrwx 1 root root         8 Jan 29 23:38 utxostoreblaster.run -> teranode.run
     ...
     ```
-  In the above filesystem snapshot from a Kubernetes pod, notice how all applications refer to the same `ubsv.run` binary via symlinks. This setup enhances maintainability and efficiency by centralizing the application logic in a single binary, while symlinks provide the flexibility to execute different aspects of the binary as needed for each microservice.
+  In the above filesystem snapshot from a Kubernetes pod, notice how all applications refer to the same `teranode.run` binary via symlinks. This setup enhances maintainability and efficiency by centralizing the application logic in a single binary, while symlinks provide the flexibility to execute different aspects of the binary as needed for each microservice.
 
 **Technical Detailing**: Kubernetes interprets these commands and symlinks through the `command` and `args` fields in the container spec within a Pod's manifest.
 
@@ -85,7 +85,7 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 
 2. **Configure kubeconfig for EKS**:
    - Use the `aws eks update-kubeconfig` command to configure kubectl to interact with your Amazon EKS clusters.
-   - Example: `aws eks update-kubeconfig --name aws-ubsv-playground --region <region>`
+   - Example: `aws eks update-kubeconfig --name aws-teranode-playground --region <region>`
      - For example, the staging environment supported regions include `ap-south-1`, `eu-west-1`, and `us-east-1`.
    - Verify the configuration with `kubectl config view`. Alternatively, you can verify the raw data in the `~/.kube/config` file.
 
@@ -243,16 +243,16 @@ total 141072
 -rw-rw-r-- 1 root root         0 Jan 25 00:12 settings.conf
 drwxr-xr-x 2 root root       116 Jan 25 00:12 certs
 -rw-rw-r-- 1 root root     49314 Jan 29 14:30 settings_local.conf
--rwxr-xr-x 1 root root 125468128 Jan 29 23:37 ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 utxostoreblaster.run -> ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 propagationblaster.run -> ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 chainintegrity.run -> ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 blockassemblyblaster.run -> ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 blaster.run -> ubsv.run
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 s3blaster.run -> ubsv.run
+-rwxr-xr-x 1 root root 125468128 Jan 29 23:37 teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 utxostoreblaster.run -> teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 propagationblaster.run -> teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 chainintegrity.run -> teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 blockassemblyblaster.run -> teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 blaster.run -> teranode.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 s3blaster.run -> teranode.run
 lrwxrwxrwx 1 root root        21 Jan 29 23:38 libsecp256k1.so.0 -> libsecp256k1.so.0.0.0
 lrwxrwxrwx 1 root root        21 Jan 29 23:38 libsecp256k1.so -> libsecp256k1.so.0.0.0
-lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> ubsv.run
+lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> teranode.run
 
 ```
 

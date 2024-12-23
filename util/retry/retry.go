@@ -3,7 +3,7 @@ package retry
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 // Retry will retry a function call a number of times, with a backoff time between each retry.

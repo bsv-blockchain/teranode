@@ -4,8 +4,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 func NewSettings() *Settings {

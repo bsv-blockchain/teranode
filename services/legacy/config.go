@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/version"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/version"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

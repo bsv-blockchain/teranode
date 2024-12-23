@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/teranode/model"
 )
 
 func TestTarget(t *testing.T) {

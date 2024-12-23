@@ -3,7 +3,7 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/file"
+	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
+	"github.com/bitcoin-sv/teranode/services/legacy/testdata"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

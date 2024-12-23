@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
+	"github.com/bitcoin-sv/teranode/cmd/seeder/seeder"
 )
 
 func main() {

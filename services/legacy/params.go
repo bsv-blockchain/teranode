@@ -5,7 +5,7 @@
 package legacy
 
 import (
-	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/teranode/chaincfg"
 )
 
 // activeNetParams is a pointer to the parameters specific to the

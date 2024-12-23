@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/errors"
+	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 // invMsg packages a bitcoin inv message and the peer it came from together

@@ -24,9 +24,9 @@ Test Coverage:
        - Verify UTXO state consistency across operations
 
 Required Settings:
-    - SETTINGS_CONTEXT_1: "docker.ubsv1.test"
-    - SETTINGS_CONTEXT_2: "docker.ubsv2.test"
-    - SETTINGS_CONTEXT_3: "docker.ubsv3.test"
+    - SETTINGS_CONTEXT_1: "docker.teranode1.test"
+    - SETTINGS_CONTEXT_2: "docker.teranode2.test"
+    - SETTINGS_CONTEXT_3: "docker.teranode3.test"
 
 Dependencies:
     - Aerospike for UTXO store
@@ -51,9 +51,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -70,9 +70,9 @@ type TNB6TestSuite struct {
 
 func (suite *TNB6TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
 	}
 }
 

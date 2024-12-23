@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
+	"github.com/bitcoin-sv/teranode/cmd/utxopersister/utxopersister"
 )
 
 func main() {

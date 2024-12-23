@@ -3,7 +3,7 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/tracing"
 )
 
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	redis_db "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"

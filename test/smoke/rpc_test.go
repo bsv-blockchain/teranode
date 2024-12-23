@@ -17,18 +17,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/coinbase"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/distributor"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -154,32 +154,32 @@ func stopKafka(logger ulogger.Logger) {
 	logger.Infof("Kafka cleanup completed")
 }
 
-func stopUbsv(logger ulogger.Logger) {
+func stopTeranode(logger ulogger.Logger) {
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
-	logger.Infof("Stopping UBSV...")
+	logger.Infof("Stopping TERANODE...")
 
 	// First try graceful shutdown using SIGTERM
-	termCmd := exec.Command("pkill", "-TERM", "-f", "ubsv")
+	termCmd := exec.Command("pkill", "-TERM", "-f", "teranode")
 	if err := termCmd.Run(); err != nil {
-		logger.Infof("Failed to stop UBSV gracefully: %v\n", err)
+		logger.Infof("Failed to stop TERANODE gracefully: %v\n", err)
 
 		// If graceful shutdown fails, try SIGINT
-		intCmd := exec.Command("pkill", "-INT", "-f", "ubsv")
+		intCmd := exec.Command("pkill", "-INT", "-f", "teranode")
 		if err := intCmd.Run(); err != nil {
-			logger.Infof("Failed to stop UBSV with SIGINT: %v\n", err)
+			logger.Infof("Failed to stop TERANODE with SIGINT: %v\n", err)
 
 			// As a last resort, force kill
-			killCmd := exec.Command("pkill", "-9", "-f", "ubsv")
+			killCmd := exec.Command("pkill", "-9", "-f", "teranode")
 			if err := killCmd.Run(); err != nil {
-				logger.Infof("Failed to force stop UBSV: %v\n", err)
+				logger.Infof("Failed to force stop TERANODE: %v\n", err)
 			}
 		}
 	}
 
 	// Wait up to 5 seconds for the process to fully stop
-	if err := waitForProcessToStop("ubsv", 5*time.Second); err != nil {
-		logger.Infof("Warning: UBSV process may not have fully stopped: %v\n", err)
+	if err := waitForProcessToStop("teranode", 5*time.Second); err != nil {
+		logger.Infof("Warning: TERANODE process may not have fully stopped: %v\n", err)
 	}
 
 	// Remove data directory with proper error handling
@@ -189,14 +189,14 @@ func stopUbsv(logger ulogger.Logger) {
 		logger.Infof("Data directory removed successfully")
 	}
 
-	logger.Infof("UBSV cleanup completed")
+	logger.Infof("TERANODE cleanup completed")
 }
 
 func (suite *RPCTestSuite) SetupTest() {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
 	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
 
-	stopUbsv(log)
+	stopTeranode(log)
 
 	if err := startKafka("kafka.log", log); err != nil {
 		log.Errorf("Failed to start Kafka: %v", err)
@@ -216,10 +216,10 @@ func (suite *RPCTestSuite) SetupTest() {
 func (suite *RPCTestSuite) TearDownTest() {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
 	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
-	// First stop UBSV
-	// stopUbsv(log)
+	// First stop TERANODE
+	// stopTeranode(log)
 
-	// Wait for UBSV to fully stop before stopping Kafka
+	// Wait for TERANODE to fully stop before stopping Kafka
 	time.Sleep(2 * time.Second)
 
 	// Then stop Kafka
@@ -228,16 +228,16 @@ func (suite *RPCTestSuite) TearDownTest() {
 }
 
 const (
-	ubsv1RPCEndpoint string = "http://localhost:9292"
-	nullStr          string = "null"
-	stringTrue              = "true"
+	teranode1RPCEndpoint string = "http://localhost:9292"
+	nullStr              string = "null"
+	stringTrue                  = "true"
 )
 
 func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
 	var blockchainInfo helper.BlockchainInfo
 
 	t := suite.T()
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockchaininfo", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getblockchaininfo", []interface{}{})
 
 	if err != nil {
 		t.Errorf("Error CallRPC: %v", err)
@@ -264,7 +264,7 @@ func (suite *RPCTestSuite) TestRPCGetPeerInfo() {
 
 	var p2pResp helper.P2PRPCResponse
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getpeerinfo", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getpeerinfo", []interface{}{})
 
 	if err != nil {
 		t.Errorf("Error CallRPC: %v", err)
@@ -290,7 +290,7 @@ func (suite *RPCTestSuite) TestRPCGetInfo() {
 
 	var getInfo helper.GetInfo
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getinfo", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getinfo", []interface{}{})
 
 	if err != nil {
 		t.Errorf("Error CallRPC: %v", err)
@@ -320,7 +320,7 @@ func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 
 	var getDifficulty helper.GetDifficultyResponse
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getdifficulty", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getdifficulty", []interface{}{})
 
 	if err != nil {
 		t.Errorf("Error CallRPC: %v", err)
@@ -363,10 +363,10 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{5})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{5})
 	require.NoError(t, err, "Failed to generate blocks")
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getblockhash", []interface{}{block})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
@@ -411,10 +411,10 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getblockbyheight", []interface{}{height})
 	require.NoError(t, err, "Failed to get block by height")
 
 	errJSON := json.Unmarshal([]byte(resp), &getBlockByHeightResp)
@@ -434,7 +434,7 @@ func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
 	var miningInfoResp helper.GetMiningInfoResponse
 
 	t := suite.T()
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getmininginfo", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getmininginfo", []interface{}{})
 
 	if err != nil {
 		t.Errorf("Error CallRPC: %v", err)
@@ -478,7 +478,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	)
 	require.NoError(t, err, "Failed to create distributor client")
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate initial blocks: %v", err)
 	}
@@ -532,7 +532,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -558,7 +558,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	targetHeight := height + 1
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate blocks: %v", err)
 	}
@@ -621,10 +621,10 @@ func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getbestblockhash", []interface{}{})
 	require.NoError(t, err, "Failed to get block hash")
 
 	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
@@ -635,7 +635,7 @@ func (suite *RPCTestSuite) TestRPCInvalidateBlock() {
 
 	t.Logf("Best block hash: %s", bestBlockHash.Result)
 
-	respInv, errInv := helper.CallRPC(ubsv1RPCEndpoint, "invalidateblock", []interface{}{bestBlockHash.Result})
+	respInv, errInv := helper.CallRPC(teranode1RPCEndpoint, "invalidateblock", []interface{}{bestBlockHash.Result})
 
 	if errInv != nil {
 		t.Errorf("Error CallRPC invalidateblock: %v", err)
@@ -677,10 +677,10 @@ func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	// Generate blocks
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate blocks")
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "getbestblockhash", []interface{}{})
 	require.NoError(t, err, "Failed to get block hash")
 
 	errJSON := json.Unmarshal([]byte(resp), &bestBlockHash)
@@ -691,7 +691,7 @@ func (suite *RPCTestSuite) TestRPCReconsiderBlock() {
 
 	t.Logf("Best block hash: %s", bestBlockHash.Result)
 
-	respInv, errInv := helper.CallRPC(ubsv1RPCEndpoint, "reconsiderblock", []interface{}{bestBlockHash.Result})
+	respInv, errInv := helper.CallRPC(teranode1RPCEndpoint, "reconsiderblock", []interface{}{bestBlockHash.Result})
 
 	if errInv != nil {
 		t.Errorf("Error CallRPC invalidateblock: %v", err)
@@ -734,7 +734,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	)
 	require.NoError(t, err, "Failed to create distributor client")
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate initial blocks: %v", err)
 	}
@@ -771,7 +771,7 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	}
 
 	// Call createrawtransaction RPC
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "createrawtransaction", []interface{}{inputs, outputs})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "createrawtransaction", []interface{}{inputs, outputs})
 	require.NoError(t, err, "Failed to create raw transaction")
 
 	var createRawTxResp struct {
@@ -792,11 +792,11 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpcUseCreateRawTx() {
 	t.Logf("Sending signed transaction: %s", newTx.TxIDChainHash())
 	txHex := hex.EncodeToString(newTx.ExtendedBytes())
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txHex})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "sendrawtransaction", []interface{}{txHex})
 	require.NoError(t, err, "Failed to send transaction")
 
 	// Mine a block to include our transaction
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate block")
 }
 
@@ -825,7 +825,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	)
 	require.NoError(t, err, "Failed to create distributor client")
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate initial blocks: %v", err)
 	}
@@ -884,7 +884,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -894,7 +894,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
-	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{})
+	miningCandidateResp, err := helper.CallRPC(teranode1RPCEndpoint, "getminingcandidate", []interface{}{})
 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
 	require.NoError(t, err, "Failed to get mining candidate")
 
@@ -954,13 +954,13 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
 	}
 
-	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+	submitSolnResp, err := helper.CallRPC(teranode1RPCEndpoint, "submitminingsolution", []interface{}{solution})
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
 	require.NoError(t, err, "Failed to submit mining solution")
 
 	var getBlockHash helper.GetBlockHashResponse
 
-	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+	resp, err = helper.CallRPC(teranode1RPCEndpoint, "getbestblockhash", []interface{}{})
 
 	require.NoError(t, err, "Error getting best blockhash")
 
@@ -1007,7 +1007,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 
 		targetHeight++
 
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+		_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 		require.NoError(t, err, "Failed to generate blocks")
 
 		if err != nil {
@@ -1043,7 +1043,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	)
 	require.NoError(t, err, "Failed to create distributor client")
 
-	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{101})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	if err != nil {
 		t.Errorf("Failed to generate initial blocks: %v", err)
 	}
@@ -1102,7 +1102,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -1112,7 +1112,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
-	miningCandidateResp, err := helper.CallRPC(ubsv1RPCEndpoint, "getminingcandidate", []interface{}{})
+	miningCandidateResp, err := helper.CallRPC(teranode1RPCEndpoint, "getminingcandidate", []interface{}{})
 	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
 	require.NoError(t, err, "Failed to get mining candidate")
 
@@ -1175,13 +1175,13 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 		"coinbase": hex.EncodeToString(coinbase.Bytes()),
 	}
 
-	submitSolnResp, err := helper.CallRPC(ubsv1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+	submitSolnResp, err := helper.CallRPC(teranode1RPCEndpoint, "submitminingsolution", []interface{}{solution})
 	t.Logf("Submit solution response from rpc %v", submitSolnResp)
 	require.NoError(t, err, "Failed to submit mining solution")
 
 	var getBlockHash helper.GetBlockHashResponse
 
-	resp, err = helper.CallRPC(ubsv1RPCEndpoint, "getbestblockhash", []interface{}{})
+	resp, err = helper.CallRPC(teranode1RPCEndpoint, "getbestblockhash", []interface{}{})
 
 	require.NoError(t, err, "Error getting best blockhash")
 
@@ -1229,7 +1229,7 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 
 		targetHeight++
 
-		_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{1})
+		_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 		require.NoError(t, err, "Failed to generate blocks")
 
 		if err != nil {

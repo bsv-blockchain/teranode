@@ -1,6 +1,6 @@
 package main
 
-import "github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+import "github.com/bitcoin-sv/teranode/cmd/txblaster/txblaster"
 
 func main() {
 	txblaster.Start()

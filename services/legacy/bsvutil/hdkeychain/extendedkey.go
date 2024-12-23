@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -7,10 +7,10 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	storesql "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	storesql "github.com/bitcoin-sv/teranode/stores/blockchain/sql"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 

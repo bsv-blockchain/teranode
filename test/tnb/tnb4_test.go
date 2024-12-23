@@ -5,7 +5,7 @@ package tnb
 import (
 	"testing"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -22,9 +22,9 @@ type TNB4TestSuite struct {
 
 func (suite *TNB4TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
 	}
 }
 

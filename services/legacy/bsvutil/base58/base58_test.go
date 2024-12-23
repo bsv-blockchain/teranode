@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 )
 
 var stringTests = []struct {

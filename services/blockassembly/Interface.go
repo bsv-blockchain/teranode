@@ -3,8 +3,8 @@ package blockassembly
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

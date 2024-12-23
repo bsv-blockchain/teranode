@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/ordishs/go-utils/safemap"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"

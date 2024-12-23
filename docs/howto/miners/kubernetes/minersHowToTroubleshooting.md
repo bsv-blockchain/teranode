@@ -52,7 +52,7 @@ spec:
   template:
     spec:
       containers:
-      - name: ubsv-blockchain
+      - name: teranode-blockchain
         ...
         readinessProbe:
           httpGet:
@@ -183,7 +183,7 @@ Remember to replace placeholders like `[service_name]`, `<pod-name>`, and label 
 
 
 
-Check your Grafana `UBSV Service Overview` dashboard:
+Check your Grafana `TERANODE Service Overview` dashboard:
 
 
 

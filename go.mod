@@ -1,4 +1,4 @@
-module github.com/bitcoin-sv/ubsv
+module github.com/bitcoin-sv/teranode
 
 go 1.22.6
 

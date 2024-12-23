@@ -1,13 +1,13 @@
 services:
 
-  ubsv-1:
+  teranode-1:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
-  ubsv-2:
+  teranode-2:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run
 
-  ubsv-3:
+  teranode-3:
     volumes:
-      - ./ubsv.run:/app/ubsv.run
+      - ./teranode.run:/app/teranode.run

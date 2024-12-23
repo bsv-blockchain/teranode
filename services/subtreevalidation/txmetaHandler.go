@@ -8,8 +8,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -1,6 +1,6 @@
 //go:build test_all || test_smoke || test_utxo
 
-// Package smoke contains smoke tests for the UBSV node
+// Package smoke contains smoke tests for the TERANODE node
 //
 // To run this specific test:
 //   - Run all smoke tests: go test -tags=test_smoke ./test/smoke/...
@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"

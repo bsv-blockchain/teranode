@@ -253,7 +253,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 1. Create the following directories in the project root:
    ```
-   mkdir -p data/ubsv/txstore data/ubsv/subtreestore data/ubsv/blockstore data/postgres data/aerospike/data
+   mkdir -p data/teranode/txstore data/teranode/subtreestore data/teranode/blockstore data/postgres data/aerospike/data
    ```
 
 
@@ -271,7 +271,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 1. Build the Teranode image using the provided Dockerfile:
    ```
-   docker-compose build ubsv-builder
+   docker-compose build teranode-builder
    ```
 
 
@@ -331,9 +331,9 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    ```
    docker-compose logs
    ```
-2. View logs for a specific service (e.g., ubsv-blockchain):
+2. View logs for a specific service (e.g., teranode-blockchain):
    ```
-   docker-compose logs ubsv-blockchain
+   docker-compose logs teranode-blockchain
    ```
 
 

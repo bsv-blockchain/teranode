@@ -2,7 +2,7 @@ name: Build run container image
 on: workflow_dispatch
 
 env:
-  REPO: ubsv
+  REPO: teranode
   ECR_REGION: eu-north-1
 
 jobs:

@@ -7,7 +7,7 @@ The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and i
 2. Push events to the branches: 'master' and 'staging'.
 
 ### Environment Variables
-- `REPO`: Specifies the repository name, set to 'ubsv'.
+- `REPO`: Specifies the repository name, set to 'teranode'.
 - `ECR_REGION`: Specifies the AWS ECR region, set to 'eu-north-1'.
 
 ### Jobs
@@ -60,7 +60,7 @@ The `gke_tests.yaml` GitHub workflow is designed to be invoked through a workflo
 
 ##### 1. `go-lint-and-test`
 - **Purpose**: Performs linting and testing of Go code.
-- **Runner**: Custom runner labeled `ubsv-runner`.
+- **Runner**: Custom runner labeled `teranode-runner`.
 - **Strategy**:
     - `fail-fast`: True (If any job fails, the entire workflow will terminate).
 - **Steps**:
@@ -70,7 +70,7 @@ The `gke_tests.yaml` GitHub workflow is designed to be invoked through a workflo
 
 ##### 2. `sonarqube`
 - **Purpose**: Runs a SonarQube scan to analyze the code quality and detect bugs, vulnerabilities, and code smells.
-- **Runner**: Uses the same custom runner `ubsv-runner`.
+- **Runner**: Uses the same custom runner `teranode-runner`.
 - **Steps**:
     - **Checkout**: Performs a repository checkout similar to the lint and test job.
     - **Twingate Action**: Establishes a secure connection using Twingate, necessary for accessing internal resources during the CI process.
@@ -141,7 +141,7 @@ These jobs deploy the Docker image to specific AWS EKS clusters based on the reg
     - **Conditions**: Each job has a conditional start based on the prefix of the GitHub event ref (e.g., 'refs/tags/v' for version releases, 'refs/tags/scaling-v' for scaling deployments).
     - **Parameters**:
         - `region`: Specifies the AWS region for deployment, such as `eu-west-1`, `us-east-1`, `ap-south-1`, etc.
-        - `ubsv_env`: Specifies the environment configuration, either `allinone` or `scaling`.
+        - `teranode_env`: Specifies the environment configuration, either `allinone` or `scaling`.
 
 
 

@@ -1,11 +1,11 @@
 {{ define "txBlasterService" }}
   tx-blaster-{{ .Index }}:
-    <<: *ubsv-base
-    image: ubsv:latest
+    <<: *teranode-base
+    image: teranode:latest
     depends_on:
       - postgres
-{{- range $i, $ubsv := .UbsvDependencies }}
-      - {{ $ubsv }}
+{{- range $i, $teranode := .TeranodeDependencies }}
+      - {{ $teranode }}
 {{- end }}
     environment:
       SETTINGS_CONTEXT: "docker"
@@ -22,7 +22,7 @@
       propagation_quicAddresses: {{ .PropagationQUICAddresses }}
     command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=200", "--quic=false"]
     networks:
-      - ubsv-network
+      - teranode-network
     volumes:
       - ./data/txblaster{{ .Index }}:/app/data
 {{ end }}

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

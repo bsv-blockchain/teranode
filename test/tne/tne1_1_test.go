@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -22,9 +22,9 @@ type TNE1_1TestSuite struct {
 
 func (suite *TNE1_1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
 	}
 }
 
@@ -45,9 +45,9 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 	ctx := framework.Context
 
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.test.stopP2P"
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
-	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.teranode1.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test.stopP2P"
 
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
@@ -94,9 +94,9 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 		}
 	}
 
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.test"
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
-	settingsMap["SETTINGS_CONTEXT_3"] = "docker.ubsv3.test"
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.teranode1.test"
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
+	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test"
 
 	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)

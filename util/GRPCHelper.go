@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/ordishs/gocore"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"

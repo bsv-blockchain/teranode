@@ -4,7 +4,7 @@ package httpimpl
 import (
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/labstack/echo/v4"
 )
 

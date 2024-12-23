@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/model"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -26,9 +26,9 @@ type TNA1TestSuite struct {
 
 func (suite *TNA1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tna1Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tna1Test",
 	}
 }
 
@@ -102,12 +102,12 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	foundTxs := make(map[string]bool) // Using string representation of hash as key
 	remainingTxs := len(hashesTx)
 
-	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
+	// Search inside teranode1, teranode2 and teranode3 subfolders
 	for _, subtreeHash := range hashes {
 		t.Logf("Subtree hash: %v", subtreeHash)
 
 		for i := 1; i <= 3; i++ {
-			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
+			subDir := fmt.Sprintf("teranode%d/subtreestore", i)
 			subSubDir := subtreeHash.String()[:2]
 
 			t.Logf("Checking directory: %s", subDir)

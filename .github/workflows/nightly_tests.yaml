@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
 
 env:
-  REPO: ubsv
+  REPO: teranode
   ECR_REGION: eu-north-1
   SETTINGS_CONTEXT_DEFAULT: "default_context"
 
 jobs:
   run-tests:
-    runs-on: ubsv-runner
+    runs-on: teranode-runner
     strategy:
       matrix:
         test_config:

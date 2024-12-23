@@ -3,8 +3,8 @@ package memory
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 

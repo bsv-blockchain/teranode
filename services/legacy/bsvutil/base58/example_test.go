@@ -7,7 +7,7 @@ package base58_test
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 )
 
 // This example demonstrates how to decode modified base58 encoded data.

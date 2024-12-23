@@ -5,9 +5,9 @@ package tnb
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -22,9 +22,9 @@ type TNB2TestSuite struct {
 
 func (suite *TNB2TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
 	}
 }
 
@@ -65,8 +65,8 @@ func (suite *TNB2TestSuite) TearDownTest() {
 //   - This confirms that the UTXO spending information was correctly propagated
 //
 // Required Settings:
-// - docker.ubsv2.test.stopP2P: Used to disable P2P communication
-// - docker.ubsv2.test: Used to re-enable P2P communication
+// - docker.teranode2.test.stopP2P: Used to disable P2P communication
+// - docker.teranode2.test: Used to re-enable P2P communication
 //
 // Dependencies:
 // - Requires a running Teranode environment with at least 2 nodes

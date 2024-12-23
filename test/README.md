@@ -4,7 +4,7 @@
 
 ## Scope
 
-This document explains how tests are structured within the UBSV codebase and how they are organized within the test folder in relation to the Functional Requirements for Teranode document.
+This document explains how tests are structured within the TERANODE codebase and how they are organized within the test folder in relation to the Functional Requirements for Teranode document.
 
 The Functional Requirements for Teranode document describes the responsibilities and features of Teranode. Accordingly, the tests are organized to verify that these responsibilities and features are correctly implemented in the code.
 
@@ -41,7 +41,7 @@ A custom setup for each test suite can be achieved through the structs and funct
 To execute a given test suite (e.g., TNA, TNC, TNJ), use the following standard command template from the terminal:
 
 ```bash
-cd /ubsv/test/<test-suite-selected>
+cd /teranode/test/<test-suite-selected>
     SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags <tnXtests>
 ```
 

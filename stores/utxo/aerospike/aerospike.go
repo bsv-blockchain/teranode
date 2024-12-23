@@ -15,13 +15,13 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -164,7 +164,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
-	if err = registerLuaIfNecessary(logger, client, LuaPackage, ubsvLUA); err != nil {
+	if err = registerLuaIfNecessary(logger, client, LuaPackage, teranodeLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
 	}
 

@@ -7,12 +7,12 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  - job_name: 'ubsv-1'
+  - job_name: 'teranode-1'
     static_configs:
-      - targets: ['ubsv-1:9091']
-  - job_name: 'ubsv-2'
+      - targets: ['teranode-1:9091']
+  - job_name: 'teranode-2'
     static_configs:
-      - targets: ['ubsv-2:9091']
-  - job_name: 'ubsv-3'
+      - targets: ['teranode-2:9091']
+  - job_name: 'teranode-3'
     static_configs:
-      - targets: ['ubsv-3:9091']
+      - targets: ['teranode-3:9091']

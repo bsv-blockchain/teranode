@@ -37,10 +37,10 @@ deps:
 
 .PHONY: dev
 dev:
-	$(MAKE) dev-dashboard & $(MAKE) dev-ubsv
+	$(MAKE) dev-dashboard & $(MAKE) dev-teranode
 
-.PHONY: dev-ubsv
-dev-ubsv:
+.PHONY: dev-teranode
+dev-teranode:
 	# Run go project
 	trap 'kill %1 %2' SIGINT; \
 	go run .
@@ -53,7 +53,7 @@ dev-dashboard:
 
 .PHONY: build
 # build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
-build: update_config build-ubsv-with-dashboard clean_backup
+build: update_config build-teranode-with-dashboard clean_backup
 
 .PHONY: update_config
 update_config:
@@ -81,21 +81,21 @@ clean_backup:
 	@rm -f settings_local.conf.bak
 
 
-.PHONY: build-ubsv-with-dashboard
-build-ubsv-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+.PHONY: build-teranode-with-dashboard
+build-teranode-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
+	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
-.PHONY: build-ubsv
-build-ubsv: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+.PHONY: build-teranode
+build-teranode: set_debug_flags set_race_flag set_txmetacache_flag
+	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
-.PHONY: build-ubsv-no-debug
-build-ubsv-no-debug: set_txmetacache_flag
-	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o ubsv_no_debug.run .
+.PHONY: build-teranode-no-debug
+build-teranode-no-debug: set_txmetacache_flag
+	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
-.PHONY: build-ubsv-ci
-build-ubsv-ci: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+.PHONY: build-teranode-ci
+build-teranode-ci: set_debug_flags set_race_flag set_txmetacache_flag
+	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags set_race_flag
@@ -172,7 +172,7 @@ endif
 
 .PHONY: racetest
 racetest: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor
 
 .PHONY: testall
 testall:
@@ -352,12 +352,12 @@ clean_gen:
 	rm -f ./services/legacy/peer_api/*.pb.go
 	rm -f ./services/p2p/p2p_api/*.pb.go
 	rm -f ./model/*.pb.go
-	rm -f ./ubsverrors/*.pb.go
+	rm -f ./errors/*.pb.go
 	rm -f ./stores/utxo/*.pb.go
 
 .PHONY: clean
 clean:
-	rm -f ./ubsv_*.tar.gz
+	rm -f ./teranode_*.tar.gz
 	rm -f blaster.run
 	rm -f blockchainstatus.run
 	rm -rf build/

@@ -7,7 +7,7 @@ scrape_configs:
   #   static_configs:
   #     - targets: ["localhost:9090"]
 
-  - job_name: "ubsv-1"
+  - job_name: "teranode-1"
     static_configs:
       - targets: ["localhost:19091"]
   - job_name: "aerospike-exporter-1"

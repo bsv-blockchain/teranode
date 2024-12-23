@@ -2,7 +2,7 @@ x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
   # mem_limit: 1024m
   networks:
-    - ubsv-network
+    - teranode-network
   command: --config-file /etc/aerospike.conf
 services:
 
@@ -36,26 +36,26 @@ services:
       - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
       - ./data/aerospike-3/data:/opt/aerospike/data
 
-  ubsv1:
+  teranode1:
     depends_on:
       - aerospike-1
-    entrypoint: [ "/app/wait.sh", "aerospike-1", "3100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "3100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
     volumes:
-      - ./data/ubsv1/external:/app/data/ubsv1/external
+      - ./data/teranode1/external:/app/data/teranode1/external
 
-  ubsv2:
+  teranode2:
     depends_on:
       - aerospike-2
-    entrypoint: [ "/app/wait.sh", "aerospike-2", "3200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "3200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     volumes:
-      - ./data/ubsv2/external:/app/data/ubsv2/external
+      - ./data/teranode2/external:/app/data/teranode2/external
 
-  ubsv3:
+  teranode3:
     depends_on:
       - aerospike-3
-    entrypoint: [ "/app/wait.sh", "aerospike-3", "3300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "3300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     volumes:
-      - ./data/ubsv3/external:/app/data/ubsv3/external
+      - ./data/teranode3/external:/app/data/teranode3/external
   # aerospike-exporter-1:
   #   image: aerospike/aerospike-prometheus-exporter:latest
   #   container_name: aerospike-exporter-1
@@ -66,7 +66,7 @@ services:
   #   ports:
   #     - "19145:9145"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network
 
   # aerospike-exporter-2:
   #   image: aerospike/aerospike-prometheus-exporter:latest
@@ -78,7 +78,7 @@ services:
   #   ports:
   #     - "29145:9145"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network
 
   # aerospike-exporter-3:
   #   image: aerospike/aerospike-prometheus-exporter:latest
@@ -90,4 +90,4 @@ services:
   #   ports:
   #     - "39145:9145"
   #   networks:
-  #     - ubsv-network
+  #     - teranode-network

@@ -33,12 +33,12 @@ wait_for_service() {
     exit 1
 }
 
-# Wait for ubsv services to be ready
+# Wait for teranode services to be ready
 wait_for_service localhost 38090
 wait_for_service localhost 28090
 wait_for_service localhost 18090
 
-# Send gRPC requests to each ubsv container
+# Send gRPC requests to each teranode container
 echo "Sending gRPC requests..."
 
 # Replace `your.package.Service/YourMethod` with the actual service and method names

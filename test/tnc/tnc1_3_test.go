@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/teranode/model"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
@@ -24,9 +24,9 @@ type TNC1TestSuite struct {
 
 func (suite *TNC1TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnc1Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnc1Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnc1Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnc1Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnc1Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnc1Test",
 	}
 }
 

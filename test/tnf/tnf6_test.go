@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -22,9 +22,9 @@ type TNFTestSuite struct {
 
 func (suite *TNFTestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnf6",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnf6.stage1",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnf6",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnf6",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnf6.stage1",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnf6",
 	}
 }
 
@@ -86,7 +86,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	time.Sleep(60 * time.Second)
 
 	// Stage 2
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv2.tnf6.stage2"
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.teranode2.tnf6.stage2"
 	if err := cluster.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}

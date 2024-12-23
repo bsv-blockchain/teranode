@@ -5,7 +5,7 @@ Teranode provides a basic CPU miner that can be used for testing purposes. When 
 ```bash
 docker run -it \
 --entrypoint="" --network my-teranode-network \
-434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.50 \
+434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv-public:v0.5.50 \
 /app/miner.run -rpcconnect rpc -rpcuser bitcoin -rpcpassword bitcoin -rpcport 9292 \
 -coinbase-addr mgqipciCS56nCYSjB1vTcDGskN82yxfo1G -coinbase-sig "/Your miner tag/" \
 -cpus 2

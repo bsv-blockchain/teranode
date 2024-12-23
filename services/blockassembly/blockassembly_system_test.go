@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/test"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -84,13 +84,13 @@ func stopKafka() {
 	}
 }
 
-func stopUbsv() {
-	log.Println("Stopping UBSV...")
-	cmd := exec.Command("pkill", "-f", "ubsv")
+func stopTeranode() {
+	log.Println("Stopping TERANODE...")
+	cmd := exec.Command("pkill", "-f", "teranode")
 	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to stop UBSV: %v\n", err)
+		log.Printf("Failed to stop TERANODE: %v\n", err)
 	} else {
-		log.Println("UBSV stopped successfully")
+		log.Println("TERANODE stopped successfully")
 	}
 }
 
@@ -114,7 +114,7 @@ func TestMain(m *testing.M) {
 
 	// Cleanup processes
 	stopKafka()
-	stopUbsv()
+	stopTeranode()
 
 	os.Exit(code)
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 )
 
 func usage(msg string) {

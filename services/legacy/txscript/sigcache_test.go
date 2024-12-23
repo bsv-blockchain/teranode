@@ -8,7 +8,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

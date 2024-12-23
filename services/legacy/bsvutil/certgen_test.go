@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 )
 
 // TestNewTLSCertPair ensures the NewTLSCertPair function works as expected.

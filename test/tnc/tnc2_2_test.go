@@ -28,7 +28,7 @@ package tnc
 import (
 	"testing"
 
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -41,9 +41,9 @@ type TNC2_2TestSuite struct {
 
 func (suite *TNC2_2TestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ubsv1.test.tnc2_2Test",
-		"SETTINGS_CONTEXT_2": "docker.ubsv2.test.tnc2_2Test",
-		"SETTINGS_CONTEXT_3": "docker.ubsv3.test.tnc2_2Test",
+		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnc2_2Test",
+		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnc2_2Test",
+		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnc2_2Test",
 	}
 }
 

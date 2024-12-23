@@ -4,7 +4,7 @@
 The Teranode project is structured as follows:
 
 ```
-ubsv/
+teranode/
 │
 ├── main.go                       # Start the services.
 │

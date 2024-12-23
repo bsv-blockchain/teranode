@@ -1,12 +1,12 @@
 services:
-  ubsv1:
+  teranode1:
     environment:
       asset_httpAddress: null
 
-  ubsv2:
+  teranode2:
     environment:
       asset_httpAddress: null
 
-  ubsv3:
+  teranode3:
     environment:
       asset_httpAddress: null

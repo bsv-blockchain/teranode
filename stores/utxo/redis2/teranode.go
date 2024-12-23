@@ -8,15 +8,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	redis_db "github.com/redis/go-redis/v9"
 )
 
-//go:embed ubsv.lua
-var ubsvLUA string
+//go:embed teranode.lua
+var teranodeLUA string
 
 const luaScriptVersion = "v1"
 
@@ -57,7 +57,7 @@ func registerLuaIfNecessary(ctx context.Context, logger ulogger.Logger, rdb *red
 	}
 
 	// Create the script name
-	scriptName := fmt.Sprintf("ubsv_%s", v)
+	scriptName := fmt.Sprintf("teranode_%s", v)
 
 	// Get list of currently registered functions
 	cmd := rdb.Do(ctx, "FUNCTION", "LIST")
@@ -91,7 +91,7 @@ func registerLuaIfNecessary(ctx context.Context, logger ulogger.Logger, rdb *red
 		logger.Infof("Registering new LUA script %s", scriptName)
 
 		// Replace all instances of ___VERSION___ with the actual version
-		cmd = rdb.Do(ctx, "FUNCTION", "LOAD", strings.ReplaceAll(ubsvLUA, "___VERSION___", v))
+		cmd = rdb.Do(ctx, "FUNCTION", "LOAD", strings.ReplaceAll(teranodeLUA, "___VERSION___", v))
 		if err := cmd.Err(); err != nil {
 			if strings.Contains(err.Error(), "already exists") {
 				logger.Infof("LUA script %s already registered", scriptName)
@@ -120,7 +120,7 @@ func registerLuaForTesting(rdb *redis_db.Client) (string, func() error, error) {
 	}
 
 	return randomVersion, func() error {
-		cmd := rdb.Do(ctx, "FUNCTION", "DELETE", fmt.Sprintf("ubsv_%s", randomVersion))
+		cmd := rdb.Do(ctx, "FUNCTION", "DELETE", fmt.Sprintf("teranode_%s", randomVersion))
 		if err := cmd.Err(); err != nil {
 			return errors.NewProcessingError("Failed to delete function", err)
 		}

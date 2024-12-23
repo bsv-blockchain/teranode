@@ -1,14 +1,14 @@
 # Build/Run Workflow Update documentation
 
-UBSV uses intermediate Docker layers in order increase efficiency of the overall build and deployment process.
+TERANODE uses intermediate Docker layers in order increase efficiency of the overall build and deployment process.
 
 The build process uses `Dockerfile_build_base`
 The application runtime environment uses `Dockerfile_run_base`
 
 When there are changes made to either of these files, a new image must be built and incorporated into the application.
-This is accomplished by using two separate GitHub Actions workflows within the ubsv GitHub repo:
-- [build_base_image.yaml](https://github.com/bitcoin-sv/ubsv/actions/workflows/build_base_image.yaml)
-- [build_run_image.yaml](https://github.com/bitcoin-sv/ubsv/actions/workflows/build_run_image.yaml)
+This is accomplished by using two separate GitHub Actions workflows within the teranode GitHub repo:
+- [build_base_image.yaml](https://github.com/bitcoin-sv/teranode/actions/workflows/build_base_image.yaml)
+- [build_run_image.yaml](https://github.com/bitcoin-sv/teranode/actions/workflows/build_run_image.yaml)
 
 You can manually start one of these jobs by clicking on the workflow in the GitHub Actions interface and then clicking the "Run workflow" button and selecting a branch to run the job on.
 

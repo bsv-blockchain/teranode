@@ -5,12 +5,12 @@ import (
 	"flag"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/cmd/filereader/filereader"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -34,7 +34,7 @@ func Start() {
 	var logger = ulogger.New("chainextracts", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
 
 	// this was using a specific hard coded context
-	blockchainStoreURL := tSettings.BlockChain.StoreURL // GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
+	blockchainStoreURL := tSettings.BlockChain.StoreURL // GetURL("blockchain_store.docker.ci.chainintegrity.teranode1")
 	if blockchainStoreURL == nil {
 		panic("no blockchain_store setting found")
 	}
@@ -47,7 +47,7 @@ func Start() {
 	}
 
 	// this was using a specific hard coded context
-	subtreeStoreURL := tSettings.SubtreeValidation.SubtreeStore // GetURL("subtreestore.docker.ci.chainintegrity.ubsv1")
+	subtreeStoreURL := tSettings.SubtreeValidation.SubtreeStore // GetURL("subtreestore.docker.ci.chainintegrity.teranode1")
 	if subtreeStoreURL == nil {
 		panic("subtreestore config not found")
 	}

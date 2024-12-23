@@ -5,9 +5,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"google.golang.org/grpc"
 )
 

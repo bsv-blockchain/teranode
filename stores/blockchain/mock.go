@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/blob/file"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/usql"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/stores/blob/file"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -6,10 +6,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/teranode/errors"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/servicemanager"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"

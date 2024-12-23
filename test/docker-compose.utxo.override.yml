@@ -1,12 +1,12 @@
 services:
-  ubsv1:
+  teranode1:
     environment:
       utxostore: ""
 
-  ubsv2:
+  teranode2:
     environment:
       utxostore: ""
 
-  ubsv3:
+  teranode3:
     environment:
       utxostore: ""

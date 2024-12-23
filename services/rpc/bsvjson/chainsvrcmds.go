@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 // AddNodeSubCmd defines the type used in the addnode JSON-RPC command for the

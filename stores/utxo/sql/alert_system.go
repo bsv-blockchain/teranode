@@ -3,8 +3,8 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/teranode/errors"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

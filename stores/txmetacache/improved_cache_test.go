@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util/types"
+	"github.com/bitcoin-sv/teranode/util/types"
 	"github.com/stretchr/testify/require"
 )
 

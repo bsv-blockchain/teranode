@@ -11,7 +11,7 @@ on:
 
 env:
   # These variables aren't used for called reusable workflows, so we have to also define 'with' variables below
-  REPO: ubsv
+  REPO: teranode
   ECR_REGION: eu-north-1
 
 jobs:
@@ -45,7 +45,7 @@ jobs:
     secrets: inherit
     with:
       arch: amd64
-      repo: ubsv
+      repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
   # Build for ARM64 (Graviton and Darwin)
@@ -55,7 +55,7 @@ jobs:
     secrets: inherit
     with:
       arch: arm64
-      repo: ubsv
+      repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
   # Create docker manifest for multiple architecture tags
@@ -65,7 +65,7 @@ jobs:
     secrets: inherit
     with:
       region: eu-north-1
-      repo: ubsv
+      repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
   deploy_to_operator:
     runs-on: ubuntu-latest
@@ -94,7 +94,7 @@ jobs:
 
       - name: Deploy to Test Net
         run: |
-          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-central-1
+          aws eks update-kubeconfig --name aws-teranode-playground --region eu-central-1
           kubectl cluster-info
           kubectl patch -n prod-teranet-1 --type=merge clusters.teranode.bsvblockchain.org teranet-1-teranode -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
           kubectl patch -n prod-teranet-2 --type=merge clusters.teranode.bsvblockchain.org teranet-2-teranode -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';

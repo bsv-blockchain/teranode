@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -37,7 +37,7 @@ var (
 )
 
 func main() {
-	baseUrl := "https://m1.scaling.ubsv.dev"
+	baseUrl := "https://m1.scaling.teranode.dev"
 
 	resp, err := DoHTTPRequest(context.Background(), baseUrl+"/lastblocks?n=1", nil, nil, nil)
 	if err != nil {

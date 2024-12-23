@@ -23,5 +23,5 @@ Non-verbose mode give you a summary report only
 
 # Example
 ```
-SETTINGS_CONTEXT=docker.host.ubsv1 logLevel=INFO go run . -d postgres://poc2:poc2@localhost:5432/poc2  -f /Users/freemans/Downloads/d61fe22e-b3e7-4145-945b-b5689253aee7.csv -verbose
+SETTINGS_CONTEXT=docker.host.teranode1 logLevel=INFO go run . -d postgres://poc2:poc2@localhost:5432/poc2  -f /Users/freemans/Downloads/d61fe22e-b3e7-4145-945b-b5689253aee7.csv -verbose
 ```

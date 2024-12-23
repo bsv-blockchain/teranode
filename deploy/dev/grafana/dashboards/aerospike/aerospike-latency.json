@@ -435,8 +435,8 @@
       {
         "current": {
           "selected": false,
-          "text": "ubsv-store-asia-i4i",
-          "value": "ubsv-store-asia-i4i"
+          "text": "teranode-store-asia-i4i",
+          "value": "teranode-store-asia-i4i"
         },
         "datasource": {
           "type": "prometheus",

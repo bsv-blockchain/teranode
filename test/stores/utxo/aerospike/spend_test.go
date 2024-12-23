@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,8 +186,8 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 
 		ret, err := db.ParseLuaReturnValue(r)
 		require.NoError(t, err)
-		assert.Equal(t, ubsv_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, ubsv_aerospike.LuaReturnValue(""), ret.Signal)
+		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
 		assert.Nil(t, ret.SpendingTxID)
 	})
 
@@ -225,8 +225,8 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 
 		ret, err := db.ParseLuaReturnValue(r)
 		require.NoError(t, err)
-		assert.Equal(t, ubsv_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, ubsv_aerospike.LuaReturnValue("TTLSET"), ret.Signal)
+		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue("TTLSET"), ret.Signal)
 	})
 
 	t.Run("Increment nrRecords - multi", func(t *testing.T) {

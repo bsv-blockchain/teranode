@@ -16,26 +16,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-	ubsvblockchain "github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/settings"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	teranodeblockchain "github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/legacy/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
+	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -232,8 +232,8 @@ type SyncManager struct {
 	wg           sync.WaitGroup
 	quit         chan struct{}
 
-	// UBSV services
-	blockchainClient  ubsvblockchain.ClientI
+	// TERANODE services
+	blockchainClient  teranodeblockchain.ClientI
 	validationClient  validator.Interface
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
@@ -887,7 +887,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
 		return errors.NewProcessingError("failed to get current FSM state", err)
-	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateLEGACYSYNCING {
+	} else if fsmState != nil && *fsmState == teranodeblockchain.FSMStateLEGACYSYNCING {
 		legacySyncMode = true
 	}
 
@@ -1351,7 +1351,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get current FSM state: %v", err)
-	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
+	} else if fsmState != nil && *fsmState == teranodeblockchain.FSMStateRUNNING {
 		processInvs = true
 	}
 
@@ -1543,7 +1543,7 @@ out:
 				}
 
 				// we reached current in legacy, and current FSM state is not Running, send RUN event
-				if currentState != nil && *currentState != ubsvblockchain.FSMStateRUNNING {
+				if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
 					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
@@ -1813,7 +1813,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient ubsvblockchain.ClientI,
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient teranodeblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
@@ -1838,7 +1838,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// feeEstimator:            config.FeeEstimator,
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 
-		// ubsv stores etc.
+		// teranode stores etc.
 		logger:            logger,
 		blockchainClient:  blockchainClient,
 		validationClient:  validationClient,
@@ -1921,7 +1921,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
 			default:
 				// get the FSM state, only turn on the listener if we are in RUN mode
 				// TODO it would be better to be able to listen somehow to state changes in the FSM
-				isState, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, ubsvblockchain.FSMStateRUNNING)
+				isState, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateRUNNING)
 
 				if isState {
 					kafkaControlChan <- true // start or continue the listener

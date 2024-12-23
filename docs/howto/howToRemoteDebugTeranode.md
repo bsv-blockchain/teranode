@@ -22,7 +22,7 @@ command:
 - --headless=true
 - --api-version=2
 - exec
-- ./ubsv.run
+- ./teranode.run
 - --
 ```
 

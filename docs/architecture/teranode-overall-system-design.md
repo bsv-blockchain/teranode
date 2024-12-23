@@ -101,7 +101,7 @@ Unlike the fixed 1MB block size in the original Bitcoin implementation, Teranode
 
 The Teranode architecture is designed as a collection of microservices that work together to provide a decentralized, scalable, and secure blockchain network. The node is modular, allowing for easy integration of new services and features.
 
-![UBSV_System_Context.png](img/UBSV_System_Context.png)
+![TERANODE_System_Context.png](img/TERANODE_System_Context.png)
 
 Key components of the Teranode architecture include:
 

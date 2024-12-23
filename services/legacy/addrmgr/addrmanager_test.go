@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/services/legacy/addrmgr"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 // naTest is used to describe a test to be performed against the NetAddressKey

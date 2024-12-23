@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
+	"github.com/bitcoin-sv/teranode/cmd/aerospike_reader/aerospike_reader"
 )
 
 func main() {

@@ -1,7 +1,7 @@
 package blockassembly_api
 
 import (
-	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/loopholelabs/polyglot"
 )
 

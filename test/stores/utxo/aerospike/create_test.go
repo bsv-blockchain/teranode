@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	ubsv_aerospike "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/util"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_GetBinsToStore(t *testing.T) {
-	s := ubsv_aerospike.Store{}
+	s := teranode_aerospike.Store{}
 	s.SetUtxoBatchSize(100)
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
@@ -34,7 +34,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 	})
 
 	t.Run("TestStore_GetBinsToStore", func(t *testing.T) {
-		ubsv_aerospike.InitPrometheusMetrics()
+		teranode_aerospike.InitPrometheusMetrics()
 
 		// read hex file from os
 		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -102,7 +102,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		require.NoError(t, err)
 
 		// external should be set by the aerospike create function for huge txs
-		external := len(tx.ExtendedBytes()) > ubsv_aerospike.MaxTxSizeInStoreInBytes
+		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
 
 		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, external, tx.TxIDChainHash(), false)
 		require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StoreTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		ubsv_aerospike.InitPrometheusMetrics()
+		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
@@ -154,7 +154,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StoreTransactionExternally - no utxos", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		ubsv_aerospike.InitPrometheusMetrics()
+		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		tx.Outputs = []*bt.Output{}
@@ -197,7 +197,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StorePartialTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		ubsv_aerospike.InitPrometheusMetrics()
+		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
@@ -225,7 +225,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 }
 
 func BenchmarkStore_Create(b *testing.B) {
-	ubsv_aerospike.InitPrometheusMetrics()
+	teranode_aerospike.InitPrometheusMetrics()
 
 	// read hex file from os
 	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -234,16 +234,16 @@ func BenchmarkStore_Create(b *testing.B) {
 	tx, err := bt.NewTxFromString(string(txHex))
 	require.NoError(b, err)
 
-	s := &ubsv_aerospike.Store{}
+	s := &teranode_aerospike.Store{}
 	s.SetUtxoBatchSize(100)
 
-	sendStoreBatch := func(batch []*ubsv_aerospike.BatchStoreItem) {
+	sendStoreBatch := func(batch []*teranode_aerospike.BatchStoreItem) {
 		// do nothing
 		for _, item := range batch {
 			item.SendDone(nil)
 		}
 	}
-	s.SetStoreBatcher(batcher.New[ubsv_aerospike.BatchStoreItem](100, 1, sendStoreBatch, true))
+	s.SetStoreBatcher(batcher.New[teranode_aerospike.BatchStoreItem](100, 1, sendStoreBatch, true))
 
 	b.ResetTimer()
 

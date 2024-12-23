@@ -3,7 +3,7 @@ package rpc
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/stretchr/testify/assert"
 )
 

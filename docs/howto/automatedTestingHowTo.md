@@ -13,7 +13,7 @@ make
 ```bash
 # Clone and build
 git clone [repository]
-cd ubsv
+cd teranode
 docker compose build
 ```
 
@@ -42,16 +42,16 @@ LOG_LEVEL=DEBUG
 1. Run all tests in a suite:
 ```bash
 # Format
-cd /ubsv/test/<suite-name>
+cd /teranode/test/<suite-name>
 SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags <suite-tag>
 
 # Examples
 # Run TNA tests
-cd /ubsv/test/tna
+cd /teranode/test/tna
 SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags tnatests
 
 # Run TNC tests
-cd /ubsv/test/tnc
+cd /teranode/test/tnc
 SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags tnctests
 ```
 
@@ -86,9 +86,9 @@ export LOG_LEVEL=DEBUG
 2. Check container logs:
 ```bash
 # View logs for specific node
-docker logs ubsv-1
-docker logs ubsv-2
-docker logs ubsv-3
+docker logs teranode-1
+docker logs teranode-2
+docker logs teranode-3
 ```
 
 3. Inspect test state:
@@ -109,7 +109,7 @@ package tna
 
 import (
     "testing"
-    "github.com/bitcoin-sv/ubsv/test/setup"
+    "github.com/bitcoin-sv/teranode/test/setup"
 )
 
 type TNANewTestSuite struct {
@@ -151,7 +151,7 @@ if err != nil {
 ```yaml
 # docker-compose.custom.override.yml
 services:
-ubsv-1:
+teranode-1:
 environment:
 CUSTOM_SETTING: "value"
 ```
@@ -198,7 +198,7 @@ verified, err := framework.Nodes[1].BlockchainClient.VerifyTransaction(...)
 ### How to Test Node Failure Scenarios
 1. Stop specific node:
 ```go
-err := framework.StopNode("ubsv-2")
+err := framework.StopNode("teranode-2")
 if err != nil {
     t.Errorf("Failed to stop node: %v", err)
 }
@@ -206,7 +206,7 @@ if err != nil {
 
 2. Restart node:
 ```go
-err := framework.StartNode("ubsv-2")
+err := framework.StartNode("teranode-2")
 if err != nil {
     t.Errorf("Failed to start node: %v", err)
 }

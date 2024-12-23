@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"net/http"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/labstack/echo/v4"
 )
 

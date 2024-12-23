@@ -17,8 +17,8 @@ We decided that the two docker compose, single node and three nodes blockchain w
 
 We need to account for different phases of open source of the codebase, the timeline is still unknown as some key stakeholders are nervous of opening up the codebase as MIT or Apache. Which means that for the initial Milestone 3 with TAAL and GP we will need to figure out a way to provide them binaries/images to run without the source code. We will be sharing the pre-built binaries and the docker images associated with them. These are really hard to reverse engineer and given that GP and TAAL are considered friendly parties, we should be fine. Source code would not be released as of milestone 3 as there's still a lot of cleaning that needs to be done before we open source the project.
 
-## UBSV Binary
-The ubsv repo where the current teranode code resides will be open sourced. This repo will include a runnable version of the teranode code as well as ci/cd to build the executable. 
+## Teranode Binary
+The teranode repo where the current teranode code resides will be open sourced. This repo will include a runnable version of the teranode code as well as ci/cd to build the executable. 
 - People will have the option to build from source. This will be available at later stages as we will need to have a stable version of the software before we can publish it.
 - People will also have the ability to run pre-built and published executable for both arm64 and amd64. This will be deployed to a package manager probably github packages (as not to host and manage yet another thing). These will follow a versioning scheme that will be defined later. #todo define versioning scheme and schedules (feature based, scheduled releases, release train)
 
@@ -53,7 +53,7 @@ Along with the binary, we will also provide a docker image. This docker image wi
 This image will come with prepackaged internal dependencies. Also note that while the docker image will have all the internal dependencies (for example underlying crypto linux packages). you will still need to run the external dependencies yourself (for example databases and storage). We will build that docker image for the main platforms available out there (arm64, amd64).
 
 ## Docker Compose - Single Node
-This is the first step to running teranode **with external dependencies**. This will be a docker-compose file that will run the docker image mentioned above and the external dependencies (db, utxostore, shared storage, etc). This will be the easiest way to run the software  **including external dependencies**. This will be published to the main repo (now called ubsv, #todo this needs to be changed to teranode before making it public).
+This is the first step to running teranode **with external dependencies**. This will be a docker-compose file that will run the docker image mentioned above and the external dependencies (db, utxostore, shared storage, etc). This will be the easiest way to run the software  **including external dependencies**. This will be published to the main repo (now called teranode, #todo this needs to be changed to teranode before making it public).
 
 This will be the easiest but opinionated way to run the software with external dependencies. You're gonna have to adopt the external dependencies already chosen for you.
 
@@ -92,7 +92,7 @@ Now this environment will consists of three parts:
 ### Infrastructure
 This will be the kubernetes cluster that will run the teranode microservices. We will not be responsible for the underlying infrastructure management for the public. People have their weird and specific ways of running kubernetes. Let them figure that out.
 
-For us internally, we will be using a collection of **private** terraform modules to manage the underlying infrastructure. You can find these modules in the ubsv-infra. The code will be structured in a way to allow fast iteration of multiple environments in multiple regions.
+For us internally, we will be using a collection of **private** terraform modules to manage the underlying infrastructure. You can find these modules in the teranode-infra. The code will be structured in a way to allow fast iteration of multiple environments in multiple regions.
  
 ### Teranode Microservices
 #### What's a Kubernetes Operator?

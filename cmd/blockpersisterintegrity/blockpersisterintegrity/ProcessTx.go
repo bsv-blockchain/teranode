@@ -3,10 +3,10 @@ package blockpersisterintegrity
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/teranode/errors"
+	p_model "github.com/bitcoin-sv/teranode/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 )
 

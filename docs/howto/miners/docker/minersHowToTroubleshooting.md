@@ -58,7 +58,7 @@ In your docker-compose.yml file:
 
 ```yaml
 services:
-  ubsv-blockchain:
+  teranode-blockchain:
     ...
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
@@ -196,7 +196,7 @@ Remember to replace placeholders like `[service_name]`, and label selectors with
 
 
 
-Check your Grafana `UBSV Service Overview` dashboard:
+Check your Grafana `TERANODE Service Overview` dashboard:
 
 
 

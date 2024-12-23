@@ -18,7 +18,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
+	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 )
 
 func main() {

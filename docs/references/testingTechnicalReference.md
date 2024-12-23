@@ -1,4 +1,4 @@
-# UBSV Testing Framework Technical Reference
+# TERANODE Testing Framework Technical Reference
 
 ## Framework Components
 
@@ -74,8 +74,8 @@ SETTINGS_CONTEXT_3   # Configuration for node 3
 ```yaml
 # Base Configuration (docker-compose.e2etest.yml)
 services:
-ubsv-1:
-image: ubsv
+teranode-1:
+image: teranode
 environment:
 - SETTINGS_CONTEXT=${SETTINGS_CONTEXT_1}
 ports:
@@ -84,10 +84,10 @@ ports:
 - "10087:8087"  # Blockchain service
 - "10085:8085"  # Block assembly
 
-ubsv-2:
+teranode-2:
 # Similar configuration with different ports
 
-ubsv-3:
+teranode-3:
 # Similar configuration with different ports
 ```
 
@@ -101,9 +101,9 @@ func (suite *BitcoinTestSuite) DefaultComposeFiles() []string {
 // Default Settings Map
 func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
     return map[string]string{
-        "SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-        "SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
-        "SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
+        "SETTINGS_CONTEXT_1": "docker.ci.teranode1.tc1",
+        "SETTINGS_CONTEXT_2": "docker.ci.teranode2.tc1",
+        "SETTINGS_CONTEXT_3": "docker.ci.teranode3.tc1",
     }
 }
 ```

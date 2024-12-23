@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"google.golang.org/grpc/resolver"
 )
 

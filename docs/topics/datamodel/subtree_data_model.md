@@ -69,7 +69,7 @@ Subtrees only include transaction IDs, not full transaction data, since all node
 
 This version improves readability, adds proper heading formatting, and applies consistent emphasis to key points.
 
-![UBSV_SubTree.png](../../architecture/img/UBSV_SubTree.png)
+![TERANODE_SubTree.png](../../architecture/img/TERANODE_SubTree.png)
 
 ## Additional Resources
 

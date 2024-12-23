@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 var (

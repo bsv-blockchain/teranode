@@ -46,7 +46,7 @@ function build_local_image {
     --build-arg BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-$ID \
     --build-arg RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-$ID \
     --build-arg GITHUB_SHA=$GITHUB_SHA \
-    --tag ubsv:$GITHUB_SHA \
+    --tag teranode:$GITHUB_SHA \
     .
 
     if [[ $? -ne 0 ]]; then
@@ -230,11 +230,11 @@ elif [[ $IMAGE_TAG != "latest" && ! $IMAGE_TAG =~ ^[0-9a-f]+$ && ! $IMAGE_TAG =~
 fi
 
 if [[ $ENVIRONMENT == "docker-desktop" && $IMAGE_TAG == "local" ]]; then 
-    IMAGE_NAME="ubsv:$GITHUB_SHA"
+    IMAGE_NAME="teranode:$GITHUB_SHA"
 else 
     if [[ $IMAGE_TAG == "latest" ]]; then
         # Extract the git commit hash by querying the ECR repository with this horrible command...
-        IMAGE_TAG=$(aws ecr describe-images --repository-name ubsv --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
+        IMAGE_TAG=$(aws ecr describe-images --repository-name teranode --region eu-north-1 | jq -r '.imageDetails[] | select(.imageTags // [] | any(. == "latest-arm64")) | .imageTags | map(select(. != "latest-arm64")) | .[0]' | sed 's/-arm64//')
     fi
 
     IMAGE_NAME="434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$IMAGE_TAG"

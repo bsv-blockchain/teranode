@@ -42,24 +42,24 @@ while true; do
   echo ""
   
   if [[ $(cat $tmp1) == $(cat $tmp2) ]] && [[ $(cat $tmp2) == $(cat $tmp3) ]]; then
-    echo -e "\033[32m  ubsv1: $(cat $tmp1)  \033[0m"
-    echo -e "\033[32m  ubsv2: $(cat $tmp2)  \033[0m"
-    echo -e "\033[32m  ubsv3: $(cat $tmp3)  \033[0m"
+    echo -e "\033[32m  teranode1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[32m  teranode2: $(cat $tmp2)  \033[0m"
+    echo -e "\033[32m  teranode3: $(cat $tmp3)  \033[0m"
   else
-    echo -e "\033[31m  ubsv1: $(cat $tmp1)  \033[0m"
-    echo -e "\033[31m  ubsv2: $(cat $tmp2)  \033[0m"
-    echo -e "\033[31m  ubsv3: $(cat $tmp3)  \033[0m"
+    echo -e "\033[31m  teranode1: $(cat $tmp1)  \033[0m"
+    echo -e "\033[31m  teranode2: $(cat $tmp2)  \033[0m"
+    echo -e "\033[31m  teranode3: $(cat $tmp3)  \033[0m"
   fi
   echo ""
 
   if [[ $(cat $tmp4) == $(cat $tmp5) ]] && [[ $(cat $tmp5) == $(cat $tmp6) ]]; then
-    echo -e "\033[32m  ubsv1-test: $(cat $tmp4)  \033[0m"
-    echo -e "\033[32m  ubsv2-test: $(cat $tmp5)  \033[0m"
-    echo -e "\033[32m  ubsv3-test: $(cat $tmp6)  \033[0m"
+    echo -e "\033[32m  teranode1-test: $(cat $tmp4)  \033[0m"
+    echo -e "\033[32m  teranode2-test: $(cat $tmp5)  \033[0m"
+    echo -e "\033[32m  teranode3-test: $(cat $tmp6)  \033[0m"
   else
-    echo -e "\033[31m  ubsv1-test: $(cat $tmp4)  \033[0m"
-    echo -e "\033[31m  ubsv2-test: $(cat $tmp5)  \033[0m"
-    echo -e "\033[31m  ubsv3-test: $(cat $tmp6)  \033[0m"
+    echo -e "\033[31m  teranode1-test: $(cat $tmp4)  \033[0m"
+    echo -e "\033[31m  teranode2-test: $(cat $tmp5)  \033[0m"
+    echo -e "\033[31m  teranode3-test: $(cat $tmp6)  \033[0m"
   fi
   echo ""
 
