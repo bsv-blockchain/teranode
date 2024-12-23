@@ -50,13 +50,15 @@ func init() {
 }
 
 func main() {
+	tSettings := settings.NewSettings()
+
 	switch path.Base(os.Args[0]) {
 	case "bare.run":
 		// bare.Init()
 		bare.Start()
 		return
 	case "blockassemblyblaster.run":
-		blockassembly_blaster.Init()
+		blockassembly_blaster.Init(tSettings)
 		blockassembly_blaster.Start()
 		return
 	case "chainintegrity.run":
@@ -114,8 +116,6 @@ func main() {
 		miner.Start()
 		return
 	}
-
-	tSettings := settings.NewSettings()
 
 	logger := initLogger(progname)
 

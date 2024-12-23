@@ -42,9 +42,16 @@ var (
 	grpcClient                      propagation_api.PropagationAPIClient
 	// streamClient                    *propagation.StreamingClient
 	broadcastProtocol string
-	httpUrl           *url.URL
+	httpURL           *url.URL
 	// errorCh                         chan error
 	bufferSize int
+)
+
+const (
+	BroadcastProtocolDisabled = "disabled"
+	BroadcastProtocolGRPC     = "grpc"
+	BroadcastProtocolStream   = "stream"
+	BroadcastProtocolHTTP     = "http"
 )
 
 func Init() {
@@ -69,6 +76,7 @@ func Init() {
 	httpAddr, ok := gocore.Config().Get("tx_blaster_profilerAddr")
 	if !ok {
 		log.Printf("Profiler address not set, defaulting to localhost:6060")
+
 		httpAddr = "localhost:6060"
 	}
 
@@ -87,9 +95,9 @@ func Init() {
 	}
 
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
+
 	go func() {
 		log.Printf("%v", server.ListenAndServe())
-
 	}()
 
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
@@ -116,19 +124,21 @@ func Start() {
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	switch broadcastProtocol {
-	case "http":
+	case BroadcastProtocolHTTP:
 		httpAddresses, _ := gocore.Config().GetMulti("propagation_httpAddresses", "|")
-		httpUrl, _ = url.Parse(httpAddresses[0])
-		log.Printf("Using HTTP propagation server: %v", httpUrl)
+		httpURL, _ = url.Parse(httpAddresses[0])
+		log.Printf("Using HTTP propagation server: %v", httpURL)
 
-	case "grpc":
+	case BroadcastProtocolGRPC:
 		propagationServerAddr, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+
 		conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
 			MaxRetries: 3,
 		})
 		if err != nil {
 			panic(err)
 		}
+
 		grpcClient = propagation_api.NewPropagationAPIClient(conn)
 	}
 
@@ -151,13 +161,13 @@ func Start() {
 	}()
 
 	switch broadcastProtocol {
-	case "disabled":
+	case BroadcastProtocolDisabled:
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
-	case "grpc":
+	case BroadcastProtocolGRPC:
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	case "stream":
+	case BroadcastProtocolStream:
 		log.Printf("Starting %d stream worker(s)", workerCount)
-	case "http":
+	case BroadcastProtocolHTTP:
 		log.Printf("Starting %d http-broadcaster worker(s)", workerCount)
 	default:
 		panic("Unknown broadcast protocol")
@@ -172,14 +182,18 @@ func Start() {
 
 func worker(logger ulogger.Logger, tSettings *settings.Settings) {
 	prometheusWorkers.Inc()
+
 	defer func() {
 		prometheusWorkers.Dec()
 	}()
 
 	var streamingClient *propagation.StreamingClient
-	if broadcastProtocol == "stream" {
+
+	if broadcastProtocol == BroadcastProtocolStream {
 		var err error
+
 		ctx := context.Background()
+
 		streamingClient, err = propagation.NewStreamingClient(ctx, logger, tSettings, bufferSize)
 		if err != nil {
 			panic(err)
@@ -195,7 +209,7 @@ func worker(logger ulogger.Logger, tSettings *settings.Settings) {
 			panic(err)
 		}
 
-		if broadcastProtocol == "stream" {
+		if broadcastProtocol == BroadcastProtocolStream {
 			if err := streamingClient.ProcessTransaction(tx.ExtendedBytes()); err != nil {
 				panic(err)
 			}
@@ -205,23 +219,21 @@ func worker(logger ulogger.Logger, tSettings *settings.Settings) {
 			}
 		}
 
-		if broadcastProtocol != "disabled" {
+		if broadcastProtocol != BroadcastProtocolDisabled {
 			prometheusProcessedTransactions.Inc()
 		}
+
 		counter.Add(1)
 	}
 }
 
-func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExtendedBytes []byte) error {
+func sendToPropagationServer(ctx context.Context, _ ulogger.Logger, txExtendedBytes []byte) error {
 	switch broadcastProtocol {
-
-	case "disabled":
-
+	case BroadcastProtocolDisabled:
 		return nil
 
-	case "http":
-
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/tx", httpUrl.String()), bytes.NewReader(txExtendedBytes))
+	case BroadcastProtocolHTTP:
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/tx", httpURL.String()), bytes.NewReader(txExtendedBytes))
 		if err != nil {
 			return err
 		}
@@ -230,10 +242,12 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 
 		// Create an HTTP httpClient and send the request
 		httpClient := &http.Client{}
+
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			return errors.NewProcessingError("error sending request", err)
 		}
+
 		defer resp.Body.Close()
 
 		// Check the response status
@@ -243,8 +257,7 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 
 		return nil
 
-	case "grpc":
-
+	case BroadcastProtocolGRPC:
 		_, err := grpcClient.ProcessTransactionDebug(ctx, &propagation_api.ProcessTransactionRequest{
 			Tx: txExtendedBytes,
 		})
@@ -260,14 +273,19 @@ func FormatFloat(f float64) string {
 	decimalPart := int((f - float64(intPart)) * 100)
 
 	var sb strings.Builder
+
 	count := 0
+
 	for intPart > 0 {
 		if count > 0 && count%3 == 0 {
 			sb.WriteString(",")
 		}
+
 		digit := intPart % 10
 		sb.WriteString(fmt.Sprintf("%d", digit))
+
 		intPart /= 10
+
 		count++
 	}
 

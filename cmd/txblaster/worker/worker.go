@@ -414,7 +414,7 @@ var counter atomic.Uint64
 
 // func (w *Worker) publishToKafka(producer sarama.SyncProducer, topic string, txIDBytes []byte, txExtendedBytes []byte) error {
 // 	// partition is the first byte of the txid - max 2^8 partitions = 256
-// 	partitions, _ := gocore.Config().GetInt("validator_kafkaPartitions", 1)
+// 	partitions := w.settings.Validator.KafkaPartitions // was GetInt("validator_kafkaPartitions", 1)
 // 	partition := binary.LittleEndian.Uint32(txIDBytes) % uint32(partitions)
 // 	_, _, err := producer.SendMessage(&sarama.ProducerMessage{
 // 		Topic:     topic,

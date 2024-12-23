@@ -6,16 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	model "github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	p2p "github.com/bitcoin-sv/ubsv/util/p2p"
-	"github.com/ordishs/gocore"
 )
 
 var (
@@ -35,52 +35,66 @@ type BlockMessage struct {
 
 func TestTwoP2PNodes(t *testing.T) {
 	ctx := context.Background()
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	tSettings := settings.NewSettings()
+
+	var logLevelStr = tSettings.LogLevel
 	logger := ulogger.New("p2p", ulogger.WithLevel(logLevelStr))
 
-	assetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
-
-	p2pIp, ok := gocore.Config().Get("p2p_ip")
-	if !ok {
+	assetHTTPAddress := tSettings.Asset.HTTPAddress
+	if assetHTTPAddress == "" {
+		panic("asset_http_address not set in config")
+	}
+	assetHTTPAddressURL, err := url.Parse(assetHTTPAddress)
+	if err != nil {
+		panic("error parsing asset_httpAddress", err)
+	}
+	p2pIp := tSettings.P2P.IP
+	if p2pIp == "" {
 		panic("p2p_ip_prefix not set in config")
 	}
-	p2pPort, ok := gocore.Config().GetInt("p2p_port")
-	if !ok {
+
+	p2pPort := tSettings.P2P.Port
+	if p2pPort == 0 {
 		panic("p2p_port not set in config")
 	}
 
-	topicPrefix, ok := gocore.Config().Get("p2p_topic_prefix")
-	if !ok {
+	topicPrefix := tSettings.P2P.TopicPrefix
+	if topicPrefix == "" {
 		panic("p2p_topic_prefix not set in config")
 	}
-	btn, ok := gocore.Config().Get("p2p_block_topic")
-	if !ok {
+
+	btn := tSettings.P2P.BlockTopic
+	if btn == "" {
 		panic("p2p_block_topic not set in config")
 	}
-	stn, ok := gocore.Config().Get("p2p_subtree_topic")
-	if !ok {
+
+	stn := tSettings.P2P.SubtreeTopic
+	if stn == "" {
 		panic("p2p_subtree_topic not set in config")
 	}
-	bbtn, ok := gocore.Config().Get("p2p_bestblock_topic")
-	if !ok {
+
+	bbtn := tSettings.P2P.BestBlockTopic
+	if bbtn == "" {
 		panic("p2p_bestblock_topic not set in config")
 	}
 
-	miningOntn, ok := gocore.Config().Get("p2p_mining_on_topic")
-	if !ok {
+	miningOntn := tSettings.P2P.MiningOnTopic
+	if miningOntn == "" {
 		panic("p2p_mining_on_topic not set in config")
 	}
-	rtn, ok := gocore.Config().Get("p2p_rejected_tx_topic")
-	if !ok {
+
+	rtn := tSettings.P2P.RejectedTxTopic
+	if rtn == "" {
 		panic("p2p_rejected_tx_topic not set in config")
 	}
 
-	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
-	if !ok {
-		panic(errors.NewProcessingError("error getting p2p_shared_key"))
+	sharedKey := tSettings.P2P.SharedKey
+	if sharedKey == "" {
+		panic("p2p_shared_key not set in config")
 	}
-	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
-	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
+
+	usePrivateDht := tSettings.P2P.DHTUsePrivate
+	optimiseRetries := tSettings.P2P.OptimiseRetries
 
 	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
 	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
@@ -88,8 +102,8 @@ func TestTwoP2PNodes(t *testing.T) {
 	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
 	rejectedTxTopicName = fmt.Sprintf("%s-%s", topicPrefix, rtn)
 
-	staticPeers, _ := gocore.Config().GetMulti("p2p_static_peers", "|")
-	privateKey, _ := gocore.Config().Get("p2p_private_key")
+	staticPeers := tSettings.P2P.StaticPeers
+	privateKey, _ := tSettings.P2P.PrivateKey
 
 	p2pPortPrefix1 := "1"
 	p2pPortPrefix2 := "2"
@@ -176,12 +190,12 @@ func TestTwoP2PNodes(t *testing.T) {
 	n := model.Notification{
 		Type:    model.NotificationType_Block,
 		Hash:    header.Hash(),
-		BaseURL: assetHttpAddressURL.String(),
+		BaseURL: assetHTTPAddressURL.String(),
 	}
 
 	blockMessage := BlockMessage{
 		Hash:       n.Hash.String(),
-		DataHubUrl: assetHttpAddressURL.String(),
+		DataHubUrl: assetHTTPAddressURL.String(),
 		PeerId:     p2pNode1.HostID().String(),
 	}
 

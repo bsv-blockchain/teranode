@@ -29,15 +29,16 @@ func NewSettings() *Settings {
 	blockValidationSubtreeTTL := time.Duration(blockValidationSubtreeTTLMinutes) * time.Minute
 
 	return &Settings{
-		ClientName:        getString("clientName", "defaultClientName"),
-		DataFolder:        getString("dataFolder", "data"),
-		SecurityLevelHTTP: getInt("securityLevelHTTP", 0),
-		ServerCertFile:    getString("server_certFile", ""),
-		ServerKeyFile:     getString("server_keyFile", ""),
-		LogLevel:          getString("logLevel", "INFO"),
-		ProfilerAddr:      getString("profilerAddr", ""),
-		StatsPrefix:       getString("stats_prefix", "gocore"),
-		ChainCfgParams:    params,
+		ClientName:         getString("clientName", "defaultClientName"),
+		DataFolder:         getString("dataFolder", "data"),
+		SecurityLevelHTTP:  getInt("securityLevelHTTP", 0),
+		ServerCertFile:     getString("server_certFile", ""),
+		ServerKeyFile:      getString("server_keyFile", ""),
+		LogLevel:           getString("logLevel", "INFO"),
+		ProfilerAddr:       getString("profilerAddr", ""),
+		StatsPrefix:        getString("stats_prefix", "gocore"),
+		PrometheusEndpoint: getString("prometheusEndpoint", ""),
+		ChainCfgParams:     params,
 		Policy: &PolicySettings{
 			ExcessiveBlockSize: getInt("excessiveblocksize", 4294967296), // 4GB
 			// TODO: change BlockMaxSize to uint64

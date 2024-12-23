@@ -13,6 +13,7 @@ import (
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
@@ -21,6 +22,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc/resolver"
+)
+
+const (
+	protocolDisabled = "disabled"
+	protocolGRPC     = "grpc"
+	protocolFRPC     = "frpc"
+	protocolHTTP     = "http"
 )
 
 var (
@@ -32,9 +40,13 @@ var (
 	grpcClient                    blockassembly_api.BlockAssemblyAPIClient
 	broadcastProtocol             string
 	batchSize                     int
+
+	tSettings *settings.Settings
 )
 
-func Init() {
+func Init(teranodeSettings *settings.Settings) {
+	tSettings = teranodeSettings
+
 	prometheusBlockAssemblerAddTx = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -44,14 +56,15 @@ func Init() {
 		},
 	)
 
-	httpAddr, ok := gocore.Config().Get("profilerAddr")
-	if !ok {
+	httpAddr := tSettings.ProfilerAddr
+	if httpAddr == "" {
 		log.Printf("Profiler address not set, defaulting to localhost:6060")
+
 		httpAddr = "localhost:6060"
 	}
 
-	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
-	if ok && prometheusEndpoint != "" {
+	prometheusEndpoint := tSettings.PrometheusEndpoint
+	if prometheusEndpoint != "" {
 		http.Handle(prometheusEndpoint, promhttp.Handler())
 		log.Printf("Prometheus metrics available at http://%s%s", httpAddr, prometheusEndpoint)
 	}
@@ -71,11 +84,12 @@ func Init() {
 	}
 
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
+
 	go func() {
 		log.Printf("%v", server.ListenAndServe())
 	}()
 
-	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
+	grpcResolver := tSettings.Propagation.GRPCResolver
 	if grpcResolver == "k8s" {
 		log.Printf("[VALIDATOR] Using k8s resolver for clients")
 		resolver.SetDefaultScheme("k8s")
@@ -96,15 +110,16 @@ func Start() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	switch broadcastProtocol {
-	case "grpc":
-		grpcAddr, _ := gocore.Config().Get("blockassembly_grpcAddress")
+	if broadcastProtocol == protocolGRPC {
+		grpcAddr := tSettings.BlockAssembly.GRPCAddress
+
 		conn, err := util.GetGRPCClient(context.Background(), grpcAddr, &util.ConnectionOptions{
 			MaxRetries: 3,
 		})
 		if err != nil {
 			panic(err)
 		}
+
 		grpcClient = blockassembly_api.NewBlockAssemblyAPIClient(conn)
 	}
 
@@ -120,11 +135,11 @@ func Start() {
 	}()
 
 	switch broadcastProtocol {
-	case "disabled":
+	case protocolDisabled:
 		log.Printf("Starting %d non-broadcaster worker(s)", workerCount)
-	case "grpc":
+	case protocolGRPC:
 		log.Printf("Starting %d broadcasting worker(s)", workerCount)
-	case "frpc":
+	case protocolFRPC:
 		log.Printf("Starting %d frpc-broadcaster worker(s)", workerCount)
 	default:
 		panic("Unknown broadcast protocol")
@@ -139,6 +154,7 @@ func Start() {
 
 func worker(logger ulogger.Logger) {
 	var batchCounter = 0
+
 	txRequests := make([]*blockassembly_api.AddTxRequest, batchSize)
 
 	for {
@@ -161,6 +177,7 @@ func worker(logger ulogger.Logger) {
 		if broadcastProtocol == "disabled" {
 			return
 		}
+
 		ctx, ctxCancelFunc := context.WithDeadline(context.Background(), time.Now().Add(1*time.Second))
 
 		if batchSize == 0 {
@@ -169,6 +186,7 @@ func worker(logger ulogger.Logger) {
 			}
 		} else {
 			txRequests[batchCounter] = req
+
 			batchCounter++
 			if batchCounter == batchSize {
 				batchReq := &blockassembly_api.AddTxBatchRequest{
@@ -177,35 +195,32 @@ func worker(logger ulogger.Logger) {
 				if err := sendBatchToBlockAssemblyServer(ctx, logger, batchReq); err != nil {
 					panic(err)
 				}
+
 				batchCounter = 0
 			}
 		}
+
 		ctxCancelFunc()
 	}
 }
 
-func sendToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxRequest) error {
+func sendToBlockAssemblyServer(ctx context.Context, _ ulogger.Logger, req *blockassembly_api.AddTxRequest) error {
 	switch broadcastProtocol {
-
-	case "disabled":
+	case protocolDisabled:
 		return nil
 
-	case "grpc":
+	case protocolGRPC:
 		_, err := grpcClient.AddTx(ctx, req)
 		return err
-
 	}
 
 	return nil
 }
 
-func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *blockassembly_api.AddTxBatchRequest) error {
-	switch broadcastProtocol {
-
-	case "grpc":
+func sendBatchToBlockAssemblyServer(ctx context.Context, _ ulogger.Logger, req *blockassembly_api.AddTxBatchRequest) error {
+	if broadcastProtocol == protocolGRPC {
 		_, err := grpcClient.AddTxBatch(ctx, req)
 		return err
-
 	}
 
 	return nil
@@ -213,10 +228,12 @@ func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, 
 
 func generateRandomBytes() []byte {
 	b := make([]byte, 32)
+
 	_, err := rand.Read(b)
 	if err != nil {
 		panic(err)
 	}
+
 	return b
 }
 
@@ -225,13 +242,17 @@ func FormatFloat(f float64) string {
 	decimalPart := int((f - float64(intPart)) * 100)
 
 	var sb strings.Builder
+
 	count := 0
+
 	for intPart > 0 {
 		if count > 0 && count%3 == 0 {
 			sb.WriteString(",")
 		}
+
 		digit := intPart % 10
 		sb.WriteString(fmt.Sprintf("%d", digit))
+
 		intPart /= 10
 		count++
 	}

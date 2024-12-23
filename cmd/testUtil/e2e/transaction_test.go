@@ -12,6 +12,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
@@ -19,15 +20,15 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPropagation(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:8090"
+	tSettings := settings.NewSettings()
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logLevelStr := tSettings.LogLevel
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
@@ -44,7 +45,7 @@ func TestPropagation(t *testing.T) {
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
-	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
 		t.Fatalf("Failed to decode Coinbase private key: %v", err)

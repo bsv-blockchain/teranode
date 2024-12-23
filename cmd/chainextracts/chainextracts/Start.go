@@ -12,7 +12,6 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 type BlockSubtree struct {
@@ -25,6 +24,7 @@ func Start() {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	logfile := flag.String("logfile", "chainextract.log", "path to logfile")
 	flag.Parse()
+	tSettings := settings.NewSettings()
 
 	debugLevel := "INFO"
 	if *debug {
@@ -33,30 +33,22 @@ func Start() {
 
 	var logger = ulogger.New("chainextracts", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
 
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	if err != nil {
-		panic(err.Error())
-	}
-
-	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
-
-	if !found {
+	// this was using a specific hard coded context
+	blockchainStoreURL := tSettings.BlockChain.StoreURL // GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
+	if blockchainStoreURL == nil {
 		panic("no blockchain_store setting found")
 	}
 
-	tSettings := settings.NewSettings()
+	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
 
 	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
 	if err != nil {
 		panic(err)
 	}
 
-	subtreeStoreURL, err, found := gocore.Config().GetURL("subtreestore.docker.ci.chainintegrity.ubsv1")
-	if err != nil {
-		panic(err)
-	}
-
-	if !found {
+	// this was using a specific hard coded context
+	subtreeStoreURL := tSettings.SubtreeValidation.SubtreeStore // GetURL("subtreestore.docker.ci.chainintegrity.ubsv1")
+	if subtreeStoreURL == nil {
 		panic("subtreestore config not found")
 	}
 

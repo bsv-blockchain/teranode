@@ -8,14 +8,15 @@ import (
 )
 
 type Settings struct {
-	ClientName        string
-	DataFolder        string
-	SecurityLevelHTTP int
-	ServerCertFile    string
-	ServerKeyFile     string
-	LogLevel          string
-	ProfilerAddr      string
-	StatsPrefix       string
+	ClientName         string
+	DataFolder         string
+	SecurityLevelHTTP  int
+	ServerCertFile     string
+	ServerKeyFile      string
+	LogLevel           string
+	ProfilerAddr       string
+	StatsPrefix        string
+	PrometheusEndpoint string
 
 	ChainCfgParams    *chaincfg.Params
 	Policy            *PolicySettings

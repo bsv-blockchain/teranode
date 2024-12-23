@@ -156,8 +156,8 @@ func Start() {
 }
 
 func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, headersFile string) error {
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil || !found {
+	blockchainStoreURL := tSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
 		logger.Fatalf("Failed to get blockchain store URL")
 	}
 
@@ -250,9 +250,9 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 }
 
 func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string) error {
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil || !found {
-		return errors.NewConfigurationError("blockstore URL not found in config", err)
+	blockStoreURL := tSettings.Block.BlockStore
+	if blockStoreURL == nil {
+		return errors.NewConfigurationError("blockstore URL not found in config")
 	}
 
 	logger.Infof("Using blockStore at %s", blockStoreURL)

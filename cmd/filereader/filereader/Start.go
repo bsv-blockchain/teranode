@@ -15,13 +15,13 @@ import (
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/settings"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 const stdin = "[stdin]"
@@ -547,12 +547,9 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 }
 
 func getBlockStore(logger ulogger.Logger) blob.Store {
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil {
-		panic(err)
-	}
-
-	if !found {
+	tSettings := settings.NewSettings()
+	blockStoreURL := tSettings.Block.BlockStore
+	if blockStoreURL == nil {
 		panic("blockstore config not found")
 	}
 
