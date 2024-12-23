@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-latest
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
 ARG GITHUB_SHA
 
 

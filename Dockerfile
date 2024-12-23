@@ -1,6 +1,7 @@
 # These values should be overwritten by buildx --build-args and replaced with cluster base/run ID from repo
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-latest
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-latest
+ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
+ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-db1a6f0
+
 ARG PLATFORM_ARCH=linux/amd64
 FROM ${BASE_IMG}
 ARG GITHUB_SHA
