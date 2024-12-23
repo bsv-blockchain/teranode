@@ -47,7 +47,7 @@ func (l *lineLogger) Fatalf(format string, args ...interface{}) {
 	l.log("FATAL", format, args...)
 }
 
-func (l *lineLogger) log(level string, format string, args ...interface{}) {
+func (l *lineLogger) log(_ string, format string, args ...interface{}) {
 	l.lastLog = fmt.Sprintf(format, args...)
 }
 

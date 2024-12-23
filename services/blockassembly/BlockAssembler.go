@@ -493,6 +493,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var subtreesToInclude []*util.Subtree
 
+	var subtreeBytesToInclude [][]byte
+
 	var coinbaseMerkleProofBytes [][]byte
 
 	// set the size without the coinbase to the size of the block header
@@ -514,6 +516,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 			//nolint:gosec // G115: integer overflow conversion uint64 -> int (gosec)
 			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= uint64(b.settings.Policy.BlockMaxSize) {
 				subtreesToInclude = append(subtreesToInclude, subtree)
+				subtreeBytesToInclude = append(subtreeBytesToInclude, subtree.RootHash().CloneBytes())
 				coinbaseValue += subtree.Fees
 				currentBlockSize += subtree.SizeInBytes
 				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
@@ -586,7 +589,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		NumTxs:              txCount,
 		SizeWithoutCoinbase: sizeWithoutCoinbase,
 		// nolint:gosec
-		SubtreeCount: uint32(len(subtreesToInclude)),
+		SubtreeCount:  uint32(len(subtreesToInclude)),
+		SubtreeHashes: subtreeBytesToInclude,
 	}
 
 	return miningCandidate, subtreesToInclude, nil

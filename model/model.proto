@@ -19,6 +19,7 @@ message MiningCandidate {
   uint32 subtreeCount = 9;
   uint32 num_txs = 10;
   uint64 size_without_coinbase = 11;
+  repeated bytes subtree_hashes = 12;
 }
 
 // swagger:model MiningSolution

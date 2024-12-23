@@ -350,6 +350,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
 			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
 		}
+
 		txsProcessed.Inc()
 
 		deferFn()
@@ -669,6 +670,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		}
 
 		calculatedMerkleRoot := topTree.RootHash()
+
 		hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashMerkleRoot", jobID, err))
@@ -942,6 +944,7 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 			Version:    miningSolution.Version,
 		},
 	}
+
 	resp, err := ba.submitMiningSolution(ctx, req)
 	if err != nil {
 		ba.logger.Errorf("[generateBlock] error submitting block: %v", err)

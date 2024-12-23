@@ -555,6 +555,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
 	}
 
+	if *c.Verbosity == uint32(1) {
+		subtreeHashes := make([]string, len(mc.SubtreeHashes))
+		for i, hash := range mc.SubtreeHashes {
+			subtreeHashes[i] = utils.ReverseAndHexEncodeSlice(hash)
+		}
+
+		jsonMap["subtreeHashes"] = subtreeHashes
+	}
+
 	return jsonMap, nil
 }
 
