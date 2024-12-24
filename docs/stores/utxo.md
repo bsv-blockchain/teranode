@@ -489,7 +489,7 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 
 - **aerospike**: Aerospike UTXO store implementation.
 
-`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
+`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.ubsv.dev:3000/teranode-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
 
 - **memory**: Basic in-memory UTXO store.
 
@@ -497,7 +497,7 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 
 - **sql**: Implementation of a postgres UTXO store.
 
-`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store`
+`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.ubsv.dev:5432/teranode-store`
 
 - **nullstore**: Implementation of a null or dummy UTXO store.
 

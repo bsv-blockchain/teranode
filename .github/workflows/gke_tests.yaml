@@ -128,7 +128,7 @@ jobs:
       uses: sonarsource/sonarqube-scan-action@v2.0.2
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: https://sonarqube.teranode.dev
+        SONAR_HOST_URL: https://sonarqube.ubsv.dev
       continue-on-error: true
 
     - name: SonarQube Quality Gate check
@@ -136,5 +136,5 @@ jobs:
       timeout-minutes: 10
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: https://sonarqube.teranode.dev
+        SONAR_HOST_URL: https://sonarqube.ubsv.dev
       continue-on-error: true

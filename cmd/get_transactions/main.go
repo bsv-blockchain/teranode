@@ -37,7 +37,7 @@ var (
 )
 
 func main() {
-	baseUrl := "https://m1.scaling.teranode.dev"
+	baseUrl := "https://m1.scaling.ubsv.dev"
 
 	resp, err := DoHTTPRequest(context.Background(), baseUrl+"/lastblocks?n=1", nil, nil, nil)
 	if err != nil {

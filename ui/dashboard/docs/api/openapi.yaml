@@ -16,8 +16,8 @@ externalDocs:
   description: Find out more about Bitcoin SV, TERANODE
   url: https://github.com/bitcoin-sv/teranode/tree/feature/ui-refresh/ui_v2/dashboard/docs/api/rest.md
 servers:
-  - url: https://m1.scaling.teranode.dev
-  - url: https://m2.scaling.teranode.dev
+  - url: https://m1.scaling.ubsv.dev
+  - url: https://m2.scaling.ubsv.dev
 tags:
   - name: search-item
     description: Either a block, subtree or tx

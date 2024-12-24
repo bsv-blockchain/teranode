@@ -233,7 +233,7 @@ function treeBoxes(selector, jsonData, orientation)
                     : (rectNode.height - rectNode.textMargin * 2)
             })
             .append('xhtml').html(function(d) {
-                // get the main domain from the url of the form http://m2.scaling.teranode.dev/api/v1
+                // get the main domain from the url of the form http://m2.scaling.ubsv.dev/api/v1
                 let domain = d.data.miner
                 if (domain) {
                     try {
