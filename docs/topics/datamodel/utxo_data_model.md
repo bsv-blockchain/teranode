@@ -1,19 +1,6 @@
 # Teranode Data Model - UTXO
 
-
-
 ## UTXO Data Model
-
-When a transaction is stored in a
-A UTXO record is stored with the following fields:
-
-Yes, based on the Go code, there are additional fields being stored in the Aerospike record beyond what we initially derived from the Lua code. Specifically, the raw transaction data, fee, size, parent transaction hashes, and other fields are being stored or retrieved as part of the UTXO data management. These fields are used for tracking and processing transactions.
-
-### Expanded Data Model Based on the Go Code
-
-Here is an updated version of the UTXO Record Data Model in table format, including the new fields found in the Go code.
-
-### UTXO Record Data Model (Expanded)
 
 For every transaction, a UTXO record is stored in the database. The record contains the following fields:
 
@@ -61,6 +48,14 @@ Typically, UTXO records are kept with a time-to-live value that is set when all 
 |-----------------------|-------------------------------------|-----------------------------------------------------------------------------------------------------------|
 | **TTL**               | `Integer`                           | Time-to-live value for the record, based on its status (e.g., if all UTXOs are spent or reassigned).        |
 
+## Aerospike Storage
+
+If storing in Aerospike, the UTXO record is stored as a bin in the Aerospike database. The bin contains the UTXO data in a serialized format, containing up to 1024 bytes.
+
+![AerospikeRecord.png](../../services/img/AerospikeRecord.png)
+
+For more information, please refer to the official Aerospike documentation: https://aerospike.com.
+
 
 ## UTXO MetaData
 
@@ -90,8 +85,3 @@ Note:
 
 
 - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
-
-
-## Additional Resources
-
-- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.

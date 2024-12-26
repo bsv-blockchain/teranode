@@ -1,5 +1,59 @@
 // //go:build aerospike
 
+// Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
+// It offers high performance, distributed storage capabilities with support for large-scale
+// UTXO sets and complex operations like freezing, reassignment, and batch processing.
+//
+// # Architecture
+//
+// The implementation uses a combination of Aerospike Key-Value store and Lua scripts
+// for atomic operations. Transactions are stored with the following structure:
+//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
+//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - External Storage: Optional blob storage for large transactions
+//
+// # Features
+//
+//   - Efficient UTXO lifecycle management (create, spend, unspend)
+//   - Support for batched operations with LUA scripting
+//   - Automatic cleanup of spent UTXOs through TTL
+//   - Alert system integration for freezing/unfreezing UTXOs
+//   - Metrics tracking via Prometheus
+//   - Support for large transactions through external blob storage
+//
+// # Usage
+//
+//	store, err := aerospike.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "aerospike",
+//	    Host:   "localhost:3000",
+//	    Path:   "/test/utxos",
+//	    RawQuery: "expiration=3600&set=txmeta",
+//	})
+//
+// # Database Structure
+//
+// Normal Transaction:
+//   - inputs: Transaction input data
+//   - outputs: Transaction output data
+//   - utxos: List of UTXO hashes
+//   - nrUtxos: Total number of UTXOs
+//   - spentUtxos: Number of spent UTXOs
+//   - blockIDs: Block references
+//   - isCoinbase: Coinbase flag
+//   - spendingHeight: Coinbase maturity height
+//   - frozen: Frozen status
+//
+// Large Transaction with External Storage:
+//   - Same as normal but with external=true
+//   - Transaction data stored in blob storage
+//   - Multiple records for >20k outputs
+//
+// # Thread Safety
+//
+// The implementation is fully thread-safe and supports concurrent access through:
+//   - Atomic operations via Lua scripts
+//   - Batched operations for better performance
+//   - Lock-free reads with optimistic concurrency
 package aerospike
 
 import (
@@ -29,15 +83,17 @@ var (
 	previousOutputsDecorateStat = gocoreStat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
+// batchGetItemData holds the result of a batch get operation
 type batchGetItemData struct {
-	Data *meta.Data
-	Err  error
+	Data *meta.Data // Retrieved data
+	Err  error      // Any error encountered
 }
 
+// batchGetItem represents a single item in a batch get operation
 type batchGetItem struct {
-	hash   chainhash.Hash
-	fields []string
-	done   chan batchGetItemData
+	hash   chainhash.Hash        // Transaction hash
+	fields []string              // Fields to retrieve
+	done   chan batchGetItemData // Channel for result
 }
 
 type batchOutpoint struct {
@@ -45,6 +101,17 @@ type batchOutpoint struct {
 	errCh    chan error
 }
 
+// GetSpend checks if a UTXO has been spent and returns its current status.
+// The response includes:
+//   - Current UTXO status (OK, SPENT, FROZEN, etc)
+//   - Spending transaction ID if spent
+//   - Lock time if applicable
+//
+// This operation verifies:
+//   - UTXO exists
+//   - UTXO hash matches
+//   - Frozen status
+//   - Current spend state
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
@@ -121,10 +188,30 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}, nil
 }
 
+// GetMeta retrieves only transaction metadata without the full transaction data.
+// This is an optimized version of Get that excludes transaction body.
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return s.get(ctx, hash, utxo.MetaFields)
 }
 
+// Get operations in the Aerospike UTXO store support efficient retrieval
+// of transaction data with configurable field selection and batching.
+// The store provides several interfaces for data retrieval:
+//   - Get: Retrieves full transaction data
+//   - GetMeta: Retrieves only metadata
+//   - GetSpend: Checks UTXO spend status
+//   - BatchDecorate: Efficiently fetches data for multiple transactions
+//   - PreviousOutputsDecorate: Retrieves previous output data
+
+// Get retrieves transaction data with optional field selection.
+// Parameters:
+//   - ctx: Context for cancellation
+//   - hash: Transaction hash
+//   - fields: Optional list of fields to retrieve, defaults to all fields
+//
+// Returns:
+//   - Transaction metadata
+//   - Any error encountered
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
@@ -236,6 +323,17 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 	return bins
 }
 
+// BatchDecorate efficiently fetches metadata for multiple transactions.
+// It optimizes database access by:
+//   - Batching multiple queries
+//   - Deduplicating requests
+//   - Managing external storage access
+//   - Handling partial responses
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - items: Transactions to fetch
+//   - fields: Optional fields to retrieve
 func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
 	var err error
 
@@ -372,6 +470,11 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 	return nil
 }
 
+// PreviousOutputsDecorate fetches output data for transaction inputs.
+// Uses batching to optimize retrieval of previous output data:
+//   - Deduplicates requests for the same transaction
+//   - Handles both internal and external storage
+//   - Returns locking scripts and amounts
 func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.PreviousOutput) error {
 	errChans := make([]chan error, len(outpoints))
 
@@ -594,6 +697,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	return tx, nil
 }
 
+// sendGetBatch processes a batch of get requests efficiently
 func (s *Store) sendGetBatch(batch []*batchGetItem) {
 	items := make([]*utxo.UnresolvedMetaData, 0, len(batch))
 

@@ -1,3 +1,57 @@
+// Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
+// It offers high performance, distributed storage capabilities with support for large-scale
+// UTXO sets and complex operations like freezing, reassignment, and batch processing.
+//
+// # Architecture
+//
+// The implementation uses a combination of Aerospike Key-Value store and Lua scripts
+// for atomic operations. Transactions are stored with the following structure:
+//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
+//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - External Storage: Optional blob storage for large transactions
+//
+// # Features
+//
+//   - Efficient UTXO lifecycle management (create, spend, unspend)
+//   - Support for batched operations with LUA scripting
+//   - Automatic cleanup of spent UTXOs through TTL
+//   - Alert system integration for freezing/unfreezing UTXOs
+//   - Metrics tracking via Prometheus
+//   - Support for large transactions through external blob storage
+//
+// # Usage
+//
+//	store, err := aerospike.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "aerospike",
+//	    Host:   "localhost:3000",
+//	    Path:   "/test/utxos",
+//	    RawQuery: "expiration=3600&set=txmeta",
+//	})
+//
+// # Database Structure
+//
+// Normal Transaction:
+//   - inputs: Transaction input data
+//   - outputs: Transaction output data
+//   - utxos: List of UTXO hashes
+//   - nrUtxos: Total number of UTXOs
+//   - spentUtxos: Number of spent UTXOs
+//   - blockIDs: Block references
+//   - isCoinbase: Coinbase flag
+//   - spendingHeight: Coinbase maturity height
+//   - frozen: Frozen status
+//
+// Large Transaction with External Storage:
+//   - Same as normal but with external=true
+//   - Transaction data stored in blob storage
+//   - Multiple records for >20k outputs
+//
+// # Thread Safety
+//
+// The implementation is fully thread-safe and supports concurrent access through:
+//   - Atomic operations via Lua scripts
+//   - Batched operations for better performance
+//   - Lock-free reads with optimistic concurrency
 package aerospike
 
 import (
@@ -10,8 +64,23 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 )
 
-// FreezeUTXOs will freeze the UTXOs by setting the spendingTxID to FF...FF
-// This will be checked by the LUA script when a spend is attempted
+// FreezeUTXOs marks UTXOs as frozen by setting their spending transaction ID to FF...FF.
+// Frozen UTXOs cannot be spent until unfrozen or reassigned.
+//
+// The operation is performed atomically via a Lua script that:
+//   - Verifies the UTXO exists and matches the provided hash
+//   - Checks the UTXO is not already spent or frozen
+//   - Sets the spending transaction ID to FF...FF to mark as frozen
+//
+// Parameters:
+//   - ctx: Context for cancellation/timeout
+//   - spends: Array of UTXOs to freeze
+//
+// Returns error if any UTXO:
+//   - Doesn't exist
+//   - Is already spent
+//   - Is already frozen
+//   - Fails to freeze
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
@@ -68,7 +137,22 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
-// UnFreezeUTXOs will unfreeze the UTXOs by unsetting the frozen spendingTxID
+// UnFreezeUTXOs removes the frozen status from UTXOs by clearing the frozen spending transaction ID.
+// This re-enables normal spending of the UTXOs.
+//
+// The operation is performed atomically via a Lua script that:
+//   - Verifies the UTXO exists and matches the provided hash
+//   - Checks the UTXO is currently frozen
+//   - Clears the frozen spending transaction ID (the frozen spendingTxID)
+//
+// Parameters:
+//   - ctx: Context for cancellation/timeout
+//   - spends: Array of UTXOs to unfreeze
+//
+// Returns error if any UTXO:
+//   - Doesn't exist
+//   - Is not frozen
+//   - Fails to unfreeze
 func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
@@ -125,7 +209,24 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
-// ReAssignUTXO will reassign the transaction output idx UTXO to a new UTXO
+// ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
+// The UTXO must be frozen before it can be reassigned.
+//
+// The reassignment process:
+//   - Verifies the UTXO exists and is frozen
+//   - Updates the UTXO hash to the new value
+//   - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+//   - Logs the reassignment for audit purposes
+//
+// Parameters:
+//   - ctx: Context for cancellation/timeout
+//   - oldUtxo: The frozen UTXO to reassign
+//   - newUtxo: The new UTXO details
+//
+// Returns error if:
+//   - Original UTXO doesn't exist
+//   - Original UTXO is not frozen
+//   - Reassignment fails
 func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
 	// nolint: gosec
 	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout/uint32(s.utxoBatchSize))

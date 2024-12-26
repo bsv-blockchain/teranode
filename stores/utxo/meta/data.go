@@ -1,3 +1,6 @@
+// Package meta provides types and utilities for handling Bitcoin SV transaction metadata
+// in the UTXO store. It includes serialization and deserialization of transaction data
+// along with associated metadata like parent transactions, block references, and fees.
 package meta
 
 import (
@@ -11,24 +14,51 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// Data struct for the transaction metadata
-// do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
+// Data represents transaction metadata including the transaction itself,
+// its parent transactions, block references, and other metadata.
+// The struct fields are ordered for optimal memory layout.
+// IMPORTANT - Do not change order, it has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type Data struct {
-	Tx             *bt.Tx           `json:"tx"`
+	// Tx is the full transaction data
+	Tx *bt.Tx `json:"tx"`
+
+	// ParentTxHashes contains the transaction IDs of all parent transactions
 	ParentTxHashes []chainhash.Hash `json:"parentTxHashes"`
-	BlockIDs       []uint32         `json:"blockIDs"`
-	Fee            uint64           `json:"fee"`
-	SizeInBytes    uint64           `json:"sizeInBytes"`
-	IsCoinbase     bool             `json:"isCoinbase"`
-	LockTime       uint32           `json:"lockTime"` // lock time can be different from the transaction lock time, for instance in coinbase transactions
+
+	// BlockIDs contains the block heights where this transaction appears
+	BlockIDs []uint32 `json:"blockIDs"`
+
+	// Fee is the total transaction fee in satoshis
+	Fee uint64 `json:"fee"`
+
+	// SizeInBytes is the serialized size of the transaction
+	SizeInBytes uint64 `json:"sizeInBytes"`
+
+	// IsCoinbase indicates if this is a coinbase transaction
+	IsCoinbase bool `json:"isCoinbase"`
+
+	// LockTime is the block height or timestamp until which this transaction is locked.
+	// This can differ from the transaction's own locktime, especially for coinbase transactions.
+	LockTime uint32 `json:"lockTime"`
 }
 
+// PreviousOutput represents an input's previous output information.
+// It's used when decorating transaction inputs with their source output data.
 type PreviousOutput struct {
-	PreviousTxID  chainhash.Hash
-	Vout          uint32
-	Idx           int
+	// PreviousTxID is the transaction ID containing the output
+	PreviousTxID chainhash.Hash
+
+	// Vout is the output index in the previous transaction
+	Vout uint32
+
+	// Idx is the input index in the spending transaction
+	Idx int
+
+	// LockingScript is the output's locking script
 	LockingScript []byte
-	Satoshis      uint64
+
+	// Satoshis is the amount in satoshis
+	Satoshis uint64
 }
 
 // NewMetaDataFromBytes creates a new Data object from a byte slice
@@ -180,6 +210,9 @@ func (d *Data) MetaBytes() []byte {
 	return buf
 }
 
+// String returns a human-readable representation of the Data object.
+// The format includes all metadata fields and the transaction ID if available.
+// Returns "nil" if the Data object is nil.
 func (d *Data) String() string {
 	if d == nil {
 		return "nil"

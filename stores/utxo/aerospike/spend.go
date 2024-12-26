@@ -1,5 +1,59 @@
 // //go:build aerospike
 
+// Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
+// It offers high performance, distributed storage capabilities with support for large-scale
+// UTXO sets and complex operations like freezing, reassignment, and batch processing.
+//
+// # Architecture
+//
+// The implementation uses a combination of Aerospike Key-Value store and Lua scripts
+// for atomic operations. Transactions are stored with the following structure:
+//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
+//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - External Storage: Optional blob storage for large transactions
+//
+// # Features
+//
+//   - Efficient UTXO lifecycle management (create, spend, unspend)
+//   - Support for batched operations with LUA scripting
+//   - Automatic cleanup of spent UTXOs through TTL
+//   - Alert system integration for freezing/unfreezing UTXOs
+//   - Metrics tracking via Prometheus
+//   - Support for large transactions through external blob storage
+//
+// # Usage
+//
+//	store, err := aerospike.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "aerospike",
+//	    Host:   "localhost:3000",
+//	    Path:   "/test/utxos",
+//	    RawQuery: "expiration=3600&set=txmeta",
+//	})
+//
+// # Database Structure
+//
+// Normal Transaction:
+//   - inputs: Transaction input data
+//   - outputs: Transaction output data
+//   - utxos: List of UTXO hashes
+//   - nrUtxos: Total number of UTXOs
+//   - spentUtxos: Number of spent UTXOs
+//   - blockIDs: Block references
+//   - isCoinbase: Coinbase flag
+//   - spendingHeight: Coinbase maturity height
+//   - frozen: Frozen status
+//
+// Large Transaction with External Storage:
+//   - Same as normal but with external=true
+//   - Transaction data stored in blob storage
+//   - Multiple records for >20k outputs
+//
+// # Thread Safety
+//
+// The implementation is fully thread-safe and supports concurrent access through:
+//   - Atomic operations via Lua scripts
+//   - Batched operations for better performance
+//   - Lock-free reads with optimistic concurrency
 package aerospike
 
 import (
@@ -19,17 +73,61 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Spend operations in the Aerospike UTXO store handle spending UTXOs through
+// batched Lua operations with automatic TTL management and error handling.
+//
+// # Architecture
+//
+// The spend process uses a multi-layered approach:
+//   1. Batch collection of spend requests
+//   2. Grouping of spends by transaction
+//   3. Atomic Lua scripts for spending
+//   4. TTL management for cleanup
+//   5. External storage synchronization
+//
+// # Main Types
+
+// batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
-	spend *utxo.Spend
-	done  chan error
+	spend *utxo.Spend // UTXO to spend
+	done  chan error  // Channel for completion notification
 }
 
+// batchIncrement handles record count updates for paginated transactions
 type batchIncrement struct {
-	txID      *chainhash.Hash
-	increment int
-	res       chan incrementNrRecordsRes
+	txID      *chainhash.Hash            // Transaction hash
+	increment int                        // Count adjustment
+	res       chan incrementNrRecordsRes // Result channel
 }
 
+// Spend marks UTXOs as spent in a batch operation.
+// The function:
+//  1. Validates inputs
+//  2. Batches spend requests
+//  3. Handles responses
+//  4. Manages rollback on failure
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - spends: Array of UTXOs to spend
+//   - blockHeight: Current block height (unused, derived from store)
+//
+// Error handling:
+//   - Rolls back successful spends on partial failure
+//   - Handles panic recovery
+//   - Reports metrics for failures
+//
+// Example:
+//
+//	spends := []*utxo.Spend{
+//	    {
+//	        TxID: txHash,
+//	        Vout: 0,
+//	        UTXOHash: utxoHash,
+//	        SpendingTxID: spendingTxHash,
+//	    },
+//	}
+//	err := store.Spend(ctx, spends, blockHeight)
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
 	return s.spend(ctx, spends)
 }
@@ -94,6 +192,14 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return nil
 }
 
+// sendSpendBatchLua processes a batch of spend requests via Lua scripts.
+// The function:
+//  1. Groups spends by transaction
+//  2. Creates batch UDF operations
+//  3. Executes Lua scripts
+//  4. Handles responses and errors
+//  5. Manages TTL settings
+//  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendSpendBatchLua",
@@ -282,6 +388,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
+// handleAllSpent manages cleanup when all UTXOs in a transaction are spent:
+//  1. Decrements record count for pagination
+//  2. Sets TTL for cleanup
+//  3. Updates external storage TTL
 func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
 	res, err := s.IncrementNrRecords(txID, -1)
 	if err != nil {
@@ -312,6 +422,8 @@ type incrementNrRecordsRes struct {
 	err error
 }
 
+// IncrementNrRecords updates the record count for paginated transactions.
+// Used for cleanup management of large transactions.
 func (s *Store) IncrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
 	res := make(chan incrementNrRecordsRes)
 

@@ -1,5 +1,59 @@
 // //go:build aerospike
 
+// Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
+// It offers high performance, distributed storage capabilities with support for large-scale
+// UTXO sets and complex operations like freezing, reassignment, and batch processing.
+//
+// # Architecture
+//
+// The implementation uses a combination of Aerospike Key-Value store and Lua scripts
+// for atomic operations. Transactions are stored with the following structure:
+//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
+//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - External Storage: Optional blob storage for large transactions
+//
+// # Features
+//
+//   - Efficient UTXO lifecycle management (create, spend, unspend)
+//   - Support for batched operations with LUA scripting
+//   - Automatic cleanup of spent UTXOs through TTL
+//   - Alert system integration for freezing/unfreezing UTXOs
+//   - Metrics tracking via Prometheus
+//   - Support for large transactions through external blob storage
+//
+// # Usage
+//
+//	store, err := aerospike.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "aerospike",
+//	    Host:   "localhost:3000",
+//	    Path:   "/test/utxos",
+//	    RawQuery: "expiration=3600&set=txmeta",
+//	})
+//
+// # Database Structure
+//
+// Normal Transaction:
+//   - inputs: Transaction input data
+//   - outputs: Transaction output data
+//   - utxos: List of UTXO hashes
+//   - nrUtxos: Total number of UTXOs
+//   - spentUtxos: Number of spent UTXOs
+//   - blockIDs: Block references
+//   - isCoinbase: Coinbase flag
+//   - spendingHeight: Coinbase maturity height
+//   - frozen: Frozen status
+//
+// Large Transaction with External Storage:
+//   - Same as normal but with external=true
+//   - Transaction data stored in blob storage
+//   - Multiple records for >20k outputs
+//
+// # Thread Safety
+//
+// The implementation is fully thread-safe and supports concurrent access through:
+//   - Atomic operations via Lua scripts
+//   - Batched operations for better performance
+//   - Lock-free reads with optimistic concurrency
 package aerospike
 
 import (
@@ -25,16 +79,48 @@ import (
 // Used for NOOP batch operations
 var placeholderKey *aerospike.Key
 
+// BatchStoreItem represents a transaction to be stored in a batch operation.
 type BatchStoreItem struct {
-	txHash      *chainhash.Hash
-	isCoinbase  bool
-	tx          *bt.Tx
+	// TxHash is the transaction ID
+	txHash *chainhash.Hash
+
+	// IsCoinbase indicates if this is a coinbase transaction
+	isCoinbase bool
+
+	// Tx contains the full transaction data
+	tx *bt.Tx
+
+	// BlockHeight is the height where this transaction appears
 	blockHeight uint32
-	blockIDs    []uint32
-	lockTime    uint32
-	done        chan error
+
+	// BlockIDs contains all blocks where this transaction appears
+	blockIDs []uint32
+
+	// LockTime is the transaction's lock time
+	lockTime uint32
+
+	// Done is used to signal completion and return errors
+	done chan error
 }
 
+// Create stores a new transaction's outputs as UTXOs.
+// It queues the transaction for batch processing.
+//
+// The function:
+//  1. Creates metadata
+//  2. Prepares a BatchStoreItem
+//  3. Queues for batch processing
+//  4. Waits for completion
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - tx: Transaction to store
+//   - blockHeight: Current block height
+//   - opts: Additional creation options
+//
+// Returns:
+//   - Transaction metadata
+//   - Any error that occurred
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	createOptions := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -95,6 +181,30 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	return txMeta, nil
 }
 
+// sendStoreBatch processes a batch of transaction storage requests.
+// It handles automatic switching between in-database and external storage
+// based on transaction size and configuration.
+//
+// The process flow:
+//  1. For each transaction in the batch:
+//     - Create Aerospike key
+//     - Check if external storage is needed
+//     - Prepare Aerospike bins
+//     - Handle pagination if needed
+//  2. Execute batch operation
+//  3. Process results and handle errors
+//  4. Signal completion to callers
+//
+// Flow diagram for each transaction:
+//
+//	Check Size ──┬──> Small ──> Store in Aerospike
+//	             │
+//	             └──> Large ──> Store in External Blob
+//	                         ├─> Full Transaction (.tx)
+//	                         └─> Partial Transaction (.outputs)
+//
+// Parameters:
+//   - batch: Array of BatchStoreItems to process
 func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	start := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendStoreBatch",
@@ -345,6 +455,21 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
+// splitIntoBatches splits a set of UTXOs into batches of the configured size.
+// Each batch includes common metadata bins plus the UTXO-specific data.
+//
+// This is used to handle transactions with large numbers of outputs
+// by splitting them into multiple records to stay within Aerospike size limits.
+//
+// Parameters:
+//   - utxos: Array of UTXO data to split
+//   - commonBins: Metadata bins shared across batches
+//
+// Returns:
+//   - Array of bin batches, where each batch contains:
+//   - Common metadata (version, locktime, etc)
+//   - UTXOs for that batch
+//   - Count of non-nil UTXOs in batch
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
 	var batches [][]*aerospike.Bin
 
@@ -375,6 +500,28 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 	return batches
 }
 
+// GetBinsToStore prepares Aerospike bins for storage, handling transaction data
+// and UTXO organization.
+//
+// The function:
+//  1. Calculates fees and UTXO hashes
+//  2. Prepares transaction data
+//  3. Organizes UTXOs
+//  4. Splits into batches if needed
+//  5. Handles external storage decisions
+//
+// Parameters:
+//   - tx: Transaction to process
+//   - blockHeight: Current block height
+//   - blockIDs: Blocks containing this transaction
+//   - external: Whether to use external storage
+//   - txHash: Transaction ID
+//   - isCoinbase: Whether this is a coinbase transaction
+//
+// Returns:
+//   - Array of bin batches
+//   - Whether the transaction has UTXOs
+//   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
@@ -499,6 +646,14 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	return batches, hasUtxos, nil
 }
 
+// StoreTransactionExternally handles storage of large transactions in external blob storage.
+// This is used when transactions exceed the Aerospike record size limit.
+//
+// The process:
+//  1. Stores transaction data in blob storage
+//  2. Creates Aerospike records with metadata
+//  3. Links records to external data
+//  4. Handles pagination if needed
 func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	timeStart := time.Now()
 
@@ -567,6 +722,13 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	utils.SafeSend(bItem.done, nil)
 }
 
+// StorePartialTransactionExternally handles storage of partial transactions
+// (typically just outputs) in external storage.
+//
+// Used for:
+//   - Transaction outputs received before inputs
+//   - Very large output sets
+//   - Special transaction types
 func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 

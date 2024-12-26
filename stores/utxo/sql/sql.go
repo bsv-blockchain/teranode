@@ -1,3 +1,43 @@
+// Package sql provides a SQL-based implementation of the UTXO store interface.
+// It supports both PostgreSQL and SQLite backends with automatic schema creation
+// and migration.
+//
+// # Features
+//
+//   - Full UTXO lifecycle management (create, spend, unspend)
+//   - Transaction metadata storage
+//   - Input/output tracking
+//   - Block height and median time tracking
+//   - Optional UTXO expiration with automatic cleanup
+//   - Prometheus metrics integration
+//   - Support for the alert system (freeze/unfreeze/reassign UTXOs)
+//
+// # Usage
+//
+//	store, err := sql.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "postgres",
+//	    Host:   "localhost:5432",
+//	    User:   "user",
+//	    Path:   "dbname",
+//	    RawQuery: "expiration=3600",
+//	})
+//
+// # Database Schema
+//
+// The store uses the following tables:
+//   - transactions: Stores base transaction data
+//   - inputs: Stores transaction inputs with previous output references
+//   - outputs: Stores transaction outputs and UTXO state
+//   - block_ids: Stores which blocks a transaction appears in
+//
+// # Metrics
+//
+// The following Prometheus metrics are exposed:
+//   - teranode_sql_utxo_get: Number of UTXO retrieval operations
+//   - teranode_sql_utxo_spend: Number of UTXO spend operations
+//   - teranode_sql_utxo_reset: Number of UTXO reset operations
+//   - teranode_sql_utxo_delete: Number of UTXO delete operations
+//   - teranode_sql_utxo_errors: Number of errors by function and type
 package sql
 
 import (
@@ -26,6 +66,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
+// Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
 	logger           ulogger.Logger
 	settings         *settings.Settings
@@ -36,6 +77,23 @@ type Store struct {
 	expirationMillis uint64
 }
 
+// New creates a new SQL-based UTXO store.
+// It supports both PostgreSQL and SQLite backends through the URL scheme.
+//
+// Supported URL schemes:
+//   - postgres://: PostgreSQL database
+//   - sqlite:///: SQLite file database
+//   - sqlitememory:///: In-memory SQLite database
+//
+// URL parameters:
+//   - expiration: Time in seconds after which spent UTXOs are cleaned up
+//   - logging: Enable SQL query logging
+//
+// Example URLs:
+//
+//	postgres://user:pass@localhost:5432/dbname?expiration=3600
+//	sqlite:///path/to/db.sqlite?expiration=3600
+//	sqlitememory:///test?expiration=3600
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
@@ -124,6 +182,7 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
 }
 
+// Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
 
@@ -137,6 +196,8 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 	return http.StatusOK, details, nil
 }
 
+// Create stores a new transaction's outputs as UTXOs.
+// For coinbase transactions, it sets the maturity period to 100 blocks.
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
@@ -327,6 +388,13 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, 
 	return s.get(ctx, hash, utxo.MetaFields)
 }
 
+// Get retrieves transaction metadata and optionally the full transaction data.
+// The fields parameter controls which data is returned:
+//   - tx: Full transaction data
+//   - inputs: Transaction inputs
+//   - outputs: Transaction outputs
+//   - blockIDs: Block references
+//   - parentTxHashes: Previous transaction hashes
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
@@ -482,6 +550,17 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+// Spend marks UTXOs as spent by updating their spending transaction ID.
+// It performs several validations:
+//   - Checks if the UTXO exists
+//   - Verifies the UTXO is not frozen
+//   - Confirms the UTXO matches the expected hash
+//   - Validates coinbase maturity
+//   - Ensures the UTXO is not already spent
+//   - Optionally marks the transaction for cleanup if all outputs are spent
+//
+// The blockHeight parameter is used for coinbase maturity checking.
+// If blockHeight is 0, the current block height is used.
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
@@ -628,6 +707,9 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 	return nil
 }
 
+// UnSpend reverses a previous spend operation, marking UTXOs as unspent.
+// This removes the spending transaction ID and any expiration timestamp.
+// Commonly used during blockchain reorganizations.
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
@@ -695,6 +777,8 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
+// Delete removes a transaction and all its associated data.
+// This includes inputs, outputs, and block references.
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
@@ -868,6 +952,8 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	}, nil
 }
 
+// BatchDecorate efficiently fetches metadata for multiple transactions.
+// This is used to optimize bulk operations on transactions.
 func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
@@ -894,6 +980,7 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 	return nil
 }
 
+// PreviousOutputsDecorate fetches output information for transaction inputs.
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
@@ -1085,6 +1172,7 @@ func createSqliteSchema(db *usql.DB) error {
 	return nil
 }
 
+// deleteTombstoned removes transactions that have passed their expiration time.
 func deleteTombstoned(db *usql.DB) error {
 	q := `SELECT id FROM transactions WHERE tombstone_millis < $1;`
 

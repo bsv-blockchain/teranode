@@ -1,3 +1,4 @@
+// Package utxo provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
 package utxo
 
 import (
@@ -7,13 +8,20 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// SpendResponse is a struct that holds the response from the GetSpend function
+// SpendResponse contains the response from querying (GetSpend) a UTXO's spend status.
 type SpendResponse struct {
-	Status       int             `json:"status"`
+	// Status indicates the current state of the UTXO
+	Status int `json:"status"`
+
+	// SpendingTxID is the ID of the transaction that spent this UTXO, if any
 	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
-	LockTime     uint32          `json:"lockTime,omitempty"`
+
+	// LockTime is the block height or timestamp until which this UTXO is locked
+	LockTime uint32 `json:"lockTime,omitempty"`
 }
 
+// Bytes serializes the SpendResponse into a byte slice.
+// The format is: [8 bytes status][4 bytes locktime][32 bytes spendingTxID (optional)]
 func (sr *SpendResponse) Bytes() []byte {
 	buf := make([]byte, 0, 8+32+4)
 
@@ -37,6 +45,8 @@ func (sr *SpendResponse) Bytes() []byte {
 	return buf
 }
 
+// FromBytes deserializes a SpendResponse from a byte slice.
+// Returns an error if the byte slice is invalid or too short.
 func (sr *SpendResponse) FromBytes(b []byte) (err error) {
 	if len(b) < 12 {
 		return errors.NewInvalidArgumentError("invalid byte length")

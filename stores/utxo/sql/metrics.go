@@ -1,3 +1,43 @@
+// Package sql provides a SQL-based implementation of the UTXO store interface.
+// It supports both PostgreSQL and SQLite backends with automatic schema creation
+// and migration.
+//
+// # Features
+//
+//   - Full UTXO lifecycle management (create, spend, unspend)
+//   - Transaction metadata storage
+//   - Input/output tracking
+//   - Block height and median time tracking
+//   - Optional UTXO expiration with automatic cleanup
+//   - Prometheus metrics integration
+//   - Support for the alert system (freeze/unfreeze/reassign UTXOs)
+//
+// # Usage
+//
+//	store, err := sql.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "postgres",
+//	    Host:   "localhost:5432",
+//	    User:   "user",
+//	    Path:   "dbname",
+//	    RawQuery: "expiration=3600",
+//	})
+//
+// # Database Schema
+//
+// The store uses the following tables:
+//   - transactions: Stores base transaction data
+//   - inputs: Stores transaction inputs with previous output references
+//   - outputs: Stores transaction outputs and UTXO state
+//   - block_ids: Stores which blocks a transaction appears in
+//
+// # Metrics
+//
+// The following Prometheus metrics are exposed:
+//   - teranode_sql_utxo_get: Number of UTXO retrieval operations
+//   - teranode_sql_utxo_spend: Number of UTXO spend operations
+//   - teranode_sql_utxo_reset: Number of UTXO reset operations
+//   - teranode_sql_utxo_delete: Number of UTXO delete operations
+//   - teranode_sql_utxo_errors: Number of errors by function and type
 package sql
 
 import (

@@ -1,3 +1,4 @@
+// Package utxo provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
 package utxo
 
 import (
@@ -10,6 +11,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// CalculateUtxoStatus determines the status of a UTXO based on its spending state
+// and coinbase maturity requirements.
+//
+// Parameters:
+//   - spendingTxID: The ID of the transaction that spends this UTXO, or nil if unspent
+//   - coinbaseSpendingHeight: The height at which a coinbase UTXO becomes spendable
+//   - blockHeight: The current block height
+//
+// Returns:
+//   - Status: The calculated UTXO status
 func CalculateUtxoStatus(spendingTxID *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
 	status := Status_OK
 
@@ -22,6 +33,8 @@ func CalculateUtxoStatus(spendingTxID *chainhash.Hash, coinbaseSpendingHeight ui
 	return status
 }
 
+// CalculateUtxoStatus2 is a simplified version of CalculateUtxoStatus that only considers
+// the spending state of a UTXO, ignoring coinbase maturity.
 func CalculateUtxoStatus2(spendingTxID *chainhash.Hash) Status {
 	status := Status_OK
 
@@ -32,8 +45,18 @@ func CalculateUtxoStatus2(spendingTxID *chainhash.Hash) Status {
 	return status
 }
 
-// GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
-// It will return an error if the context is cancelled.
+// GetFeesAndUtxoHashes calculates the total fees and generates UTXO hashes for a transaction.
+// Returns an error if the transaction is not properly extended with input values.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - tx: The transaction to analyze
+//   - blockHeight: Current block height
+//
+// Returns:
+//   - uint64: Total transaction fees
+//   - []*chainhash.Hash: UTXO hashes for each output
+//   - error: Any error encountered during processing
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
 	if !util.IsExtended(tx, blockHeight) && !tx.IsCoinbase() {
 		return 0, nil, errors.NewProcessingError("tx is not extended")
@@ -71,7 +94,16 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 	return fees, utxoHashes, nil
 }
 
-// GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
+// GetUtxoHashes returns the UTXO hashes for the outputs of a transaction.
+// If a txHash is provided, it will be used instead of calculating the transaction's hash.
+//
+// Parameters:
+//   - tx: The transaction to analyze
+//   - txHash: Optional pre-calculated transaction hash to use instead of computing one
+//
+// Returns:
+//   - []*chainhash.Hash: Array of UTXO hashes, one for each output
+//   - error: Any error encountered during processing
 func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, error) {
 	var txChainHash *chainhash.Hash
 	if len(txHash) > 0 {
@@ -96,6 +128,8 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 	return utxoHashes, nil
 }
 
+// ShouldStoreOutputAsUTXO determines if a transaction output should be stored as a UTXO.
+// Returns true if the output has a non-zero value or is not an OP_RETURN output.
 func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uint32) bool {
 	if output.Satoshis > 0 {
 		// if the output has a non-zero satoshis value, it should be stored as a UTXO

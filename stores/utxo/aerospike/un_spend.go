@@ -1,5 +1,59 @@
 // //go:build aerospike
 
+// Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
+// It offers high performance, distributed storage capabilities with support for large-scale
+// UTXO sets and complex operations like freezing, reassignment, and batch processing.
+//
+// # Architecture
+//
+// The implementation uses a combination of Aerospike Key-Value store and Lua scripts
+// for atomic operations. Transactions are stored with the following structure:
+//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
+//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - External Storage: Optional blob storage for large transactions
+//
+// # Features
+//
+//   - Efficient UTXO lifecycle management (create, spend, unspend)
+//   - Support for batched operations with LUA scripting
+//   - Automatic cleanup of spent UTXOs through TTL
+//   - Alert system integration for freezing/unfreezing UTXOs
+//   - Metrics tracking via Prometheus
+//   - Support for large transactions through external blob storage
+//
+// # Usage
+//
+//	store, err := aerospike.New(ctx, logger, settings, &url.URL{
+//	    Scheme: "aerospike",
+//	    Host:   "localhost:3000",
+//	    Path:   "/test/utxos",
+//	    RawQuery: "expiration=3600&set=txmeta",
+//	})
+//
+// # Database Structure
+//
+// Normal Transaction:
+//   - inputs: Transaction input data
+//   - outputs: Transaction output data
+//   - utxos: List of UTXO hashes
+//   - nrUtxos: Total number of UTXOs
+//   - spentUtxos: Number of spent UTXOs
+//   - blockIDs: Block references
+//   - isCoinbase: Coinbase flag
+//   - spendingHeight: Coinbase maturity height
+//   - frozen: Frozen status
+//
+// Large Transaction with External Storage:
+//   - Same as normal but with external=true
+//   - Transaction data stored in blob storage
+//   - Multiple records for >20k outputs
+//
+// # Thread Safety
+//
+// The implementation is fully thread-safe and supports concurrent access through:
+//   - Atomic operations via Lua scripts
+//   - Batched operations for better performance
+//   - Lock-free reads with optimistic concurrency
 package aerospike
 
 import (
@@ -12,10 +66,46 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 )
 
+// UnSpend operations handle reverting spent UTXOs back to an unspent state.
+// This is primarily used during blockchain reorganizations to handle
+// transaction rollbacks.
+//
+// # Operation Flow
+//
+//	Validation → Lua Script → Update Records → Handle External Storage
+//
+// The operation:
+//   1. Verifies UTXO exists
+//   2. Clears spending transaction ID
+//   3. Updates record counts for pagination
+//   4. Manages external storage TTL
+//   5. Updates metrics
+
+// UnSpend reverts spent UTXOs to unspent state.
+// Parameters:
+//   - ctx: Context for cancellation
+//   - spends: Array of UTXOs to unspend
+//
+// Returns error if:
+//   - Context is cancelled
+//   - Timeout occurs
+//   - UTXO doesn't exist
+//   - Operation fails
+//
+// Thread Safety:
+//   - Uses Lua scripts for atomic operations
+//   - Handles concurrent unspend operations
+//   - Coordinates with external storage
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return s.unSpend(ctx, spends)
 }
 
+// unSpend implements the core unspend logic.
+// For each UTXO:
+//  1. Checks context cancellation
+//  2. Logs operation details
+//  3. Executes Lua script
+//  4. Handles response
 func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	for i, spend := range spends {
 		select {
@@ -45,6 +135,22 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return nil
 }
 
+// unSpendLua executes the Lua script for a single UTXO unspend.
+// The operation:
+//  1. Calculates key and offset
+//  2. Executes Lua script
+//  3. Processes response
+//  4. Updates record counts
+//  5. Manages external storage
+//
+// Lua Return Values:
+//   - OK:NOTALLSPENT - Success, some UTXOs still unspent
+//   - OK:NOTALLSPENT:EXTERNAL - Success, external storage needs update
+//   - ERROR:* - Various error conditions
+//
+// Metrics:
+//   - prometheusUtxoMapReset: Successful unspends
+//   - prometheusUtxoMapErrors: Failed operations
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 

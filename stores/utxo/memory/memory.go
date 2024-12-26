@@ -1,3 +1,31 @@
+// Package memory provides an in-memory implementation of the UTXO store interface
+// primarily used for testing and development purposes.
+//
+// The implementation is thread-safe and provides full UTXO lifecycle management
+// including spending, freezing, and reassignment operations. All data is stored
+// in memory and will be lost when the process exits.
+//
+// # Memory Usage
+//
+// The memory store keeps all transactions and UTXOs in memory, which means:
+//   - Memory usage grows linearly with the number of transactions
+//   - No data persists between process restarts
+//   - Not suitable for production use with large UTXO sets
+//
+// # Concurrency
+//
+// The implementation is thread-safe through:
+//   - A mutex protecting the transaction map
+//   - Atomic operations for block height and median time
+//   - Copy-on-write for internal data structures
+//
+// # Usage
+//
+// The memory store is primarily intended for:
+//   - Testing
+//   - Development
+//   - Small-scale simulations
+//   - Scenarios where persistence is not required
 package memory
 
 import (
@@ -15,23 +43,27 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// memoryData holds transaction data and UTXO state in memory.
 type memoryData struct {
-	tx              *bt.Tx
-	lockTime        uint32
-	blockIDs        []uint32
-	utxoMap         map[chainhash.Hash]*chainhash.Hash
-	utxoSpendableIn map[uint32]uint32
-	frozenMap       map[chainhash.Hash]bool
+	tx              *bt.Tx                             // The full transaction
+	lockTime        uint32                             // Transaction lock time
+	blockIDs        []uint32                           // Block heights where tx appears
+	utxoMap         map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
+	utxoSpendableIn map[uint32]uint32                  // Maps output index to spendable height
+	frozenMap       map[chainhash.Hash]bool            // Tracks frozen UTXOs
 }
 
+// Memory implements the UTXO store interface using in-memory data structures.
+// It is thread-safe for concurrent access.
 type Memory struct {
 	logger          ulogger.Logger
-	txs             map[chainhash.Hash]*memoryData
-	txsMu           sync.Mutex
-	blockHeight     atomic.Uint32
-	medianBlockTime atomic.Uint32
+	txs             map[chainhash.Hash]*memoryData // Main transaction storage
+	txsMu           sync.Mutex                     // Protects txs map
+	blockHeight     atomic.Uint32                  // Current block height
+	medianBlockTime atomic.Uint32                  // Current median block time
 }
 
+// New creates a new in-memory UTXO store.
 func New(logger ulogger.Logger) *Memory {
 	return &Memory{
 		logger:          logger,
@@ -42,10 +74,14 @@ func New(logger ulogger.Logger) *Memory {
 	}
 }
 
+// Health checks the store's health status.
+// The memory store is always considered healthy if it exists.
 func (m *Memory) Health(_ context.Context, _ bool) (int, string, error) {
 	return http.StatusOK, "Memory Store available", nil
 }
 
+// Create stores a new transaction and its UTXOs in memory.
+// Returns an error if the transaction already exists.
 func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -115,6 +151,12 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string
 	return nil, errors.NewTxNotFoundError("%v not found", hash)
 }
 
+// GetSpend checks the spend status of a UTXO.
+// It verifies:
+//   - Transaction exists
+//   - UTXO exists
+//   - UTXO frozen status
+//   - Spending state
 func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	metaData, err := m.Get(context.Background(), spend.TxID)
 	if err != nil {
@@ -164,6 +206,13 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// Spend marks UTXOs as spent by updating their spending transaction ID.
+// It verifies:
+//   - Transaction exists
+//   - UTXO exists and matches hash
+//   - UTXO is not frozen
+//   - UTXO is spendable (maturity/timelock)
+//   - UTXO is not already spent by different tx
 func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -204,6 +253,7 @@ func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint
 	return nil
 }
 
+// UnSpend marks UTXOs as unspent by clearing their spending transaction ID.
 func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -224,6 +274,7 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
+// SetMinedMulti records which blocks a transaction appears in.
 func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -239,6 +290,8 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, bloc
 	return nil
 }
 
+// BatchDecorate efficiently fetches metadata for multiple transactions.
+// Unlike other implementations, this always fetches full transaction data.
 func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -265,6 +318,7 @@ func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utx
 	return nil
 }
 
+// PreviousOutputsDecorate fetches previous output data for transaction inputs.
 func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -291,6 +345,11 @@ func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.
 	return nil
 }
 
+// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
+// Returns an error if any UTXO:
+//   - Doesn't exist
+//   - Is already frozen
+//   - Is already spent
 func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -319,6 +378,10 @@ func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
+// UnFreezeUTXOs removes the frozen status from UTXOs.
+// Returns an error if any UTXO:
+//   - Doesn't exist
+//   - Is not frozen
 func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -343,6 +406,9 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
+// ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
+// The UTXO must be frozen and will become spendable after
+// ReAssignedUtxoSpendableAfterBlocks blocks.
 func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -362,15 +428,18 @@ func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *u
 	return nil
 }
 
+// SetBlockHeight updates the current block height using atomic operations.
 func (m *Memory) SetBlockHeight(height uint32) error {
 	m.blockHeight.Store(height)
 	return nil
 }
 
+// GetBlockHeight returns the current block height atomically.
 func (m *Memory) GetBlockHeight() uint32 {
 	return m.blockHeight.Load()
 }
 
+// SetMedianBlockTime updates the median block time using atomic operations.
 func (m *Memory) SetMedianBlockTime(medianTime uint32) error {
 	m.logger.Debugf("setting median block time to %d", medianTime)
 	m.medianBlockTime.Store(medianTime)
@@ -378,12 +447,13 @@ func (m *Memory) SetMedianBlockTime(medianTime uint32) error {
 	return nil
 }
 
+// GetMedianBlockTime returns the current median block time atomically.
 func (m *Memory) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime.Load()
 }
 
-// GetUtxoMap returns the utxo map for a given transaction hash
-// this function can only be used internally in tests, as it is not part of the interface
+// GetUtxoMap returns the utxo map for a given transaction hash.
+// This method is intended only for testing purposes and is not part of the Store interface.
 func (m *Memory) GetUtxoMap(txHash chainhash.Hash) map[chainhash.Hash]*chainhash.Hash {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -395,6 +465,8 @@ func (m *Memory) GetUtxoMap(txHash chainhash.Hash) map[chainhash.Hash]*chainhash
 	return m.txs[txHash].utxoMap
 }
 
+// delete removes a transaction from the store.
+// This is an internal method used for testing.
 func (m *Memory) delete(hash *chainhash.Hash) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
