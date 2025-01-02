@@ -10,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/ordishs/gocore"
 )
 
 type PeerHeight struct {
@@ -22,15 +21,10 @@ type PeerHeight struct {
 	defaultTimeout        time.Duration
 }
 
-func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration) (*PeerHeight, error) {
-	p2pIP, ok := gocore.Config().Get("p2p_ip")
-	if !ok {
+func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration, p2pPort int, staticPeers []string, privateKey string) (*PeerHeight, error) {
+	p2pIP := tSettings.P2P.IP
+	if p2pIP == "" {
 		return nil, errors.NewConfigurationError("[PeerHeight] p2p_ip not set in config")
-	}
-
-	p2pPort, ok := gocore.Config().GetInt(fmt.Sprintf("p2p_port_%s", processName))
-	if !ok {
-		return nil, errors.NewConfigurationError("[PeerHeight] p2p_port_%s not set in config", processName)
 	}
 
 	sharedKey := tSettings.P2P.SharedKey
@@ -41,9 +35,6 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 	usePrivateDht := tSettings.P2P.DHTUsePrivate
 
 	optimiseRetries := tSettings.P2P.OptimiseRetries
-
-	staticPeers, _ := gocore.Config().GetMulti(fmt.Sprintf("%s_p2p_static_peers", processName), "|")
-	privateKey, _ := gocore.Config().Get(fmt.Sprintf("%s_p2p_private_key", processName))
 
 	config := P2PConfig{
 		ProcessName:     processName,

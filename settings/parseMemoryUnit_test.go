@@ -1,4 +1,4 @@
-package util
+package settings
 
 import (
 	"testing"
@@ -43,12 +43,12 @@ func TestParseMemoryUnit(t *testing.T) {
 			if err != nil {
 				t.Errorf("Unexpected error for input: %s, error: %v", tc.input, err)
 			}
+
 			if result != tc.expected {
 				t.Errorf("Expected %d bytes for input: %s, but got %d bytes", tc.expected, tc.input, result)
 			}
 		}
 	}
-
 }
 
 // func TestParseConfig(t *testing.T) {

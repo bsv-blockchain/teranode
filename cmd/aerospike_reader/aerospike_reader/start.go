@@ -56,7 +56,7 @@ func Start() {
 
 	fmt.Printf("Key         : %x\n", keySource)
 
-	client, err := util.GetAerospikeClient(logger, storeURL)
+	client, err := util.GetAerospikeClient(logger, storeURL, tSettings)
 	if err != nil {
 		fmt.Printf("Failed to connect to aerospike: %s\n", err)
 		os.Exit(1)

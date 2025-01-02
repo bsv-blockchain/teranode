@@ -115,7 +115,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "no utxostore setting found")
 		}
 
-		client, err := util.GetAerospikeClient(h.logger, storeURL)
+		client, err := util.GetAerospikeClient(h.logger, storeURL, h.settings)
 		if err != nil {
 			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
 

@@ -140,7 +140,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	namespace := aerospikeURL.Path[1:]
 
-	client, err := util.GetAerospikeClient(logger, aerospikeURL)
+	client, err := util.GetAerospikeClient(logger, aerospikeURL, tSettings)
 	if err != nil {
 		return nil, err
 	}

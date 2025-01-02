@@ -117,7 +117,11 @@ func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchain
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
 
-	peerSync, err := p2p.NewPeerHeight(logger, tSettings, "coinbase", numberOfExpectedPeers, peerStatusTimeout)
+	p2pPort := tSettings.Coinbase.P2PPort
+	staticPeers := tSettings.Coinbase.P2PStaticPeers
+	p2pPrivateKey := tSettings.Coinbase.P2PPrivateKey
+
+	peerSync, err := p2p.NewPeerHeight(logger, tSettings, "coinbase", numberOfExpectedPeers, peerStatusTimeout, p2pPort, staticPeers, p2pPrivateKey)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create peer sync service", err)
 	}

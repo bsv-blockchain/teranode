@@ -69,14 +69,15 @@ type KafkaSettings struct {
 type AerospikeSettings struct {
 	Debug                  bool
 	Host                   string
-	BatchPolicy            string
-	ReadPolicy             string
-	WritePolicy            string
+	BatchPolicyURL         *url.URL
+	ReadPolicyURL          *url.URL
+	WritePolicyURL         *url.URL
 	Port                   int
 	UseDefaultBasePolicies bool
 	UseDefaultPolicies     bool
 	WarmUp                 bool
 	StoreBatcherDuration   time.Duration
+	StatsRefreshDuration   time.Duration
 }
 
 type AlertSettings struct {
@@ -261,9 +262,8 @@ type P2PSettings struct {
 	IP            string
 	MiningOnTopic string
 
-	PeerID       string
-	Port         int
-	PortCoinbase int
+	PeerID string
+	Port   int
 
 	PrivateKey      string
 	RejectedTxTopic string
@@ -301,6 +301,7 @@ type CoinbaseSettings struct {
 	SlackChannel                string
 	SlackToken                  string
 	TestMode                    bool
+	P2PPort                     int
 }
 
 type SubtreeValidationSettings struct {

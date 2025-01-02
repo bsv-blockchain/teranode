@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
-	"github.com/bitcoin-sv/teranode/util"
 )
 
 func NewSettings() *Settings {
@@ -14,7 +13,7 @@ func NewSettings() *Settings {
 		panic(err)
 	}
 
-	blockMaxSize, err := util.ParseMemoryUnit(getString("blockmaxsize", "0")) // default to 0 - unlimited
+	blockMaxSize, err := ParseMemoryUnit(getString("blockmaxsize", "0")) // default to 0 - unlimited
 	if err != nil {
 		panic(err)
 	}
@@ -90,14 +89,15 @@ func NewSettings() *Settings {
 		Aerospike: AerospikeSettings{
 			Debug:                  getBool("aerospike_debug", false),
 			Host:                   getString("aerospike_host", "localhost"),
-			BatchPolicy:            getString("aerospike_batchPolicy", "defaultBatchPolicy"),
-			ReadPolicy:             getString("aerospike_readPolicy", "defaultReadPolicy"),
-			WritePolicy:            getString("aerospike_writePolicy", "defaultWritePolicy"),
+			BatchPolicyURL:         getURL("aerospike_batchPolicy", "defaultBatchPolicy"),
+			ReadPolicyURL:          getURL("aerospike_readPolicy", "defaultReadPolicy"),
+			WritePolicyURL:         getURL("aerospike_writePolicy", "defaultWritePolicy"),
 			Port:                   getInt("aerospike_port", 3000),
 			UseDefaultBasePolicies: getBool("aerospike_useDefaultBasePolicies", false),
 			UseDefaultPolicies:     getBool("aerospike_useDefaultPolicies", false),
 			WarmUp:                 getBool("aerospike_warmUp", true),
 			StoreBatcherDuration:   getDuration("aerospike_storeBatcherDuration", 10*time.Millisecond),
+			StatsRefreshDuration:   getDuration("aerospike_statsRefresh", 5*time.Second),
 		},
 		Alert: AlertSettings{
 			GenesisKeys:   getMultiString("alert_genesis_keys", "|", []string{}),
@@ -197,7 +197,7 @@ func NewSettings() *Settings {
 			ProcessTxMetaUsingCacheBatchSize:          getInt("blockvalidation_processTxMetaUsingCache_BatchSize", 1024),
 			ProcessTxMetaUsingCacheConcurrency:        getInt("blockvalidation_processTxMetaUsingCache_Concurrency", 32),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("blockvalidation_processTxMetaUsingCache_MissingTxThreshold", 1),
-			ProcessTxMetaUsingStoreBatchSize:          getInt("blockvalidation_processTxMetaUsingStore_BatchSize", util.Max(4, runtime.NumCPU()/2)),
+			ProcessTxMetaUsingStoreBatchSize:          getInt("blockvalidation_processTxMetaUsingStore_BatchSize", max(4, runtime.NumCPU()/2)),
 			ProcessTxMetaUsingStoreConcurrency:        getInt("blockvalidation_processTxMetaUsingStore_Concurrency", 32),
 			ProcessTxMetaUsingStoreMissingTxThreshold: getInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 1),
 			SkipCheckParentMined:                      getBool("blockvalidation_skipCheckParentMined", false),
@@ -205,7 +205,7 @@ func NewSettings() *Settings {
 			SubtreeTTL:                                blockValidationSubtreeTTL,
 			SubtreeTTLConcurrency:                     getInt("blockvalidation_subtreeTTLConcurrency", 32),
 			SubtreeValidationAbandonThreshold:         getInt("blockvalidation_subtree_validation_abandon_threshold", 1),
-			ValidateBlockSubtreesConcurrency:          getInt("blockvalidation_validateBlockSubtreesConcurrency", util.Max(4, runtime.NumCPU()/2)),
+			ValidateBlockSubtreesConcurrency:          getInt("blockvalidation_validateBlockSubtreesConcurrency", max(4, runtime.NumCPU()/2)),
 			ValidationMaxRetries:                      getInt("blockvalidation_validation_max_retries", 3),
 			ValidationRetrySleep:                      getDuration("blockvalidation_validation_retry_sleep", 5*time.Second),
 			OptimisticMining:                          getBool("blockvalidation_optimistic_mining", true),
@@ -215,7 +215,7 @@ func NewSettings() *Settings {
 			BlockFoundChBufferSize:                    getInt("blockvalidation_blockFoundCh_buffer_size", 1000),
 			CatchupChBufferSize:                       getInt("blockvalidation_catchupCh_buffer_size", 10),
 			UseCatchupWhenBehind:                      getBool("blockvalidation_useCatchupWhenBehind", false),
-			CatchupConcurrency:                        getInt("blockvalidation_catchupConcurrency", util.Max(4, runtime.NumCPU()/2)),
+			CatchupConcurrency:                        getInt("blockvalidation_catchupConcurrency", max(4, runtime.NumCPU()/2)),
 			ValidationWarmupCount:                     getInt("blockvalidation_validation_warmup_count", 128),
 			BatchMissingTransactions:                  getBool("blockvalidation_batch_missing_transactions", false),
 		},
@@ -270,7 +270,6 @@ func NewSettings() *Settings {
 			MiningOnTopic:     getString("p2p_mining_on_topic", ""),
 			PeerID:            getString("p2p_peer_id", ""),
 			Port:              getInt("p2p_port", 9906),
-			PortCoinbase:      getInt("p2p_portCoinbase", 9906),
 			PrivateKey:        getString("p2p_private_key", ""),
 			RejectedTxTopic:   getString("p2p_rejected_tx_topic", ""),
 			SharedKey:         getString("p2p_shared_key", ""),
@@ -303,13 +302,14 @@ func NewSettings() *Settings {
 			SlackChannel:                getString("slack_channel", ""),
 			SlackToken:                  getString("slack_token", ""),
 			TestMode:                    getBool("coinbase_test_mode", false),
+			P2PPort:                     getInt("p2p_port_coinbase", 9906),
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second),
 			QuorumPath:                                getString("subtree_quorum_path", ""),
 			SubtreeStore:                              getURL("subtreestore", ""),
 			FailFastValidation:                        getBool("subtreevalidation_failfast_validation", true),
-			GetMissingTransactions:                    getInt("subtreevalidation_getMissingTransactions", util.Max(4, runtime.NumCPU()/2)),
+			GetMissingTransactions:                    getInt("subtreevalidation_getMissingTransactions", max(4, runtime.NumCPU()/2)),
 			GRPCAddress:                               getString("subtreevalidation_grpcAddress", "localhost:8089"),
 			GRPCListenAddress:                         getString("subtreevalidation_grpcListenAddress", ":8089"),
 			ProcessTxMetaUsingCacheBatchSize:          getInt("subtreevalidation_processTxMetaUsingCache_BatchSize", 1024),
@@ -372,4 +372,12 @@ func NewSettings() *Settings {
 			Enabled: getBool("dashboard_enabled", false),
 		},
 	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+
+	return b
 }
