@@ -51,7 +51,7 @@ This diagram illustrates the central role of the Validator in processing new tra
 2. Valid transactions are forwarded to the Block Assembly component using the `kafka_txsConfig` topic for inclusion in new blocks.
 
 
-3. The Validator sends new UTXO (Unspent Transaction Output) metadata to the Subtree Validation component through the `kafka_txmetaConfig` topic for inclusion in new subtrees.
+3. The Validator sends new UTXO (Unspent Transaction Output) metadata to the Subtree Validation component through the `kafka_txmetaConfig` topic for inclusion in new subtrees. Should a reversal be required, the same topic is  used to notify a deletion ("delete" command).
 
 
 4. If a transaction is rejected, the Validator notifies the P2P component via the `kafka_rejectedTxConfig` topic, allowing the network (other peers) to be informed about invalid transactions.
@@ -121,6 +121,6 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 
 ## 5. Other Resources
 
-- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
+- [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.

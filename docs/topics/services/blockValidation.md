@@ -65,7 +65,7 @@ Finally, note that the Block Validation service benefits of the use of Lustre Fs
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../misc/lustre_fs.svg)
+![lustre_fs.svg](../../misc/lustre_fs.svg)
 
 
 ## 2. Functionality
@@ -170,15 +170,15 @@ The `BlockValidation` proceeds to mark all transactions within the block as "min
 
 ## 3. gRPC Protobuf Definitions
 
-The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/subtreevalidationProto.md).
+The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/subtreevalidationProto.md).
 
 
 ## 4. Data Model
 
-- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
-- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): UTXO and UTXO Metadata data models for managing unspent transaction outputs.
+- [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
+- [UTXO Data Model](../datamodel/utxo_data_model.md): UTXO and UTXO Metadata data models for managing unspent transaction outputs.
 
 
 ## 5. Technology
@@ -296,4 +296,4 @@ The Block Validation service uses the following configuration options:
 
 ## 9. Other Resources
 
-[Block Validation Reference](../references/services/blockvalidation_reference.md)
+[Block Validation Reference](../../references/services/blockvalidation_reference.md)

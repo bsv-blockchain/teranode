@@ -157,9 +157,9 @@ Options for configuring these stores are managed through the `options` package.
 
 ## 4. Data Model
 
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Use Cases
 
@@ -277,7 +277,7 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
 
 - **Lustre with S3 Backend**
   ```plaintext
-  subtreestore.mainnet2=lustre://s3.${regionName}.amazonaws.com/ubsv-${clientName}-block-store?region=${regionName}&localDir=data/subtreestore&localPersist=s3
+  subtreestore.mainnet2=lustre://s3.${regionName}.amazonaws.com/teranode-${clientName}-block-store?region=${regionName}&localDir=data/subtreestore&localPersist=s3
   ```
 
 - **File System with Local TTL Store**
@@ -293,4 +293,4 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
 
 ## 9. Other Resources
 
-[Blob Server Reference](../references/stores/blob_reference.md)
+[Blob Server Reference](../../references/stores/blob_reference.md)

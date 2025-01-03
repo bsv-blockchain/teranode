@@ -300,4 +300,4 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 
 ## 7. Other Resources
 
-[Alert Reference](../references/services/alert_reference.md)
+[Alert Reference](../../references/services/alert_reference.md)

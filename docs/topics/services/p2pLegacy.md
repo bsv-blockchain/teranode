@@ -218,4 +218,4 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 7. Other Resources
 
-[Alert Reference](../references/services/legacy_reference.md)
+[Alert Reference](../../references/services/legacy_reference.md)

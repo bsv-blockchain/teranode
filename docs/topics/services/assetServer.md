@@ -81,18 +81,18 @@ Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../misc/lustre_fs.svg)
+![lustre_fs.svg](../../misc/lustre_fs.svg)
 
 
 ## 3. Data Model
 
 The following data types are provided by the Asset Server:
 
-- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
-- [Block Header Data Model](../topics/datamodel/block_header_data_model.md): a block header includes the block ID of the previous block.
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
-- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
+- [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Block Header Data Model](../datamodel/block_header_data_model.md): a block header includes the block ID of the previous block.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [UTXO Data Model](../datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
 
 
 ## 4. Use Cases
@@ -314,4 +314,4 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Other Resources
 
-[Asset Reference](../references/services/asset_reference.md)
+[Asset Reference](../../references/services/asset_reference.md)

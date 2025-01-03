@@ -303,8 +303,8 @@ As a sequence:
 
 ## 4. Data Model
 
-- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
@@ -396,4 +396,4 @@ The following settings can be configured for the p2p service:
 
 ## 8. Other Resources
 
-[P2P Reference](../references/services/p2p_reference.md)
+[P2P Reference](../../references/services/p2p_reference.md)

@@ -275,13 +275,13 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
 
 ## 3. gRPC Protobuf Definitions
 
-The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/validatorProto.md).
+The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/validatorProto.md).
 
 ## 4. Data Model
 
 The Validation Service deals with the extended transaction format, as seen below:
 
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Technology
 
@@ -360,4 +360,4 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 9. Other Resources
 
-[Validator Reference](../references/services/validator_reference.md)
+[Validator Reference](../../references/services/validator_reference.md)

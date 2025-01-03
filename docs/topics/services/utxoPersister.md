@@ -278,4 +278,4 @@ The `utxopersister` service utilizes specific `gocore` settings for configuratio
 
 ## 8. Other Resources
 
-[UTXO Persister Reference](../references/services/utxopersister_reference.md)
+[UTXO Persister Reference](../../references/services/utxopersister_reference.md)

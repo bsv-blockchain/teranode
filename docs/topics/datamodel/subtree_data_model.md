@@ -11,6 +11,7 @@ The concept of subtrees is a distinct feature not found in the BTC design.
 
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
 
+![TERANODE_SUBTREE_MERKLE_ROOT.png](../architecture/img/TERANODE_SUBTREE_MERKLE_ROOT.png)
 
 Here's a table documenting the structure of the `Subtree` type:
 
@@ -69,10 +70,10 @@ Subtrees only include transaction IDs, not full transaction data, since all node
 
 This version improves readability, adds proper heading formatting, and applies consistent emphasis to key points.
 
-![TERANODE_SubTree.png](../../architecture/img/TERANODE_SubTree.png)
+![TERANODE_SubTree.png](../architecture/img/TERANODE_SubTree.png)
 
 ## Additional Resources
 
-- [Overall System Design](../../../docs/architecture/teranode-overall-system-design.md)
+- [Overall System Design](../architecture/teranode-overall-system-design.md)
 - [Block](./block_data_model.md)
 - [Transaction](./transaction_data_model.md)

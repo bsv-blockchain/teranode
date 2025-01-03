@@ -81,6 +81,6 @@ To know more about the Extended Transaction Format, please refer to the [Bitcoin
 
 Other:
 
-- [Overall System Design](../../../docs/architecture/teranode-overall-system-design.md)
+- [Overall System Design](../architecture/teranode-overall-system-design.md)
 - [Block](./block_data_model.md)
 - [Subtree](./subtree_data_model.md)

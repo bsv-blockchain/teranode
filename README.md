@@ -3,6 +3,7 @@
 ## Table of Contents
 
 1. [Tutorials](#tutorials)
+   - [Development](#development-tutorials)
    - [Miners](#miner-tutorials)
 2. [How-to Guides](#how-to-guides)
    - [Development](#development)
@@ -16,6 +17,9 @@
 
 ## Tutorials
 
+### Development Tutorials
+- [Setting Up for Development](docs/tutorials/developers/developerSetup.md)
+
 ### Miner Tutorials
 
 - [Initial Setup Walkthrough](docs/tutorials/miners/minersGettingStarted.md)
@@ -26,15 +30,14 @@
 
 ### Development
 
-1. [Setting Up for Development](docs/howto/developerSetup.md)
-2. [Running Services Locally](docs/howto/locallyRunningServices.md)
-3. [Using the Makefile](docs/howto/makefile.md)
-4. [Running Tests](docs/howto/runningTests.md)
-5. [Setting Up Automated Test Environment](docs/howto/automatedTestingHowTo.md)
-6. [Generating Protobuf Files](docs/howto/generatingProtobuf.md)
-7. [Adding new Protobuf Services](docs/howto/addingNewProtobufServices.md)
-8. [Configuring gRPC Logging](docs/howto/configuringGrpcLogging.md)
-9. [Kubernetes - Remote Debugging Guide](docs/howto/howToRemoteDebugTeranode.md)
+1. [Running Services Locally](docs/howto/locallyRunningServices.md)
+2. [Using the Makefile](docs/howto/makefile.md)
+3. [Running Tests](docs/howto/runningTests.md)
+4. [Setting Up Automated Test Environment](docs/howto/automatedTestingHowTo.md)
+5. [Generating Protobuf Files](docs/howto/generatingProtobuf.md)
+6. [Adding new Protobuf Services](docs/howto/addingNewProtobufServices.md)
+7. [Configuring gRPC Logging](docs/howto/configuringGrpcLogging.md)
+8. [Kubernetes - Remote Debugging Guide](docs/howto/howToRemoteDebugTeranode.md)
 
 ### Miners
 
@@ -76,33 +79,33 @@
 - [What is Teranode?](docs/topics/teranodeIntro.md)
 
 ### Architecture
-- [Overall System Design](docs/architecture/teranode-overall-system-design.md)
-- [Microservices Overview](docs/architecture/teranode-microservices-overview.md)
+- [Overall System Design](docs/topics/architecture/teranode-overall-system-design.md)
+- [Microservices Overview](docs/topics/architecture/teranode-microservices-overview.md)
 
 #### Core Services
-- [Asset Server](docs/services/assetServer.md)
-- [Propagation Service](docs/services/propagation.md)
-- [Validator Service](docs/services/validator.md)
-- [Subtree Validation Service](docs/services/subtreeValidation.md)
-- [Block Validation Service](docs/services/blockValidation.md)
-- [Block Assembly Service](docs/services/blockAssembly.md)
-- [Blockchain Service](docs/services/blockchain.md)
-- [Alert Service](docs/services/alert.md)
+- [Asset Server](docs/topics/services/assetServer.md)
+- [Propagation Service](docs/topics/services/propagation.md)
+- [Validator Service](docs/topics/services/validator.md)
+- [Subtree Validation Service](docs/topics/services/subtreeValidation.md)
+- [Block Validation Service](docs/topics/services/blockValidation.md)
+- [Block Assembly Service](docs/topics/services/blockAssembly.md)
+- [Blockchain Service](docs/topics/services/blockchain.md)
+- [Alert Service](docs/topics/services/alert.md)
 
 #### Overlay Services
-- [Block Persister Service](docs/services/blockPersister.md)
-- [UTXO Persister Service](docs/services/utxoPersister.md)
-- [P2P Service](docs/services/p2p.md)
-- [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
-- [P2P Legacy Service](docs/services/p2pLegacy.md)
-- [RPC Server](docs/services/rpc.md)
+- [Block Persister Service](docs/topics/services/blockPersister.md)
+- [UTXO Persister Service](docs/topics/services/utxoPersister.md)
+- [P2P Service](docs/topics/services/p2p.md)
+- [P2P Bootstrap Service](docs/topics/services/p2pBootstrap.md)
+- [P2P Legacy Service](docs/topics/services/p2pLegacy.md)
+- [RPC Server](docs/topics/services/rpc.md)
 
 #### Infrastructure Components
 - **Stores**
-   - [Blob Server](docs/stores/blob.md)
-   - [UTXO Store](docs/stores/utxo.md)
+   - [Blob Server](docs/topics/stores/blob.md)
+   - [UTXO Store](docs/topics/stores/utxo.md)
 - **Messaging**
-   - [Kafka](docs/kafka/kafka.md)
+   - [Kafka](docs/topics/kafka/kafka.md)
 - **Utilities**
    - [UTXO Seeder](docs/commands/seeder.md)
    - [UTXO Blaster](docs/commands/utxoBlaster.md)
