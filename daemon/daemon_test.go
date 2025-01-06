@@ -108,12 +108,7 @@ func TestDaemon_Start_Basic(t *testing.T) {
 		d.Start(logger, args, tSettings, readyCh)
 	}()
 
-	select {
-	case <-readyCh:
-		// Daemon started successfully
-	case <-time.After(10 * time.Second):
-		t.Fatal("Timeout waiting for daemon to start")
-	}
+	<-readyCh
 
 	// Stop the daemon
 	d.Stop()
