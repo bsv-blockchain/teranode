@@ -26,6 +26,8 @@ type serviceWrapper struct {
 }
 
 var (
+	instance  *ServiceManager
+	once      sync.Once
 	mu        sync.RWMutex
 	listeners []string = make([]string, 0)
 )
@@ -35,13 +37,23 @@ type ServiceManager struct {
 	dependencyChannelsMux sync.Mutex
 	dependencyChannels    []chan bool
 	logger                ulogger.Logger
-	ctx                   context.Context
+	Ctx                   context.Context
 	cancelFunc            context.CancelFunc
 	g                     *errgroup.Group
 	// statusClient       status.ClientI
 }
 
-func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context) {
+// NewServiceManager creates a new service manager or returns the existing instance
+func NewServiceManager(logger ulogger.Logger) *ServiceManager {
+	once.Do(func() {
+		instance = initServiceManager(logger)
+	})
+
+	return instance
+}
+
+// initServiceManager initializes a new ServiceManager instance
+func initServiceManager(logger ulogger.Logger) *ServiceManager {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -49,7 +61,7 @@ func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context)
 	sm := &ServiceManager{
 		services:   make([]serviceWrapper, 0),
 		logger:     logger,
-		ctx:        ctx,
+		Ctx:        ctx,
 		cancelFunc: cancelFunc,
 		g:          g,
 		// statusClient: statusClient,
@@ -70,7 +82,7 @@ func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context)
 		_ = json.NewEncoder(w).Encode(GetListenerInfos())
 	})
 
-	return sm, ctx
+	return sm
 }
 
 func AddListenerInfo(name string) {
@@ -107,7 +119,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 
 	sm.logger.Infof("⚪️ Initializing service %s...", name)
 
-	if err := service.Init(sm.ctx); err != nil {
+	if err := service.Init(sm.Ctx); err != nil {
 		return err
 	}
 
@@ -128,7 +140,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		close(sm.dependencyChannels[sw.index])
 		sm.dependencyChannelsMux.Unlock()
 
-		if err := service.Start(sm.ctx); err != nil {
+		if err := service.Start(sm.Ctx); err != nil {
 			sm.logger.Errorf("Error from service start %s: %v", name, err)
 			return err
 		}

@@ -60,7 +60,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		}
 	}
 
-	sm, ctx := servicemanager.NewServiceManager(logger)
+	sm := servicemanager.NewServiceManager(logger)
 
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -83,7 +83,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		}
 	}()
 
-	err := startServices(ctx, logger, tSettings, sm, args)
+	err := startServices(sm.Ctx, logger, tSettings, sm, args)
 	if err != nil {
 		logger.Fatalf("error starting services: %v", err)
 	}
@@ -93,7 +93,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	mux := http.NewServeMux()
 	healthFunc := func(liveness bool) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
-			status, details, err := sm.HealthHandler(ctx, liveness)
+			status, details, err := sm.HealthHandler(sm.Ctx, liveness)
 			if err != nil {
 				w.WriteHeader(status)
 				_, _ = w.Write([]byte(details))
@@ -182,14 +182,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		return nil
 	}
 
-	go func() {
-		var (
-			profilerAddr string
-			ok           bool
-		)
-
-		profilerAddr, ok = gocore.Config().Get("profilerAddr")
-		if ok {
+	if profilerAddr, ok := gocore.Config().Get("profilerAddr"); ok && profilerAddr != "" {
+		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
 			gocore.RegisterStatsHandlers()
@@ -206,16 +200,15 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 			http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 			logger.Fatalf("%v", server.ListenAndServe())
-		}
-	}()
+		}()
+	}
 
 	if gocore.Config().GetBool("use_datadog_profiler", false) {
 		deferFn := datadogProfiler()
 		defer deferFn()
 	}
 
-	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
-	if ok && prometheusEndpoint != "" {
+	if prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint"); ok && prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 		http.Handle(prometheusEndpoint, promhttp.Handler())
 	}
