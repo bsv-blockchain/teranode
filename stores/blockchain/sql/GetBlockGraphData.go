@@ -20,7 +20,11 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			,block_time
 			,tx_count
 			FROM blocks
-			WHERE id IN (0, (SELECT id FROM blocks ORDER BY chain_work DESC, id ASC LIMIT 1))
+			WHERE id IN (
+				0,
+				(SELECT id FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1)
+			)
+			AND EXISTS (SELECT 1 FROM blocks WHERE id > 0)
 			UNION ALL
 			SELECT
 			 b.id
@@ -54,7 +58,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			return nil, errors.NewStorageError("failed to read data point", err)
 		}
 
-		// blockDataPoints.DataPoints = append(blockDataPoints.DataPoints, dataPoint)
+		blockDataPoints.DataPoints = append(blockDataPoints.DataPoints, dataPoint)
 	}
 
 	return blockDataPoints, nil

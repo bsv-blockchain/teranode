@@ -136,7 +136,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkFirstBlockBigInt := new(big.Int).SetBytes(chainWorkFirstBlock)
-		t.Logf("first chain work: %s", chainWorkFirstBlockBigInt.String())
+		// t.Logf("first chain work: %s", chainWorkFirstBlockBigInt.String())
 
 		secondBlock := &model.Block{
 			Header: &model.BlockHeader{
@@ -162,7 +162,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkSecondBlockBigInt := new(big.Int).SetBytes(chainWorkSecondBlock)
-		t.Logf("second chain work: %s", chainWorkSecondBlockBigInt.String())
+		// t.Logf("second chain work: %s", chainWorkSecondBlockBigInt.String())
 
 		assert.True(t, chainWorkSecondBlockBigInt.Cmp(chainWorkFirstBlockBigInt) > 0)
 	})
@@ -201,7 +201,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkFirstBlockBigInt := new(big.Int).SetBytes(chainWorkFirstBlock)
-		t.Logf("first chain work: %s", chainWorkFirstBlockBigInt.String())
+		// t.Logf("first chain work: %s", chainWorkFirstBlockBigInt.String())
 
 		secondBlock := &model.Block{
 			Header: &model.BlockHeader{
@@ -227,7 +227,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkSecondBlockBigInt := new(big.Int).SetBytes(chainWorkSecondBlock)
-		t.Logf("second chain work: %s", chainWorkSecondBlockBigInt.String())
+		// t.Logf("second chain work: %s", chainWorkSecondBlockBigInt.String())
 
 		assert.True(t, chainWorkSecondBlockBigInt.Cmp(chainWorkFirstBlockBigInt) > 0)
 
@@ -255,7 +255,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkThirdBlockBigInt := new(big.Int).SetBytes(chainWorkThirdBlock)
-		t.Logf("third chain work: %s", chainWorkThirdBlockBigInt.String())
+		// t.Logf("third chain work: %s", chainWorkThirdBlockBigInt.String())
 
 		assert.True(t, chainWorkThirdBlockBigInt.Cmp(chainWorkSecondBlockBigInt) > 0)
 
@@ -322,7 +322,7 @@ func TestGetCumulativeChainWork(t *testing.T) {
 		require.NoError(t, err)
 
 		chainWorkBigInt := new(big.Int).SetBytes(chainWork)
-		t.Logf("forked chain work: %s", chainWorkBigInt.String())
+		// t.Logf("forked chain work: %s", chainWorkBigInt.String())
 
 		// assert that this chaiwork is the same as the third block
 		assert.Equal(t, chainWorkSecondBlockBigInt.String(), chainWorkBigInt.String())

@@ -36,7 +36,7 @@ func TestGenesisHashNewChain(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Setup test logger
-			logger := ulogger.NewZeroLogger(t.Name())
+			logger := ulogger.TestLogger{}
 
 			// Setup test database URL
 			dbURL, err := url.Parse("sqlitememory:///")
@@ -93,7 +93,7 @@ func TestGenesisHashWrongParams(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Setup test logger and database
-			logger := ulogger.NewZeroLogger(t.Name())
+			logger := ulogger.TestLogger{}
 			dbURL, err := url.Parse("sqlitememory:///")
 			require.NoError(t, err)
 
