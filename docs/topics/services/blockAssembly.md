@@ -276,13 +276,13 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
 
 ## 3. Data Model
 
-- [Block Data Model](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers.
-- [Subtree Data Model](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [UTXO Data Model](../topics/datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
+- [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
+- [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [UTXO Data Model](../datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
 
 ## 4. gRPC Protobuf Definitions
 
-The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/blockassemblyProto.md).
+The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockassemblyProto.md).
 
 
 ## 5. Technology
@@ -383,4 +383,4 @@ The Block Assembly service uses the following configuration options:
 
 ## 9. Other Resources
 
-[Block Assembly Reference](../references/services/blockassembly_reference.md)
+[Block Assembly Reference](../../references/services/blockassembly_reference.md)

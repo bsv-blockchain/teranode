@@ -111,7 +111,7 @@ The Coinbase Service offers a number of gRPC methods that can be used for miners
 
 ## 3. gRPC Protobuf Definitions
 
-The Coinbase Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/coinbaseProto.md).
+The Coinbase Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/coinbaseProto.md).
 
 
 ## 4. Data Model
@@ -242,4 +242,4 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 9. Other Resources
 
-[Coinbase Reference](../references/services/coinbase_reference.md)
+[Coinbase Reference](../../references/services/coinbase_reference.md)

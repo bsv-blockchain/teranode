@@ -147,9 +147,9 @@ In the original Bitcoin model:
 
 The Teranode data model introduces:
 
-- [Extended Transactions](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
-- [Subtrees](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [Blocks](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers, not transactions.
+- [Extended Transactions](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [Subtrees](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Blocks](../datamodel/block_data_model.md): Contain lists of subtree identifiers, not transactions.
 
 The main differences can be seen in the table below:
 
@@ -207,12 +207,13 @@ The Teranode architecture offers several benefits:
 - **UTXO**: Unspent Transaction Output, representing spendable coins in the Bitcoin system.
 - **Merkle root**: A single hash representing a set of transactions in a subtree or block.
 
-Please check the [Teranode BSV Glossary](../references/glossary.md) for more terms and definitions.
+Please check the [Teranode BSV Glossary](../../references/glossary.md) for more terms and definitions.
+
 
 ## 9. Related Resources
 
 - [Teranode Microservices Overview](teranode-microservices-overview.md)
 
-- [Extended Transactions](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
-- [Subtrees](../topics/datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
-- [Blocks](../topics/datamodel/block_data_model.md): Contain lists of subtree identifiers, not transactions.
+- [Extended Transactions](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [Subtrees](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
+- [Blocks](../datamodel/block_data_model.md): Contain lists of subtree identifiers, not transactions.

@@ -162,4 +162,4 @@ The `blockpersister` service utilizes specific `gocore` settings for configurati
 
 ## 8. Other Resources
 
-[Block Persister Reference](../references/services/blockpersister_reference.md)
+[Block Persister Reference](../../references/services/blockpersister_reference.md)

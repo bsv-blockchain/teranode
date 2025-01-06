@@ -323,12 +323,12 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 
 ## 3. gRPC Protobuf Definitions
 
-The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/blockchainProto.md).
+The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockchainProto.md).
 
 
 ## 4. Data Model
 
-The Blockchain works with the [Block Data Model](../topics/datamodel/block_data_model.md).
+The Blockchain works with the [Block Data Model](../datamodel/block_data_model.md).
 
 The blockchain database stores the block header, coinbase TX, and block merkle root. The following is the structure of the `blocks` data:
 
@@ -517,4 +517,4 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 
 ## 9. Other Resources
 
-[Blockchain Reference](../references/services/blockchain_reference.md)
+[Blockchain Reference](../../references/services/blockchain_reference.md)

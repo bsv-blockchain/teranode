@@ -218,10 +218,7 @@ This service is responsible for creating subtrees and assembling block templates
 - Subtrees
 - UTXOs
 
-
-
 You can read more about this service [here](../services/blockAssembly.md).
-
 
 ### 2.7 Blockchain Service
 
@@ -464,7 +461,7 @@ You can read more about this store [here](../stores/blob.md).
 
 The UTXO Store is responsible for tracking spendable UTXOs based on the longest honest chain-tip in the network.
 
-![UTXO_Store_Container_Context_Diagram.png](../../docs/services/img/UTXO_Store_Container_Context_Diagram.png)
+![UTXO_Store_Container_Context_Diagram.png](../services/img/UTXO_Store_Container_Context_Diagram.png)
 
 **Key Responsibilities:**
 - Maintain the current UTXO set
@@ -472,7 +469,7 @@ The UTXO Store is responsible for tracking spendable UTXOs based on the longest 
 - Manage block height for determining UTXO spendability
 - Support freezing, unfreezing, and reassigning UTXOs
 
-![UTXO_Store_Component_Context_Diagram.png](../../docs/services/img/UTXO_Store_Component_Context_Diagram.png)
+![UTXO_Store_Component_Context_Diagram.png](../services/img/UTXO_Store_Component_Context_Diagram.png)
 
 **Supported Storage Backends:**
 - Aerospike (primary production datastore)
@@ -542,7 +539,7 @@ Miners are responsible for the computational work of finding valid blocks.
 
 ## 7. Related Resources
 
-- [Teranode Architecture Overview](./teranode-overall-system-design.md)
+- [Teranode Architecture Overview](teranode-overall-system-design.md)
 
 - Core Services:
    - [Asset Server](../services/assetServer.md)

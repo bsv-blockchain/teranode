@@ -65,13 +65,13 @@ The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as w
 The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
 
 
-![UTXO_Store_Container_Context_Diagram.png](../../docs/services/img/UTXO_Store_Container_Context_Diagram.png)
+![UTXO_Store_Container_Context_Diagram.png](../servicesO_Store_Container_Context_Diagram.png)
 
 
 The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.
 
 
-![UTXO_Store_Component_Context_Diagram.png](../../docs/services/img/UTXO_Store_Component_Context_Diagram.png)
+![UTXO_Store_Component_Context_Diagram.png](../servicesO_Store_Component_Context_Diagram.png)
 
 The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
 
@@ -246,7 +246,7 @@ type Data struct {
 
 This is widely used by all services, given it is a comprehensive set of data going well beyond the extended Tx data set.
 
-To know more about the UTXO data model, please read more [here](../topics/datamodel/utxo_data_model.md).
+To know more about the UTXO data model, please read more [here](../datamodel/utxo_data_model.md).
 
 ## 4. Use Cases
 
@@ -489,7 +489,7 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 
 - **aerospike**: Aerospike UTXO store implementation.
 
-`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.ubsv.dev:3000/teranode-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
+`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
 
 - **memory**: Basic in-memory UTXO store.
 
@@ -497,7 +497,7 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 
 - **sql**: Implementation of a postgres UTXO store.
 
-`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.ubsv.dev:5432/teranode-store`
+`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store`
 
 - **nullstore**: Implementation of a null or dummy UTXO store.
 
@@ -591,4 +591,4 @@ Additionally, the following Aerospike-related settings allow to further configur
 
 ## 9. Other Resources
 
-[UTXO Store Reference](../references/stores/utxo_reference.md)
+[UTXO Store Reference](../../references/stores/utxo_reference.md)

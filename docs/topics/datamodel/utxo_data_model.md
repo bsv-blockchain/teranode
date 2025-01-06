@@ -52,7 +52,7 @@ Typically, UTXO records are kept with a time-to-live value that is set when all 
 
 If storing in Aerospike, the UTXO record is stored as a bin in the Aerospike database. The bin contains the UTXO data in a serialized format, containing up to 1024 bytes.
 
-![AerospikeRecord.png](../../services/img/AerospikeRecord.png)
+![AerospikeRecord.png](../services/img/AerospikeRecord.png)
 
 For more information, please refer to the official Aerospike documentation: https://aerospike.com.
 

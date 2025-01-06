@@ -71,13 +71,13 @@ All communication channels receive txs and delegate them to the `ProcessTransact
 
 ## 3. gRPC Protobuf Definitions
 
-The Propagation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/propagationProto.md).
+The Propagation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/propagationProto.md).
 
 ## 4. Data Model
 
 The Propagation Service deals with the extended transaction format, as seen below:
 
-- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
+- [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Technology
 
@@ -151,4 +151,4 @@ The Propagation service uses the following configuration options:
 
 ## 9. Other Resources
 
-[Propagation Service Reference](../references/services/propagation_reference.md)
+[Propagation Service Reference](../../references/services/propagation_reference.md)

@@ -589,4 +589,4 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Other Resources
 
-[Alert Reference](../references/services/propagation_reference.md)
+[Alert Reference](../../references/services/propagation_reference.md)
