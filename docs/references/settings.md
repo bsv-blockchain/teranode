@@ -3,7 +3,7 @@
 All services accept settings allowing local and remote servers to have their own specific configuration.
 
 Please review the following documents for more information on how to deploy the settings:
-- [Developer Setup](../howto/developerSetup.md)
+- [Developer Setup](../tutorials/developers/developerSetup.md)
 - [Test Setup](../howto/miners/docker/minersHowToConfigureTheNode.md)
 - [Production Setup](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 
