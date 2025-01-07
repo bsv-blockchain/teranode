@@ -72,6 +72,13 @@ func NewGenerateCmd(numBlocks uint32) *GenerateCmd {
 	}
 }
 
+// GenerateToAddressCmd defines the generate JSON-RPC command.
+type GenerateToAddressCmd struct {
+	NumBlocks int32
+	Address   string
+	MaxTries  *int32
+}
+
 // GetBestBlockCmd defines the getbestblock JSON-RPC command.
 type GetBestBlockCmd struct{}
 
@@ -131,6 +138,7 @@ func init() {
 	MustRegisterCmd("debuglevel", (*DebugLevelCmd)(nil), flags)
 	MustRegisterCmd("node", (*NodeCmd)(nil), flags)
 	MustRegisterCmd("generate", (*GenerateCmd)(nil), flags)
+	MustRegisterCmd("generatetoaddress", (*GenerateToAddressCmd)(nil), flags)
 	MustRegisterCmd("getbestblock", (*GetBestBlockCmd)(nil), flags)
 	MustRegisterCmd("getcurrentnet", (*GetCurrentNetCmd)(nil), flags)
 	MustRegisterCmd("getheaders", (*GetHeadersCmd)(nil), flags)

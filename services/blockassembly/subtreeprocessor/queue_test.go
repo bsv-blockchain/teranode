@@ -20,31 +20,39 @@ func Test_queue(t *testing.T) {
 	enqueueItems(t, q, 1, 10)
 
 	items := 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		assert.Equal(t, uint64(items), item.node.Fee)
+
 		items++
-		//t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
+
 	assert.Equal(t, 10, items)
 
 	enqueueItems(t, q, 1, 10)
 
 	items = 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		assert.Equal(t, uint64(items), item.node.Fee)
+
 		items++
-		//t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
+
 	assert.Equal(t, 10, items)
 }
 
@@ -67,15 +75,18 @@ func Test_queueWithTime(t *testing.T) {
 
 	items := 0
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+
 	for {
 		item = q.dequeue(validFromMillis)
 		if item == nil {
 			break
 		}
+
 		assert.Equal(t, uint64(items), item.node.Fee)
+
 		items++
-		//t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10, items)
 
@@ -95,15 +106,18 @@ func Test_queueWithTime(t *testing.T) {
 
 	items = 0
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
+
 	for {
 		item = q.dequeue(validFromMillis)
 		if item == nil {
 			break
 		}
+
 		assert.Equal(t, uint64(items), item.node.Fee)
+
 		items++
-		//t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 10, items)
 }
@@ -114,47 +128,60 @@ func Test_queue2Threads(t *testing.T) {
 	enqueueItems(t, q, 2, 10)
 
 	items := 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		items++
+
 		t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 20, items)
 
 	enqueueItems(t, q, 2, 10)
 
 	items = 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		items++
+
 		t.Logf("Item: %d\n", item.node.Fee)
 	}
+
 	assert.True(t, q.IsEmpty())
 	assert.Equal(t, 20, items)
 }
 
 func Test_queueLarge(t *testing.T) {
 	runtime.GC()
+
 	q := NewLockFreeQueue()
 
 	enqueueItems(t, q, 1, 10_000_000)
 
 	startTime := time.Now()
+
 	items := 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		items++
 	}
+
 	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
 	t.Logf("Mem used for queue: %s\n", printAlloc())
 
@@ -166,14 +193,18 @@ func Test_queueLarge(t *testing.T) {
 	enqueueItems(t, q, 1_000, 10_000)
 
 	startTime = time.Now()
+
 	items = 0
+
 	for {
 		item := q.dequeue(0)
 		if item == nil {
 			break
 		}
+
 		items++
 	}
+
 	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
 	t.Logf("Mem used after dequeue: %s\n", printAlloc())
 	runtime.GC()
@@ -185,11 +216,15 @@ func Test_queueLarge(t *testing.T) {
 
 func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	startTime := time.Now()
+
 	var wg sync.WaitGroup
+
 	for n := 0; n < threads; n++ {
 		wg.Add(1)
+
 		go func(n int) {
 			defer wg.Done()
+
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
 				q.enqueue(&TxIDAndFee{
@@ -202,6 +237,7 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 			}
 		}(n)
 	}
+
 	wg.Wait()
 	t.Logf("Time queue %d items: %s\n", threads*iter, time.Since(startTime))
 }
@@ -210,6 +246,7 @@ func BenchmarkQueue(b *testing.B) {
 	q := NewLockFreeQueue()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		q.enqueue(&TxIDAndFee{
 			node: util.SubtreeNode{
@@ -250,6 +287,8 @@ func BenchmarkAtomicPointer(b *testing.B) {
 
 func printAlloc() string {
 	var m runtime.MemStats
+
 	runtime.ReadMemStats(&m)
+
 	return fmt.Sprintf("%d MB", m.Alloc/(1024*1024))
 }

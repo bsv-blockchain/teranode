@@ -20,16 +20,22 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// swagger:enum Status
+// Status represents the current state of a UTXO.
 type Status int32
 
 const (
-	Status_OK             Status = 0
-	Status_SPENT          Status = 1
-	Status_LOCKED         Status = 2
-	Status_NOT_FOUND      Status = 3
+	// Status_OK indicates the UTXO is valid and spendable
+	Status_OK Status = 0
+	// Status_SPENT indicates the UTXO has been spent
+	Status_SPENT Status = 1
+	// Status_LOCKED indicates the UTXO is temporarily locked
+	Status_LOCKED Status = 2
+	// Status_NOT_FOUND indicates the UTXO does not exist
+	Status_NOT_FOUND Status = 3
+	// Status_ALREADY_EXISTS indicates an attempt to create a duplicate UTXO
 	Status_ALREADY_EXISTS Status = 4
-	Status_FROZEN         Status = 5
+	// Status_FROZEN indicates the UTXO has been frozen by the alert system
+	Status_FROZEN Status = 5
 )
 
 // Enum value maps for Status.

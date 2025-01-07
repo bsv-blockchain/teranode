@@ -19,6 +19,7 @@ var (
 	prometheusHandleCreateRawTransaction prometheus.Histogram
 	prometheusHandleSendRawTransaction   prometheus.Histogram
 	prometheusHandleGenerate             prometheus.Histogram
+	prometheusHandleGenerateToAddress    prometheus.Histogram
 	prometheusHandleGetMiningCandidate   prometheus.Histogram
 	prometheusHandleSubmitMiningSolution prometheus.Histogram
 	prometheusHandleGetpeerinfo          prometheus.Histogram
@@ -126,6 +127,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "generate",
 			Help:      "Histogram of calls to handleGenerate in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGenerateToAddress = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "generate_to_address",
+			Help:      "Histogram of calls to handleGenerateToAddress in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

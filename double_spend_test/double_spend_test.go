@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -93,7 +94,7 @@ func TestDaemon(t *testing.T) {
 	baClient, err := blockassembly.NewClient(ctx, logger, tSettings)
 	require.NoError(t, err)
 
-	err = baClient.GenerateBlocks(ctx, 101)
+	err = baClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
 	require.NoError(t, err)
 
 	block1, _, err := bcClient.GetBlockHeadersByHeight(ctx, 1, 1)

@@ -277,7 +277,7 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 		return nil, errors.NewProcessingError("error getting mining candidate", err)
 	}
 
-	solution, err := mining.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
@@ -306,7 +306,7 @@ func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogg
 }
 
 func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
-	solution, err := mining.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
@@ -326,7 +326,7 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 }
 
 func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
-	solution, err := mining.Mine(ctx, miningCandidate)
+	solution, err := mining.Mine(ctx, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}

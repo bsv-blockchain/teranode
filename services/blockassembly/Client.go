@@ -150,6 +150,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 			req:  req,
 			done: done,
 		})
+
 		err := <-done
 		if err != nil {
 			return false, err
@@ -210,10 +211,8 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 	return nil
 }
 
-func (s *Client) GenerateBlocks(ctx context.Context, count int32) error {
-	_, err := s.client.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{
-		Count: count,
-	})
+func (s *Client) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error {
+	_, err := s.client.GenerateBlocks(ctx, req)
 
 	unwrappedErr := errors.UnwrapGRPC(err)
 	if unwrappedErr == nil {
@@ -236,6 +235,7 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	_, err := s.client.AddTxBatch(ctx, txBatch)
 	if err != nil {
 		s.logger.Errorf("%v", err)
+
 		for _, item := range batch {
 			item.done <- errors.UnwrapGRPC(err)
 		}

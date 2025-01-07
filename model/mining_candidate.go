@@ -78,3 +78,29 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(p2pk ...bool) (*bt.Tx, erro
 
 	return coinbaseTx, nil
 }
+
+func (mc *MiningCandidate) CreateCoinbaseTxCandidateForAddress(address *string) (*bt.Tx, error) {
+	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+
+	if address == nil {
+		return nil, errors.NewConfigurationError("address is required for ")
+	}
+
+	a, b, err := GetCoinbaseParts(mc.Height, mc.CoinbaseValue, arbitraryText, []string{*address})
+	if err != nil {
+		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
+	}
+
+	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
+	extranonce := make([]byte, 12)
+	_, _ = rand.Read(extranonce)
+	a = append(a, extranonce...)
+	a = append(a, b...)
+
+	coinbaseTx, err := bt.NewTxFromBytes(a)
+	if err != nil {
+		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
+	}
+
+	return coinbaseTx, nil
+}

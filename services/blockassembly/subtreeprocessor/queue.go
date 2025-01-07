@@ -33,11 +33,13 @@ func (q *LockFreeQueue) length() int64 {
 // enqueue is thread safe, it uses atomic operations to add to the queue
 func (q *LockFreeQueue) enqueue(v *TxIDAndFee) {
 	v.time = fastime.Now().UnixMilli()
+
 	prev := q.tail.Swap(v)
 	if prev == nil {
 		q.head.next.Store(v)
 		return
 	}
+
 	prev.next.Store(v)
 	q.queueLength.Add(1)
 }
@@ -57,6 +59,7 @@ func (q *LockFreeQueue) dequeue(validFromMillis int64) *TxIDAndFee {
 
 	q.head = next
 	q.queueLength.Add(-1)
+
 	return next
 }
 

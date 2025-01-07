@@ -170,7 +170,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := mining.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -446,7 +446,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := mining.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -550,7 +550,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash4.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := mining.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -659,7 +659,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, hash2.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := mining.Mine(ctx, miningCandidate)
+		solution, err := mining.Mine(ctx, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)

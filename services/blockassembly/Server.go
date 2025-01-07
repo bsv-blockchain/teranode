@@ -920,7 +920,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	}
 
 	for i := 0; i < int(req.Count); i++ {
-		err := ba.generateBlock(ctx)
+		err := ba.generateBlock(ctx, req.Address)
 		if err != nil {
 			return nil, errors.NewProcessingError("error generating block", err)
 		}
@@ -929,7 +929,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
+func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})
 	if err != nil {
@@ -937,7 +937,7 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context) error {
 	}
 
 	// mine the block
-	miningSolution, err := mining.Mine(ctx, miningCandidate)
+	miningSolution, err := mining.Mine(ctx, miningCandidate, address)
 	if err != nil {
 		return errors.NewProcessingError("error mining block", err)
 	}

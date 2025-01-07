@@ -25,7 +25,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/multiformats/go-multiaddr"
+	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -727,11 +727,17 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	resp := &p2p_api.GetPeersResponse{}
 
 	for _, sp := range serverPeers {
+		if sp.ID == "" || sp.Addrs == nil {
+			continue
+		}
+
+		// ignore localhost
 		if sp.ID == s.P2PNode.HostID() {
 			continue
 		}
 
-		if len(sp.Addrs) == 0 {
+		// ignore bootstrap server
+		if contains(s.settings.P2P.BootstrapAddresses, sp.ID.String()) {
 			continue
 		}
 
@@ -741,6 +747,27 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	}
 
 	return resp, nil
+}
+
+// contains checks if a slice of strings contains a specific string.
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		bootstrapAddr, err := ma.NewMultiaddr(s)
+		if err != nil {
+			continue
+		}
+
+		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
+		if err != nil {
+			continue
+		}
+
+		if peerInfo.ID.String() == item {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
@@ -806,29 +833,29 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 	}
 }
 
-func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr multiaddr.Multiaddr) (net.IP, error) {
+func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
 	// try to get the IP address component
-	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+	if ip, err := maddr.ValueForProtocol(ma.P_IP4); err == nil {
 		return net.ParseIP(ip), nil
 	}
 
-	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+	if ip, err := maddr.ValueForProtocol(ma.P_IP6); err == nil {
 		return net.ParseIP(ip), nil
 	}
 
 	// if it's a DNS multiaddr, resolve it
-	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
+	if _, err := maddr.ValueForProtocol(ma.P_DNS4); err == nil {
 		return s.resolveDNS(ctx, maddr)
 	}
 
-	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS6); err == nil {
+	if _, err := maddr.ValueForProtocol(ma.P_DNS6); err == nil {
 		return s.resolveDNS(ctx, maddr)
 	}
 
 	return nil, nil // not an IP or resolvable DNS address
 }
 
-func (s *Server) resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (net.IP, error) {
+func (s *Server) resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, error) {
 	resolver := madns.DefaultResolver
 
 	addrs, err := resolver.Resolve(ctx, dnsAddr)
@@ -840,7 +867,7 @@ func (s *Server) resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (n
 		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no addresses found for %s", dnsAddr))
 	}
 	// get the IP from the first resolved address
-	for _, proto := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+	for _, proto := range []int{ma.P_IP4, ma.P_IP6} {
 		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
 			return net.ParseIP(ipStr), nil
 		}

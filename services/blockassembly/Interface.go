@@ -15,7 +15,7 @@ type ClientI interface {
 	GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error)
 	GetCurrentDifficulty(ctx context.Context) (float64, error)
 	SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error
-	GenerateBlocks(ctx context.Context, count int32) error
+	GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error
 	DeDuplicateBlockAssembly(ctx context.Context) error
 	ResetBlockAssembly(ctx context.Context) error
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
@@ -65,7 +65,7 @@ func (m Mock) SubmitMiningSolution(ctx context.Context, solution *model.MiningSo
 	panic("implement me")
 }
 
-func (m Mock) GenerateBlocks(ctx context.Context, count int32) error {
+func (m Mock) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error {
 	// TODO implement me
 	panic("implement me")
 }

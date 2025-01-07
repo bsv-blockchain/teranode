@@ -364,7 +364,8 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 
 				return makeError(ErrInvalidType, str)
 			}
-			if dest.OverflowInt(int64(srcUint)) {
+
+			if dest.OverflowInt(int64(srcUint)) { //nolint:gosec
 				str := fmt.Sprintf("parameter #%d '%s' "+
 					"overflows destination type %v",
 					paramNum, fieldName, destBaseType)
@@ -372,7 +373,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 				return makeError(ErrInvalidType, str)
 			}
 
-			dest.SetInt(int64(srcUint))
+			dest.SetInt(int64(srcUint)) //nolint:gosec
 
 		// Destination is an unsigned integer of various magnitude.
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,

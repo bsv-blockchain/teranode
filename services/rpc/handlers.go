@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
@@ -491,7 +492,57 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	err := s.blockAssemblyClient.GenerateBlocks(ctx, int32(c.NumBlocks)) //nolint:gosec
+	err := s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(c.NumBlocks)}) //nolint:gosec
+	if err != nil {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: err.Error(),
+		}
+	}
+
+	return nil, nil
+}
+
+// handleGenerateToAddress handles generatetoaddress commands.
+func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	c := cmd.(*bsvjson.GenerateToAddressCmd)
+	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerateToAddress",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGenerateToAddress),
+		tracing.WithLogMessage(s.logger, "[handleGenerateToAddress] called for %d blocks to %s", c.NumBlocks, c.Address),
+	)
+
+	defer deferFn()
+
+	// Respond with an error if there's virtually 0 chance of mining a block
+	// with the CPU.
+	if !s.settings.ChainCfgParams.GenerateSupported {
+		return nil, &bsvjson.RPCError{
+			Code: bsvjson.ErrRPCDifficulty,
+			Message: fmt.Sprintf("No support for `generatetoaddress` on "+
+				"the current network, %s, as it's unlikely to "+
+				"be possible to mine a block with the CPU.",
+				s.settings.ChainCfgParams.Net),
+		}
+	}
+
+	if c.NumBlocks <= 0 {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: "Please request a nonzero number of blocks to generate.",
+		}
+	}
+
+	// check address
+	_, err := bsvutil.DecodeAddress(c.Address, s.settings.ChainCfgParams)
+	if err != nil {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidAddressOrKey,
+			Message: err.Error(),
+		}
+	}
+
+	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: c.NumBlocks, Address: &c.Address, MaxTries: c.MaxTries}) //nolint:gosec
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInternal.Code,

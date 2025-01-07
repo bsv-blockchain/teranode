@@ -111,6 +111,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"decodescript":          handleUnimplemented,
 	"estimatefee":           handleUnimplemented,
 	"generate":              handleGenerate,
+	"generatetoaddress":     handleGenerateToAddress,
 	"getaddednodeinfo":      handleUnimplemented,
 	"getbestblock":          handleUnimplemented,
 	"getbestblockhash":      handleGetBestBlockHash,
@@ -767,6 +768,7 @@ func parseCmd(request *bsvjson.Request) *parsedRPCCmd {
 
 	cmd, err := bsvjson.UnmarshalCmd(request)
 	if err != nil {
+		fmt.Printf("Error unmarshalling command: %v", err)
 		// When the error is because the method is not registered,
 		// produce a method not found RPC error.
 		if jerr, ok := err.(bsvjson.Error); ok &&

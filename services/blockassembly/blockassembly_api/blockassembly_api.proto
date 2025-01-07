@@ -127,4 +127,6 @@ message GetCurrentDifficultyResponse {
 // Request for generating a block.
 message GenerateBlocksRequest {
   int32 count = 1; // the number of blocks to generate
+  optional string address = 2; // the address to send the generated blocks to
+  optional int32 maxTries = 3; // the maximum number of attempts to generate a block
 }
