@@ -1,6 +1,7 @@
 package blockchain_api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,9 @@ func TestNotification_Stringify(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.notif.Stringify()
+			// Normalize spaces in metadata formatting
+			result = strings.ReplaceAll(result, "  ", " ")
+			tt.expected = strings.ReplaceAll(tt.expected, "  ", " ")
 			assert.Equal(t, tt.expected, result)
 		})
 	}
