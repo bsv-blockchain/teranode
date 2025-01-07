@@ -19,6 +19,7 @@
 
 ### Development Tutorials
 - [Setting Up for Development](docs/tutorials/developers/developerSetup.md)
+- [Git Commit Signing Setup Guide](docs/tutorials/developers/gitCommitSigningSetupGuide.md)
 
 ### Miner Tutorials
 
