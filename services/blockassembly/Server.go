@@ -293,20 +293,28 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 		return nil
 	}
 
-	// TODO #145
-	// the repository in the blob server sometimes cannot find subtrees that were just stored
-	// this is the dumbest way we can think of to fix it, at least temporarily
-	time.Sleep(20 * time.Millisecond)
+	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		ba.logger.Errorf("[SubtreeProcessor] Failed to get current state: %s", err)
+	}
 
-	if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
-		Type:     model.NotificationType_Subtree,
-		Hash:     subtree.RootHash()[:],
-		Base_URL: "",
-		Metadata: &blockchain.NotificationMetadata{
-			Metadata: nil,
-		},
-	}); err != nil {
-		return errors.NewServiceError("[BlockAssembly:Init][%s] failed to send subtree notification", subtree.RootHash().String(), err)
+	// only send notification if the FSM is in the running state
+	if isRunning {
+		// TODO #145
+		// the repository in the blob server sometimes cannot find subtrees that were just stored
+		// this is the dumbest way we can think of to fix it, at least temporarily
+		time.Sleep(20 * time.Millisecond)
+
+		if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
+			Type:     model.NotificationType_Subtree,
+			Hash:     subtree.RootHash()[:],
+			Base_URL: "",
+			Metadata: &blockchain.NotificationMetadata{
+				Metadata: nil,
+			},
+		}); err != nil {
+			return errors.NewServiceError("[BlockAssembly:Init][%s] failed to send subtree notification", subtree.RootHash().String(), err)
+		}
 	}
 
 	return nil

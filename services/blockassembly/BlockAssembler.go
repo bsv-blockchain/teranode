@@ -71,6 +71,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	defaultMiningBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, utxoStore, newSubtreeChan)
+
 	b := &BlockAssembler{
 		logger:              logger,
 		stats:               stats.NewStat("BlockAssembler"),
@@ -232,6 +233,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						b.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 					}
 
+					// if the current state is not running, we don't give a mining candidate
 					if *currentState == blockchain.FSMStateRUNNING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
