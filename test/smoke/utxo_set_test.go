@@ -5,7 +5,7 @@
 // To run this specific test:
 //   - Run all smoke tests: go test -tags=test_smoke ./test/smoke/...
 //   - Run only UTXO tests: go test -tags=test_utxo ./test/smoke/...
-//   - Run this specific test: go test -tags=test_utxo -run TestUTXOVerificationTestSuite/TestVerifyUTXOSetConsistency ./test/smoke/...
+//   - Run this specific test: go test -tags=test_utxo -run TestUTXOVerificationTestSuite/TestVerifyUTXOSetConsistency
 //
 // Test Requirements:
 //   - Docker must be running (tests use testcontainers)
@@ -88,7 +88,8 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	require.NoError(t, err, "Failed to create address")
 
 	// Get initial UTXO set state
-	initialHeight, err := helper.GetBlockHeight(framework.Nodes[0].AssetURL)
+	url := "http://" + framework.Nodes[0].AssetURL
+	initialHeight, err := helper.GetBlockHeight(url)
 	require.NoError(t, err, "Failed to get initial block height")
 
 	// Create and send a faucet transaction
@@ -126,7 +127,7 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	require.NoError(t, err, "Failed to mine block")
 
 	// Wait for the block to be processed
-	err = helper.WaitForBlockHeight(framework.Nodes[0].AssetURL, initialHeight+1, 60)
+	err = helper.WaitForBlockHeight(url, initialHeight+1, 60)
 	require.NoError(t, err, "Failed to wait for block height")
 
 	// Verify UTXO sets are consistent across nodes

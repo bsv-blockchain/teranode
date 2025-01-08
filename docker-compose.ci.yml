@@ -1,0 +1,181 @@
+x-ubsv-base: &ubsv-base
+  image: ubsv:latest
+  networks:
+    - ubsv-network
+  restart: "no"
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-7.2.0.3_1
+  networks:
+    - ubsv-network
+  command: --config-file /etc/aerospike.conf
+
+networks:
+  ubsv-network:
+    name: ubsv-network-${TEST_RUN_ID:-default}
+
+volumes:
+  ubsv1_data:
+    name: ubsv1_data_${TEST_RUN_ID:-default}
+  ubsv2_data:
+    name: ubsv2_data_${TEST_RUN_ID:-default}
+  ubsv3_data:
+    name: ubsv3_data_${TEST_RUN_ID:-default}
+  postgres_data:
+    name: postgres_data_${TEST_RUN_ID:-default}
+  aerospike1_data:
+    name: aerospike1_data_${TEST_RUN_ID:-default}
+  aerospike2_data:
+    name: aerospike2_data_${TEST_RUN_ID:-default}
+  aerospike3_data:
+    name: aerospike3_data_${TEST_RUN_ID:-default}
+
+services:
+  ubsv-builder:
+    image: ubsv:latest
+    build:
+      context: .
+      dockerfile: ci.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-db1a6f0
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
+    networks:
+      - ubsv-network
+    entrypoint: [ "pwd" ]
+
+  ubsv1:
+    <<: *ubsv-base
+    container_name: ubsv1-${TEST_RUN_ID:-default}
+    depends_on:
+      - aerospike-1
+      - postgres
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1.test}
+      logLevel: "DEBUG"
+      TEST_RUN_ID: ${TEST_RUN_ID:-default}
+    ports:
+      - "18081-18089:8081-8089"
+      - "18090-18097:8090-8097"
+      - "19091:9091"
+      - "19905:9905"
+      - "19292:9292"
+    volumes:
+      - ubsv1_data:/app/data
+      - ./settings_local.conf:/app/settings_local.conf
+
+  ubsv2:
+    <<: *ubsv-base
+    container_name: ubsv2-${TEST_RUN_ID:-default}
+    depends_on:
+      - aerospike-2
+      - postgres
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2.test}
+      logLevel: "DEBUG"
+      TEST_RUN_ID: ${TEST_RUN_ID:-default}
+    volumes:
+      - ubsv2_data:/app/data
+      - ./settings_local.conf:/app/settings_local.conf
+
+  ubsv3:
+    <<: *ubsv-base
+    container_name: ubsv3-${TEST_RUN_ID:-default}
+    depends_on:
+      - aerospike-3
+      - postgres
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    environment:
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3.test}
+      logLevel: "DEBUG"
+      TEST_RUN_ID: ${TEST_RUN_ID:-default}
+    volumes:
+      - ubsv3_data:/app/data
+      - ./settings_local.conf:/app/settings_local.conf
+
+  test-runner:
+    <<: *ubsv-base
+    container_name: test-runner-${TEST_RUN_ID:-default}
+    depends_on:
+      - ubsv1
+      - ubsv2
+      - ubsv3
+      - aerospike-1
+      - aerospike-2
+      - aerospike-3
+      - postgres
+      - kafka-shared
+    environment:
+      TEST_ENV: container
+      TEST_RUN_ID: ${TEST_RUN_ID:-default}
+      SETTINGS_CONTEXT: docker
+      logLevel: "DEBUG"
+      # Set TEST_BINARY to tne.test, tna.test, or smoke.test to run pre-built binaries
+      # Leave empty to use go test directly
+      TEST_BINARY: ${TEST_BINARY:-}
+      TEST_ARGS: ${TEST_ARGS:--test.v}
+    volumes:
+      - ./test:/app/test
+      - ubsv1_data:/app/data/ubsv1
+      - ubsv2_data:/app/data/ubsv2
+      - ubsv3_data:/app/data/ubsv3
+      - ./settings_local.conf:/app/settings_local.conf
+    working_dir: /app/test
+    # Use shell form to support conditional execution
+    command: sh -c 'if [ -n "$$TEST_BINARY" ]; then ./$$TEST_BINARY $$TEST_ARGS; else tail -f /dev/null; fi'
+
+  postgres:
+    container_name: postgres-${TEST_RUN_ID:-default}
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    volumes:
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared-${TEST_RUN_ID:-default}
+    image: redpandadata/redpanda:latest
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+
+  aerospike-1:
+    <<: *aerospike-base
+    container_name: aerospike-1-${TEST_RUN_ID:-default}
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - aerospike1_data:/opt/aerospike/data
+
+  aerospike-2:
+    <<: *aerospike-base
+    container_name: aerospike-2-${TEST_RUN_ID:-default}
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - aerospike2_data:/opt/aerospike/data
+
+  aerospike-3:
+    <<: *aerospike-base
+    container_name: aerospike-3-${TEST_RUN_ID:-default}
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - aerospike3_data:/opt/aerospike/data

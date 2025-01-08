@@ -2,7 +2,7 @@
 
 // How to run this test manually:
 // $ cd test/tnj
-// $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestDoubleSpendMultipleUtxos$" -tags tnj
+// $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestDoubleSpendMultipleUtxos$" -tags test_tnj
 package tnj
 
 import (

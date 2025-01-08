@@ -6,8 +6,8 @@
 // go test -v -tags test_tnb ./test/tnb
 //
 // Run a specific test:
-// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$" ./test/tnb
-// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestNoReformattingRequired$" ./test/tnb
+// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$"
+// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestNoReformattingRequired$"
 //
 // Run with test coverage:
 // go test -v -tags test_tnb -coverprofile=coverage.out ./test/tnb
@@ -61,8 +61,8 @@ func (suite *TNB1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNB1TestSuite) TearDownTest() {
-}
+// func (suite *TNB1TestSuite) TearDownTest() {
+// }
 
 func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	testEnv := suite.TeranodeTestEnv
@@ -169,7 +169,10 @@ func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
 	require.NoError(t, err)
 	require.NotNil(t, tx)
 
-	_, err = helper.GenerateBlocks(ctx, node, 1, logger)
+	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL
+	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+	// Generate blocks
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	// Wait for block processing

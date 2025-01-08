@@ -2,8 +2,8 @@
 
 // How to run this test:
 // $ cd test/tnd/
-// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagation$" -tags test_functional
-// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagationWithNotifications$" -tags test_functional
+// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagation$" -tags test_tnd
+// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagationWithNotifications$" -tags test_tnd
 
 package tnd
 
@@ -38,7 +38,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagation() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	logger := testEnv.Logger
-	url := "http://localhost:10090"
+	url := "http://" + testEnv.Nodes[0].AssetURL
 	node0 := testEnv.Nodes[0]
 	node1 := testEnv.Nodes[1]
 	node2 := testEnv.Nodes[2]
@@ -62,9 +62,9 @@ func (suite *TND1_1TestSuite) TestBlockPropagation() {
 	t.Log("Waiting for blocks to propagate to all nodes...")
 
 	for _, nodeURL := range []string{
-		"http://localhost:10090", // node0
-		"http://localhost:12090", // node1
-		"http://localhost:14090", // node2
+		"http://" + node0.AssetURL,
+		"http://" + node1.AssetURL,
+		"http://" + node2.AssetURL,
 	} {
 		err := helper.WaitForBlockHeight(nodeURL, targetHeight, 60)
 		require.NoError(t, err)
@@ -128,6 +128,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	logger := testEnv.Logger
+	url := "http://" + testEnv.Nodes[0].AssetURL
 
 	// Set up notification channels for receiving nodes
 	var wg sync.WaitGroup
@@ -167,7 +168,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	}
 
 	// Get initial block height
-	initialHeight, err := helper.GetBlockHeight("http://localhost:10090")
+	initialHeight, err := helper.GetBlockHeight(url)
 	require.NoError(t, err)
 	t.Logf("Initial block height: %d", initialHeight)
 
@@ -190,9 +191,9 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	t.Log("Waiting for blocks to propagate to all nodes...")
 
 	for _, node := range []string{
-		"http://localhost:10090", // node0
-		"http://localhost:12090", // node1
-		"http://localhost:14090", // node2
+		"http://" + testEnv.Nodes[0].AssetURL,
+		"http://" + testEnv.Nodes[1].AssetURL,
+		"http://" + testEnv.Nodes[2].AssetURL,
 	} {
 		err := helper.WaitForBlockHeight(node, targetHeight, 60)
 		require.NoError(t, err)

@@ -2,15 +2,21 @@
 
 package tne
 
+// How to run all tests:
+// $ cd test/tne/
+// $ go test -v -run "^TestTNE1_1TestSuite$" -tags test_functional
+
 // How to run this test:
 // $ cd test/tne/
-// $ go test -v -run "^TestTNE1_1TestSuite$/TestNode_DoNotVerifyTransactionsIfAlreadyVerified$" -tags test_functional
+// $ go test -v -run "^TestTNE1_1TestSuite$/TestNode_DoNotVerifyTransactionsIfAlreadyVerified$" -tags test_tne
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -33,8 +39,8 @@ func (suite *TNE1_1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNE1_1TestSuite) TearDownTest() {
-}
+// func (suite *TNE1_1TestSuite) TearDownTest() {
+// }
 
 func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified() {
 	t := suite.T()
@@ -54,21 +60,29 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 	}
 
 	var err error
+
+	err = framework.InitializeTeranodeTestClients()
+	t.Errorf("Failed to initialize Teranode test clients: %v", err)
+
 	// wait for all blockchain nodes to be ready
-	for index, node := range suite.TeranodeTestEnv.Nodes {
+	for index, node := range framework.Nodes {
 		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
 
-		err = helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		err = helper.SendEventRun(framework.Context, node.BlockchainClient, framework.Logger)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 	}
 
-	ports := []int{10000, 12000, 14000} // ports are defined in docker-compose.e2etest.yml
+	ports := []int{8000, 8000, 8000} // ports are defined in docker-compose.e2etest.yml
 	for index, port := range ports {
 		suite.T().Logf("Waiting for node %d to be ready", index)
+		mp, err := framework.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 
-		err = helper.WaitForHealthLiveness(port, 30*time.Second)
+		err = helper.WaitForHealthLiveness(mp.Int(), 30*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
@@ -102,11 +116,21 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
+	err = framework.InitializeTeranodeTestClients()
+	if err != nil {
+		t.Errorf("Failed to initialize Teranode test clients: %v", err)
+	}
+
 	// Wait for nodes to be healthy
+	ports = []int{8000, 8000, 8000} // ports are defined in docker-compose.e2etest.yml
 	for index, port := range ports {
 		suite.T().Logf("Waiting for node %d to be ready", index)
+		mp, err := framework.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 
-		err = helper.WaitForHealthLiveness(port, 30*time.Second)
+		err = helper.WaitForHealthLiveness(mp.Int(), 30*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

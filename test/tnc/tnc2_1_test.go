@@ -52,8 +52,8 @@ func (suite *TNC2_1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNC2_1TestSuite) TearDownTest() {
-}
+// func (suite *TNC2_1TestSuite) TearDownTest() {
+// }
 
 // TestUniqueCandidateIdentifiers verifies that each mining candidate has a unique identifier
 func (suite *TNC2_1TestSuite) TestUniqueCandidateIdentifiers() {

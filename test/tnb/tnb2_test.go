@@ -33,8 +33,8 @@ func (suite *TNB2TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNB2TestSuite) TearDownTest() {
-}
+// func (suite *TNB2TestSuite) TearDownTest() {
+// }
 
 // How to run this test:
 // $ cd test/tnb/

@@ -297,7 +297,9 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 }
 
 func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger) (string, error) {
-	resp, err := CallRPC(node.RPCURL, "generate", []interface{}{1})
+	teranode1RPCEndpoint := node.RPCURL
+	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+	resp, err := CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	if err != nil {
 		return "", errors.NewProcessingError("error generating block", err)
 	}
@@ -923,7 +925,10 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 }
 
 func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int, logger ulogger.Logger) (string, error) {
-	resp, err := CallRPC(node.RPCURL, "generate", []interface{}{numBlocks})
+	teranode1RPCEndpoint := node.RPCURL
+	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+	// Generate blocks
+	resp, err := CallRPC(teranode1RPCEndpoint, "generate", []interface{}{numBlocks})
 	if err != nil {
 		return "", errors.NewProcessingError("error generating blocks", err)
 	}
@@ -1235,7 +1240,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) error {
 	var (
 		err    error
-		status int
+		// status int
 	)
 
 	const readiness = false // we don't need readiness check here, just liveness
@@ -1247,14 +1252,27 @@ func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logg
 		case <-timeout:
 			return errors.NewError("Timeout waiting for Blockchain service", err)
 		default:
-			status, _, err = blockchainClient.Health(ctx, readiness)
-			if err != nil || status != http.StatusOK {
+			err = blockchainClient.Run(ctx, "test")
+			if err != nil {
 				time.Sleep(100 * time.Millisecond)
 
 				continue
 			}
 
-			err = blockchainClient.Run(ctx, "test")
+			// status, _, err = blockchainClient.Health(ctx, readiness)
+			// logger.Infof("Blockchain GRPC health status: %d", status)
+			// if err != nil || status != http.StatusOK {
+			// 	time.Sleep(100 * time.Millisecond)
+
+			// 	continue
+			// }
+
+			// err = blockchainClient.Run(ctx, "test")
+			// if err != nil {
+			// 	time.Sleep(100 * time.Millisecond)
+
+			// 	continue
+			// }
 
 			return err
 		}

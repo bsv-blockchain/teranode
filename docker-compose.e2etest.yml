@@ -6,7 +6,7 @@ x-teranode-base: &teranode-base
   networks:
     - teranode-network
   volumes:
-    - ./data/test:/app/data
+    - ./data/test/${TEST_ID:-default}:/app/data
 
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
@@ -16,7 +16,7 @@ x-aerospike-base: &aerospike-base
 
 networks:
   teranode-network:
-    name: teranode-network-test
+    name: teranode-network-test-${TEST_ID:-default}
 
 services:
   teranode-builder:
@@ -30,9 +30,11 @@ services:
     networks:
       - teranode-network
     entrypoint: [ "pwd" ]
+    expose:
+      - "8000"
 
   postgres:
-    container_name: postgres-test
+    container_name: postgres-test-${TEST_ID:-default}
     image: postgres:latest
     networks:
       - teranode-network
@@ -41,10 +43,12 @@ services:
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     ports:
-      - "7432:5432"
+      - "5432"
+    expose:
+      - "5432"
     volumes:
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/test/postgres:/var/lib/postgresql/data
+      - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -53,7 +57,7 @@ services:
       retries: 5
 
   kafka-shared:
-    container_name: kafka-shared-test
+    container_name: kafka-shared-test-${TEST_ID:-default}
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
@@ -67,15 +71,15 @@ services:
       - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
       - --pandaproxy-addr 0.0.0.0:9093
       - --advertise-pandaproxy-addr localhost:9093
-    ports:
-      - "48081:8081"
-      - "49092:9092"
-      - "49093:9093"
+    expose:
+      - "8081"
+      - "9092"
+      - "9093"
     volumes:
-      - ./data/test/kafka:/var/lib/kafka
+      - ./data/test/${TEST_ID:-default}/kafka:/var/lib/kafka
 
   kafka-console-shared:
-    container_name: kafka-console-shared
+    container_name: kafka-console-shared-test-${TEST_ID:-default}
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
       - teranode-network
@@ -91,40 +95,46 @@ services:
             enabled: true
             urls: ["http://kafka-shared:8081"]
     ports:
-      - "18080:8080"
+      - "8080"
     depends_on:
       - kafka-shared
 
   aerospike-1:
     <<: *aerospike-base
-    container_name: aerospike-1-test
+    container_name: aerospike-1-test-${TEST_ID:-default}
     ports:
-      - "13100:13100"
+      - "13100"
+    expose:
+      - "13100"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-1/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
 
   aerospike-2:
     <<: *aerospike-base
-    container_name: aerospike-2-test
+    container_name: aerospike-2-test-${TEST_ID:-default}
     ports:
-      - "13200:13200"
+      - "13200"
+    expose:
+      - "13200"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-2/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
 
   aerospike-3:
     <<: *aerospike-base
-    container_name: aerospike-3-test
+    container_name: aerospike-3-test-${TEST_ID:-default}
     ports:
-      - "13300:13300"
+      - "13300"
+    expose:
+      - "13300"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-3/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
 
   teranode1:
     <<: *teranode-base
-    container_name: teranode1-test
+    container_name: teranode1-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-1
@@ -135,22 +145,29 @@ services:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}
       logLevel: "DEBUG"
     ports:
-      - "10000:8000"
-      - "10081-10097:8081-8097"
-      - "10099:8099"
-      - "11091:9091"
-      - "11905:9905"
-      - "11292:9292"
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode1/txstore:/app/data/txstore
-      - ./data/test/teranode1/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode1/blockstore:/app/data/blockstore
-      - ./data/test/teranode1/external:/app/data/teranode1/external
+      - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode1/external:/app/data/teranode1/external
 
   teranode2:
     <<: *teranode-base
-    container_name: teranode2-test
+    container_name: teranode2-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-2
@@ -161,22 +178,29 @@ services:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test}
       logLevel: "DEBUG"
     ports:
-      - "12000:8000"
-      - "12081-12097:8081-8097"
-      - "12099:8099"
-      - "13091:9091"
-      - "13905:9905"
-      - "13292:9292"
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode2/txstore:/app/data/txstore
-      - ./data/test/teranode2/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode2/blockstore:/app/data/blockstore
-      - ./data/test/teranode2/external:/app/data/teranode2/external
+      - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode2/external:/app/data/teranode2/external
 
   teranode3:
     <<: *teranode-base
-    container_name: teranode3-test
+    container_name: teranode3-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-3
@@ -190,50 +214,22 @@ services:
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     ports:
-      - "14000:8000"
-      - "14081-14097:8081-8097"
-      - "14099:8099"
-      - "15091:9091"
-      - "15905:9905"
-      - "15292:9292"
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode3/txstore:/app/data/txstore
-      - ./data/test/teranode3/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode3/blockstore:/app/data/blockstore
-      - ./data/test/teranode3/external:/app/data/teranode3/external
-  # prometheus-1:
-  #   container_name: prometheus-1-test
-  #   image: prom/prometheus:v2.44.0
-  #   scale: 0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "16090:9090"
-  #   networks:
-  #     - teranode-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
-
-  # prometheus-2:
-  #   container_name: prometheus-2-test
-  #   scale: 0
-  #   image: prom/prometheus:v2.44.0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "16091:9090"
-  #   networks:
-  #     - teranode-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
-
-  # prometheus-3:
-  #   container_name: prometheus-3-test
-  #   scale: 0
-  #   image: prom/prometheus:v2.44.0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "16092:9090"
-  #   networks:
-  #     - teranode-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+      - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external

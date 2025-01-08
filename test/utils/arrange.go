@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/retry"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -33,11 +35,11 @@ func (suite *TeranodeTestSuite) DefaultSettingsMap() map[string]string {
 	}
 }
 
-const (
-	NodeURL1 = "http://localhost:10090"
-	NodeURL2 = "http://localhost:12090"
-	NodeURL3 = "http://localhost:14090"
-)
+// const (
+// 	NodeURL1 = "http://localhost:10090"
+// 	NodeURL2 = "http://localhost:12090"
+// 	NodeURL3 = "http://localhost:14090"
+// )
 
 func (suite *TeranodeTestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.DefaultSettingsMap(), suite.DefaultComposeFiles(), false)
@@ -50,12 +52,12 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 		}
 	}
 
-	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	err := removeDataDirectory("../../data", isGitHubActions)
+	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	// err := removeDataDirectory("../../data", isGitHubActions)
 
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+	// if err != nil {
+	// 	suite.T().Fatal(err)
+	// }
 
 	if suite.T() != nil && suite.TeranodeTestEnv != nil {
 		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
@@ -65,26 +67,24 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
 	var err error
 
-	const teranode1RPCEndpoint = "http://localhost:11292"
-
 	suite.ComposeFiles = composeFiles
 	suite.SettingsMap = settingsMap
 
-	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
 	suite.T().Log("Removing data directory")
 
-	err = removeDataDirectory("../../data/test", isGitHubActions)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+	// err = removeDataDirectory("../../data/test", isGitHubActions)
+	// if err != nil {
+	// 	suite.T().Fatal(err)
+	// }
 
 	suite.T().Log("Cleaning up test containers")
 
-	err = cleanUpE2EContainers(isGitHubActions)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+	// err = cleanUpE2EContainers(isGitHubActions)
+	// if err != nil {
+	// 	suite.T().Fatal(err)
+	// }
 
 	suite.T().Log("Setting up TeranodeTestEnv")
 
@@ -117,11 +117,17 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			}
 		}
 
-		ports := []int{10000, 12000, 14000} // ports are defined in docker-compose.e2etest.yml
+		// get mapped ports for 8000, 8000, 8000
+		ports := []int{8000, 8000, 8000}
 		for index, port := range ports {
+			mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+			if err != nil {
+				suite.T().Fatal(err)
+			}
+
 			suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = WaitForHealthLiveness(port, 30*time.Second)
+			err = WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
 			if err != nil {
 				suite.T().Fatal(err)
 			}
@@ -129,10 +135,9 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 		suite.T().Log("All nodes ready")
 
-		// Min height possible is 101
-		// whatever height you specify, make sure :
-		// blockvalidation_maxPreviousBlockHeadersToCheck = [height - 1]
 		height := uint32(101)
+		teranode1RPCEndpoint := suite.TeranodeTestEnv.Nodes[0].RPCURL
+		teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 
 		// Generate blocks
 		_, err = retry.Retry(
@@ -147,6 +152,15 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			// suite.T().Fatal(err)
 			suite.T().Logf("Error generating blocks: %v", err)
 		}
+
+		NodeURL1 := suite.TeranodeTestEnv.Nodes[0].AssetURL
+		NodeURL2 := suite.TeranodeTestEnv.Nodes[1].AssetURL
+		NodeURL3 := suite.TeranodeTestEnv.Nodes[2].AssetURL
+
+		// Add http to the url
+		NodeURL1 = "http://" + NodeURL1
+		NodeURL2 = "http://" + NodeURL2
+		NodeURL3 = "http://" + NodeURL3
 
 		err = WaitForBlockHeight(NodeURL1, height, 30)
 		if err != nil {

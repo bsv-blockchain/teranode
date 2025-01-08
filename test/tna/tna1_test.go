@@ -94,7 +94,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		t.Log("hashes is empty!")
 	}
 
-	baseDir := "../../data/test"
+	baseDir := filepath.Join("../../data/test", testEnv.TestID)
 
 	t.Logf("num of subtrees: %d", len(hashes))
 

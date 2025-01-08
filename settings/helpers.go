@@ -8,8 +8,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func getString(key, defaultValue string) string {
-	value, found := gocore.Config().Get(key)
+func getString(key, defaultValue string, alternativeContext ...string) string {
+	value, found := gocore.Config(alternativeContext...).Get(key)
 	if !found {
 		return defaultValue
 	}
@@ -17,14 +17,14 @@ func getString(key, defaultValue string) string {
 	return value
 }
 
-func getMultiString(key, sep string, defaultValues []string) []string {
-	value, _ := gocore.Config().GetMulti(key, sep, defaultValues)
+func getMultiString(key, sep string, defaultValues []string, alternativeContext ...string) []string {
+	value, _ := gocore.Config(alternativeContext...).GetMulti(key, sep, defaultValues)
 
 	return value
 }
 
-func getInt(key string, defaultValue int) int {
-	value, found := gocore.Config().GetInt(key)
+func getInt(key string, defaultValue int, alternativeContext ...string) int {
+	value, found := gocore.Config(alternativeContext...).GetInt(key)
 	if !found {
 		return defaultValue
 	}
@@ -32,18 +32,18 @@ func getInt(key string, defaultValue int) int {
 	return value
 }
 
-func getURL(key, defaultValue string) *url.URL {
-	value, _, _ := gocore.Config().GetURL(key, defaultValue)
+func getURL(key, defaultValue string, alternativeContext ...string) *url.URL {
+	value, _, _ := gocore.Config(alternativeContext...).GetURL(key, defaultValue)
 
 	return value
 }
 
-func getBool(key string, defaultValue bool) bool {
-	return gocore.Config().GetBool(key, defaultValue)
+func getBool(key string, defaultValue bool, alternativeContext ...string) bool {
+	return gocore.Config(alternativeContext...).GetBool(key, defaultValue)
 }
 
-func getFloat64(key string, defaultValue float64) float64 {
-	strVal, found := gocore.Config().Get(key, "")
+func getFloat64(key string, defaultValue float64, alternativeContext ...string) float64 {
+	strVal, found := gocore.Config(alternativeContext...).Get(key, "")
 	value, err := strconv.ParseFloat(strVal, 64)
 
 	if !found || err != nil {

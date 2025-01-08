@@ -81,8 +81,8 @@ func (suite *TNB6TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNB6TestSuite) TearDownTest() {
-}
+// func (suite *TNB6TestSuite) TearDownTest() {
+// }
 
 // TestUTXOSetManagement verifies that transaction outputs are correctly added to the UTXO set.
 // This test ensures that:

@@ -35,7 +35,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	logger := testEnv.Logger
-	url := "http://localhost:10090"
+	url := "http://" + testEnv.Nodes[0].AssetURL
 
 	txDistributor := testEnv.Nodes[0].DistributorClient
 
@@ -124,7 +124,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	const teranode1RPCEndpoint = "http://localhost:11292"
+	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL
+	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 	// Generate blocks
 	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
 	// wait for the blocks to be generated

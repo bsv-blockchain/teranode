@@ -12,7 +12,6 @@
 // 2. Run specific test cases:
 //    $ cd test/tnc
 //    $ go test -v -run "^TestTNC1_1TestSuite$/TestVerifyMerkleRootCalculation$" -tags test_tnc
-//    $ go test -v -run "^TestTNC1_1TestSuite$/TestVerifyMerkleRootWithEmptyBlock$" -tags test_tnc
 //
 // Prerequisites:
 // - Go 1.19 or later
@@ -50,8 +49,8 @@ func (suite *TNC1_1TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNC1_1TestSuite) TearDownTest() {
-}
+// func (suite *TNC1_1TestSuite) TearDownTest() {
+// }
 
 func (suite *TNC1_1TestSuite) TestVerifyMerkleRootCalculation() {
 	testEnv := suite.TeranodeTestEnv

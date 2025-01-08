@@ -51,8 +51,8 @@ func (suite *TNC1_2TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNC1_2TestSuite) TearDownTest() {
-}
+// func (suite *TNC1_2TestSuite) TearDownTest() {
+// }
 
 // TestCheckPrevBlockHash verifies that the mining candidate correctly references
 // the hash of the previous block

@@ -33,8 +33,8 @@ func (suite *TNB4TestSuite) SetupTest() {
 	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
 }
 
-func (suite *TNB4TestSuite) TearDownTest() {
-}
+// func (suite *TNB4TestSuite) TearDownTest() {
+// }
 
 // TestP2PKHScriptValidation verifies that Teranode correctly validates P2PKH transaction scripts.
 // This test ensures that:

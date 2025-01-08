@@ -2,7 +2,10 @@
 
 // How to run this test manually:
 // $ cd test/tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags test_tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$" -tags test_tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount2$" -tags test_tnc
 
 package tnc
 
