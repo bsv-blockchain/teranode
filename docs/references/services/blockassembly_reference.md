@@ -10,11 +10,11 @@ type BlockAssembly struct {
     blockAssembler        *BlockAssembler
     logger                ulogger.Logger
     stats                 *gocore.Stat
+    settings             *settings.Settings
     blockchainClient      blockchain.ClientI
     txStore               blob.Store
     utxoStore             utxostore.Store
     subtreeStore          blob.Store
-    subtreeTTL            time.Duration
     jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
     blockSubmissionChan   chan *BlockSubmissionRequest
 }
@@ -27,6 +27,7 @@ The `BlockAssembly` type is the main structure for the block assembly service. I
 ```go
 type BlockAssembler struct {
     logger                 ulogger.Logger
+    settings               *settings.Settings
     utxoStore              utxo.Store
     subtreeStore           blob.Store
     blockchainClient       blockchain.ClientI
@@ -35,7 +36,6 @@ type BlockAssembler struct {
     bestBlockHeader        atomic.Pointer[model.BlockHeader]
     bestBlockHeight        atomic.Uint32
     currentChain           []*model.BlockHeader
-    currentChainMap        map[chainhash.Hash]uint32
     currentChainMapIDs     map[uint32]struct{}
     currentChainMapMu      sync.RWMutex
     blockchainSubscriptionCh chan *blockchain.Notification
@@ -57,6 +57,7 @@ The `BlockAssembler` type is responsible for assembling blocks, managing the cur
 ```go
 type SubtreeProcessor struct {
     currentItemsPerFile       int
+    settings                 *settings.Settings
     txChan                    chan *[]TxIDAndFee
     getSubtreesChan           chan chan []*util.Subtree
     moveUpBlockChan           chan moveBlockRequest
@@ -73,11 +74,10 @@ type SubtreeProcessor struct {
     batcher                   *TxIDAndFeeBatch
     queue                     *LockFreeQueue
     removeMap                 *util.SwissMap
-    doubleSpendWindowDuration time.Duration
     subtreeStore              blob.Store
     utxoStore                 utxostore.Store
     logger                    ulogger.Logger
-    stat                      *gocore.Stat
+    stats                     *gocore.Stat
     currentRunningState       atomic.Value
 }
 ```
@@ -103,7 +103,7 @@ The `LockFreeQueue` type represents a lock-free FIFO queue for managing transact
 #### New
 
 ```go
-func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembly
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, utxoStore utxostore.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembly
 ```
 
 Creates a new instance of the `BlockAssembly` service.
@@ -187,6 +187,33 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 ```
 
 Submits a mining solution for a block.
+
+
+#### DeDuplicateBlockAssembly
+
+```go
+func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error)
+```
+
+Removes duplicate transactions from the block assembly process. This operation helps maintain block validity by ensuring no transaction is included multiple times.
+
+#### GenerateBlocks
+
+```go
+func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error)
+```
+
+Generates the specified number of blocks, if block generation is supported by the chain configuration. Each block is mined and submitted following standard block assembly rules.
+
+Parameters:
+- `req.Count`: Number of blocks to generate
+- `req.Address`: Optional mining address
+
+#### GetBlockAssemblyState
+
+```go
+func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error)
+```
 
 ### BlockAssembler
 

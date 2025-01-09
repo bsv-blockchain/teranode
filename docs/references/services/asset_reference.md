@@ -6,16 +6,17 @@
 
 ```go
 type Server struct {
-logger              ulogger.Logger
-utxoStore           utxo.Store
-txStore             blob.Store
-subtreeStore        blob.Store
-blockPersisterStore blob.Store
-httpAddr            string
-httpServer          *http_impl.HTTP
-centrifugeAddr      string
-centrifugeServer    *centrifuge_impl.Centrifuge
-blockchainClient    blockchain.ClientI
+   logger              ulogger.Logger
+   settings           *settings.Settings
+   utxoStore          utxo.Store
+   txStore            blob.Store
+   subtreeStore       blob.Store
+   blockPersisterStore blob.Store
+   httpAddr           string
+   httpServer         *httpimpl.HTTP
+   centrifugeAddr     string
+   centrifugeServer   *centrifuge_impl.Centrifuge
+   blockchainClient   blockchain.ClientI
 }
 ```
 
@@ -25,13 +26,14 @@ The `Server` type is the main structure for the Asset Service. It contains vario
 
 ```go
 type Repository struct {
-logger              ulogger.Logger
-UtxoStore           utxo.Store
-TxStore             blob.Store
-SubtreeStore        blob.Store
-BlockPersisterStore blob.Store
-BlockchainClient    blockchain.ClientI
-CoinbaseProvider    coinbase_api.CoinbaseAPIClient
+   logger              ulogger.Logger
+   settings            *settings.Settings
+   UtxoStore           utxo.Store
+   TxStore             blob.Store
+   SubtreeStore        blob.Store
+   BlockPersisterStore blob.Store
+   BlockchainClient    blockchain.ClientI
+   CoinbaseProvider    coinbase_api.CoinbaseAPIClient
 }
 ```
 

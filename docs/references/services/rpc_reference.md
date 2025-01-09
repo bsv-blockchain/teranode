@@ -10,24 +10,27 @@ The RPC Server provides a JSON-RPC interface for interacting with the Bitcoin SV
 
 ```go
 type RPCServer struct {
-started                int32
-shutdown               int32
-authsha                [sha256.Size]byte
-limitauthsha           [sha256.Size]byte
-numClients             int32
-statusLines            map[int]string
-statusLock             sync.RWMutex
-wg                     sync.WaitGroup
-requestProcessShutdown chan struct{}
-quit                   chan int
-logger                 ulogger.Logger
-rpcMaxClients          int
-rpcQuirks              bool
-listeners              []net.Listener
-blockchainClient       blockchain.ClientI
-blockAssemblyClient    *blockassembly.Client
-peerClient             peer.ClientI
-chainParams            *chaincfg.Params
+   settings               *settings.Settings
+   started                int32
+   shutdown               int32
+   authsha                [sha256.Size]byte
+   limitauthsha          [sha256.Size]byte
+   numClients            int32
+   statusLines           map[int]string
+   statusLock            sync.RWMutex
+   wg                    sync.WaitGroup
+   requestProcessShutdown chan struct{}
+   quit                  chan int
+   logger                ulogger.Logger
+   rpcMaxClients         int
+   rpcQuirks             bool
+   listeners             []net.Listener
+   blockchainClient      blockchain.ClientI
+   blockAssemblyClient   *blockassembly.Client
+   peerClient            peer.ClientI
+   p2pClient             p2p.ClientI
+   assetHTTPURL          *url.URL
+   helpCacher            *helpCacher
 }
 ```
 
@@ -36,7 +39,7 @@ chainParams            *chaincfg.Params
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*RPCServer, error)
 ```
 
 Creates a new instance of the RPC Server.

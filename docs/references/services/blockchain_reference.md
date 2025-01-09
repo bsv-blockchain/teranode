@@ -6,21 +6,25 @@
 
 ```go
 type Blockchain struct {
-blockchain_api.UnimplementedBlockchainAPIServer
-addBlockChan       chan *blockchain_api.AddBlockRequest
-store              blockchain_store.Store
-logger             ulogger.Logger
-newSubscriptions   chan subscriber
-deadSubscriptions  chan subscriber
-subscribers        map[subscriber]bool
-notifications      chan *blockchain_api.Notification
-newBlock           chan struct{}
-difficulty         *Difficulty
-chainParams        *chaincfg.Params
-blockKafkaProducer kafka.KafkaProducerI
-stats              *gocore.Stat
-finiteStateMachine *fsm.FSM
-kafkaHealthURL     *url.URL
+    blockchain_api.UnimplementedBlockchainAPIServer
+    addBlockChan                  chan *blockchain_api.AddBlockRequest
+    store                         blockchain_store.Store
+    logger                        ulogger.Logger
+    settings                      *settings.Settings
+    newSubscriptions              chan subscriber
+    deadSubscriptions             chan subscriber
+    subscribers                   map[subscriber]bool
+    subscribersMu                 sync.RWMutex
+    notifications                 chan *blockchain_api.Notification
+    newBlock                      chan struct{}
+    difficulty                    *Difficulty
+    blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI
+    kafkaChan                     chan *kafka.Message
+    stats                         *gocore.Stat
+    finiteStateMachine            *fsm.FSM
+    stateChangeTimestamp          time.Time
+    AppCtx                        context.Context
+    localTestStartState           string
 }
 ```
 
@@ -30,9 +34,9 @@ The `Blockchain` type is the main structure for the blockchain server. It implem
 
 ```go
 type subscriber struct {
-subscription blockchain_api.BlockchainAPI_SubscribeServer
-source       string
-done         chan struct{}
+    subscription blockchain_api.BlockchainAPI_SubscribeServer
+    source       string
+    done         chan struct{}
 }
 ```
 
@@ -43,7 +47,7 @@ The `subscriber` type represents a subscriber to the blockchain server, containi
 ### New
 
 ```go
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error)
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error)
 ```
 
 Creates a new instance of the `Blockchain` server with the provided logger and store.

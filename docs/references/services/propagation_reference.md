@@ -10,14 +10,14 @@ The Propagation Server is a component of a Bitcoin SV implementation that handle
 
 ```go
 type PropagationServer struct {
-propagation_api.UnsafePropagationAPIServer
-logger                       ulogger.Logger
-stats                        *gocore.Stat
-txStore                      blob.Store
-validator                    validator.Interface
-blockchainClient             blockchain.ClientI
-validatorKafkaProducerClient *kafka.KafkaAsyncProducer
-kafkaHealthURL               *url.URL
+    propagation_api.UnsafePropagationAPIServer
+    logger                       ulogger.Logger
+    settings                     *settings.Settings
+    stats                        *gocore.Stat
+    txStore                      blob.Store
+    validator                    validator.Interface
+    blockchainClient             blockchain.ClientI
+    validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 ```
 
@@ -28,7 +28,7 @@ The `PropagationServer` struct is the main type for the Propagation Server. It c
 ### New
 
 ```go
-func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *PropagationServer
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer
 ```
 
 Creates a new instance of the Propagation Server with the provided dependencies.

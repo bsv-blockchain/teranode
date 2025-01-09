@@ -12,23 +12,41 @@ The `Server` struct is the main component of the UTXO Persister Service.
 
 ```go
 type Server struct {
-logger           ulogger.Logger
-blockchainClient blockchain.ClientI
-blockchainStore  blockchain_store.Store
-blockStore       blob.Store
-stats            *gocore.Stat
-lastHeight       uint32
-mu               sync.Mutex
-running          bool
-triggerCh        chan string
-chainParams      *chaincfg.Params
+    logger           ulogger.Logger
+    settings         *settings.Settings      // Configuration settings
+    blockchainClient blockchain.ClientI      // Interface to blockchain operations
+    blockchainStore  blockchain_store.Store  // Direct blockchain storage access
+    blockStore       blob.Store             // Binary large object storage
+    stats            *gocore.Stat           // Performance statistics
+    lastHeight       uint32                 // Last processed block height
+    mu               sync.Mutex             // Synchronization mutex
+    running          bool                   // Server operational state
+    triggerCh        chan string           // Channel for processing triggers
 }
 ```
 
 #### Constructor
 
+The service provides two initialization paths depending on your architectural needs:
+
 ```go
-func New(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainClient blockchain.ClientI) *Server
+// Standard initialization with blockchain client
+func New(
+    ctx context.Context,
+    logger ulogger.Logger,
+    tSettings *settings.Settings,
+    blockStore blob.Store,
+    blockchainClient blockchain.ClientI,
+) *Server
+
+// Direct initialization bypassing blockchain client
+func NewDirect(
+    ctx context.Context,
+    logger ulogger.Logger,
+    tSettings *settings.Settings,
+    blockStore blob.Store,
+    blockchainStore blockchain_store.Store,
+) (*Server, error)
 ```
 
 Creates a new `Server` instance with the provided dependencies.
@@ -136,8 +154,34 @@ Index uint32
 The UTXO Persister Service uses three types of files:
 
 1. UTXO Additions (extension: `utxo-additions`)
+
+```
+- Transaction ID (32 bytes)
+- Encoded Height and Coinbase (4 bytes)
+  * Height << 1 | coinbase_flag
+- Output Count (4 bytes)
+For each output:
+  - Index (4 bytes)
+  - Value (8 bytes)
+  - Script Length (4 bytes)
+  - Script (variable)
+```
+
 2. UTXO Deletions (extension: `utxo-deletions`)
+
+```
+- Transaction ID (32 bytes)
+- Output Index (4 bytes)
+```
+
 3. UTXO Set (extension: `utxo-set`)
+
+```
+- EOF Marker (32 zero bytes)
+- Transaction Count (8 bytes)
+- UTXO/Deletion Count (8 bytes)
+```
+
 
 Each file type has a specific header format and contains serialized UTXO data.
 

@@ -6,160 +6,171 @@
 
 ```go
 type Server struct {
-ctx                            context.Context
-logger                         ulogger.Logger
-blockStore                     blob.Store
-subtreeStore                   blob.Store
-utxoStore                      utxo.Store
-stats                          *gocore.Stat
-blockchainClient               blockchain.ClientI
-blocksFinalKafkaConsumerClient *kafka.KafkaConsumerGroup
-kafkaHealthURL                 *url.URL
+    ctx              context.Context
+    logger           ulogger.Logger
+    settings         *settings.Settings
+    blockStore       blob.Store
+    subtreeStore     blob.Store
+    utxoStore        utxo.Store
+    stats            *gocore.Stat
+    blockchainClient blockchain.ClientI
+    state            *state.State
 }
 ```
 
-The `Server` type is the main structure for the Block Persister Service. It contains various components for managing stores, Kafka consumers, and blockchain interactions.
+The `Server` type is the main structure for the Block Persister Service. It contains components for managing stores, blockchain interactions, and state management.
 
 ## Functions
 
-### Server
+### Server Management
 
 #### New
-
 ```go
-func New(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, subtreeStore blob.Store, utxoStore utxo.Store, blockchainClient blockchain.ClientI) *Server
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockStore blob.Store, subtreeStore blob.Store, utxoStore utxo.Store, blockchainClient blockchain.ClientI, opts ...func(*Server)) *Server
 ```
 
-Creates a new instance of the `Server`.
+Creates a new instance of the `Server` with optional configuration functions.
+
+#### WithSetInitialState
+```go
+func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
+```
+
+Optional configuration function that sets the initial state of the block persister server.
 
 #### Health
-
 ```go
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the Block Persister Service.
+Performs health checks on the Block Persister Service, including:
+- Blockchain client and FSM status
+- Block store availability
+- Subtree store status
+- UTXO store health
 
 #### Init
-
 ```go
 func (u *Server) Init(ctx context.Context) (err error)
 ```
 
-Initializes the Block Persister Service.
+Initializes the Block Persister Service and Prometheus metrics.
 
 #### Start
-
 ```go
 func (u *Server) Start(ctx context.Context) error
 ```
 
-Starts the Block Persister Service.
+Starts the Block Persister Service, including:
+- HTTP blob store server (if configured)
+- Block processing loop
+- State management
 
-#### Stop
+### Block Processing
 
+#### getNextBlockToProcess
 ```go
-func (u *Server) Stop(_ context.Context) error
+func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
 ```
 
-Stops the Block Persister Service.
+Retrieves the next block to process based on:
+- Last persisted block height
+- Block persister persist age configuration
+- Current best block height
 
-#### blocksFinalHandler
-
-```go
-func (u *Server) blocksFinalHandler(msg *kafka.KafkaMessage) error
-```
-
-Handles incoming Kafka messages for finalized blocks.
-
-#### persistBlock
-
-```go
-func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error
-```
-
-Persists a block to storage.
+### Subtree Processing
 
 #### ProcessSubtree
-
 ```go
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
 ```
 
-Processes a subtree, validating and storing its transactions.
-
-### Utility Functions
+Processes a subtree by:
+1. Retrieving subtree data from store
+2. Deserializing subtree data
+3. Processing transaction metadata
+4. Writing transactions to storage
+5. Updating UTXO set
 
 #### WriteTxs
-
 ```go
 func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXOSet) error
 ```
 
 Writes transactions to storage and processes them for UTXO updates.
 
-## Key Processes
-
-### Block Persistence
-
-1. The service listens for finalized block messages from Kafka.
-2. When a message is received, it's handled by `blocksFinalHandler`.
-3. The handler attempts to acquire a lock for the block to prevent duplicate processing.
-4. If the lock is acquired, `persistBlock` is called to process the block.
-5. `persistBlock` creates a new UTXO diff, processes all subtrees in the block, and writes the block to disk.
-
-### Subtree Processing
-
-1. `ProcessSubtree` is called for each subtree in a block.
-2. It retrieves the subtree data from storage and deserializes it.
-3. Transaction metadata for each transaction in the subtree is loaded.
-4. Transactions are written to storage using `WriteTxs`.
-5. The UTXO set is updated for each transaction.
-
-### UTXO Management
-
-- The service maintains a UTXO set that's updated as blocks are processed.
-- UTXO diffs are created for each block and applied to the main UTXO set.
-
 ## Configuration
 
-The Block Persister Service uses configuration values from the `gocore.Config()` function, including:
+The service uses settings from the `settings.Settings` structure:
 
-- `kafka_blocksFinalConfig`: Kafka configuration for finalized block messages
-- `blockPersister_httpListenAddress`: HTTP listen address for the block store server
-- `blockstore`: URL for the block store
-- `fsm_state_restore`: Whether to restore the FSM state on startup
+### Block Settings
+- `Block.StateFile`: File path for state storage
+- `Block.PersisterHTTPListenAddress`: HTTP listener address
+- `Block.BlockStore`: Block store URL
+- `Block.BlockPersisterPersistAge`: Age threshold for block persistence
+- `Block.BlockPersisterPersistSleep`: Sleep duration between processing attempts
+- `Block.BatchMissingTransactions`: Whether to batch missing transaction requests
+
+## State Management
+
+The service maintains persistence state through the `state.State` component:
+- Tracks last persisted block height
+- Manages block hash records
+- Provides atomic state updates
+
+## Error Handling
+
+The service implements comprehensive error handling:
+- Storage errors trigger retries after delay
+- Processing errors are logged with context
+- Configuration errors prevent service startup
+- State management errors trigger recovery procedures
+
+## Metrics
+
+The service provides Prometheus metrics for monitoring:
+- Block persistence timing
+- Subtree validation metrics
+- Transaction processing stats
+- Store health indicators
 
 ## Dependencies
 
-The Block Persister Service depends on several other components and services:
-
+Required components:
 - Block Store (blob.Store)
 - Subtree Store (blob.Store)
 - UTXO Store (utxo.Store)
 - Blockchain Client (blockchain.ClientI)
-- Kafka Consumer
+- Logger (ulogger.Logger)
+- Settings (settings.Settings)
 
-These dependencies are injected into the `Server` structure during initialization.
+## Processing Flow
 
-## Error Handling
+### Block Processing Loop
+1. Check for next block to process based on persistence age
+2. Retrieve block data if available
+3. Persist block data to storage
+4. Update state with successful persistence
+5. Sleep if no blocks available or on error
 
-The service implements robust error handling, particularly in the Kafka message processing:
+### Subtree Processing
+1. Retrieve subtree data from store
+2. Process transaction metadata
+3. Write transactions to storage
+4. Update UTXO set
+5. Handle errors with appropriate recovery
 
-- Recoverable errors (e.g., storage errors, service errors) cause the message to be reprocessed.
-- Unrecoverable errors (e.g., processing errors, invalid arguments) are logged, and the message is marked as completed to prevent infinite retry loops.
+## Health Checks
 
-## Concurrency
+The service implements two types of health checks:
 
-- The service uses goroutines and error groups to process subtrees concurrently.
-- A quorum-based locking mechanism is used to prevent duplicate processing of blocks.
+### Liveness Check
+- Basic service health validation
+- No dependency checks
+- Quick response for kubernetes probes
 
-## Metrics
-
-The service initializes Prometheus metrics for monitoring various aspects of its operation, including:
-
-- Block persistence duration
-- Subtree validation duration
-- UTXO set updates
-
-These metrics can be used to monitor the performance and health of the Block Persister Service.
+### Readiness Check
+- Full dependency validation
+- Store availability checks
+- Blockchain client status
+- FSM state validation

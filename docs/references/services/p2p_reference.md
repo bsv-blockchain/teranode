@@ -2,82 +2,103 @@
 
 ## Overview
 
-The P2P Server is a component of a Bitcoin SV implementation that facilitates peer-to-peer communication for blocks, transactions, and other network-related data. It integrates with various services such as blockchain, block validation, and Kafka for efficient data distribution and processing.
+The P2P Server facilitates peer-to-peer communication within the Bitcoin SV network, managing the distribution of blocks, transactions, and network-related data. The server integrates with blockchain services, validation systems, and Kafka messaging to ensure efficient data propagation across the network. It implements both WebSocket and HTTP interfaces for peer communication while maintaining secure, scalable connections.
 
-## Types
+## Core Components
 
-### Server
+### Server Structure
+
+The P2P Server is implemented through the Server struct, which coordinates all peer-to-peer communication:
 
 ```go
 type Server struct {
-P2PNode                       *p2p.P2PNode
-logger                        ulogger.Logger
-bitcoinProtocolID             string
-blockchainClient              blockchain.ClientI
-blockValidationClient         *blockvalidation.Client
-AssetHTTPAddressURL           string
-e                             *echo.Echo
-notificationCh                chan *notificationMsg
-rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
-subtreeKafkaProducerClient    *kafka.KafkaAsyncProducer
-blocksKafkaProducerClient     *kafka.KafkaAsyncProducer
-kafkaHealthURL                *url.URL
+    p2p_api.UnimplementedPeerServiceServer
+    P2PNode                       *p2p.P2PNode
+    logger                        ulogger.Logger
+    settings                      *settings.Settings
+    bitcoinProtocolID             string
+    blockchainClient              blockchain.ClientI
+    blockValidationClient         *blockvalidation.Client
+    AssetHTTPAddressURL           string
+    e                             *echo.Echo
+    notificationCh                chan *notificationMsg
+    rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI
+    subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI
+    blocksKafkaProducerClient     kafka.KafkaAsyncProducerI
+    banList                       *BanList
+    banChan                       chan BanEvent
 }
 ```
 
-The `Server` struct is the main type for the P2P Server. It contains various components for P2P communication, blockchain interaction, and message handling.
+The server manages several key components, each serving a specific purpose in the P2P network:
+- The P2PNode handles direct peer connections and message routing
+- The various Kafka clients manage message distribution across the network
+- The ban system maintains network security by managing peer access
+- The notification channel handles real-time event propagation
 
-## Functions
+## Server Operations
 
-### NewServer
+### Server Initialization
+
+The server initializes through the NewServer function:
 
 ```go
-func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error)
+func NewServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI, subtreeKafkaProducerClient kafka.KafkaAsyncProducerI, blocksKafkaProducerClient kafka.KafkaAsyncProducerI) (*Server, error)
 ```
 
-Creates a new instance of the P2P Server with the provided dependencies.
+This function establishes the server with required settings and dependencies, including:
+- P2P network configuration (IP, port, topics)
+- Topic name generation for various message types
+- Ban list initialization
+- Connection to blockchain services
+- Kafka producer and consumer setup
 
-## Methods
+### Health Management
 
-### Health
+The server implements comprehensive health checking through:
 
 ```go
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the server and its dependencies. It returns an HTTP status code, a description, and an error if any.
+This method performs two types of health verification:
 
-### Init
+For liveness checks, it verifies basic server operation without dependency checks.
 
+For readiness checks, it verifies:
+- Kafka broker connectivity
+- Blockchain client functionality
+- FSM state verification
+- Block validation client status
+
+### Server Lifecycle Management
+
+The server manages its lifecycle through several key methods:
+
+The Init method prepares the server for operation:
 ```go
 func (s *Server) Init(ctx context.Context) (err error)
 ```
+It verifies and adjusts HTTP/HTTPS settings based on security requirements and establishes necessary connection URLs.
 
-Initializes the P2P Server, setting up Kafka producers and consumers, and other necessary components.
-
-### Start
-
+The Start method initiates server operations:
 ```go
 func (s *Server) Start(ctx context.Context) error
 ```
+It begins:
+- Kafka message processing
+- Block validation client setup
+- HTTP/WebSocket server operation
+- P2P network communication
+- Blockchain subscription monitoring
+- Ban event processing
 
-Starts the P2P Server, including HTTP server, P2P node, and blockchain subscription listener.
-
-### StartHTTP
-
-```go
-func (s *Server) StartHTTP(ctx context.Context) error
-```
-
-Starts the HTTP server for the P2P Server.
-
-### Stop
-
+The Stop method ensures graceful shutdown:
 ```go
 func (s *Server) Stop(ctx context.Context) error
 ```
+It manages the orderly shutdown of all server components and connections.
 
-Stops the P2P Server and its components.
 
 ### Message Handlers
 

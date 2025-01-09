@@ -12,23 +12,33 @@ The `Server` struct is the main component of the TX Validator Service.
 
 ```go
 type Server struct {
-validator_api.UnsafeValidatorAPIServer
-validator        Interface
-logger           ulogger.Logger
-utxoStore        utxo.Store
-kafkaSignal      chan os.Signal
-stats            *gocore.Stat
-ctx              context.Context
-blockchainClient blockchain.ClientI
-consumerClient   *kafka.KafkaConsumerGroup
-kafkaHealthURL   *url.URL
+    validator_api.UnsafeValidatorAPIServer
+    validator                     Interface
+    logger                        ulogger.Logger
+    settings                      *settings.Settings
+    utxoStore                     utxo.Store
+    kafkaSignal                   chan os.Signal
+    stats                         *gocore.Stat
+    ctx                           context.Context
+    blockchainClient              blockchain.ClientI
+    consumerClient                kafka.KafkaConsumerGroupI
+    txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+    rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 ```
 
 #### Constructor
 
 ```go
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI) *Server
+func NewServer(
+    logger ulogger.Logger,
+    tSettings *settings.Settings,
+    utxoStore utxo.Store,
+    blockchainClient blockchain.ClientI,
+    consumerClient kafka.KafkaConsumerGroupI,
+    txMetaKafkaProducerClient kafka.KafkaAsyncProducerI,
+    rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+) *Server
 ```
 
 Creates a new `Server` instance with the provided dependencies.
@@ -52,16 +62,15 @@ The `Validator` struct implements the core validation logic.
 
 ```go
 type Validator struct {
-logger                        ulogger.Logger
-txValidator                   TxValidator
-utxoStore                     utxo.Store
-blockAssembler                blockassembly.Store
-saveInParallel                bool
-blockAssemblyDisabled         bool
-stats                         *gocore.Stat
-txMetaKafkaProducerClient     *kafka.KafkaAsyncProducer
-rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-kafkaHealthURL                *url.URL
+    logger                        ulogger.Logger
+    settings                      *settings.Settings
+    txValidator                   TxValidatorI
+    utxoStore                     utxo.Store
+    blockAssembler                blockassembly.Store
+    saveInParallel                bool
+    stats                         *gocore.Stat
+    txmetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+    rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 ```
 

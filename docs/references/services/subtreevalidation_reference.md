@@ -8,22 +8,20 @@ The `Server` type implements the core functionality for subtree validation in a 
 
 ```go
 type Server struct {
-subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
-logger                            ulogger.Logger
-subtreeStore                      blob.Store
-subtreeTTL                        time.Duration
-txStore                           blob.Store
-utxoStore                         utxo.Store
-validatorClient                   validator.Interface
-subtreeCount                      atomic.Int32
-maxMerkleItemsPerSubtree          int
-stats                             *gocore.Stat
-prioritySubtreeCheckActiveMap     map[string]bool
-prioritySubtreeCheckActiveMapLock sync.Mutex
-blockchainClient                  blockchain.ClientI
-subtreeConsumerClient             *kafka.KafkaConsumerGroup
-txmetaConsumerClient              *kafka.KafkaConsumerGroup
-kafkaHealthURL                    *url.URL
+    subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
+    logger ulogger.Logger
+    settings *settings.Settings
+    subtreeStore blob.Store
+    txStore blob.Store
+    utxoStore utxo.Store
+    validatorClient validator.Interface
+    subtreeCount atomic.Int32
+    stats *gocore.Stat
+    prioritySubtreeCheckActiveMap map[string]bool
+    prioritySubtreeCheckActiveMapLock sync.Mutex
+    blockchainClient blockchain.ClientI
+    subtreeConsumerClient kafka.KafkaConsumerGroupI
+    txmetaConsumerClient kafka.KafkaConsumerGroupI
 }
 ```
 
@@ -32,15 +30,11 @@ kafkaHealthURL                    *url.URL
 ### New
 
 ```go
-func New(
-ctx context.Context,
-logger ulogger.Logger,
-subtreeStore blob.Store,
-txStore blob.Store,
-utxoStore utxo.Store,
-validatorClient validator.Interface,
-blockchainClient blockchain.ClientI,
-) (*Server, error)
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings,
+subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store,
+validatorClient validator.Interface, blockchainClient blockchain.ClientI,
+subtreeConsumerClient kafka.KafkaConsumerGroupI,
+txmetaConsumerClient kafka.KafkaConsumerGroupI) (*Server, error)
 ```
 
 Creates a new `Server` instance with the provided dependencies.

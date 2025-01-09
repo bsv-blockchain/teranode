@@ -8,26 +8,26 @@
 type Server struct {
 alert_api.UnimplementedAlertAPIServer
 logger              ulogger.Logger
-stats               *gocore.Stat
-blockchainClient    blockchain.ClientI
-utxoStore           utxo.Store
+settings           *settings.Settings
+stats              *gocore.Stat
+blockchainClient   blockchain.ClientI
+utxoStore          utxo.Store
 blockassemblyClient *blockassembly.Client
-appConfig           *config.Config
-p2pServer           *p2p.Server
-webServer           *webserver.Server
+appConfig          *config.Config
+p2pServer          *p2p.Server
 }
 ```
 
-The `Server` type is the main structure for the Alert Service. It implements the `UnimplementedAlertAPIServer` and contains various components for managing alerts, blockchain interactions, and P2P communication.
+The `Server` type is the main structure for the Alert Service. It implements the `UnimplementedAlertAPIServer` and contains components for managing alerts, blockchain interactions, and P2P communication.
 
 ### Node
 
 ```go
 type Node struct {
-logger              ulogger.Logger
-blockchainClient    blockchain.ClientI
-utxoStore           utxo.Store
-blockassemblyClient *blockassembly.Client
+    logger              ulogger.Logger
+    blockchainClient    blockchain.ClientI
+    utxoStore           utxo.Store
+    blockassemblyClient *blockassembly.Client
 }
 ```
 
@@ -40,10 +40,10 @@ The `Node` type represents a node in the network and provides methods for intera
 #### New
 
 ```go
-func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server
 ```
 
-Creates a new instance of the `Server`.
+Creates a new instance of the `Server` with the specified dependencies and initializes Prometheus metrics.
 
 #### Health
 
@@ -51,7 +51,13 @@ Creates a new instance of the `Server`.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the Alert Service.
+Performs comprehensive health checks on the Alert Service. If `checkLiveness` is true, only performs basic liveness checks. Otherwise, performs readiness checks on all dependencies:
+- BlockchainClient
+- FSM (Finite State Machine)
+- BlockassemblyClient
+- UTXOStore
+
+Returns HTTP status code, details message, and any error encountered.
 
 #### HealthGRPC
 
@@ -59,7 +65,7 @@ Performs health checks on the Alert Service.
 func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error)
 ```
 
-Performs a gRPC health check on the Alert Service.
+Performs a gRPC health check on the Alert Service and returns a structured response with timestamp.
 
 #### Init
 
@@ -67,7 +73,7 @@ Performs a gRPC health check on the Alert Service.
 func (s *Server) Init(ctx context.Context) (err error)
 ```
 
-Initializes the Alert Service.
+Initializes the Alert Service by loading configuration. Returns a configuration error if initialization fails.
 
 #### Start
 
@@ -75,7 +81,11 @@ Initializes the Alert Service.
 func (s *Server) Start(ctx context.Context) (err error)
 ```
 
-Starts the Alert Service.
+Starts the Alert Service by:
+1. Creating genesis alert in database
+2. Verifying RPC connection (unless disabled)
+3. Creating and starting P2P server
+4. Waiting for shutdown signal
 
 #### Stop
 
@@ -83,41 +93,9 @@ Starts the Alert Service.
 func (s *Server) Stop(ctx context.Context) error
 ```
 
-Stops the Alert Service.
+Gracefully stops the Alert Service by closing all configurations and shutting down the P2P server.
 
-#### loadConfig
-
-```go
-func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error)
-```
-
-Loads the configuration for the Alert Service.
-
-#### requireP2P
-
-```go
-func (s *Server) requireP2P() error
-```
-
-Ensures the P2P configuration is valid.
-
-#### createPrivateKeyDirectory
-
-```go
-func (s *Server) createPrivateKeyDirectory() error
-```
-
-Creates the private key directory for P2P communication.
-
-#### loadDatastore
-
-```go
-func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL *url.URL) error
-```
-
-Loads an instance of Datastore into the dependencies.
-
-### Node
+### Node Methods
 
 #### NewNodeConfig
 
@@ -125,7 +103,7 @@ Loads an instance of Datastore into the dependencies.
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) config.NodeInterface
 ```
 
-Creates a new instance of the `Node`.
+Creates a new instance of the `Node` with the specified dependencies.
 
 #### BestBlockHash
 
@@ -141,33 +119,34 @@ Retrieves the hash of the best block in the blockchain.
 func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error
 ```
 
-Invalidates a block in the blockchain.
+Invalidates a block in the blockchain using its hash.
 
-#### BanPeer
+#### RPC Interface Methods
+
+```go
+func (n *Node) GetRPCHost() string
+func (n *Node) GetRPCPassword() string
+func (n *Node) GetRPCUser() string
+```
+
+Interface methods for accessing RPC connection details. Currently return empty strings.
+
+#### Peer Management
 
 ```go
 func (n *Node) BanPeer(ctx context.Context, peer string) error
-```
-
-Adds the peer's IP address to the ban list.
-
-#### UnbanPeer
-
-```go
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error
 ```
 
-Removes the peer's IP address from the ban list.
+Methods for managing peer bans. Currently placeholder implementations.
 
-#### AddToConsensusBlacklist
+#### Consensus Management
 
 ```go
 func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.BlacklistResponse, error)
 ```
 
-Adds funds to the consensus blacklist, setting specified UTXOs as un-spendable.
-
-#### AddToConfiscationTransactionWhitelist
+Adds funds to the consensus blacklist, setting specified UTXOs as un-spendable. Supports both freezing and unfreezing based on enforcement height.
 
 ```go
 func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []models.ConfiscationTransactionDetails) (*models.AddToConfiscationTransactionWhitelistResponse, error)
@@ -175,52 +154,48 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 
 Re-assigns UTXOs to confiscation transactions, allowing them to be spent.
 
-#### extractPublicKey
-
-```go
-func extractPublicKey(scriptSig []byte) ([]byte, error)
-```
-
-Extracts the public key from a P2PKH scriptSig.
-
 ## Configuration
 
-The Alert Service uses a configuration structure (`config.Config`) that includes settings for:
+The Alert Service uses a configuration structure (`config.Config`) that includes:
 
-- Alert processing interval
+### Core Settings
+- Alert processing interval (default: 5 minutes)
 - Request logging
-- Datastore configuration
-- P2P configuration
-- RPC connections
-- Genesis keys
+- Genesis keys (required)
 
-The configuration is loaded from the Teranode settings file and environment variables.
+### Datastore Configuration
+- Auto-migration settings
+- Support for:
+    - SQLite (including in-memory)
+    - PostgreSQL
+    - MySQL
+- Connection pooling options
+- Debug settings
 
-## P2P Communication
-
-The Alert Service uses a P2P server for communication. The P2P configuration includes:
-
-- IP and port
+### P2P Configuration
+- IP and port settings
 - DHT mode
-- Protocol ID
-- Topic name
-- Private key
+- Protocol ID (defaults to system default if not specified)
+- Topic name (network-dependent: "bitcoin_alert_system_[network]" for non-mainnet)
+- Private key management
+- Peer discovery interval
 
-## Datastore
+### Error Types
+Common configuration errors include:
+- `ErrNoGenesisKeys`: No genesis keys provided
+- `ErrNoP2PIP`: Invalid P2P IP configuration
+- `ErrNoP2PPort`: Invalid P2P port configuration
+- `ErrDatastoreUnsupported`: Unsupported datastore type
 
-The Alert Service supports multiple database backends:
+### Health Checks
+The service implements comprehensive health checks:
+- Liveness check: Basic service health
+- Readiness check: Dependency health including:
+    - Blockchain client
+    - FSM status
+    - Blockassembly client
+    - UTXO store
 
-- SQLite (including in-memory)
-- PostgreSQL
-- MySQL
-
-The datastore is configured with options for debugging, connection pooling, and auto-migration of models.
-
-## Consensus Blacklist and Confiscation Transactions
-
-The Alert Service provides functionality to manage a consensus blacklist and confiscation transactions:
-
-- `AddToConsensusBlacklist`: Freezes or unfreezes specified UTXOs.
-- `AddToConfiscationTransactionWhitelist`: Re-assigns UTXOs to allow spending by confiscation transactions.
-
-These functions interact with the UTXO store to manage the state of specific outputs in the blockchain.
+The health checks return appropriate HTTP status codes:
+- `200 OK`: Service is healthy
+- `503 Service Unavailable`: Service or dependencies are unhealthy
