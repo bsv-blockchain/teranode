@@ -190,10 +190,22 @@ func (c *Client) TriggerBatcher() {
 }
 
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+	validationOptions := NewDefaultOptions()
+	for _, opt := range opts {
+		opt(validationOptions)
+	}
+
+	return c.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
+}
+
+func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	if c.batchSize == 0 {
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-			TransactionData: tx.ExtendedBytes(),
-			BlockHeight:     blockHeight,
+			TransactionData:      tx.ExtendedBytes(),
+			BlockHeight:          blockHeight,
+			SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
+			AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
+			SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
 		}); err != nil {
 			return errors.UnwrapGRPC(err)
 		}
@@ -202,8 +214,11 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, op
 		/* batch mode */
 		c.batcher.Put(&batchItem{
 			req: &validator_api.ValidateTransactionRequest{
-				TransactionData: tx.ExtendedBytes(),
-				BlockHeight:     blockHeight,
+				TransactionData:      tx.ExtendedBytes(),
+				BlockHeight:          blockHeight,
+				SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
+				AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
+				SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
 			},
 			done: doneCh,
 		})

@@ -58,6 +58,10 @@ message HealthResponse {
 message ValidateTransactionRequest {
   bytes transaction_data = 1;    // Raw transaction data to validate
   uint32 block_height = 2;       // Block height for validation context
+  // validation options
+  optional bool skip_utxo_creation = 3;     // Skip UTXO creation for validation
+  optional bool add_tx_to_block_assembly = 4; // Add transaction to block assembly
+  optional bool skip_policy_checks = 5;     // Skip policy checks
 }
 
 // ValidateTransactionResponse provides transaction validation results

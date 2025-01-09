@@ -37,6 +37,7 @@ func NewDefaultOptions() *Options {
 	return &Options{
 		skipUtxoCreation:     false,
 		addTXToBlockAssembly: true,
+		skipPolicyChecks:     false,
 	}
 }
 

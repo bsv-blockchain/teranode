@@ -8,7 +8,6 @@ import (
 
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -109,8 +108,8 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			AllowFailFast: true, // allow subtrees to fail fast, when getting from the network, will be retried if in a block
 		}
 
-		// Call the ValidateSubtreeInternal method
-		if err := u.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight); err != nil {
+		// Call the validateSubtreeInternal method
+		if err = u.ValidateSubtreeInternal(ctx, v, 0); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 			// Here we return the error directly without further wrapping, as ValidateSubtreeInternal categorizes the error
 			return err

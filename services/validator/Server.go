@@ -206,7 +206,8 @@ func (v *Server) Start(ctx context.Context) error {
 			return err
 		}
 
-		if err = v.validator.Validate(ctx, tx, data.Height); err != nil {
+		// should not pass in a height when validating from Kafka, should just be current utxo store height
+		if err = v.validator.ValidateWithOptions(ctx, tx, 0, data.Options); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
@@ -322,7 +323,20 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	// set the tx hash, so it doesn't have to be recalculated
 	tx.SetTxHash(tx.TxIDChainHash())
 
-	err = v.validator.Validate(ctx, tx, req.BlockHeight)
+	validationOptions := NewDefaultOptions()
+	if req.SkipUtxoCreation != nil {
+		validationOptions.skipUtxoCreation = *req.SkipUtxoCreation
+	}
+
+	if req.AddTxToBlockAssembly != nil {
+		validationOptions.addTXToBlockAssembly = *req.AddTxToBlockAssembly
+	}
+
+	if req.SkipPolicyChecks != nil {
+		validationOptions.skipPolicyChecks = *req.SkipPolicyChecks
+	}
+
+	err = v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 

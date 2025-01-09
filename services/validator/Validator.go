@@ -191,9 +191,14 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 // and optionally adds the transaction to block assembly.
 // Returns error if validation fails.
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (err error) {
-	// apply options
-	validationOptions := ProcessOptions(opts...)
+	return v.ValidateWithOptions(ctx, tx, blockHeight, ProcessOptions(opts...))
+}
 
+// ValidateWithOptions performs comprehensive validation of a transaction.
+// It checks transaction finality, validates inputs and outputs, updates the UTXO set,
+// and optionally adds the transaction to block assembly.
+// Returns error if validation fails.
+func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()

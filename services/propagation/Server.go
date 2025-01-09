@@ -22,7 +22,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
@@ -38,7 +37,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	http3 "github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -586,10 +585,8 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
-		validatorData := &validator.TxValidationData{
-			Tx:     req.Tx,
-			Height: chaincfg.GenesisActivationHeight,
-		}
+		validationOptions := validator.NewDefaultOptions()
+		validatorData := validator.NewTxValidationData(req.Tx, 0, validationOptions)
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
 		ps.validatorKafkaProducerClient.Publish(&kafka.Message{
@@ -599,7 +596,8 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
-		if err = ps.validator.Validate(ctx, btTx, chaincfg.GenesisActivationHeight); err != nil {
+		// but we pass in no block height, and just use the block height set in the utxo store
+		if err = ps.validator.Validate(ctx, btTx, 0); err != nil {
 			err = errors.NewServiceError("failed validating transaction", err)
 			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 

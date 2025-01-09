@@ -58,6 +58,11 @@ func (m *MockValidatorClient) GetMedianBlockTime() uint32 {
 }
 
 func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+	validationOptions := ProcessOptions(opts...)
+	return m.ValidateWithOptions(context.Background(), tx, blockHeight, validationOptions)
+}
+
+func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	if len(m.Errors) > 0 {
 		// return error and pop of stack
 		err := m.Errors[0]
@@ -72,4 +77,5 @@ func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight
 
 	return nil
 }
+
 func (m *MockValidatorClient) TriggerBatcher() {}

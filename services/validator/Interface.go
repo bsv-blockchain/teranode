@@ -37,6 +37,16 @@ type Interface interface {
 	//   - error: Any validation errors encountered
 	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error
 
+	// ValidateWithOptions performs comprehensive validation of a transaction with options passed in directly
+	// Parameters:
+	//   - ctx: Context for the validation operation
+	//   - tx: The transaction to validate
+	//   - blockHeight: Current block height for validation context
+	//   - opts: validation options
+	// Returns:
+	//   - error: Any validation errors encountered
+	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error)
+
 	// GetBlockHeight returns the current block height
 	// Returns:
 	//   - uint32: Current block height
@@ -85,6 +95,20 @@ func (mv *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, s
 // Returns:
 //   - error: Always returns nil
 func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+	return nil
+}
+
+// ValidateWithOptions implements mock transaction validation with options set directly
+// Always returns success without performing any actual validation
+// Parameters:
+//   - ctx: Context for validation (unused in mock)
+//   - tx: Transaction to validate (unused in mock)
+//   - blockHeight: Block height for validation context (unused in mock)
+//   - validationOptions: Validation options for the transaction (unused in mock)
+//
+// Returns:
+//   - error: Always returns nil
+func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	return nil
 }
 

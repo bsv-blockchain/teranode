@@ -24,6 +24,17 @@ type TxValidationData struct {
 	// Height represents the block height at which the transaction should be validated
 	// This is crucial for applying the correct validation rules based on protocol upgrades
 	Height uint32
+
+	// validation options
+	Options *Options
+}
+
+func NewTxValidationData(tx []byte, height uint32, options *Options) *TxValidationData {
+	return &TxValidationData{
+		Tx:      tx,
+		Height:  height,
+		Options: options,
+	}
 }
 
 // NewTxValidationDataFromBytes deserializes a byte slice into a TxValidationData structure
@@ -51,10 +62,23 @@ func NewTxValidationDataFromBytes(bytes []byte) (*TxValidationData, error) {
 	// Extract height from first 4 bytes (little-endian)
 	d.Height = binary.LittleEndian.Uint32(bytes[:4])
 
+	// Extract validation options from the 5th byte
+	d.Options = NewDefaultOptions()
+	validationOptionsByte := bytes[4]
+
+	// set the first bit to true if skipUtxoCreation is true
+	d.Options.skipUtxoCreation = validationOptionsByte&0x01 == 0x01
+
+	// set the second bit to true if addTXToBlockAssembly is true
+	d.Options.addTXToBlockAssembly = validationOptionsByte&0x02 == 0x02
+
+	// set the third bit to true if skipPolicyChecks is true
+	d.Options.skipPolicyChecks = validationOptionsByte&0x04 == 0x04
+
 	// read remaining bytes as tx (if present)
 	if len(bytes) > 4 {
-		d.Tx = make([]byte, len(bytes[4:]))
-		copy(d.Tx, bytes[4:])
+		d.Tx = make([]byte, len(bytes[5:]))
+		copy(d.Tx, bytes[5:])
 	}
 
 	return d, nil
@@ -81,6 +105,27 @@ func (d *TxValidationData) Bytes() []byte {
 	b32 := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b32, d.Height)
 	bytes = append(bytes, b32...)
+
+	// write the validation options as a byte slice
+	validationOptionsByte := byte(0x00)
+
+	// set the first but to 1 if skipUtxoCreation is true
+	if d.Options.skipUtxoCreation {
+		validationOptionsByte |= 0x01
+	}
+
+	// set the second bit to 1 if addTXToBlockAssembly is true
+	if d.Options.addTXToBlockAssembly {
+		validationOptionsByte |= 0x02
+	}
+
+	// set the third bit to 1 if skipPolicyChecks is true
+	if d.Options.skipPolicyChecks {
+		validationOptionsByte |= 0x04
+	}
+
+	// Append validation options byte
+	bytes = append(bytes, validationOptionsByte)
 
 	// Append transaction data
 	bytes = append(bytes, d.Tx...)
