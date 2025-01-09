@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -22,6 +23,8 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	TxCount = config.TxCount
 	GenerateNewTestData = config.GenerateNewTestData
 
+	tSettings := settings.NewSettings()
+
 	// create test dir of not exists
 	if _, err := os.Stat(FileDir); os.IsNotExist(err) {
 		if err = os.Mkdir(FileDir, 0755); err != nil {
@@ -36,9 +39,10 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 		if err != nil {
 			return nil, err
 		}
+
 		_ = blockFile.Close()
 
-		block, err := model.NewBlockFromBytes(blockBytes)
+		block, err := model.NewBlockFromBytes(blockBytes, tSettings)
 		if err != nil {
 			return nil, err
 		}
@@ -162,19 +166,25 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	fees := testSubtrees.totalFees
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	if err != nil {
 		return nil, err
 	}
+
 	coinbase.Outputs = nil
+
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+fees)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	var subtreeFile *os.File
+
 	var subtreeFileMerkleHashes *os.File
+
 	var subtreeBytes []byte
+
 	var merkleRootsubtreeHashes []*chainhash.Hash
 
 	subtreeFileMerkleHashes, err = os.Create(FileNameTemplateMerkleHashes)
@@ -191,6 +201,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 			if err != nil {
 				return nil, err
 			}
+
 			subtreeFile, err = os.Open(fmt.Sprintf(config.FileNameTemplate, i))
 			if err != nil {
 				return nil, err
@@ -222,11 +233,13 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 			return nil, err
 		}
 	}
+
 	if err = subtreeFileMerkleHashes.Close(); err != nil {
 		return nil, err
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
+
 	if calculatedMerkleRootHash, err = CalculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
 		return nil, err
 	}
@@ -235,7 +248,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
 	}
@@ -245,6 +258,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
 			break
 		}
+
 		blockHeader.Nonce++
 
 		if blockHeader.Nonce%1000000 == 0 {
@@ -256,12 +270,15 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	// 	return nil, fmt.Errorf("subtree count %d does not match subtree hash count %d", subtreeCount, len(subtreeHashes))
 	// }
 
-	block := &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: TxCount,
-		SizeInBytes:      123123,
-		Subtrees:         subtreeHashes,
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbase,
+		subtreeHashes,
+		TxCount,
+		123123,
+		0, 0, tSettings)
+	if err != nil {
+		return nil, err
 	}
 
 	blockFile, err = os.Create(FileNameTemplateBlock)
@@ -278,6 +295,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	if err != nil {
 		return nil, err
 	}
+
 	if err = blockFile.Close(); err != nil {
 		return nil, err
 	}

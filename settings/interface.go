@@ -8,15 +8,23 @@ import (
 )
 
 type Settings struct {
-	ClientName         string
-	DataFolder         string
-	SecurityLevelHTTP  int
-	ServerCertFile     string
-	ServerKeyFile      string
-	LogLevel           string
-	ProfilerAddr       string
-	StatsPrefix        string
-	PrometheusEndpoint string
+	ServiceName             string
+	ClientName              string
+	DataFolder              string
+	SecurityLevelHTTP       int
+	ServerCertFile          string
+	ServerKeyFile           string
+	LogLevel                string
+	ProfilerAddr            string
+	StatsPrefix             string
+	PrometheusEndpoint      string
+	HealthCheckPort         int
+	UseDatadogProfiler      bool
+	UseOpenTracing          bool
+	TracingSampleRate       string
+	LocalTestStartFromState string
+	PostgresCheckAddress    string
+	UseCgoVerifier          bool
 
 	ChainCfgParams    *chaincfg.Params
 	Policy            *PolicySettings
@@ -112,6 +120,7 @@ type BlockSettings struct {
 	KafkaWorkers                          int
 	ValidOrderAndBlessedConcurrency       int
 	StoreCacheEnabled                     bool
+	StoreCacheSize                        int
 	MaxSize                               int
 	BlockStore                            *url.URL
 	FailFastValidation                    bool
@@ -127,6 +136,7 @@ type BlockSettings struct {
 	UTXOPersisterDirect                   bool
 	BlockPersisterPersistAge              uint32
 	BlockPersisterPersistSleep            time.Duration
+	TxMetaStore                           *url.URL
 }
 
 type BlockChainSettings struct {
@@ -345,6 +355,7 @@ type LegacySettings struct {
 	PrintInvMessages           bool
 	GRPCAddress                string
 	AllowBlockPriority         bool
+	LimitedBlockValidation     bool
 }
 
 type PropagationSettings struct {
@@ -357,6 +368,8 @@ type PropagationSettings struct {
 	SendBatchTimeout     int
 	GRPCResolver         string
 	GRPCAddresses        []string
+	GRPCListenAddress    string
+	UseDumb              bool
 }
 
 type RPCSettings struct {

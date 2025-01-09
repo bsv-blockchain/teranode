@@ -92,7 +92,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), testItems.blockAssembler.settings)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 
@@ -381,6 +381,8 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 	t.Run("AddTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
+		tSettings := createTestSettings()
+
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
@@ -392,7 +394,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 
@@ -471,6 +473,8 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 	t.Run("GetMiningCandidate", func(t *testing.T) {
 		initPrometheusMetrics()
 
+		tSettings := createTestSettings()
+
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
@@ -482,7 +486,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 
@@ -575,6 +579,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 	t.Run("GetMiningCandidate_MaxBlockSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
+		tSettings := createTestSettings()
+
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
@@ -587,7 +593,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 
@@ -684,6 +690,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	t.Run("GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
+		tSettings := createTestSettings()
+
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
@@ -696,7 +704,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 

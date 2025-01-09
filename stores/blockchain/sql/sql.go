@@ -12,13 +12,13 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/usql"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	_ "modernc.org/sqlite"
 )
 
@@ -307,7 +307,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	if len(hash) == 0 {
 		wireGenesisBlock := s.chainParams.GenesisBlock
 
-		genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock)
+		genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock, nil)
 		if err != nil {
 			return err
 		}
@@ -351,10 +351,12 @@ type blockchainCache struct {
 }
 
 func NewBlockchainCache() *blockchainCache {
-	cacheSize, _ := gocore.Config().GetInt("blockchain_store_cache_size", 200)
+	tSettings := settings.NewSettings()
+
+	cacheSize := tSettings.Block.StoreCacheSize
 
 	return &blockchainCache{
-		enabled:     gocore.Config().GetBool("blockchain_store_cache_enabled", true),
+		enabled:     tSettings.Block.StoreCacheEnabled,
 		headers:     make(map[chainhash.Hash]*model.BlockHeader, cacheSize),
 		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, cacheSize),
 		existsCache: make(map[chainhash.Hash]bool, cacheSize),

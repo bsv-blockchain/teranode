@@ -95,7 +95,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Len(t, responseBytes, 229)
 
 		// read the response bytes into a block
-		block, err := model.NewBlockFromBytes(responseBytes)
+		block, err := model.NewBlockFromBytes(responseBytes, nil)
 		require.NoError(t, err)
 
 		// Check response fields
@@ -138,7 +138,7 @@ func TestGetNBlocks(t *testing.T) {
 		responseBytes, err := hex.DecodeString(responseHex)
 		require.NoError(t, err)
 
-		block, err := model.NewBlockFromBytes(responseBytes)
+		block, err := model.NewBlockFromBytes(responseBytes, nil)
 		require.NoError(t, err)
 
 		// Check response fields
@@ -186,7 +186,7 @@ func TestGetNBlocks(t *testing.T) {
 
 		for i := 0; i < 3; i++ {
 			// read the blocks sequentially from the reader
-			block, err := model.NewBlockFromReader(reader)
+			block, err := model.NewBlockFromReader(reader, nil)
 			require.NoError(t, err)
 
 			// Check response fields

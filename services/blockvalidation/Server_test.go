@@ -43,6 +43,9 @@ var (
 
 func TestOneTransaction(t *testing.T) {
 	var err error
+
+	tSettings := test.CreateBaseTestSettings()
+
 	subtrees := make([]*util.Subtree, 1)
 
 	subtrees[0], err = util.NewTree(1)
@@ -61,20 +64,23 @@ func TestOneTransaction(t *testing.T) {
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
 	merkleRootHash := coinbaseTx.TxIDChainHash()
-	block := &model.Block{
-		Header: &model.BlockHeader{
+
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: merkleRootHash,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, tSettings)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -100,6 +106,9 @@ func TestTwoTransactions(t *testing.T) {
 	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
 	var err error
+
+	tSettings := test.CreateBaseTestSettings()
+
 	subtrees := make([]*util.Subtree, 1)
 	subtrees[0], err = util.NewTree(1)
 	require.NoError(t, err)
@@ -117,24 +126,27 @@ func TestTwoTransactions(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
+
 	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
 	expectedMerkleRootHash, _ := chainhash.NewHash(expectedMerkleRoot.CloneBytes())
-	block := &model.Block{
-		Header: &model.BlockHeader{
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: expectedMerkleRootHash,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, tSettings)
+	assert.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -153,6 +165,9 @@ func TestTwoTransactions(t *testing.T) {
 
 func TestMerkleRoot(t *testing.T) {
 	var err error
+
+	tSettings := test.CreateBaseTestSettings()
+
 	subtrees := make([]*util.Subtree, 2)
 
 	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1
@@ -193,13 +208,14 @@ func TestMerkleRoot(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
-	require.NoError(t, err)
+
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -209,8 +225,9 @@ func TestMerkleRoot(t *testing.T) {
 	}
 
 	nBits, _ := model.NewNBitFromSlice(bits)
-	block := &model.Block{
-		Header: &model.BlockHeader{
+
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			Version:        1,
 			Timestamp:      1293623863,
 			Nonce:          274148111,
@@ -218,9 +235,10 @@ func TestMerkleRoot(t *testing.T) {
 			HashMerkleRoot: merkleRoot,
 			Bits:           *nBits,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, tSettings)
+	assert.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)
@@ -235,14 +253,15 @@ func TestMerkleRoot(t *testing.T) {
 }
 
 func TestTtlCache(t *testing.T) {
-
 	cache := ttlcache.New[chainhash.Hash, bool](
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
 	)
-	for _, txId := range txIds {
-		hash, _ := chainhash.NewHashFromStr(txId)
+
+	for _, txID := range txIds {
+		hash, _ := chainhash.NewHashFromStr(txID)
 		cache.Set(*hash, true, 1*time.Second)
 	}
+
 	go cache.Start()
 	assert.Equal(t, 4, cache.Len())
 	time.Sleep(2 * time.Second)
@@ -253,7 +272,7 @@ func TestBlockHeadersN(t *testing.T) {
 	var catchupBlockHeaders []*model.BlockHeader
 	for i := 997; i >= 0; i-- {
 		catchupBlockHeaders = append(catchupBlockHeaders, &model.BlockHeader{
-			Version:        uint32(i),
+			Version:        uint32(i), //nolint:gosec
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 		})
@@ -285,11 +304,13 @@ func TestBlockHeadersN(t *testing.T) {
 func TestServer_processBlockFound(t *testing.T) {
 	ctx := context.Background()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	blockHex := "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
 	blockBytes, err := hex.DecodeString(blockHex)
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	block, err := model.NewBlockFromBytes(blockBytes, tSettings)
 	require.NoError(t, err)
 
 	blockchainStore := blockchain_store.NewMockStore()
@@ -300,10 +321,10 @@ func TestServer_processBlockFound(t *testing.T) {
 	txStore := memory.New()
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, utxoStore)
+	require.NoError(t, err)
 
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
 
-	tSettings := test.CreateBaseTestSettings()
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
 
@@ -327,6 +348,7 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 		`=~^/block/[a-z0-9]+\z`,
 		httpmock.NewBytesResponder(200, blockBytes),
 	)
+
 	defer func() {
 		httpmock.Deactivate()
 	}()

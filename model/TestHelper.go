@@ -53,9 +53,10 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		if err != nil {
 			return nil, err
 		}
+
 		_ = blockFile.Close()
 
-		block, err := NewBlockFromBytes(blockBytes)
+		block, err := NewBlockFromBytes(blockBytes, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -84,6 +85,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 	_ = subtree.AddCoinbaseNode()
 
 	var subtreeFile *os.File
+
 	var subtreeFileMerkleHashes *os.File
 
 	subtreeCount := 0
@@ -101,14 +103,17 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
 
-	txId := make([]byte, 32)
+	txID := make([]byte, 32)
+
 	var hash chainhash.Hash
+
 	fees := uint64(0)
+
 	var n int
 
 	for i := 1; i < int(transactionIDCount); i++ { //nolint:gosec
-		binary.LittleEndian.PutUint64(txId, uint64(i))
-		hash = chainhash.Hash(txId)
+		binary.LittleEndian.PutUint64(txID, uint64(i)) //nolint:gosec
+		hash = chainhash.Hash(txID)
 
 		if err = subtree.AddNode(hash, uint64(i), uint64(i)); err != nil {
 			return nil, err
@@ -118,6 +123,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		if err != nil {
 			return nil, err
 		}
+
 		if n != 48 {
 			return nil, errors.NewProcessingError("expected to write 48 bytes, wrote %d", n)
 		}
@@ -173,6 +179,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		}
 	}
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	if err != nil {
 		return nil, err
@@ -227,11 +234,13 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 			return nil, err
 		}
 	}
+
 	if err = subtreeFileMerkleHashes.Close(); err != nil {
 		return nil, err
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash
+
 	if calculatedMerkleRootHash, err = calculateMerkleRoot(merkleRootsubtreeHashes); err != nil {
 		return nil, err
 	}
@@ -240,7 +249,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
 	}
@@ -250,6 +259,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
 			break
 		}
+
 		blockHeader.Nonce++
 
 		if blockHeader.Nonce%1000000 == 0 {
@@ -284,6 +294,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 	if err != nil {
 		return nil, err
 	}
+
 	if err = blockFile.Close(); err != nil {
 		return nil, err
 	}
@@ -318,7 +329,9 @@ type feeAndSize struct {
 func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// read from the reader and add to txMeta store
 	txHash := chainhash.Hash{}
+
 	var fee uint64
+
 	var sizeInBytes uint64
 
 	g := errgroup.Group{}
@@ -326,6 +339,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	batch := make([]feeAndSize, 0, 1024)
 
 	b := make([]byte, 48)
+
 	for {
 		_, err := io.ReadFull(r, b)
 		if err != nil {
@@ -347,6 +361,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 
 		if len(batch) == 1024 {
 			saveBatch := batch
+
 			g.Go(func() error {
 				for _, data := range saveBatch {
 					data := data
@@ -406,6 +421,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		for _, hash := range hashes {
 			err := st.AddNode(*hash, 1, 0)
 			if err != nil {
@@ -414,6 +430,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		}
 
 		calculatedMerkleRoot := st.RootHash()
+
 		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
 			return nil, err

@@ -174,7 +174,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 		fmt.Printf("\t%d transactions\n", txCount)
 
 	case "block": // here
-		block, err := block_model.NewBlockFromReader(r)
+		block, err := block_model.NewBlockFromReader(r, nil)
 		if err != nil {
 			return false, errors.NewProcessingError("error reading block", err)
 		}

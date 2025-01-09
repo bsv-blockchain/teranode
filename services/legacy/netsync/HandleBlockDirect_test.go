@@ -81,15 +81,15 @@ func TestHandleBlockDirect(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	mBlock, err := model.NewBlockFromBytes(blockBytes)
+	tSettings := &settings.Settings{}
+
+	mBlock, err := model.NewBlockFromBytes(blockBytes, tSettings)
 	require.NoError(t, err)
 
 	mBlock.Height = 1
 
 	err = blockchainClient.AddBlock(ctx, mBlock, "test")
 	require.NoError(t, err)
-
-	tSettings := &settings.Settings{}
 
 	sm, err := New(
 		ctx,

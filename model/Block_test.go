@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
@@ -28,7 +29,6 @@ import (
 )
 
 func TestBlock_Bytes(t *testing.T) {
-
 	hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	hash2, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
@@ -69,7 +69,7 @@ func TestBlock_Bytes(t *testing.T) {
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		blockFromBytes, err := NewBlockFromBytes(blockBytes)
+		blockFromBytes, err := NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
 
 		assert.Equal(t, block1Header, hex.EncodeToString(blockFromBytes.Header.Bytes()))
@@ -104,7 +104,7 @@ func TestBlock_Bytes(t *testing.T) {
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		blockFromBytes, err := NewBlockFromBytes(blockBytes)
+		blockFromBytes, err := NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -134,7 +134,7 @@ func TestBlock_Bytes(t *testing.T) {
 		require.NoError(t, err)
 
 		buf := bytes.NewReader(blockBytes)
-		blockFromBytes, err := NewBlockFromReader(buf)
+		blockFromBytes, err := NewBlockFromReader(buf, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -170,7 +170,7 @@ func TestBlock_Bytes(t *testing.T) {
 
 		// read 4 blocks
 		for i := 0; i < 4; i++ {
-			blockFromBytes, err := NewBlockFromReader(buf)
+			blockFromBytes, err := NewBlockFromReader(buf, nil)
 			require.NoError(t, err)
 
 			assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -181,7 +181,7 @@ func TestBlock_Bytes(t *testing.T) {
 		}
 
 		// no more blocks to read
-		_, err = NewBlockFromReader(buf)
+		_, err = NewBlockFromReader(buf, nil)
 		require.Error(t, err)
 	})
 }
@@ -194,11 +194,12 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for correct median time", func(t *testing.T) {
 		expected := timestamps[5]
-		median, err := CalculateMedianTimestamp(timestamps)
 
+		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
+
 		if !median.Equal(expected) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
@@ -208,10 +209,12 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[6]
 		// add a new high timestamp out of sequence
 		timestamps[5] = time.Unix(int64(20), 0)
+
 		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
+
 		if !median.Equal(expected) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
@@ -221,10 +224,12 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[4]
 		// add a new low timestamp out of sequence
 		timestamps[5] = time.Unix(int64(1), 0)
+
 		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
+
 		if !median.Equal(expected) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
@@ -232,10 +237,12 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for less than 11 timestamps", func(t *testing.T) {
 		expected := timestamps[5]
+
 		median, err := CalculateMedianTimestamp(timestamps[:10])
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
+
 		if !median.Equal(expected) {
 			t.Errorf("Expected median %v, got %v", expected, *median)
 		}
@@ -251,27 +258,28 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	require.NoError(t, err)
 
-	b := &Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
-		SizeInBytes:      123,
-		Subtrees:         []*chainhash.Hash{},
-	}
+	b, err := NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{},
+		1,
+		123, 0, 0, nil)
+	require.NoError(t, err)
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	txMetaStore := memory.New(ulogger.TestLogger{})
 
 	currentChain := make([]*BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
+
 	for i := 0; i < 11; i++ {
 		currentChain[i] = &BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i),
+			Timestamp: 1231469665 - uint32(i), //nolint:gosec
 		}
-		currentChainIDs[i] = uint32(i)
+		currentChainIDs[i] = uint32(i) //nolint:gosec
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := &sync.Map{}
@@ -294,15 +302,14 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 
 	subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
 
-	b := &Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
-		SizeInBytes:      123,
-		Subtrees: []*chainhash.Hash{
+	b, err := NewBlock(blockHeader,
+		coinbase,
+		[]*chainhash.Hash{
 			subtreeHash,
 		},
-	}
+		1,
+		123, 0, 0, nil)
+	require.NoError(t, err)
 
 	mockBlobStore, _ := New(ulogger.TestLogger{})
 	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore, nil)
@@ -316,6 +323,7 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 
 	// create a slice of random hashes
 	hashes := make([]*chainhash.Hash, leafCount)
+
 	for i := 0; i < leafCount; i++ {
 		// create random 32 bytes
 		bytes := make([]byte, 32)
@@ -337,21 +345,22 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	require.NoError(t, err)
 
-	b := &Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
-		SizeInBytes:      123,
-		Subtrees: []*chainhash.Hash{
+	b, err := NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{
 			subtree.RootHash(),
 		},
-		SubtreeSlices: []*util.Subtree{subtree},
-	}
+		1,
+		123, 0, 0, nil)
+	require.NoError(t, err)
+
 	err = b.checkDuplicateTransactions(context.Background())
 	_ = err // To stop lint warning
-	// TODO reactivate this test when we have a way to check for duplicate transactions
-	// require.Error(t, err)
 }
+
+// TODO reactivate this test when we have a way to check for duplicate transactions
+// require.Error(t, err)
 
 func TestCheckParentExistsOnChain(t *testing.T) {
 	txMetaStore := memory.New(ulogger.TestLogger{})
@@ -442,7 +451,7 @@ var blockBytesForBenchmark, _ = hex.DecodeString("010000006fe28c0ab6f1b372c1a6a2
 
 func Benchmark_NewBlockFromBytes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, _ = NewBlockFromBytes(blockBytesForBenchmark)
+		_, _ = NewBlockFromBytes(blockBytesForBenchmark, nil)
 	}
 }
 
@@ -503,7 +512,7 @@ func TestNewBlockFromMsgBlock(t *testing.T) {
 		}
 
 		// Call the function
-		block, err := NewBlockFromMsgBlock(msgBlock)
+		block, err := NewBlockFromMsgBlock(msgBlock, nil)
 
 		// Assert no error
 		assert.NoError(t, err)
@@ -567,7 +576,7 @@ func TestGenesisBytesFromModelBlock(t *testing.T) {
 
 	wireGenesisBlock := chaincfg.MainNetParams.GenesisBlock
 
-	genesisBlock, err := NewBlockFromMsgBlock(wireGenesisBlock)
+	genesisBlock, err := NewBlockFromMsgBlock(wireGenesisBlock, nil)
 	if err != nil {
 		t.Fatalf("Failed to create new block from bytes: %v", err)
 	}
@@ -587,4 +596,28 @@ func TestGenesisBytesFromModelBlock(t *testing.T) {
 	if genesisBlock.Header.Bits != *nbits {
 		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
 	}
+}
+
+func TestNewBlockSettings(t *testing.T) {
+	blockHeaderBytes, _ := hex.DecodeString(block1Header)
+	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+	require.NoError(t, err)
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+
+	tSettings := &settings.Settings{
+		ChainCfgParams: &chaincfg.RegressionNetParams,
+	}
+
+	b, err := NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{},
+		0, 0, 0, 0,
+		tSettings)
+	require.NoError(t, err)
+
+	assert.Equal(t, b.settings, tSettings)
 }

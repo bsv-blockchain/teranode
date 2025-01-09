@@ -1909,7 +1909,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return &sm, nil
 }
 
-func (sm *SyncManager) startKafkaListeners(ctx context.Context, err error) {
+func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	kafkaControlChan := make(chan bool) // true = start, false = stop
 
 	// start a go routine to control the kafka listener, using the FSM state of the node
@@ -2018,7 +2018,7 @@ func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 			}
 
 			// get the block from the msg value
-			block, err := model.NewBlockFromBytes(msg.Value)
+			block, err := model.NewBlockFromBytes(msg.Value, sm.settings)
 			if err != nil {
 				sm.logger.Errorf("[kafkaBlocksListener][%s] failed to create block from Kafka message: %v", hash, err)
 				// not going to retry, if we cannot parse the message

@@ -447,7 +447,7 @@ func TestMoveUpBlock_LeftInQueue(t *testing.T) {
 	blockBytes, err := hex.DecodeString("000000206a21d13c3d2656557493b4652f67a763f835b86bf90107a60f412c290000000083ba48026c405d5a4b4d5aa3f10cee9de605a012e9a25f72a19aa9fe123380c689505c67c874461cc6dda18002fde501016b104579e34c5c12fad8899035be27f7605f8ff95db814ba02fbc49397a761fd01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1903af32190000000000205f7c477c327c437c5f200001000000ffffffff01e50b5402000000001976a9147a112f6a373b80b4ebb2b02acef97f35aef7494488ac00000000feaf321900")
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	block, err := model.NewBlockFromBytes(blockBytes, tSettings)
 	require.NoError(t, err)
 
 	err = subtreeProcessor.moveUpBlock(ctx, block, true)

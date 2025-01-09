@@ -16,6 +16,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -28,7 +29,6 @@ import (
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
@@ -200,6 +200,7 @@ type Block struct {
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
 	medianTimestamp uint32
+	settings        *settings.Settings
 }
 
 type BlockBloomFilter struct {
@@ -208,7 +209,14 @@ type BlockBloomFilter struct {
 	CreationTime time.Time
 }
 
-func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32) (*Block, error) {
+func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32, optionalSettings *settings.Settings) (*Block, error) {
+	var tSettings *settings.Settings
+	if optionalSettings != nil {
+		tSettings = optionalSettings
+	} else {
+		tSettings = settings.NewSettings()
+	}
+
 	return &Block{
 		Header:           header,
 		CoinbaseTx:       coinbase,
@@ -218,11 +226,12 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 		subtreeLength:    uint64(len(subtrees)),
 		Height:           blockHeight,
 		ID:               id,
+		settings:         tSettings,
 	}, nil
 }
 
 // NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock
-func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock) (*Block, error) {
+func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Settings) (*Block, error) {
 	if msgBlock == nil {
 		return nil, errors.NewInvalidArgumentError("msgBlock is nil")
 	}
@@ -279,11 +288,18 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock) (*Block, error) {
 	// }
 
 	// Create and return the new Block
-	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
+	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0, optionalSettings)
 }
 
-func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
+func NewBlockFromBytes(blockBytes []byte, optionalSettings *settings.Settings) (block *Block, err error) {
 	startTime := time.Now()
+
+	var tSettings *settings.Settings
+	if optionalSettings != nil {
+		tSettings = optionalSettings
+	} else {
+		tSettings = settings.NewSettings()
+	}
 
 	defer func() {
 		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
@@ -300,7 +316,9 @@ func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 		return nil, errors.NewBlockInvalidError("block is too small")
 	}
 
-	block = &Block{}
+	block = &Block{
+		settings: tSettings,
+	}
 
 	// read the first 80 bytes as the block header
 	blockHeaderBytes := blockBytes[:80]
@@ -313,8 +331,16 @@ func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 	return readBlockFromReader(block, bytes.NewReader(blockBytes[80:]))
 }
 
-func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
+func NewBlockFromReader(blockReader io.Reader, optionalSettings *settings.Settings) (block *Block, err error) {
 	startTime := time.Now()
+
+	var tSettings *settings.Settings
+
+	if optionalSettings != nil {
+		tSettings = optionalSettings
+	} else {
+		tSettings = settings.NewSettings()
+	}
 
 	defer func() {
 		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
@@ -325,7 +351,9 @@ func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
 		}
 	}()
 
-	block = &Block{}
+	block = &Block{
+		settings: tSettings,
+	}
 
 	blockHeaderBytes := make([]byte, 80)
 	// read the first 80 bytes as the block header
@@ -560,8 +588,8 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		legacyLimitedBlockValidation := gocore.Config().GetBool("legacy_limitedBlockValidation", false)
-		if legacyLimitedBlockValidation {
+		legacyLimitedBlockValidation := b.settings.Legacy.LimitedBlockValidation
+		if b.settings.Legacy.LimitedBlockValidation {
 			logger.Warnf("WARNING: legacyLimitedBlockValidation env: %v", legacyLimitedBlockValidation)
 		}
 
@@ -616,7 +644,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "Block:checkDuplicateTransactions")
 	defer deferFn()
 
-	concurrency, _ := gocore.Config().GetInt("block_checkDuplicateTransactionsConcurrency", -1)
+	concurrency := b.settings.Block.CheckDuplicateTransactionsConcurrency
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()/2)
 	}
@@ -677,7 +705,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		currentBlockHeaderIDsMap[id] = struct{}{}
 	}
 
-	concurrency, _ := gocore.Config().GetInt("block_validOrderAndBlessedConcurrency", -1)
+	concurrency := b.settings.Block.ValidOrderAndBlessedConcurrency
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()) // block validation runs on its own box, so we can use all cores
 	}
@@ -975,9 +1003,9 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 		}
 	}()
 
-	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		return errors.NewConfigurationError("aerospike get URL error", err)
+	aeroURL := b.settings.Block.TxMetaStore
+	if aeroURL == nil {
+		return errors.NewConfigurationError("aerospike get URL (settings.Block.TxMetaStore) is nil")
 	}
 
 	portStr := aeroURL.Port()
@@ -1049,7 +1077,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		txCount     atomic.Uint64
 	)
 
-	concurrency, _ := gocore.Config().GetInt("block_getAndValidateSubtreesConcurrency", -1)
+	concurrency := b.settings.Block.GetAndValidateSubtreesConcurrency
 	if concurrency <= 0 {
 		concurrency = util.Max(4, runtime.NumCPU()/2)
 	}
@@ -1195,7 +1223,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 	var calculatedMerkleRootHash *chainhash.Hash
 
-	if len(hashes) == 1 {
+	if len(hashes) == 1 { //nolint:gocritic
 		calculatedMerkleRootHash = &hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees

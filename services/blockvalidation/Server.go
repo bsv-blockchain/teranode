@@ -573,7 +573,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
-	block, err := model.NewBlockFromBytes(request.Block)
+	block, err := model.NewBlockFromBytes(request.Block, u.settings)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
@@ -755,7 +755,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseURL str
 		return nil, errors.NewProcessingError("[getBlock][%s] failed to get block from peer", hash.String(), err)
 	}
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	block, err := model.NewBlockFromBytes(blockBytes, u.settings)
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlock][%s] failed to create block from bytes", hash.String(), err)
 	}
@@ -783,7 +783,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	blocks := make([]*model.Block, 0)
 
 	for {
-		block, err := model.NewBlockFromReader(blockReader)
+		block, err := model.NewBlockFromReader(blockReader, u.settings)
 		if err != nil {
 			if strings.Contains(err.Error(), "EOF") {
 				// if strings.Contains(err.Error(), "EOF") || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO

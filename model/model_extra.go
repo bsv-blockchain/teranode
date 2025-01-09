@@ -27,13 +27,13 @@ func (mc *MiningCandidate) Stringify(long bool) string {
 		sb.WriteString(fmt.Sprintf("nBits:          %s\n\t", utils.ReverseAndHexEncodeSlice(mc.NBits)))
 		sb.WriteString(fmt.Sprintf("Time:           %d\n\t", mc.Time))
 		sb.WriteString(fmt.Sprintf("Height:         %d\n", mc.Height))
-		// sb.WriteString("Merkle Proof:\n")
-		// for _, mp := range mc.MerkleProof {
-		// 	sb.WriteString("\t")
-		// 	sb.WriteString(hex.EncodeToString(mp))
-		// 	sb.WriteString("\n")
-		// }
 	}
+	// sb.WriteString("Merkle Proof:\n")
+	// for _, mp := range mc.MerkleProof {
+	// 	sb.WriteString("\t")
+	// 	sb.WriteString(hex.EncodeToString(mp))
+	// 	sb.WriteString("\n")
+	// }
 	return sb.String()
 }
 

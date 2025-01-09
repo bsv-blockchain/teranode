@@ -5,11 +5,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -62,9 +61,9 @@ func TestGenerateBlock(t *testing.T) {
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i),
+			Timestamp: 1231469665 - uint32(i), //nolint:gosec
 		}
-		currentChainIDs[i] = uint32(i)
+		currentChainIDs[i] = uint32(i) //nolint:gosec
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 

@@ -55,7 +55,7 @@ func (d *Daemon) Stop() {
 func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings.Settings, readyCh ...chan struct{}) {
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if shouldStart("wait_for_postgres", args) {
-		if err := waitForPostgresToStart(logger); err != nil {
+		if err := waitForPostgresToStart(logger, tSettings.PostgresCheckAddress); err != nil {
 			logger.Fatalf("error waiting for postgres: %v", err)
 		}
 	}
@@ -114,10 +114,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		_, _ = w.Write([]byte("STOP USING THIS ENDPOINT - use port 8000/health/readiness or 8000/health/liveness"))
 	})
 
-	port, ok := gocore.Config().GetInt("health_check_port", 8000)
-	if !ok {
-		logger.Warnf("health_check_port not set in config, using default port 8000")
-	}
+	port := tSettings.HealthCheckPort
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
@@ -182,12 +179,14 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		return nil
 	}
 
-	if profilerAddr, ok := gocore.Config().Get("profilerAddr"); ok && profilerAddr != "" {
+	profilerAddr := tSettings.ProfilerAddr
+	if profilerAddr != "" {
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
 			gocore.RegisterStatsHandlers()
-			prefix, _ := gocore.Config().Get("stats_prefix")
+
+			prefix := tSettings.StatsPrefix
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
 
 			server := &http.Server{
@@ -203,22 +202,22 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		}()
 	}
 
-	if gocore.Config().GetBool("use_datadog_profiler", false) {
+	if tSettings.UseDatadogProfiler {
 		deferFn := datadogProfiler()
 		defer deferFn()
 	}
 
-	if prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint"); ok && prometheusEndpoint != "" {
+	prometheusEndpoint := tSettings.PrometheusEndpoint
+	if prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 		http.Handle(prometheusEndpoint, promhttp.Handler())
 	}
 
-	// tracingOn := gocore.Config().GetBool("tracing")
-	if gocore.Config().GetBool("use_open_tracing", true) {
+	if tSettings.UseOpenTracing {
 		logger.Infof("Starting tracer")
 		// closeTracer := tracing.InitOtelTracer()
 		// defer closeTracer()
-		samplingRateStr, _ := gocore.Config().Get("tracing_SampleRate", "0.01")
+		samplingRateStr := tSettings.TracingSampleRate
 
 		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
 		if err != nil {
@@ -227,7 +226,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			samplingRate = 0.01
 		}
 
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "teranode")
+		serviceName := tSettings.ServiceName
 
 		closer, err := tracing.InitOpenTracer(serviceName, samplingRate)
 		if err != nil {
@@ -243,9 +242,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// blockchain service
 	if startBlockchain {
-		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-		if err != nil || !found {
-			return err
+		blockchainStoreURL := tSettings.BlockChain.StoreURL
+		if blockchainStoreURL == nil {
+			return errors.NewStorageError("blockchain store url not found")
 		}
 
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
@@ -271,7 +270,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		// if flag is not found, check the config if the flag is set
 		if localTestStartFromState == "" {
 			// read the config param
-			localTestStartFromState, _ = gocore.Config().Get("local_test_start_from_state")
+			localTestStartFromState = tSettings.LocalTestStartFromState
 		}
 
 		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), tSettings, blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
@@ -462,7 +461,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// blockAssembly
 	if startBlockAssembly {
-		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
+		if tSettings.BlockAssembly.GRPCListenAddress != "" {
 			txStore, err := getTxStore(logger)
 			if err != nil {
 				return err
@@ -555,7 +554,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// blockValidation
 	if startBlockValidation {
-		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
+		if tSettings.BlockValidation.GRPCListenAddress != "" {
 			subtreeStore, err := getSubtreeStore(logger)
 			if err != nil {
 				return err
@@ -603,7 +602,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// validator
 	if startValidator {
-		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
+		if tSettings.Validator.GRPCListenAddress != "" {
 			utxoStore, err := getUtxoStore(ctx, logger, tSettings)
 			if err != nil {
 				return err
@@ -676,9 +675,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// propagation
 	if startPropagation {
-		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
-		if ok && propagationGrpcAddress != "" {
-			if gocore.Config().GetBool("propagation_use_dumb", false) {
+		if tSettings.Propagation.GRPCListenAddress == "" {
+			if tSettings.Propagation.UseDumb {
 				if err := sm.AddService("PropagationServer", propagation.NewDumbPropagationServer(tSettings)); err != nil {
 					return err
 				}
@@ -853,9 +851,7 @@ func printUsage() {
 	fmt.Println("")
 }
 
-func waitForPostgresToStart(logger ulogger.Logger) error {
-	address, _ := gocore.Config().Get("postgres_check_address", "localhost:5432")
-
+func waitForPostgresToStart(logger ulogger.Logger, address string) error {
 	timeout := time.Minute // 1 minutes timeout
 
 	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)

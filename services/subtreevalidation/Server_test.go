@@ -64,14 +64,14 @@ func TestOneTransaction(t *testing.T) {
 	}
 
 	merkleRootHash := coinbaseTx.TxIDChainHash()
-	block := &model.Block{
-		Header: &model.BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: merkleRootHash,
-		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+
+	block, err := model.NewBlock(&model.BlockHeader{
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: merkleRootHash,
+	},
+		coinbaseTx,
+		subtreeHashes, 0, 0, 0, 0, nil)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -126,14 +126,12 @@ func TestTwoTransactions(t *testing.T) {
 	}
 
 	expectedMerkleRootHash, _ := chainhash.NewHash(expectedMerkleRoot.CloneBytes())
-	block := &model.Block{
-		Header: &model.BlockHeader{
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: expectedMerkleRootHash,
-		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+
+	block, err := model.NewBlock(&model.BlockHeader{
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: expectedMerkleRootHash,
+	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0, nil)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -211,18 +209,16 @@ func TestMerkleRoot(t *testing.T) {
 	}
 
 	nBits, _ := model.NewNBitFromSlice(bits)
-	block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			Timestamp:      1293623863,
-			Nonce:          274148111,
-			HashPrevBlock:  prevBlockHash,
-			HashMerkleRoot: merkleRoot,
-			Bits:           *nBits,
-		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+
+	block, err := model.NewBlock(&model.BlockHeader{
+		Version:        1,
+		Timestamp:      1293623863,
+		Nonce:          274148111,
+		HashPrevBlock:  prevBlockHash,
+		HashMerkleRoot: merkleRoot,
+		Bits:           *nBits,
+	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0, nil)
+	require.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)

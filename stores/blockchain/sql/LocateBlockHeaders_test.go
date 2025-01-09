@@ -51,7 +51,7 @@ func TestSQLLocateBlockHeaders(t *testing.T) {
 	var buf bytes.Buffer
 	err = chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 	require.NoError(t, err)
-	genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+	genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
 	require.NoError(t, err)
 	require.NotNil(t, genesisBlock)
 

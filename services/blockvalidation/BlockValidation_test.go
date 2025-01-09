@@ -301,13 +301,14 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		}
 	}
 
-	block := &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()),
-		SizeInBytes:      123123,
-		Subtrees:         subtreeHashes, // should be the subtree with placeholder
-	}
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbase,
+		subtreeHashes,            // should be the subtree with placeholder
+		uint64(subtree.Length()), //nolint:gosec
+		123123,
+		0, 0, tSettings)
+	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
@@ -411,15 +412,16 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		}
 	}
 
-	block := &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()),
-		SizeInBytes:      123123,
-		Subtrees:         subtreeHashes, // should be the subtree with placeholder
-	}
-
 	tSettings := test.CreateBaseTestSettings()
+
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbase,
+		subtreeHashes,            // should be the subtree with placeholder
+		uint64(subtree.Length()), //nolint:gosec
+		123123,
+		0, 0, tSettings)
+	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
@@ -742,6 +744,8 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	var blocks []*model.Block
 
+	tSettings := test.CreateBaseTestSettings()
+
 	for i := 0; i < numBlocks; i++ {
 		subtree, err := util.NewTreeByLeafCount(4)
 		require.NoError(t, err)
@@ -804,19 +808,18 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 			}
 		}
 
-		block := &model.Block{
-			Header:           blockHeader,
-			CoinbaseTx:       coinbase,
-			TransactionCount: uint64(subtree.Length()),
-			SizeInBytes:      123123,
-			Subtrees:         subtreeHashes, // should be the subtree with placeholder
-		}
+		block, err := model.NewBlock(
+			blockHeader,
+			coinbase,
+			subtreeHashes,            // should be the subtree with placeholder
+			uint64(subtree.Length()), //nolint:gosec
+			123123,
+			0, 0, tSettings)
+		require.NoError(t, err)
 
 		blocks = append(blocks, block)
 		previousBlockHash = block.Header.Hash() // Update the previous block hash for the next block
 	}
-
-	tSettings := test.CreateBaseTestSettings()
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
 	require.NoError(t, err)
@@ -922,13 +925,14 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	}
 
 	// Create the block with valid merkle root
-	validBlock := &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()), //nolint:gosec
-		SizeInBytes:      123123,
-		Subtrees:         subtreeHashes,
-	}
+	validBlock, err := model.NewBlock(
+		blockHeader,
+		coinbase,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		123123,
+		0, 0, tSettings)
+	require.NoError(t, err)
 
 	// Setup blockchain store and client
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)
@@ -968,13 +972,14 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		}
 	}
 
-	invalidBlock := &model.Block{
-		Header:           invalidBlockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()), //nolint:gosec
-		SizeInBytes:      123123,
-		Subtrees:         []*chainhash.Hash{subtree.RootHash()},
-	}
+	invalidBlock, err := model.NewBlock(
+		invalidBlockHeader,
+		coinbase,
+		[]*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), //nolint:gosec
+		123123,
+		0, 0, tSettings)
+	require.NoError(t, err)
 
 	// Test invalid merkle root
 	err = blockValidation.ValidateBlock(context.Background(), invalidBlock, "http://localhost:8000", model.NewBloomStats())
@@ -1050,26 +1055,32 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	require.Equal(t, subtree.Length(), 4, "Subtree should have 4 transactions")
 	// Create the block
-	block := &model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: uint64(subtree.Length()), //nolint:gosec
-		SizeInBytes: func() uint64 {
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint:gosec
+		func() uint64 {
 			totalSize := int64(0)
+
 			for _, tx := range []*bt.Tx{coinbaseTx, tx1, tx2, tx3, tx4} {
 				size := tx.Size()
 				if size < 0 {
 					t.Fatal("negative transaction size")
 				}
+
 				totalSize += int64(size)
 			}
+
 			if totalSize < 0 {
 				t.Fatal("negative total size")
 			}
+
 			return uint64(totalSize)
 		}(),
-		Subtrees: subtreeHashes,
-	}
+		0, 0, tSettings)
+
+	require.NoError(t, err)
 
 	// Setup blockchain store and client
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings.ChainCfgParams)

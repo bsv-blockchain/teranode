@@ -443,7 +443,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		fmt.Printf("\t%d transactions\n", txCount)
 
 	case "block":
-		block, err := block_model.NewBlockFromReader(br)
+		block, err := block_model.NewBlockFromReader(br, nil)
 		if err != nil {
 			return errors.NewBlockError("error reading block", err)
 		}

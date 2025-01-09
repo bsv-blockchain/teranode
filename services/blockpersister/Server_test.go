@@ -37,6 +37,7 @@ var (
 
 func TestOneTransaction(t *testing.T) {
 	var err error
+
 	subtrees := make([]*util.Subtree, 1)
 
 	subtrees[0], err = util.NewTree(1)
@@ -55,20 +56,23 @@ func TestOneTransaction(t *testing.T) {
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 	}
 
 	merkleRootHash := coinbaseTx.TxIDChainHash()
-	block := &model.Block{
-		Header: &model.BlockHeader{
+
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: merkleRootHash,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, nil)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -113,7 +117,6 @@ func TestTwoTransactions(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
-	require.NoError(t, err)
 
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
@@ -125,14 +128,16 @@ func TestTwoTransactions(t *testing.T) {
 	}
 
 	expectedMerkleRootHash, _ := chainhash.NewHash(expectedMerkleRoot.CloneBytes())
-	block := &model.Block{
-		Header: &model.BlockHeader{
+
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: expectedMerkleRootHash,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, nil)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -192,13 +197,14 @@ func TestMerkleRoot(t *testing.T) {
 	// this now needs to be here since we do not have the full subtrees in the Block struct
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
-	require.NoError(t, err)
+
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
+
 	for i, subTree := range subtrees {
 		rootHash := subTree.RootHash()
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
@@ -208,8 +214,9 @@ func TestMerkleRoot(t *testing.T) {
 	}
 
 	nBits, _ := model.NewNBitFromSlice(bits)
-	block := &model.Block{
-		Header: &model.BlockHeader{
+
+	block, err := model.NewBlock(
+		&model.BlockHeader{
 			Version:        1,
 			Timestamp:      1293623863,
 			Nonce:          274148111,
@@ -217,9 +224,10 @@ func TestMerkleRoot(t *testing.T) {
 			HashMerkleRoot: merkleRoot,
 			Bits:           *nBits,
 		},
-		Subtrees:   subtreeHashes,
-		CoinbaseTx: coinbaseTx,
-	}
+		coinbaseTx,
+		subtreeHashes,
+		0, 0, 0, 0, nil)
+	assert.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)

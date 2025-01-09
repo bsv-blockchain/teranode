@@ -35,7 +35,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 	}
 
 	var block *model.Block
-	block, err = model.NewBlockFromReader(blockReader)
+	block, err = model.NewBlockFromReader(blockReader, nil)
 	// block, err = model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return errors.NewProcessingError("failed to parse block %s: %s", blockHeader.Hash(), err)
