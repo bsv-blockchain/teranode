@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/docker/go-connections/nat"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -118,7 +119,13 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		}
 
 		// get mapped ports for 8000, 8000, 8000
-		ports := []int{8000, 8000, 8000}
+		port, ok := gocore.Config().GetInt("health_check_port", 8000)
+		if !ok {
+			suite.T().Fatalf("health_check_port not set in config")
+		}
+
+		ports := []int{port, port, port}
+
 		for index, port := range ports {
 			mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
 			if err != nil {

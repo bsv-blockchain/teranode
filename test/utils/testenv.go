@@ -434,20 +434,29 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		values := utxoStoreURL.Query()
 		if externalStore := values.Get("externalStore"); externalStore != "" {
 			// Parse the externalStore URL
-			externalStoreURL, err := url.Parse(externalStore)
+			// externalStoreURL, err := url.Parse(externalStore)
 			if err != nil {
 				return errors.NewConfigurationError("error parsing external store url:", err)
 			}
 
 			// Modify the path to point to the correct test directory
-			// Original: ./data/test/teranode1/external
-			// New: ./../../data/test/<test-id>/teranode1/external
 			relativePath := fmt.Sprintf("./../../data/test/%s/%s/external", t.TestID, node.Name)
-			externalStoreURL.Path = relativePath
+			t.Logger.Infof("Modified externalStore path: %s", relativePath)
 
-			// Update the externalStore query parameter
-			values.Set("externalStore", externalStoreURL.String())
-			utxoStoreURL.RawQuery = values.Encode()
+			// Manually construct the query string to avoid encoding issues
+			queryParts := []string{}
+
+			for k, v := range values {
+				if k == "externalStore" {
+					queryParts = append(queryParts, fmt.Sprintf("%s=file://%s", k, relativePath))
+				} else {
+					for _, val := range v {
+						queryParts = append(queryParts, fmt.Sprintf("%s=%s", k, val))
+					}
+				}
+			}
+
+			utxoStoreURL.RawQuery = strings.Join(queryParts, "&")
 		}
 
 		t.Logger.Infof("utxoStoreURL: %s", utxoStoreURL.String())
@@ -617,6 +626,18 @@ func (t *TeranodeTestEnv) StartNode(nodeName string) error {
 
 		if err := node.Start(t.Context); err != nil {
 			return err
+		}
+
+		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
+		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+
+		for idx := range order {
+			settings := settings.NewSettings(t.Nodes[idx].SettingsContext)
+			t.Nodes[idx].Name = nodeNames[idx]
+			t.Nodes[idx].Settings = settings
+			t.Logger.Infof("Settings context: %s", t.Nodes[idx].SettingsContext)
+			t.Logger.Infof("Node name: %s", nodeNames[idx])
+			t.Logger.Infof("Node settings: %s", t.Nodes[idx].Settings)
 		}
 	}
 

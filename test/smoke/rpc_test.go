@@ -113,7 +113,7 @@ func startApp(logFile string, logger ulogger.Logger) error {
 	logger.Infof("Waiting for app to be ready...")
 
 	for {
-		_, err := util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness")
+		_, err = util.DoHTTPRequest(context.Background(), "http://localhost:8000/health/liveness")
 		if err == nil {
 			break
 		}

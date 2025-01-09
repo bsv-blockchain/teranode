@@ -3,14 +3,13 @@
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxos$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxos$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxos$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxos$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags test_utxo
 package smoke
 
 import (
@@ -40,8 +39,6 @@ type UtxoTestSuite struct {
 func (suite *UtxoTestSuite) TearDownTest() {
 }
 
-const url = "http://localhost:10090"
-
 /* TestShouldAllowToSpendUtxos tests that a UTXO can be spent */
 // Request funds from the coinbase wallet
 // Create a new transaction from the first output of the faucet transaction
@@ -57,6 +54,9 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
+
+	url := "http://" + framework.Nodes[0].AssetURL
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	txDistributor := &framework.Nodes[0].DistributorClient
 
@@ -178,7 +178,10 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 	bl := false
 	targetHeight := height + 1
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 5; i++ {
+		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+		require.NoError(t, err)
+
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
@@ -197,7 +200,7 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+		// _, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -222,6 +225,8 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
+	url := "http://" + framework.Nodes[0].AssetURL
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	txDistributor := &framework.Nodes[0].DistributorClient
 
@@ -326,9 +331,12 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	blTx2 := false
 	targetHeight := height + 1
 
-	for j := 0; j < 30; j++ {
+	for j := 0; j < 5; j++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		assert.NoError(t, err, "Failed to wait for block height")
+
+		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+		assert.NoError(t, err, "Failed to generate blocks")
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
@@ -412,6 +420,8 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
+	url := "http://" + framework.Nodes[0].AssetURL
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	txDistributor := &framework.Nodes[0].DistributorClient
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
@@ -517,7 +527,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	go func() {
 		logger.Infof("Sending second transaction %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
-		_, err := txDistributor.SendTransaction(ctx, tx2)
+		_, err = txDistributor.SendTransaction(ctx, tx2)
 		if err != nil {
 			errChan <- errors.NewProcessingError("failed to send second transaction", err)
 			return
@@ -554,12 +564,12 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	// Verify both transactions are in blocks
 	verifyTxInBlock := func(tx *bt.Tx, desc string) bool {
 		targetHeight := height + 1
-		for i := 0; i < 30; i++ {
+		for i := 0; i < 5; i++ {
 			err := helper.WaitForBlockHeight(url, targetHeight, 60)
-			if err != nil {
-				logger.Warnf("Failed to wait for block height: %v", err)
-				continue
-			}
+			assert.NoError(t, err, "Failed to wait for block height")
+
+			_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+			assert.NoError(t, err, "Failed to generate block")
 
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
@@ -601,7 +611,8 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	ctx := framework.Context
 	logger := framework.Logger
 
-	url := "http://localhost:10090"
+	url := "http://" + framework.Nodes[0].AssetURL
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	txDistributor := framework.Nodes[0].DistributorClient
 
@@ -696,16 +707,17 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	bl := false
 	targetHeight := height + 1
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 5; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
-		if err != nil {
-			t.Errorf("Failed to wait for block height: %v", err)
-		}
+		assert.NoError(t, err, "Failed to wait for block height")
+
+		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+		assert.NoError(t, err, "Failed to generate block")
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
 
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
 		}
@@ -715,7 +727,6 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		}
 
 		targetHeight++
-		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -747,6 +758,8 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	err := framework.InitializeTeranodeTestClients()
 	require.NoError(t, err, "Failed to initialize Teranode test clients")
+
+	url := "http://" + framework.Nodes[0].AssetURL
 
 	txDistributor := framework.Nodes[0].DistributorClient
 
@@ -878,14 +891,18 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block")
 
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 	// Verify both transactions are in blocks
 	for i, tx := range []*bt.Tx{tx1} {
 		bl := false
 		targetHeight := height + 1
 
-		for j := 0; j < 30; j++ {
+		for j := 0; j < 5; j++ {
 			err := helper.WaitForBlockHeight(url, targetHeight, 60)
 			assert.NoError(t, err, "Failed to wait for block height")
+
+			_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+			assert.NoError(t, err, "Failed to generate block")
 
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Testing on Best block header: %v", header[0].Hash())
@@ -900,8 +917,6 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 			}
 
 			targetHeight++
-			_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-			assert.NoError(t, err, "Failed to mine block")
 		}
 
 		assert.True(t, bl, "Transaction %d not found in block", i+1)
@@ -943,9 +958,9 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 
 	time.Sleep(10 * time.Second)
 
-	srcFile := fmt.Sprintf("../../data/test/teranode1/external/%s.tx", faucetTx.TxID())
+	srcFile := fmt.Sprintf("../../data/test/%s/teranode1/external/%s.tx", framework.TestID, faucetTx.TxID())
 
-	destFile := fmt.Sprintf("../../data/test/teranode2/external/%s.tx", faucetTx.TxID())
+	destFile := fmt.Sprintf("../../data/test/%s/teranode2/external/%s.tx", framework.TestID, faucetTx.TxID())
 
 	err = helper.CopyFile(srcFile, destFile)
 	if err != nil {
@@ -953,11 +968,22 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	}
 
 	framework.StartNode("teranode2")
+
+	err = framework.InitializeTeranodeTestClients()
+	if err != nil {
+		t.Errorf("Failed to initialize teranode test clients: %v", err)
+	}
 	time.Sleep(10 * time.Second)
 
 	err = framework.Nodes[1].BlockchainClient.Run(framework.Context, "test")
 	if err != nil {
 		t.Errorf("Failed to run blockchain client: %v", err)
+	}
+
+	// mine a block
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	time.Sleep(30 * time.Second)
@@ -966,8 +992,8 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	if err != nil {
 		t.Errorf("Failed to get UTXO: %v", err)
 	}
+
 	assert.NotNil(t, md.Tx.TxID(), "Failed to get UTXO")
-	t.Logf("UTXO: %s %s\n", md.Tx.TxIDChainHash(), md.Tx.TxID())
 }
 
 // TestShouldAllowReassign tests that we can reassign UTXOs
@@ -990,7 +1016,7 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	logger := testenv.Logger
 	ctx := testenv.Context
 
-	const teranode1RPCEndpoint = "http://localhost:11292"
+	teranode1RPCEndpoint := "http://" + testenv.Nodes[0].RPCURL
 
 	node1 := testenv.Nodes[0]
 
@@ -1045,7 +1071,7 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	assert.NoError(t, err, "Failed to reassign UTXOs")
 	logger.Infof("Alice to Bob Transaction reassigned to Charles", reassignTx.TxID())
 
-	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1000})
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{100})
 	require.NoError(t, err, "Failed to generate blocks")
 	time.Sleep(60 * time.Second)
 
@@ -1054,7 +1080,18 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 	charlestoAliceTx, err := helper.CreateTransaction(aliceToCharlesReassignedTxUtxo, alice.AddressString, 10000, charlesPrivatekey)
 	assert.NoError(t, err, "Failed to create transaction")
 	_, err = helper.SendTransaction(ctx, node1, charlestoAliceTx)
-	logger.Infof("Reassigned Transaction spent by Charles", charlestoAliceTx.TxID())
+	assert.Error(t, err, "TX should be rejected since UTXO is not spendable until block 1000")
+
+	// mine more 1000 blocks
+	url := "http://" + testenv.Nodes[0].AssetURL
+
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1000})
+	require.NoError(t, err, "Failed to generate blocks")
+
+	err = helper.WaitForBlockHeight(url, 1000, 60*time.Second)
+	assert.NoError(t, err, "Failed to generate blocks")
+
+	_, err = helper.SendTransaction(ctx, node1, charlestoAliceTx)
 	assert.NoError(t, err, "Failed to send transaction")
 }
 
