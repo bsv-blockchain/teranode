@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -27,7 +28,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
-	"github.com/multiformats/go-multiaddr"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/ordishs/gocore"
@@ -43,6 +43,12 @@ type P2PNode struct {
 	bitcoinProtocolID string
 	handlerByTopic    map[string]Handler
 	startTime         time.Time
+
+	// The following variables must only be used atomically.
+	bytesReceived uint64
+	bytesSent     uint64
+	lastRecv      int64
+	lastSend      int64
 }
 
 type Handler func(ctx context.Context, msg []byte, from string)
@@ -151,7 +157,7 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 }
 
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
-	s.logger.Infof("[P2PNode] starting")
+	s.logger.Infof("[%s] starting", s.config.ProcessName)
 
 	if len(s.config.StaticPeers) == 0 {
 		s.logger.Infof("[P2PNode] no static peers to connect to - skipping connection attempt")
@@ -206,6 +212,8 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 			return err
 		}
 
+		s.logger.Infof("[P2PNode] joined topic: %s", topicName)
+
 		topics[topicName] = topic
 	}
 
@@ -238,6 +246,8 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 	s.handlerByTopic[topicName] = handler
 
 	go func() {
+		s.logger.Infof("[P2PNode][SetTopicHandler] starting handler for topic: %s", topicName)
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -271,6 +281,14 @@ func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte
 	if err := s.topics[topicName].Publish(ctx, msgBytes); err != nil {
 		return errors.NewServiceError("[P2PNode][Publish] publish error", err)
 	}
+
+	s.logger.Debugf("[P2PNode][Publish] topic: %s - message: %s\n", topicName, strings.TrimSpace(string(msgBytes)))
+
+	// Increment bytesSent using atomic operations
+	atomic.AddUint64(&s.bytesSent, uint64(len(msgBytes)))
+
+	// Update lastSend timestamp
+	atomic.StoreInt64(&s.lastSend, time.Now().Unix())
 
 	return nil
 }
@@ -306,6 +324,12 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 	if err != nil {
 		return err
 	}
+
+	// Increment bytesSent using atomic operations
+	atomic.AddUint64(&s.bytesSent, uint64(len(msg)))
+
+	// Update lastSend timestamp
+	atomic.StoreInt64(&s.lastSend, time.Now().Unix())
 
 	return nil
 }
@@ -608,20 +632,56 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 }
 
 func (s *P2PNode) streamHandler(ns network.Stream) {
+	defer ns.Close()
+	fmt.Printf("[%s] streamHandler\n", s.config.ProcessName)
+
 	buf, err := io.ReadAll(ns)
 	if err != nil {
 		_ = ns.Reset()
 
-		s.logger.Errorf("[P2PNode] failed to read network stream: %+v              ", err.Error())
+		s.logger.Errorf("[P2PNode] failed to read network stream: %+v", err)
+
+		fmt.Printf("[P2PNode] failed to read network stream: %+v", err)
 
 		return
 	}
 
 	_ = ns.Close()
 
+	atomic.AddUint64(&s.bytesReceived, uint64(len(buf)))
+
 	if len(buf) > 0 {
+		atomic.StoreInt64(&s.lastRecv, time.Now().Unix())
 		s.logger.Debugf("[P2PNode] Received message: %s", string(buf))
 	}
+}
+
+// LastSend returns the last send time of the peer.
+//
+// This function is safe for concurrent access.
+func (s *P2PNode) LastSend() time.Time {
+	return time.Unix(atomic.LoadInt64(&s.lastSend), 0)
+}
+
+// LastRecv returns the last recv time of the peer.
+//
+// This function is safe for concurrent access.
+func (s *P2PNode) LastRecv() time.Time {
+	return time.Unix(atomic.LoadInt64(&s.lastRecv), 0)
+}
+
+// BytesSent returns the total number of bytes sent by the peer.
+//
+// This function is safe for concurrent access.
+func (s *P2PNode) BytesSent() uint64 {
+	return atomic.LoadUint64(&s.bytesSent)
+}
+
+// BytesReceived returns the total number of bytes received by the peer.
+//
+// This function is safe for concurrent access.
+func (s *P2PNode) BytesReceived() uint64 {
+	return atomic.LoadUint64(&s.bytesReceived)
 }
 
 type PeerInfo struct {
@@ -649,30 +709,29 @@ func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 
 // TODO: remove
 
-func getIPFromMultiaddr(ctx context.Context, maddr multiaddr.Multiaddr) (net.IP, error) {
+func getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
 	// Try to get the IP address component
-	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+	if ip, err := maddr.ValueForProtocol(ma.P_IP4); err == nil {
 		return net.ParseIP(ip), nil
 	}
 
-	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+	if ip, err := maddr.ValueForProtocol(ma.P_IP6); err == nil {
 		return net.ParseIP(ip), nil
 	}
 
 	// If it's a DNS multiaddr, resolve it
-	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
+	if _, err := maddr.ValueForProtocol(ma.P_DNS4); err == nil {
 		return resolveDNS(ctx, maddr)
 	}
 
-	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS6); err == nil {
+	if _, err := maddr.ValueForProtocol(ma.P_DNS6); err == nil {
 		return resolveDNS(ctx, maddr)
 	}
 
 	return nil, nil // Not an IP or resolvable DNS address
 }
 
-func resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (net.IP, error) {
-
+func resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, error) {
 	resolver := madns.DefaultResolver
 
 	addrs, err := resolver.Resolve(ctx, dnsAddr)
@@ -684,7 +743,7 @@ func resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (net.IP, error
 		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no addresses found for %s", dnsAddr))
 	}
 	// Get the IP from the first resolved address
-	for _, proto := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+	for _, proto := range []int{ma.P_IP4, ma.P_IP6} {
 		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
 			return net.ParseIP(ipStr), nil
 		}
