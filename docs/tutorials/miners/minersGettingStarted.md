@@ -30,6 +30,7 @@ This tutorial will guide you through your first steps with Teranode using Docker
 Before you begin, ensure you have:
 - Basic understanding of blockchain technology
 - Familiarity with command-line operations
+- The AWS CLI
 - Docker Engine 17.03+
 - Docker Compose
 - The Teranode Docker Compose file
@@ -91,14 +92,17 @@ cd teranode-public
 cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
 ```
 
-2. Pull required images:
+2. Authenticate with AWS ECR (only required during the private beta phase)
+
 ```bash
-docker-compose pull
+# authenticate with AWS ECR
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
+
 ```
 
-3. Build Teranode:
+3. Pull required images:
 ```bash
-docker-compose build teranode-builder
+docker-compose pull
 ```
 
 ### Step 3: Start Teranode
@@ -115,8 +119,17 @@ docker-compose ps
 
 3. Check individual service logs:
 ```bash
-docker-compose logs asset-server
+# Example commands
+docker-compose logs asset
 docker-compose logs blockchain
+```
+
+4. Verify legacy sync status:
+
+When the node is started for the first time, its first action is to perform a initial blockchain sync. You can check the sync progress by checking the Legacy service logs:
+
+```bash
+docker-compose logs legacy
 ```
 
 ### Step 4: Verify Installation
@@ -128,8 +141,9 @@ curl http://localhost:8090/health
 
 2. Access monitoring dashboard:
 - Open Grafana: http://localhost:3005
-- Login with default credentials: admin/admin
-- Navigate to the "TERANODE Service Overview" dashboard
+- Login with the default credentials: admin/admin
+- Navigate to the "Teranode - Service Overview" dashboard for key metrics
+- Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
 
 ### Common Issues
 
@@ -160,25 +174,14 @@ curl http://localhost:8090/api/v1/blockstats
 
 3. Monitor specific service logs:
 ```bash
+docker-compose logs -f legacy
 docker-compose logs -f blockchain
-docker-compose logs -f asset-server
+docker-compose logs -f asset
 ```
 
 ### Working with Transactions
 
-1. Send a transaction:
-```bash
-curl -X POST http://localhost:9292 \
--H "Content-Type: application/json" \
--d '{
-"jsonrpc": "1.0",
-"id": "curltest",
-"method": "sendrawtransaction",
-"params": ["<transaction-hex>"]
-    }'
-```
-
-2. Get transaction details:
+1. Get transaction details:
 ```bash
 curl http://localhost:8090/api/v1/tx/<txid>
 ```
@@ -226,7 +229,7 @@ docker-compose up -d
 
 1. Check current block height:
 ```bash
-curl http://localhost:8090/api/v1/bestblockheader
+curl http://localhost:8090/api/v1/bestblockheader/json
 ```
 
 2. Get block information:

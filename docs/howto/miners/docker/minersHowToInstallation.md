@@ -266,17 +266,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    ```
 
 
-
-**Step 6: Build the Teranode Image**
-
-1. Build the Teranode image using the provided Dockerfile:
-   ```
-   docker-compose build teranode-builder
-   ```
-
-
-
-**Step 7: Start the Teranode Stack**
+**Step 6: Start the Teranode Stack**
 
 1. Launch the entire Teranode stack using Docker Compose:
    ```
@@ -285,7 +275,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 
 
-**Step 8: Verify Services**
+**Step 7: Verify Services**
 
 1. Check if all services are running correctly:
    ```
@@ -295,7 +285,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 
 
-**Step 9: Access Monitoring Tools**
+**Step 8: Access Monitoring Tools**
 
 1. **Grafana**: Access the Grafana dashboard at `http://localhost:3005`
 - Default credentials are `admin/admin`
@@ -314,7 +304,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    6. **Access URL**: http://localhost:8090/viewer
 
 
-**Step 10: Interact with Teranode**
+**Step 9: Interact with Teranode**
 
 - The various Teranode services expose different ports for interaction:
     - **Blockchain service**: Port 8082
@@ -325,7 +315,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
 
 
 
-**Step 11: Logging and Troubleshooting**
+**Step 10: Logging and Troubleshooting**
 
 1. View logs for all services:
    ```
@@ -337,7 +327,7 @@ Note: The `Docker Compose` method is recommended for testing in single node envi
    ```
 
 
-**Step 12: Docker Log Rotation**
+**Step 11: Docker Log Rotation**
 
 Teranode is very verbose and will output a lot of information, especially with logLevel=DEBUG. Make sure to setup log rotation for the containers to avoid running out of disk space.
 
@@ -353,7 +343,7 @@ EOF'
 sudo systemctl restart docker
 ```
 
-**Step 13: Stopping the Stack**
+**Step 12: Stopping the Stack**
 
 1. To stop all services:
    ```

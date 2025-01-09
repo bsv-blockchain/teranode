@@ -10,27 +10,19 @@ Pull the latest versions of all images:
 docker-compose pull
 ```
 
-3. **Rebuild the Teranode Image**
-
-If there are changes to the Dockerfile or local build context:
-
-```
-docker-compose build teranode-builder
-```
-
-4. **Stop the Current Stack**
+3. **Stop the Current Stack**
 
 ```
 docker-compose down
 ```
 
-5. **Start the Updated Stack**
+4. **Start the Updated Stack**
 
 ```
 docker-compose up -d
 ```
 
-6. **Verify the Update**
+5. **Verify the Update**
 
 Check that all services are running and healthy:
 
@@ -38,7 +30,7 @@ Check that all services are running and healthy:
 docker-compose ps
 ```
 
-7. **Check Logs for Any Issues**
+6. **Check Logs for Any Issues**
 
 ```
 docker-compose logs
