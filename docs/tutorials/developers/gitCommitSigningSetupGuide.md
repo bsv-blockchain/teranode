@@ -105,7 +105,7 @@ git config user.signingkey ~/.ssh/id_ed25519
 - Enter a title
 - Select "Signing Key" for Key Type
 -
-![singingKey.png](../img/singingKey.png)
+![singingKey.png](../img/signingKey.png)
 
 - Paste contents of `~/.ssh/id_ed25519.pub`
 - Click "Add SSH key"
