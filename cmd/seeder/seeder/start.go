@@ -161,7 +161,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		logger.Fatalf("Failed to get blockchain store URL")
 	}
 
-	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
+	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings)
 	if err != nil {
 		logger.Fatalf("Failed to create blockchain client: %v", err)
 	}

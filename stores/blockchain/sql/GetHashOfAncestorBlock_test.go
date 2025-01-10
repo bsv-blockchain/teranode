@@ -22,7 +22,7 @@ func TestSQLGetHashOfAncestorBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	// Create blockWindow+4 blocks (e.g. 148 blocks if blockWindow=144)
@@ -79,7 +79,7 @@ func TestSQLGetHashOfAncestorBlockShort(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	// don't generate enough blocks

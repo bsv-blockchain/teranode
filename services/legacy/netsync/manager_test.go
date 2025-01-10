@@ -54,7 +54,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 	peerNotifier := NewMockPeerNotifier()
 
 	storeURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	if err != nil {
 		return errors.NewServiceError("failed to create blockchain store", err)
 	}

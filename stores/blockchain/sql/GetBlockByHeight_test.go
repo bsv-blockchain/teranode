@@ -18,7 +18,7 @@ func TestSQLGetBlockByHeight(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		block, err := s.GetBlockByHeight(context.Background(), 0)
@@ -35,7 +35,7 @@ func TestSQLGetBlockByHeight(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

@@ -4,21 +4,19 @@ import (
 	"io"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/opentracing/opentracing-go"
-	"github.com/ordishs/gocore"
 	"github.com/uber/jaeger-client-go"
 	"github.com/uber/jaeger-client-go/config"
 )
 
 // InitTracer creates a new instance of a teranode tracer.
-func InitTracer(serviceName string, samplingRate float64) (io.Closer, error) {
-	useTracing := gocore.Config().GetBool("use_open_tracing", true)
-	if !useTracing {
-		return InitOpenTracer(serviceName, samplingRate)
+func InitTracer(serviceName string, samplingRate float64, tSettings *settings.Settings) (io.Closer, error) {
+	if !tSettings.UseOpenTracing {
+		return InitOpenTracer(serviceName, samplingRate, tSettings)
 	}
 
-	useOtelTracing := gocore.Config().GetBool("use_otel_tracing", false)
-	if useOtelTracing {
+	if tSettings.UseOtelTracing {
 		return InitOtelTracer(serviceName, samplingRate)
 	}
 
@@ -28,9 +26,8 @@ func InitTracer(serviceName string, samplingRate float64) (io.Closer, error) {
 // InitOpenTracer initializes the Jaeger tracer using opentracing
 // serviceName: the name of the service
 // samplingRate: the rate at which to sample traces (0.0 - 1.0)
-func InitOpenTracer(serviceName string, samplingRate float64) (io.Closer, error) {
-	useTracing := gocore.Config().GetBool("use_open_tracing", true)
-	if !useTracing {
+func InitOpenTracer(serviceName string, samplingRate float64, tSettings *settings.Settings) (io.Closer, error) {
+	if !tSettings.UseOpenTracing {
 		return nil, nil
 	}
 

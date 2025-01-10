@@ -15,7 +15,6 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/ordishs/go-utils/safemap"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -522,10 +521,10 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 // GetAerospikeReadPolicy creates a new Aerospike read policy with the provided options applied. Used to manage
 // default connection parameters
 // If no options are provided, the policy will use the default values
-func GetAerospikeReadPolicy(options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
+func GetAerospikeReadPolicy(tSettings *settings.Settings, options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
 
-	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+	if tSettings.Aerospike.UseDefaultPolicies {
 		return readPolicy
 	}
 
@@ -578,10 +577,10 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied. Used to manage
 // default connection parameters
 // If no options are provided, the policy will use the default values
-func GetAerospikeWritePolicy(generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
+func GetAerospikeWritePolicy(tSettings *settings.Settings, generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, expiration)
 
-	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+	if tSettings.Aerospike.UseDefaultPolicies {
 		return writePolicy
 	}
 
@@ -601,10 +600,10 @@ func GetAerospikeWritePolicy(generation, expiration uint32, options ...Aerospike
 	return writePolicy
 }
 
-func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
+func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolicy {
 	batchPolicy := aerospike.NewBatchPolicy()
 
-	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+	if tSettings.Aerospike.UseDefaultPolicies {
 		return batchPolicy
 	}
 
@@ -619,10 +618,10 @@ func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 	return batchPolicy
 }
 
-func GetAerospikeBatchWritePolicy(generation, expiration uint32) *aerospike.BatchWritePolicy {
+func GetAerospikeBatchWritePolicy(tSettings *settings.Settings, generation, expiration uint32) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 
-	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+	if tSettings.Aerospike.UseDefaultPolicies {
 		return batchWritePolicy
 	}
 
@@ -632,10 +631,10 @@ func GetAerospikeBatchWritePolicy(generation, expiration uint32) *aerospike.Batc
 	return batchWritePolicy
 }
 
-func GetAerospikeBatchReadPolicy() *aerospike.BatchReadPolicy {
+func GetAerospikeBatchReadPolicy(tSettings *settings.Settings) *aerospike.BatchReadPolicy {
 	batchReadPolicy := aerospike.NewBatchReadPolicy()
 
-	if gocore.Config().GetBool("aerospike_useDefaultPolicies", false) {
+	if tSettings.Aerospike.UseDefaultPolicies {
 		return batchReadPolicy
 	}
 

@@ -104,7 +104,7 @@ import (
 //   - prometheusUtxoMapDelete: Incremented on successful deletion
 //   - prometheusUtxoMapErrors: Incremented on deletion errors
 func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
-	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {

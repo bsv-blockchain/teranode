@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,20 +13,20 @@ import (
 
 func TestGenesisHashNewChain(t *testing.T) {
 	testCases := []struct {
-		name        string
-		chainParams *chaincfg.Params
+		name     string
+		settings *settings.Settings
 	}{
 		{
-			name:        "MainNet",
-			chainParams: &chaincfg.MainNetParams,
+			name:     "MainNet",
+			settings: settings.NewSettings(),
 		},
 		{
-			name:        "TestNet",
-			chainParams: &chaincfg.TestNetParams,
+			name:     "TestNet",
+			settings: settings.NewSettings(),
 		},
 		{
-			name:        "RegTest",
-			chainParams: &chaincfg.RegressionNetParams,
+			name:     "RegTest",
+			settings: settings.NewSettings(),
 		},
 		// {
 		// 	name:        "STN",
@@ -43,7 +44,7 @@ func TestGenesisHashNewChain(t *testing.T) {
 			require.NoError(t, err)
 
 			// Create new SQL store - this should insert the genesis block
-			store, err := New(logger, dbURL, tc.chainParams)
+			store, err := New(logger, dbURL, tc.settings)
 			require.NoError(t, err)
 			defer store.Close()
 
@@ -57,7 +58,7 @@ func TestGenesisHashNewChain(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify the hash matches the expected genesis block hash
-			assert.Equal(t, tc.chainParams.GenesisHash[:], hash)
+			assert.Equal(t, tc.settings.ChainCfgParams.GenesisHash[:], hash)
 		})
 	}
 }
@@ -97,8 +98,11 @@ func TestGenesisHashWrongParams(t *testing.T) {
 			dbURL, err := url.Parse("sqlitememory:///")
 			require.NoError(t, err)
 
+			s := settings.NewSettings()
+			s.ChainCfgParams = tc.initialParams
+
 			// First create a store with initial params
-			store, err := New(logger, dbURL, tc.initialParams)
+			store, err := New(logger, dbURL, s)
 			require.NoError(t, err)
 			defer store.Close()
 

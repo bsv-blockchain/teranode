@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/settings"
 	storesql "github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -30,10 +31,13 @@ func Test_SetGetFSMState(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	s, err := storesql.New(ulogger.TestLogger{}, storeURL, &chaincfg.MainNetParams)
+	s, err := storesql.New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	err = s.SetFSMState(context.Background(), "CATCHING_BLOCKS")

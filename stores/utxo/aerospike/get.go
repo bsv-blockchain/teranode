@@ -126,7 +126,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 		return nil, aErr
 	}
 
-	policy := util.GetAerospikeReadPolicy()
+	policy := util.GetAerospikeReadPolicy(s.settings)
 	policy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
 	value, aErr := s.client.Get(policy, key, binNames...)
@@ -337,10 +337,10 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
 	var err error
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
-	policy := util.GetAerospikeBatchReadPolicy()
+	policy := util.GetAerospikeBatchReadPolicy(s.settings)
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
@@ -507,10 +507,10 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	var err error
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
-	policy := util.GetAerospikeBatchReadPolicy()
+	policy := util.GetAerospikeBatchReadPolicy(s.settings)
 
 	// Create a batch of records to read, with a max size of the batch
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))

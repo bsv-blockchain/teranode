@@ -17,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 	"github.com/quic-go/quic-go/http3"
 )
 
@@ -65,6 +64,7 @@ func NewDistributor(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		propagationServers: propagationServers,
 		attempts:           1,
 		failureTolerance:   50,
+		settings:           tSettings,
 	}
 
 	for _, opt := range opts {
@@ -144,12 +144,12 @@ func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger,
 func NewQuicDistributor(logger ulogger.Logger, tSettings *settings.Settings, opts ...Option) (*Distributor, error) {
 	var quicAddresses []string
 
-	quicAddresses, _ = gocore.Config().GetMulti("propagation_quicAddresses", "|")
+	quicAddresses = tSettings.Propagation.QuicAddresses
 	if len(quicAddresses) == 0 {
 		return nil, errors.NewConfigurationError("propagation_quicAddresses not set in config")
 	}
 
-	waitMsBetweenTxs, _ := gocore.Config().GetInt("distributer_wait_time", 0)
+	waitMsBetweenTxs := tSettings.Coinbase.DistributerWaitTime
 	logger.Infof("wait time between txs: %d ms\n", waitMsBetweenTxs)
 
 	tlsConf := &tls.Config{
@@ -264,10 +264,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
 
-		timeout, err, _ := gocore.Config().GetDuration("distributor_timeout", 30*time.Second)
-		if err != nil {
-			return nil, errors.NewConfigurationError("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout", err)
-		}
+		timeout := d.settings.Coinbase.DistributorTimeout
 
 		for addr, propagationServer := range d.propagationServers {
 			address := addr // Create a local copy

@@ -9,6 +9,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -46,8 +47,10 @@ func TestAlertSystem(t *testing.T) {
 		aErr = client.Put(nil, key, bins)
 		require.NoError(t, aErr)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		// Call FreezeUTXO
-		err := db.FreezeUTXOs(context.Background(), spends)
+		err := db.FreezeUTXOs(context.Background(), spends, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is frozen
@@ -106,8 +109,10 @@ func TestAlertSystem(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "UTXO is frozen")
 
+		tSettings := test.CreateBaseTestSettings()
+
 		// Call UnFreezeUTXOs
-		err = db.UnFreezeUTXOs(context.Background(), spends)
+		err = db.UnFreezeUTXOs(context.Background(), spends, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is unfrozen
@@ -178,16 +183,18 @@ func TestAlertSystem(t *testing.T) {
 		require.Len(t, utxoBytes, 32)
 		assert.Equal(t, utxoHash0[:], utxoBytes)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		// Call ReAssignUTXO - should fail, utxo is not frozen
-		err = db.ReAssignUTXO(context.Background(), utxoRec, newUtxoRec)
+		err = db.ReAssignUTXO(context.Background(), utxoRec, newUtxoRec, tSettings)
 		require.Error(t, err)
 
 		// Call FreezeUTXO
-		err = db.FreezeUTXOs(context.Background(), []*utxo.Spend{utxoRec})
+		err = db.FreezeUTXOs(context.Background(), []*utxo.Spend{utxoRec}, tSettings)
 		require.NoError(t, err)
 
 		// Call ReAssignUTXO
-		err = db.ReAssignUTXO(context.Background(), utxoRec, newUtxoRec)
+		err = db.ReAssignUTXO(context.Background(), utxoRec, newUtxoRec, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is re-assigned

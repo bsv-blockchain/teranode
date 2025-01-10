@@ -11,6 +11,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -27,6 +28,8 @@ import (
 func TestAerospike(t *testing.T) {
 	client, db, _, deferFn := initAerospike(t)
 	defer deferFn()
+
+	tSettings := settings.NewSettings()
 
 	parentTxHash := tx.Inputs[0].PreviousTxIDChainHash()
 
@@ -50,7 +53,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, aErr)
 
 	t.Cleanup(func() {
-		policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+		policy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 		_, _ = client.Delete(policy, key)
 	})
 
@@ -64,7 +67,7 @@ func TestAerospike(t *testing.T) {
 
 		var value *aerospike.Record
 		// raw aerospike get
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(215), uint64(value.Bins["fee"].(int)))
@@ -81,7 +84,7 @@ func TestAerospike(t *testing.T) {
 		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, blockID)
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		require.Equal(t, uint32(2), value.Generation)
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 1)
@@ -90,7 +93,7 @@ func TestAerospike(t *testing.T) {
 		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, blockID2)
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		require.Equal(t, uint32(3), value.Generation)
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 2)
@@ -108,7 +111,7 @@ func TestAerospike(t *testing.T) {
 
 		var value *aerospike.Record
 		// raw aerospike get
-		value, err = client.Get(util.GetAerospikeReadPolicy(), coinbaseKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), coinbaseKey)
 		require.NoError(t, err)
 		assert.True(t, value.Bins["isCoinbase"].(bool))
 
@@ -173,7 +176,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		// assert.Equal(t, value.Bins["tx"], tx.ExtendedBytes())
 		assert.Len(t, value.Bins["inputs"], 1)
@@ -221,7 +224,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -247,7 +250,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, txMeta)
 
-		rPolicy := util.GetAerospikeReadPolicy()
+		rPolicy := util.GetAerospikeReadPolicy(tSettings)
 		rec, err := client.Get(rPolicy, txKey, "outputs", "utxos", "spentUtxos")
 		require.NoError(t, err)
 		require.NotNil(t, rec)
@@ -255,7 +258,7 @@ func TestAerospike(t *testing.T) {
 		_, ok := rec.Bins["utxos"].([]interface{})
 		require.True(t, ok)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+		wPolicy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		ret, aErr := client.Execute(wPolicy, txKey, teranode_aerospike.LuaPackage, "spend",
@@ -270,7 +273,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -291,7 +294,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+		wPolicy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 
 		for _, s := range spendsAll {
 			ret, aErr := client.Execute(wPolicy, txKey, teranode_aerospike.LuaPackage, "spend",
@@ -304,7 +307,7 @@ func TestAerospike(t *testing.T) {
 			assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
 		}
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -321,7 +324,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+		wPolicy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aerospike.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
@@ -344,7 +347,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
@@ -375,7 +378,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spendsRemaining, 0)
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not been in a block yet
@@ -390,7 +393,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
@@ -421,7 +424,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spendsRemaining, 0)
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration as all UTXOs are spent
@@ -436,7 +439,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spendsAll, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -455,7 +458,7 @@ func TestAerospike(t *testing.T) {
 		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration
@@ -483,7 +486,7 @@ func TestAerospike(t *testing.T) {
 		require.Error(t, err)
 		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		assert.Equal(t, tx.Version, uint32(value.Bins["version"].(int))) // nolint:gosec
 	})
@@ -510,7 +513,7 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -532,7 +535,7 @@ func TestAerospike(t *testing.T) {
 		}})
 		require.NoError(t, err)
 
-		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
 		utxos, ok = value.Bins["utxos"].([]interface{})

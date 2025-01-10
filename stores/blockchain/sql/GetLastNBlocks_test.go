@@ -18,7 +18,7 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		blocks, err := s.GetLastNBlocks(context.Background(), 10, false, 0)
@@ -30,7 +30,7 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		// Store blocks 1, 2, and 3
@@ -53,7 +53,7 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		// Store blocks 1, 2, and 3

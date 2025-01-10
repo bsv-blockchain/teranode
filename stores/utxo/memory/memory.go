@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -350,7 +351,7 @@ func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.
 //   - Doesn't exist
 //   - Is already frozen
 //   - Is already spent
-func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -382,7 +383,7 @@ func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 // Returns an error if any UTXO:
 //   - Doesn't exist
 //   - Is not frozen
-func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -409,7 +410,7 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 // ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
 // The UTXO must be frozen and will become spendable after
 // ReAssignedUtxoSpendableAfterBlocks blocks.
-func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
+func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

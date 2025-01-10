@@ -737,7 +737,7 @@ FoundAncestor:
 		moveUpBlockHeaders[i], moveUpBlockHeaders[opp] = moveUpBlockHeaders[opp], moveUpBlockHeaders[i]
 	}
 
-	maxGetReorgHashes, _ := gocore.Config().GetInt("blockassembly_maxGetReorgHashes", 10_000)
+	maxGetReorgHashes := b.settings.BlockAssembly.MaxGetReorgHashes
 	if len(filteredMoveDown) > maxGetReorgHashes {
 		b.logger.Errorf("reorg is too big, max block reorg: current hash: %s, current height: %d, new hash: %s, new height: %d, common ancestor hash: %s, common ancestor height: %d, move down block count: %d, move up block count: %d, current locator: %v, new block locator: %v", b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load(), header.Hash(), height, commonAncestor.Hash(), commonAncestorMeta.Height, len(filteredMoveDown), len(moveUpBlockHeaders), currentChainLocator, newChainLocator)
 		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", maxGetReorgHashes)

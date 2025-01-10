@@ -18,7 +18,7 @@ func TestSQLGetState(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		_, err = s.GetState(context.Background(), "test")

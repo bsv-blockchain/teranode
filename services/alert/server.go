@@ -221,7 +221,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			"localhost:8332",
 		)
 	} else {
-		s.appConfig.Services.Node = NewNodeConfig(s.logger, s.blockchainClient, s.utxoStore, s.blockassemblyClient)
+		s.appConfig.Services.Node = NewNodeConfig(s.logger, s.blockchainClient, s.utxoStore, s.blockassemblyClient, s.settings)
 	}
 
 	// Load the datastore service

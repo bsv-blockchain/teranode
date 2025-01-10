@@ -32,10 +32,10 @@ type SQL struct {
 	chainParams   *chaincfg.Params
 }
 
-func New(logger ulogger.Logger, storeURL *url.URL, chainParams *chaincfg.Params) (*SQL, error) {
+func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*SQL, error) {
 	logger = logger.New("bcsql")
 
-	db, err := util.InitSQLDB(logger, storeURL)
+	db, err := util.InitSQLDB(logger, storeURL, tSettings)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
@@ -62,7 +62,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, chainParams *chaincfg.Params)
 		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
 		blocksCache:   *NewBlockchainCache(),
-		chainParams:   chainParams,
+		chainParams:   tSettings.ChainCfgParams,
 	}
 
 	err = s.insertGenesisTransaction(logger)

@@ -22,6 +22,7 @@ import (
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/coinbase"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -457,10 +458,15 @@ func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
 }
 
 func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := settings.NewSettings("dev.system.test")
+	// tSettings.ChainCfgParams.Name = "regtest"
 
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
 
+	logger.Infof("tSettings: %+v", tSettings.ChainCfgParams.Name)
+	logger.Infof("tSettings: %+v", tSettings.Coinbase.DistributorTimeout)
+	// tSettings.Coinbase.DistributorTimeout = 30 * time.Second
+	// logger.Infof("tSettings: %+v", tSettings.Coinbase.DistributorTimeout)
 	ctx := context.Background()
 	t := suite.T()
 	url := "http://localhost:8090"
@@ -470,6 +476,10 @@ func (suite *RPCTestSuite) TestShouldAllowFairTxUseRpc() {
 
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Failed to create Blockchain client")
+
+	// tSettings.Coinbase = settings.CoinbaseSettings{
+	// 	DistributorTimeout: 10 * time.Second,
+	// }
 
 	txDistributor, err := distributor.NewDistributor(ctx, logger, tSettings,
 		distributor.WithBackoffDuration(200*time.Millisecond),

@@ -124,10 +124,10 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:SetMinedMulti2")
 	defer deferFn()
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	// math.MaxUint32 - 1 does not update expiration of the record
-	policy := util.GetAerospikeBatchWritePolicy(0, aerospike.TTLDontUpdate)
+	policy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontUpdate)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))

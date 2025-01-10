@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -142,15 +143,15 @@ func (m *MockStore) GetMedianBlockTime() uint32 {
 	return 0
 }
 
-func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }
 
-func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }
 
-func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }
 

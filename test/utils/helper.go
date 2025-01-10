@@ -1104,7 +1104,7 @@ func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, addre
 	return CreateTransaction(u, address, amount, privateKey)
 }
 
-func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger) error {
+func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{
 		TxID:     tx.TxIDChainHash(),
@@ -1113,7 +1113,7 @@ func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger
 	}
 
 	for _, node := range testenv.Nodes {
-		err := node.UtxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend})
+		err := node.UtxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings)
 		if err != nil {
 			logger.Errorf("Error freezing UTXOs on node %v: %v", err, node.Name)
 		}
@@ -1122,7 +1122,7 @@ func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger
 	return nil
 }
 
-func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger) error {
+func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
 	if err != nil {
 		return err
@@ -1159,7 +1159,7 @@ func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassig
 			TxID:     firstTx.TxIDChainHash(),
 			Vout:     0,
 			UTXOHash: oldUtxoHash,
-		}, newSpend)
+		}, newSpend, tSettings)
 
 		if err != nil {
 			return err
@@ -1239,7 +1239,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 
 func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) error {
 	var (
-		err    error
+		err error
 		// status int
 	)
 

@@ -22,7 +22,7 @@ func TestSQLGetBlockHeadersFromTill(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		headers, _, err := s.GetBlockHeadersFromTill(ctx, &chainhash.Hash{}, &chainhash.Hash{})
@@ -35,7 +35,7 @@ func TestSQLGetBlockHeadersFromTill(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
 		generatedBlockHeaders := generateBlockHeaders(t, s, 25)

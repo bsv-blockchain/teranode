@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -417,8 +418,8 @@ func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*
 	return t.utxoStore.PreviousOutputsDecorate(ctx, outpoints)
 }
 
-func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
-	if err := t.utxoStore.FreezeUTXOs(ctx, spends); err != nil {
+func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	if err := t.utxoStore.FreezeUTXOs(ctx, spends, tSettings); err != nil {
 		return err
 	}
 
@@ -429,8 +430,8 @@ func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) err
 	return nil
 }
 
-func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
-	if err := t.utxoStore.UnFreezeUTXOs(ctx, spends); err != nil {
+func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	if err := t.utxoStore.UnFreezeUTXOs(ctx, spends, tSettings); err != nil {
 		return err
 	}
 
@@ -441,8 +442,8 @@ func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) e
 	return nil
 }
 
-func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
-	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, newUtxo); err != nil {
+func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, newUtxo, tSettings); err != nil {
 		return err
 	}
 

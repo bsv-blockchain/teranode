@@ -59,6 +59,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -81,7 +82,7 @@ import (
 //   - Is already spent
 //   - Is already frozen
 //   - Fails to freeze
-func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
@@ -102,7 +103,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 
 	batchID := s.batchID.Add(1)
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err)
 	}
@@ -153,7 +154,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 //   - Doesn't exist
 //   - Is not frozen
 //   - Fails to unfreeze
-func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
@@ -174,7 +175,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 
 	batchID := s.batchID.Add(1)
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err)
 	}
@@ -227,7 +228,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 //   - Original UTXO doesn't exist
 //   - Original UTXO is not frozen
 //   - Reassignment fails
-func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
+func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
 	// nolint: gosec
 	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout/uint32(s.utxoBatchSize))
 
@@ -248,7 +249,7 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 		),
 	}
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo", err)
 	}

@@ -29,7 +29,7 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	banList := &BanList{

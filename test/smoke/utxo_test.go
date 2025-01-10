@@ -871,15 +871,17 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 		return spendingTx, nil
 	}
 
+	// TODO: which settings do we use?
+
 	// get spends for the first set of outputs
 	spends := getSpends(faucetTx.Outputs[:firstSet], 0)
-	err = framework.Nodes[0].UtxoStore.FreezeUTXOs(ctx, spends)
+	err = framework.Nodes[0].UtxoStore.FreezeUTXOs(ctx, spends, framework.Nodes[0].Settings)
 	assert.NoError(t, err, "Failed to freeze UTXOs")
 	// Create and send transaction with the frozen spends
 	_, err = createAndSendTx(faucetTx.Outputs[:firstSet], 0)
 	assert.Error(t, err, "Should not allow to spend frozen UTXOs")
 	// Unfreeze the UTXOs
-	err = framework.Nodes[0].UtxoStore.UnFreezeUTXOs(ctx, spends)
+	err = framework.Nodes[0].UtxoStore.UnFreezeUTXOs(ctx, spends, framework.Nodes[0].Settings)
 	assert.NoError(t, err, "Failed to unfreeze UTXOs")
 	// Create and send transaction with the unfrozen spends
 	tx1, err := createAndSendTx(faucetTx.Outputs[:firstSet], 0)
@@ -1063,11 +1065,11 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 
 	time.Sleep(10 * time.Second)
 	// Freeze UTXO of the Alice-Bob transaction
-	err = helper.FreezeUtxos(ctx, *testenv, aliceToBobTx, logger)
+	err = helper.FreezeUtxos(ctx, *testenv, aliceToBobTx, logger, testenv.Nodes[0].Settings)
 	assert.NoError(t, err, "Failed to freeze UTXOs")
 
 	// Reassign the UTXO to Charles address
-	err = helper.ReassignUtxo(ctx, *testenv, aliceToBobTx, reassignTx, logger)
+	err = helper.ReassignUtxo(ctx, *testenv, aliceToBobTx, reassignTx, logger, testenv.Nodes[0].Settings)
 	assert.NoError(t, err, "Failed to reassign UTXOs")
 	logger.Infof("Alice to Bob Transaction reassigned to Charles", reassignTx.TxID())
 

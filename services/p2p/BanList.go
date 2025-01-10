@@ -80,7 +80,7 @@ func newBanList(logger ulogger.Logger, tSettings *settings.Settings) (*BanList, 
 		return nil, errors.NewConfigurationError("no blockchain_store setting found")
 	}
 
-	store, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
+	store, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create blockchain store: %s", err)
 	}

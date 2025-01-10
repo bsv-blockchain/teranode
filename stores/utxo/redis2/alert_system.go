@@ -5,14 +5,15 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 )
 
-func (s *Store) FreezeUTXOs(ctx context.Context, utxos []*utxo.Spend) error {
+func (s *Store) FreezeUTXOs(ctx context.Context, utxos []*utxo.Spend, tSettings *settings.Settings) error {
 	return s.freezeUnfreeze(ctx, utxos, fmt.Sprintf("freeze_%s", s.version))
 }
 
-func (s *Store) UnFreezeUTXOs(ctx context.Context, utxos []*utxo.Spend) error {
+func (s *Store) UnFreezeUTXOs(ctx context.Context, utxos []*utxo.Spend, tSettings *settings.Settings) error {
 	return s.freezeUnfreeze(ctx, utxos, fmt.Sprintf("unfreeze_%s", s.version))
 }
 
@@ -83,7 +84,7 @@ func (s *Store) freezeUnfreeze(ctx context.Context, utxos []*utxo.Spend, fn stri
 	return nil
 }
 
-func (s *Store) ReAssignUTXO(ctx context.Context, oldUTXO *utxo.Spend, newUTXO *utxo.Spend) error {
+func (s *Store) ReAssignUTXO(ctx context.Context, oldUTXO *utxo.Spend, newUTXO *utxo.Spend, tSettings *settings.Settings) error {
 	// -- KEYS[1]: transaction key
 	// -- ARGV[1]: offset
 	// -- ARGV[2]: utxoHash

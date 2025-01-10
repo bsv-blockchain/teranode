@@ -73,7 +73,7 @@ func Start() {
 
 	tSettings := settings.NewSettings()
 
-	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings.ChainCfgParams)
+	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}

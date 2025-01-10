@@ -141,7 +141,9 @@ func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, 
 }
 
 func cleanDB(t *testing.T, client *aerospike.Client, key *aerospike.Key, txs ...*bt.Tx) {
-	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	tSettings := test.CreateBaseTestSettings()
+
+	policy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)

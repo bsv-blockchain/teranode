@@ -35,7 +35,7 @@ func TestSQLGetSuitableBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, storeURL, tSettings.ChainCfgParams)
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
 	_, _, err = s.StoreBlock(context.Background(), block1, "")

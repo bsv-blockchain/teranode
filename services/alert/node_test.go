@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bn/models"
 	"github.com/libsv/go-bt/v2"
@@ -24,9 +25,11 @@ var (
 func TestNode_AddToConsensusBlacklist(t *testing.T) {
 	ctx := context.Background()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("empty", func(t *testing.T) {
 		utxoStore := memory.New(ulogger.TestLogger{})
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
 
 		_, err := node.AddToConsensusBlacklist(ctx, nil)
 		require.Error(t, err)
@@ -38,7 +41,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
 
 		funds := []models.Fund{{
 			TxOut: models.TxOut{
@@ -88,6 +91,8 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 		require.NoError(t, err)
 
@@ -95,7 +100,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 			TxID:     tx.TxIDChainHash(),
 			Vout:     0,
 			UTXOHash: utxoHash,
-		}})
+		}}, tSettings)
 		require.NoError(t, err)
 
 		// make sure that the utxo is frozen
@@ -109,7 +114,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		// check that the utxo is unfrozen = 0
 		require.Equal(t, 5, utxoSpend.Status)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
 
 		funds := []models.Fund{{
 			TxOut: models.TxOut{
@@ -154,8 +159,10 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 	ctx := context.Background()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	t.Run("empty", func(t *testing.T) {
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, nil, nil)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, nil, nil, tSettings)
 
 		response, err := node.AddToConfiscationTransactionWhitelist(ctx, nil)
 		require.Error(t, err)
@@ -168,7 +175,7 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
 
 		btTx := tx.Clone()
 		_ = btTx
@@ -221,12 +228,14 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 		newUtxoHash, err := util.UTXOHashFromInput(confiscationTransaction.Inputs[0])
 		require.NoError(t, err)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		// freeze the utxo
 		err = utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{
 			TxID:     tx.TxIDChainHash(),
 			Vout:     0,
 			UTXOHash: utxoHash,
-		}})
+		}}, tSettings)
 		require.NoError(t, err)
 
 		// try again, should NOT return an error, and should succeed

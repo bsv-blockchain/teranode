@@ -37,6 +37,7 @@ package utxo
 import (
 	"context"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 
 	"github.com/libsv/go-bt/v2"
@@ -172,14 +173,14 @@ type Store interface {
 
 	// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
 	// This is used by the alert system to prevent spending of UTXOs.
-	FreezeUTXOs(ctx context.Context, spends []*Spend) error
+	FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
-	UnFreezeUTXOs(ctx context.Context, spends []*Spend) error
+	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// ReAssignUTXO reassigns a UTXO to a new transaction output.
 	// The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
-	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend) error
+	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
 	// internal state functions
 
@@ -256,15 +257,15 @@ func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints 
 	return nil
 }
 
-func (mu *MockUtxostore) FreezeUTXOs(ctx context.Context, spends []*Spend) error {
+func (mu *MockUtxostore) FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error {
 	return nil
 }
 
-func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend) error {
+func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error {
 	return nil
 }
 
-func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend) error {
+func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error {
 	return nil
 }
 

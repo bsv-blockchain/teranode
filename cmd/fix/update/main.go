@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/usql"
 	_ "github.com/lib/pq"
@@ -19,7 +20,9 @@ func main() {
 
 	defer client.Close()
 
-	policy := util.GetAerospikeReadPolicy()
+	tSettings := settings.NewSettings()
+
+	policy := util.GetAerospikeReadPolicy(tSettings)
 
 	db, err := usql.Open("postgres", "user=teranode password=teranode dbname=teranode sslmode=disable host=localhost port=5432")
 	if err != nil {

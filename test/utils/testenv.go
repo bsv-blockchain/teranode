@@ -535,7 +535,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	node.UtxoStore = utxoStore
 
 	// Create blockchain store
-	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL, node.Settings.ChainCfgParams)
+	blockchainStore, err := bcs.NewStore(t.Logger, blockchainStoreURL, node.Settings)
 	if err != nil {
 		return errors.NewConfigurationError("error creating blockchain store", err)
 	}

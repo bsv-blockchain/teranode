@@ -20,7 +20,6 @@ type Settings struct {
 	PrometheusEndpoint      string
 	HealthCheckPort         int
 	UseDatadogProfiler      bool
-	UseOpenTracing          bool
 	TracingSampleRate       string
 	LocalTestStartFromState string
 	PostgresCheckAddress    string
@@ -49,6 +48,8 @@ type Settings struct {
 	RPC               RPCSettings
 	Faucet            FaucetSettings
 	Dashboard         DashboardSettings
+	UseOpenTracing    bool
+	UseOtelTracing    bool
 }
 
 type DashboardSettings struct {
@@ -256,6 +257,8 @@ type UtxoStoreSettings struct {
 	DBTimeout                  time.Duration
 	UseExternalTxCache         bool
 	ExternalizeAllTransactions bool
+	PostgresMaxIdleConns       int
+	PostgresMaxOpenConns       int
 }
 
 type P2PSettings struct {
@@ -307,6 +310,8 @@ type CoinbaseSettings struct {
 	DistributorBackoffDuration  time.Duration
 	DistributorMaxRetries       int
 	DistributorFailureTolerance int
+	DistributerWaitTime         int
+	DistributorTimeout          time.Duration
 	PeerStatusTimeout           time.Duration
 	SlackChannel                string
 	SlackToken                  string
@@ -368,6 +373,7 @@ type PropagationSettings struct {
 	SendBatchTimeout     int
 	GRPCResolver         string
 	GRPCAddresses        []string
+	QuicAddresses        []string
 	GRPCListenAddress    string
 	UseDumb              bool
 }

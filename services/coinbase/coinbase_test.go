@@ -34,7 +34,7 @@ func Test_HappyPath(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -104,7 +104,7 @@ func Test_CoinbaseTransactionUniqueness(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -174,7 +174,7 @@ func Test_MultipleParameterVariations(t *testing.T) {
 	logger := ulogger.New("test-coinbase-params")
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -251,7 +251,7 @@ func Test_MalformedUTXOs(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -322,7 +322,7 @@ func Test_SpendValidUTXOs(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -387,7 +387,7 @@ func Test_RequestFundsFromAllValidUTXOs(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)
@@ -484,7 +484,7 @@ func Test_RequestFundsMalformed(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings.ChainCfgParams)
+	blockChainStore, err := blockchainStore.NewStore(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, blockChainStore, nil, nil)

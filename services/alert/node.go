@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -23,15 +24,17 @@ type Node struct {
 	blockchainClient    blockchain.ClientI
 	utxoStore           utxo.Store
 	blockassemblyClient *blockassembly.Client
+	settings            *settings.Settings
 }
 
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store,
-	blockassemblyClient *blockassembly.Client) config.NodeInterface {
+	blockassemblyClient *blockassembly.Client, tSettings *settings.Settings) config.NodeInterface {
 	return &Node{
 		logger:              logger,
 		blockchainClient:    blockchainClient,
 		utxoStore:           utxoStore,
 		blockassemblyClient: blockassemblyClient,
+		settings:            tSettings,
 	}
 }
 
@@ -128,12 +131,12 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 		// check the height enforcement, if the height is below our current height, we are unfreezing, otherwise freezing
 		if len(fund.EnforceAtHeight) > 0 && fund.EnforceAtHeight[0].Stop < int(n.utxoStore.GetBlockHeight()) {
 			// unfreeze
-			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}); err != nil {
+			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
 			}
 		} else {
 			// freeze
-			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}); err != nil {
+			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
 			}
 		}
@@ -240,7 +243,7 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			}
 
 			// re-assign the utxo
-			if err = n.utxoStore.ReAssignUTXO(ctx, oldUtxo, newUtxo); err != nil {
+			if err = n.utxoStore.ReAssignUTXO(ctx, oldUtxo, newUtxo, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
 			}
 		}

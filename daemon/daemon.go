@@ -228,7 +228,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 		serviceName := tSettings.ServiceName
 
-		closer, err := tracing.InitOpenTracer(serviceName, samplingRate)
+		closer, err := tracing.InitOpenTracer(serviceName, samplingRate, tSettings)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}
@@ -247,7 +247,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return errors.NewStorageError("blockchain store url not found")
 		}
 
-		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
 		if err != nil {
 			return err
 		}
@@ -675,7 +675,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// propagation
 	if startPropagation {
-		if tSettings.Propagation.GRPCListenAddress == "" {
+		if tSettings.Propagation.GRPCListenAddress != "" {
 			if tSettings.Propagation.UseDumb {
 				if err := sm.AddService("PropagationServer", propagation.NewDumbPropagationServer(tSettings)); err != nil {
 					return err

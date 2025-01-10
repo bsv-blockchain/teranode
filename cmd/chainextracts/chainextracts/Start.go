@@ -41,7 +41,7 @@ func Start() {
 
 	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
 
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings.ChainCfgParams)
+	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}

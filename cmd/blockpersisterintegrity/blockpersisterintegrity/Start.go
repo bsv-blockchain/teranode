@@ -64,7 +64,7 @@ func Start() {
 
 	tSettings := settings.NewSettings()
 
-	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings.ChainCfgParams)
+	blockchainDB, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
 	if err != nil {
 		panic(err)
 	}
@@ -73,6 +73,7 @@ func Start() {
 	if err != nil {
 		panic(err.Error())
 	}
+
 	blobStore, err := blob.NewStore(ulogger.TestLogger{}, s3StoreURL)
 	if err != nil {
 		panic(err)
@@ -105,6 +106,7 @@ func Start() {
 				logger.Errorf("block header %s does not match previous block header %s\n", blockHeader.Hash(), previousBlockHeader.HashPrevBlock)
 			}
 		}
+
 		previousBlockHeader = blockHeader
 	}
 

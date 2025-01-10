@@ -160,8 +160,12 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 
 	tracing.SetGlobalMockTracer()
 
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.BlockMaxSize = 1000000
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, &chaincfg.MainNetParams)
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -172,9 +176,6 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	}
 
 	gocore.Config().Set("tx_chan_buffer_size", "1000000")
-
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Policy.BlockMaxSize = 1000000
 
 	ctx := context.Background()
 	ba := blockassembly.New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)

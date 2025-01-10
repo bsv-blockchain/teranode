@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -213,22 +214,22 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	return err
 }
 
-func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
-	err := s.store.FreezeUTXOs(ctx, spends)
+func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
+	err := s.store.FreezeUTXOs(ctx, spends, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][FreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
-func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
-	err := s.store.UnFreezeUTXOs(ctx, spends)
+func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
+	err := s.store.UnFreezeUTXOs(ctx, spends, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][UnFreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
-func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend) error {
-	err := s.store.ReAssignUTXO(ctx, utxo, newUtxo)
+func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend, tSettings *settings.Settings) error {
+	err := s.store.ReAssignUTXO(ctx, utxo, newUtxo, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
 
 	return err

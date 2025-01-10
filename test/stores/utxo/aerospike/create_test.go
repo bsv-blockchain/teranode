@@ -14,6 +14,7 @@ import (
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -120,6 +121,8 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StoreTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -134,7 +137,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), bItem.GetTxHash().CloneBytes())
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
 		assert.Equal(t, true, value.Bins["external"])
@@ -156,6 +159,8 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 
 		teranode_aerospike.InitPrometheusMetrics()
 
+		tSettings := test.CreateBaseTestSettings()
+
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		tx.Outputs = []*bt.Output{}
 		_ = tx.AddOpReturnOutput([]byte("test"))
@@ -170,7 +175,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), bItem.GetTxHash().CloneBytes())
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
 		assert.Equal(t, true, value.Bins["external"])
@@ -197,6 +202,8 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StorePartialTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
+		tSettings := test.CreateBaseTestSettings()
+
 		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -211,7 +218,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), bItem.GetTxHash().CloneBytes())
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
+		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
 		assert.Equal(t, true, value.Bins["external"])

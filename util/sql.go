@@ -9,11 +9,10 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/usql"
 	"github.com/labstack/gommon/random"
-	"github.com/ordishs/gocore"
 )
 
 type SQLEngine string
@@ -24,68 +23,67 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
-func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
-	switch storeUrl.Scheme {
+func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
+	switch storeURL.Scheme {
 	case "postgres":
-		return InitPostgresDB(logger, storeUrl)
+		return InitPostgresDB(logger, storeURL, tSettings)
 	case "sqlite", "sqlitememory":
-		return InitSQLiteDB(logger, storeUrl)
+		return InitSQLiteDB(logger, storeURL, tSettings)
 	}
 
-	return nil, errors.NewConfigurationError("unknown scheme: %s", storeUrl.Scheme)
+	return nil, errors.NewConfigurationError("unknown scheme: %s", storeURL.Scheme)
 }
 
-func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
-	dbHost := storeUrl.Hostname()
-	port := storeUrl.Port()
+func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
+	dbHost := storeURL.Hostname()
+	port := storeURL.Port()
 	dbPort, _ := strconv.Atoi(port)
-	dbName := storeUrl.Path[1:]
+	dbName := storeURL.Path[1:]
 	dbUser := ""
 	dbPassword := ""
-	if storeUrl.User != nil {
-		dbUser = storeUrl.User.Username()
-		dbPassword, _ = storeUrl.User.Password()
+
+	if storeURL.User != nil {
+		dbUser = storeURL.User.Username()
+		dbPassword, _ = storeURL.User.Password()
 	}
 
 	// Default sslmode to "disable"
 	sslMode := "disable"
 
 	// Check if "sslmode" is present in the query parameters
-	queryParams := storeUrl.Query()
+	queryParams := storeURL.Query()
 	if val, ok := queryParams["sslmode"]; ok && len(val) > 0 {
 		sslMode = val[0] // Use the first value if multiple are provided
 	}
 
 	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d", dbUser, dbPassword, dbName, sslMode, dbHost, dbPort)
 
-	db, err := usql.Open(storeUrl.Scheme, dbInfo)
+	db, err := usql.Open(storeURL.Scheme, dbInfo)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to open postgres DB", err)
 	}
 
 	logger.Infof("Using postgres DB: %s@%s:%d/%s", dbUser, dbHost, dbPort, dbName)
 
-	idleConns, _ := gocore.Config().GetInt("utxo_postgresMaxIdleConns", 10)
-	db.SetMaxIdleConns(idleConns)
-	maxOpenConns, _ := gocore.Config().GetInt("utxo_postgresMaxOpenConns", 80)
-	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(tSettings.UtxoStore.PostgresMaxIdleConns)
+	db.SetMaxOpenConns(tSettings.UtxoStore.PostgresMaxOpenConns)
 
 	return db, nil
 }
 
-func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
+func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	var filename string
 	var err error
 
-	if storeUrl.Scheme == "sqlitememory" {
+	if storeURL.Scheme == "sqlitememory" {
 		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
 	} else {
-		folder, _ := gocore.Config().Get("dataFolder", "data")
+		folder := tSettings.DataFolder
 		if err = os.MkdirAll(folder, 0755); err != nil {
 			return nil, errors.NewServiceError("failed to create data folder %s", folder, err)
 		}
 
-		dbName := storeUrl.Path[1:]
+		dbName := storeURL.Path[1:]
 		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
 		if err != nil {
 			return nil, errors.NewServiceError("failed to get absolute path for sqlite DB", err)

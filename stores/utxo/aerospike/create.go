@@ -217,9 +217,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		deferFn()
 	}()
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, aerospike.TTLDontExpire)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
@@ -680,7 +680,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
 	// For all records, set the write policy to CREATE_ONLY
 	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
@@ -777,7 +777,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]

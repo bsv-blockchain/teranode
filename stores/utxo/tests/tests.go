@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -104,10 +105,12 @@ func Restore(t *testing.T, db utxostore.Store) {
 func Freeze(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	_, err := db.Create(ctx, tx, 1000)
 	require.NoError(t, err)
 
-	err = db.FreezeUTXOs(ctx, spends)
+	err = db.FreezeUTXOs(ctx, spends, tSettings)
 	require.NoError(t, err)
 
 	err = db.Spend(ctx, spends, 1000)
@@ -117,7 +120,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_FROZEN), resp.Status)
 
-	err = db.UnFreezeUTXOs(ctx, spends)
+	err = db.UnFreezeUTXOs(ctx, spends, tSettings)
 	require.NoError(t, err)
 
 	resp, err = db.GetSpend(ctx, testSpend0)
@@ -136,6 +139,8 @@ func Freeze(t *testing.T, db utxostore.Store) {
 func ReAssign(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
+	tSettings := test.CreateBaseTestSettings()
+
 	err := db.SetBlockHeight(101)
 	require.NoError(t, err)
 
@@ -143,14 +148,14 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	// try to reassign, should fail, utxo has not yet been frozen
-	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1)
+	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1, tSettings)
 	require.Error(t, err)
 
-	err = db.FreezeUTXOs(ctx, []*utxostore.Spend{testSpend0})
+	err = db.FreezeUTXOs(ctx, []*utxostore.Spend{testSpend0}, tSettings)
 	require.NoError(t, err)
 
 	// try to reassign, should succeed, utxo has been frozen
-	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1)
+	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1, tSettings)
 	require.NoError(t, err)
 
 	// should return an error, does not exist anymore

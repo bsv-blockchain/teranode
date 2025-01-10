@@ -23,7 +23,7 @@ func TestSQLLocateBlockHeaders(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	s, err := New(ulogger.TestLogger{}, dbURL, tSettings.ChainCfgParams)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockCount)

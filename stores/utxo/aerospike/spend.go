@@ -222,7 +222,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		}()
 	}
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
 
@@ -443,7 +443,7 @@ func (s *Store) IncrementNrRecords(txid *chainhash.Hash, increment int) (interfa
 func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	var err error
 
-	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
 	// Create a batch of records to read, with a max size of the batch

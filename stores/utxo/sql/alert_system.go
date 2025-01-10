@@ -44,13 +44,14 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
 // Returns an error if any UTXO is already spent or frozen.
-func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
+func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
 	txHashIDMap := make(map[string]int)
 
 	// check whether the UTXOs are already spent or frozen
@@ -98,7 +99,7 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) erro
 
 // UnFreezeUTXOs removes the frozen status from UTXOs.
 // Returns an error if any UTXO is not frozen.
-func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
+func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
 	txHashIDMap := make(map[string]int)
 
 	// check whether the UTXOs are already spent or frozen
@@ -141,7 +142,7 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) er
 // ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
 // The UTXO must be frozen before it can be reassigned.
 // The reassigned UTXO becomes spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
-func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend) error {
+func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend, tSettings *settings.Settings) error {
 	// check whether the UTXO is frozen
 	q := `
             SELECT t.id, o.frozen

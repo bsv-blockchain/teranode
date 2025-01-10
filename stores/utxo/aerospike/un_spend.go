@@ -152,7 +152,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 //   - prometheusUtxoMapReset: Successful unspends
 //   - prometheusUtxoMapErrors: Failed operations
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
-	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
+	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
 	// nolint gosec
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
