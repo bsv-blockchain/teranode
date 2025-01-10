@@ -329,3 +329,7 @@ go mod download
 ```
 
 This will effectively reset your cache and re-download all dependencies.
+
+## Next Steps
+
+- [Check our Git Commit Signing Setup Guide for Contributors](./gitCommitSigningSetupGuide.md)
