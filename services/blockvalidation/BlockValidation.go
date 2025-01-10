@@ -1,3 +1,17 @@
+// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+//
+// This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
+// and processing transaction metadata. It is designed for high-performance operation at scale,
+// supporting features like:
+//
+// - Concurrent block validation with optimistic mining support
+// - Subtree-based block organization and validation
+// - Transaction metadata caching and management
+// - Automatic chain catchup when falling behind
+// - Integration with Kafka for distributed operation
+//
+// The package exposes gRPC interfaces for block validation operations,
+// making it suitable for use in distributed Teranode deployments.
 package blockvalidation
 
 import (
@@ -28,41 +42,118 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// revalidateBlockData contains information needed to revalidate a block
+// that previously failed validation or requires additional verification.
 type revalidateBlockData struct {
-	block          *model.Block
-	blockHeaders   []*model.BlockHeader
+	// block is the full block data to be revalidated
+	block *model.Block
+
+	// blockHeaders contains historical block headers needed for validation context
+	blockHeaders []*model.BlockHeader
+
+	// blockHeaderIDs contains the sequential IDs of the block headers
 	blockHeaderIDs []uint32
-	baseURL        string
-	retries        int
+
+	// baseURL is the source URL from which the block was originally retrieved
+	baseURL string
+
+	// retries tracks the number of revalidation attempts
+	retries int
 }
 
+// BlockValidation handles the core validation logic for blocks in Teranode.
+// It manages block validation, subtree processing, and bloom filter creation.
 type BlockValidation struct {
-	logger                             ulogger.Logger
-	settings                           *settings.Settings
-	blockchainClient                   blockchain.ClientI
-	subtreeStore                       blob.Store
-	subtreeTTL                         time.Duration
-	txStore                            blob.Store
-	utxoStore                          utxo.Store
-	recentBlocksBloomFilters           []*model.BlockBloomFilter
-	recentBlocksBloomFiltersMu         sync.Mutex
+	// logger provides structured logging capabilities
+	logger ulogger.Logger
+
+	// settings contains operational parameters and feature flags
+	settings *settings.Settings
+
+	// blockchainClient interfaces with the blockchain for operations
+	blockchainClient blockchain.ClientI
+
+	// subtreeStore provides persistent storage for block subtrees
+	subtreeStore blob.Store
+
+	// subtreeTTL specifies how long subtrees should be retained
+	subtreeTTL time.Duration
+
+	// txStore handles permanent storage of transactions
+	txStore blob.Store
+
+	// utxoStore manages the UTXO set for transaction validation
+	utxoStore utxo.Store
+
+	// recentBlocksBloomFilters maintains bloom filters for recent blocks
+	recentBlocksBloomFilters []*model.BlockBloomFilter
+
+	// recentBlocksBloomFiltersMu protects concurrent access to bloom filters
+	recentBlocksBloomFiltersMu sync.Mutex
+
+	// recentBlocksBloomFiltersExpiration defines bloom filter retention period
 	recentBlocksBloomFiltersExpiration time.Duration
-	validatorClient                    validator.Interface
-	subtreeValidationClient            subtreevalidation.Interface
-	subtreeDeDuplicator                *deduplicator.DeDuplicator
-	lastValidatedBlocks                *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
-	blockExists                        *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeExists                      *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeCount                       atomic.Int32
-	blockHashesCurrentlyValidated      *util.SwissMap
-	blockBloomFiltersBeingCreated      *util.SwissMap
-	bloomFilterStats                   *model.BloomStats
-	setMinedChan                       chan *chainhash.Hash
-	revalidateBlockChan                chan revalidateBlockData
-	stats                              *gocore.Stat
-	lastUsedBaseURL                    string
+
+	// validatorClient handles transaction validation operations
+	validatorClient validator.Interface
+
+	// subtreeValidationClient manages subtree validation processes
+	subtreeValidationClient subtreevalidation.Interface
+
+	// subtreeDeDuplicator prevents duplicate processing of subtrees
+	subtreeDeDuplicator *deduplicator.DeDuplicator
+
+	// lastValidatedBlocks caches recently validated blocks for 2 minutes
+	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
+
+	// blockExists tracks validated block hashes for 2 hours
+	blockExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
+
+	// subtreeExists tracks validated subtree hashes for 10 minutes
+	subtreeExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
+
+	// subtreeCount tracks the number of subtrees being processed
+	subtreeCount atomic.Int32
+
+	// blockHashesCurrentlyValidated tracks blocks in validation process
+	blockHashesCurrentlyValidated *util.SwissMap
+
+	// blockBloomFiltersBeingCreated tracks bloom filters being generated
+	blockBloomFiltersBeingCreated *util.SwissMap
+
+	// bloomFilterStats collects statistics about bloom filter operations
+	bloomFilterStats *model.BloomStats
+
+	// setMinedChan receives block hashes that need to be marked as mined
+	setMinedChan chan *chainhash.Hash
+
+	// revalidateBlockChan receives blocks that need revalidation
+	revalidateBlockChan chan revalidateBlockData
+
+	// stats tracks operational metrics for monitoring
+	stats *gocore.Stat
+
+	// lastUsedBaseURL stores the most recent source URL used for retrievals
+	lastUsedBaseURL string
 }
 
+// NewBlockValidation creates a new block validation instance with the provided dependencies.
+// It initializes all required components and starts background processing goroutines for
+// handling block validation tasks.
+//
+// Parameters:
+//   - ctx: Context for lifecycle management
+//   - logger: Structured logging interface
+//   - tSettings: Validation configuration parameters
+//   - blockchainClient: Interface to blockchain operations
+//   - subtreeStore: Storage for block subtrees
+//   - txStore: Storage for transactions
+//   - txMetaStore: Storage for transaction metadata
+//   - validatorClient: Transaction validation interface
+//   - subtreeValidationClient: Subtree validation interface
+//   - bloomExpiration: Duration to retain bloom filters
+//
+// Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
@@ -165,6 +256,9 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	return bv
 }
 
+// start initializes the block validation system and begins processing.
+// It handles the recovery of unprocessed blocks and starts background workers
+// for block validation tasks.
 func (u *BlockValidation) start(ctx context.Context) error {
 	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
@@ -337,11 +431,29 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, block.String())
 }
 
+// SetBlockExists marks a block as existing in the validation system.
+// This updates the internal cache to track validated blocks.
+//
+// Parameters:
+//   - hash: Hash of the block to mark as existing
+//
+// Returns an error if the operation fails.
 func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
 	u.blockExists.Set(*hash, true)
 	return nil
 }
 
+// GetBlockExists checks whether a block exists in the validation system.
+// It first checks the internal cache, then falls back to the blockchain client
+// if necessary.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the block to check
+//
+// Returns:
+//   - bool: Whether the block exists
+//   - error: Any error encountered during the check
 func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	start := time.Now()
 	stat := gocore.NewStat("GetBlockExists")
@@ -367,11 +479,29 @@ func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Ha
 	return exists, nil
 }
 
+// SetSubtreeExists marks a subtree as existing in the validation system.
+// This updates the internal cache to track validated subtrees.
+//
+// Parameters:
+//   - hash: Hash of the subtree to mark as existing
+//
+// Returns an error if the operation fails.
 func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 	u.subtreeExists.Set(*hash, true)
 	return nil
 }
 
+// GetSubtreeExists checks whether a subtree exists in the validation system.
+// It first checks the internal cache, then falls back to the subtree store
+// if necessary.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree to check
+//
+// Returns:
+//   - bool: Whether the subtree exists
+//   - error: Any error encountered during the check
 func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSubtreeExists")
 	defer deferFn()
@@ -393,6 +523,14 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 	return exists, nil
 }
 
+// setTxMined marks a block's transactions as mined in the system.
+// It updates transaction metadata and manages block state transitions.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHash: Hash of the block containing mined transactions
+//
+// Returns an error if the mining status update fails.
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "setTxMined",
 		tracing.WithParentStat(u.stats),
@@ -457,8 +595,16 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	return nil
 }
 
-// isParentMined: check whether the parent block has been set to mined in the db
-// keep on trying until the parent block has been set to mined
+// isParentMined verifies if a block's parent has been marked as mined.
+// It checks against the database of unmined blocks to determine status.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHeader: Header of the block whose parent needs checking
+//
+// Returns:
+//   - bool: Whether the parent block is mined
+//   - error: Any error encountered during verification
 func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.BlockHeader) (bool, error) {
 	blockNotMined, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
 	if err != nil {
@@ -478,6 +624,15 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 	return parentBlockMined, nil
 }
 
+// SetTxMetaCache stores transaction metadata in the cache.
+// This method provides fast access to transaction metadata for validation purposes.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Transaction hash
+//   - txMeta: Transaction metadata to store
+//
+// Returns an error if the operation fails.
 func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "SetTxMetaCache")
@@ -489,6 +644,15 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 	return nil
 }
 
+// SetTxMetaCacheFromBytes stores transaction metadata from raw bytes.
+// This method provides efficient bulk loading of transaction metadata.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: Transaction identifier bytes
+//   - txMetaBytes: Raw metadata bytes to store
+//
+// Returns an error if storage fails.
 func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
@@ -497,6 +661,15 @@ func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMeta
 	return nil
 }
 
+// SetTxMetaCacheMinedMulti marks multiple transactions as mined.
+// This method efficiently updates mining status for transaction batches.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hashes: Transaction hashes to mark as mined
+//   - blockID: ID of the block containing these transactions
+//
+// Returns an error if the update fails.
 func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
@@ -508,6 +681,15 @@ func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes [
 	return nil
 }
 
+// SetTxMetaCacheMulti stores multiple transaction metadata entries.
+// This method enables efficient batch updates to the metadata cache.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - keys: Transaction identifier bytes
+//   - values: Corresponding metadata bytes
+//
+// Returns an error if the batch update fails.
 func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:SetTxMetaCacheMulti")
@@ -519,6 +701,14 @@ func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte
 	return nil
 }
 
+// DelTxMetaCacheMulti removes transaction metadata from the cache.
+// This method cleans up metadata for invalidated or reorganized transactions.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Transaction hash to remove
+//
+// Returns an error if deletion fails.
 func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:DelTxMetaCacheMulti")
@@ -530,6 +720,22 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 	return nil
 }
 
+// ValidateBlock performs comprehensive validation of a Bitcoin block.
+// It verifies block size, parent block status, subtrees, and transactions while
+// supporting optimistic mining for improved performance.
+//
+// The method can operate in two modes:
+//   - Standard validation: Complete verification before accepting the block
+//   - Optimistic mining: Preliminary acceptance with background validation
+//
+// Parameters:
+//   - ctx: Context for the validation operation
+//   - block: Block to validate
+//   - baseURL: Source URL for additional data retrieval
+//   - bloomStats: Statistics collector for bloom filter operations
+//   - disableOptimisticMining: Optional flag to force standard validation
+//
+// Returns an error if validation fails or nil on success.
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateBlock",
 		tracing.WithParentStat(u.stats),
@@ -807,6 +1013,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 
+// waitForParentToBeMined ensures a block's parent is mined before validation.
+// It implements retry logic with configurable backoff for parent verification.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block whose parent needs verification
+//
+// Returns an error if parent mining verification fails.
 func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *model.Block) error {
 	// Caution, in regtest, when mining initial blocks, this logic wants to retry over and over as fast as possible to ensure it keeps up
 	checkParentBlock := func() (bool, error) {
@@ -842,6 +1056,13 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	}
 }
 
+// reValidateBlock performs a full block revalidation.
+// This method handles blocks that failed initial validation or need reverification.
+//
+// Parameters:
+//   - blockData: Contains the block and context for revalidation
+//
+// Returns an error if revalidation fails.
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx, _, deferFn := tracing.StartTracing(context.Background(), "reValidateBlock",
 		tracing.WithParentStat(u.stats),
@@ -884,6 +1105,12 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block.String())
 }
 
+// createAppendBloomFilter generates and manages bloom filters for blocks.
+// It handles filter creation, pruning, and concurrent access management.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block to create filter for
 func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
 	if u.blockBloomFiltersBeingCreated.Exists(*block.Hash()) {
 		return
@@ -940,6 +1167,14 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	u.recentBlocksBloomFiltersMu.Unlock()
 }
 
+// updateSubtreesTTL manages retention periods for block subtrees.
+// It updates TTL values and marks subtrees as properly set in the blockchain.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block containing subtrees to update
+//
+// Returns an error if TTL updates fail.
 func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesTTL")
 	defer deferFn()
@@ -972,6 +1207,15 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	return nil
 }
 
+// validateBlockSubtrees ensures all subtrees in a block are valid.
+// It manages concurrent validation and retrieval of missing subtrees.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block containing subtrees to validate
+//   - baseURL: Source URL for missing subtree retrieval
+//
+// Returns an error if subtree validation fails.
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateBlockSubtrees")
 	defer deferFn()
@@ -1033,6 +1277,15 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	return nil
 }
 
+// checkOldBlockIDs verifies that referenced blocks are in the current chain.
+// It prevents invalid chain reorganizations and maintains chain consistency.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - oldBlockIDsMap: Map of transaction IDs to their parent block IDs
+//   - blockStr: String representation of the block for logging
+//
+// Returns an error if block verification fails.
 func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *sync.Map, blockStr string) (iterationError error) {
 	// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 	oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {

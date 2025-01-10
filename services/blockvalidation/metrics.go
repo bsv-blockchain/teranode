@@ -1,3 +1,17 @@
+// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+//
+// This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
+// and processing transaction metadata. It is designed for high-performance operation at scale,
+// supporting features like:
+//
+// - Concurrent block validation with optimistic mining support
+// - Subtree-based block organization and validation
+// - Transaction metadata caching and management
+// - Automatic chain catchup when falling behind
+// - Integration with Kafka for distributed operation
+//
+// The package exposes gRPC interfaces for block validation operations,
+// making it suitable for use in distributed Teranode deployments.
 package blockvalidation
 
 import (

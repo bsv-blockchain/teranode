@@ -1,3 +1,17 @@
+// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+//
+// This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
+// and processing transaction metadata. It is designed for high-performance operation at scale,
+// supporting features like:
+//
+// - Concurrent block validation with optimistic mining support
+// - Subtree-based block organization and validation
+// - Transaction metadata caching and management
+// - Automatic chain catchup when falling behind
+// - Integration with Kafka for distributed operation
+//
+// The package exposes gRPC interfaces for block validation operations,
+// making it suitable for use in distributed Teranode deployments.
 package blockvalidation
 
 import (
@@ -81,6 +95,14 @@ func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeH
 	return nil
 }
 
+// setup prepares a test environment with necessary components for block validation
+// testing. It initializes and configures:
+// - Transaction metadata store
+// - Validator client with mock implementation
+// - Subtree validation services
+// - Transaction and block storage systems
+// The function returns initialized components and a cleanup function to ensure
+// proper test isolation.
 func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 	httpmock.Activate()
@@ -126,6 +148,16 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 	}
 }
 
+// createTestTransactionChainWithCount generates a sequence of valid Bitcoin
+// transactions for testing, starting with a coinbase transaction and creating
+// a specified number of chained transactions. This utility function helps create
+// realistic test scenarios with valid transaction chains.
+//
+// Parameters:
+//   - t: Testing context for assertions
+//   - count: Number of transactions to generate in the chain
+//
+// Returns a slice of transactions starting with the coinbase transaction.
 func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	require.NoError(t, err)
@@ -218,6 +250,10 @@ func createSpendingTx(t *testing.T, prevTx *bt.Tx, vout uint32, amount uint64, a
 	return tx
 }
 
+// TestBlockValidationValidateBlockSmall verifies the validation of a small block
+// with minimal transactions to ensure core validation functionality works correctly.
+// This test demonstrates the basic block validation flow with a controlled set of
+// test transactions and validates both the merkle root calculation and block structure.
 func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -322,6 +358,11 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
+// TestBlockValidationValidateBlock tests block validation at scale by processing
+// a larger block with 1024 transactions. This test ensures the validation system
+// can handle production-level transaction volumes while maintaining proper
+// validation of all block components including merkle roots, transaction validity,
+// and block structure.
 func TestBlockValidationValidateBlock(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -436,6 +477,10 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
+// TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder verifies that
+// the validation system correctly enforces the Bitcoin protocol rule preventing
+// duplicate coinbase placeholders within a block's transaction structure.
+// This test ensures the integrity of block reward distribution.
 func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -526,6 +571,10 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
+// TestBlockValidationShouldNotAllowDuplicateCoinbaseTx ensures that blocks
+// containing multiple coinbase transactions are rejected. This validation is
+// critical for maintaining the Bitcoin protocol's monetary policy by preventing
+// multiple block rewards within a single block.
 func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -614,6 +663,10 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
+// TestInvalidBlockWithoutGenesisBlock verifies that blocks not properly
+// connected to the genesis block are rejected. This test ensures the blockchain's
+// fundamental requirement of an unbroken chain back to the genesis block,
+// preventing any potential chain splits or invalid block sequences.
 func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -839,7 +892,16 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
-// TNE-1.2: Teranode must calculate the Merkle tree based on the transactions in the block and validate it against the values in the block header received.
+// TestBlockValidationMerkleTreeValidation implements the TNE-1.2 specification
+// requirement that Teranode must accurately calculate and validate merkle trees
+// for all blocks. This test verifies both successful validation of correct
+// merkle roots and proper rejection of blocks with invalid merkle roots.
+//
+// The test covers:
+// - Correct merkle root calculation from transaction set
+// - Validation of valid merkle root values
+// - Detection and rejection of invalid merkle roots
+// - Proper handling of block header verification
 func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -986,9 +1048,18 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	require.ErrorContains(t, err, "merkle root does not match")
 }
 
-// TNE-2: After having received a block, and Teranode is unaware of a particular transaction in the proposed block
-// it must request this transaction from the node proposing the block. This transaction must then also be validated
-// according to the requirements laid out in section 3.11.
+// TestBlockValidationRequestMissingTransaction implements the TNE-2 specification
+// requirement for handling missing transactions. When Teranode encounters an unknown
+// transaction within a block, it must request and validate that transaction from
+// the proposing node according to section 3.11 requirements.
+//
+// The test verifies:
+// - Detection of missing transactions during block validation
+// - Successful retrieval of missing transactions from peer nodes
+// - Proper validation of retrieved transactions
+// - Integration of validated transactions into the transaction store
+// - Completion of block validation after resolving missing transactions
+
 func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	initPrometheusMetrics()
 

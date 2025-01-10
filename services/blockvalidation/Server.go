@@ -1,3 +1,17 @@
+// Package blockvalidation implements block validation for Bitcoin SV nodes in Teranode.
+//
+// This package provides the core functionality for validating Bitcoin blocks, managing block subtrees,
+// and processing transaction metadata. It is designed for high-performance operation at scale,
+// supporting features like:
+//
+// - Concurrent block validation with optimistic mining support
+// - Subtree-based block organization and validation
+// - Transaction metadata caching and management
+// - Automatic chain catchup when falling behind
+// - Integration with Kafka for distributed operation
+//
+// The package exposes gRPC interfaces for block validation operations,
+// making it suitable for use in distributed Teranode deployments.
 package blockvalidation
 
 import (
@@ -37,40 +51,108 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// processBlockFound encapsulates information about a newly discovered block
+// that requires validation. It includes both the block identifier and communication
+// channels for handling validation results.
 type processBlockFound struct {
-	hash    *chainhash.Hash
+	// hash uniquely identifies the discovered block using a double SHA256 hash
+	hash *chainhash.Hash
+
+	// baseURL specifies the peer URL from which additional block data can be retrieved
+	// if needed during validation
 	baseURL string
-	errCh   chan error
+
+	// errCh receives any errors encountered during block validation and allows
+	// synchronous waiting for validation completion
+	errCh chan error
 }
 
+// processBlockCatchup contains information needed to process a block during chain catchup
+// operations when the node has fallen behind the current chain tip.
 type processBlockCatchup struct {
-	block   *model.Block
+	// block contains the full block data to be validated, including header,
+	// transactions, and subtrees
+	block *model.Block
+
+	// baseURL indicates the peer URL from which additional block data can be
+	// retrieved if needed during catchup
 	baseURL string
 }
 
-// Server type carries the logger within it
+// Server implements a high-performance block validation service for Bitcoin SV.
+// It coordinates block validation, subtree management, and transaction metadata processing
+// across multiple subsystems while maintaining chain consistency. The server supports
+// both synchronous and asynchronous validation modes, with automatic catchup capabilities
+// when falling behind the chain tip.
 type Server struct {
+	// UnimplementedBlockValidationAPIServer provides default implementations of gRPC methods
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	blockchainClient    blockchain.ClientI
-	subtreeStore        blob.Store
-	txStore             blob.Store
-	utxoStore           utxo.Store
-	validatorClient     validator.Interface
-	blockFoundCh        chan processBlockFound
-	catchupCh           chan processBlockCatchup
-	blockValidation     *BlockValidation
-	SetTxMetaQ          *util.LockFreeQ[[][]byte]
+
+	// logger provides structured logging with contextual information
+	logger ulogger.Logger
+
+	// settings contains operational parameters for block validation,
+	// including timeouts, concurrency limits, and feature flags
+	settings *settings.Settings
+
+	// blockchainClient provides access to the blockchain state and operations
+	// like block storage, header retrieval, and chain reorganization
+	blockchainClient blockchain.ClientI
+
+	// subtreeStore provides persistent storage for block subtrees,
+	// enabling efficient block organization and validation
+	subtreeStore blob.Store
+
+	// txStore handles permanent storage of individual transactions,
+	// allowing retrieval of historical transaction data
+	txStore blob.Store
+
+	// utxoStore manages the Unspent Transaction Output (UTXO) set,
+	// tracking available outputs for transaction validation
+	utxoStore utxo.Store
+
+	// validatorClient handles transaction validation operations,
+	// ensuring each transaction follows network rules
+	validatorClient validator.Interface
+
+	// blockFoundCh receives notifications of newly discovered blocks
+	// that need validation. This channel buffers requests when high load occurs.
+	blockFoundCh chan processBlockFound
+
+	// catchupCh handles blocks that need processing during chain catchup operations.
+	// This channel is used when the node falls behind the chain tip.
+	catchupCh chan processBlockCatchup
+
+	// blockValidation contains the core validation logic and state
+	blockValidation *BlockValidation
+
+	// SetTxMetaQ provides a lock-free queue for handling transaction metadata
+	// operations asynchronously
+	SetTxMetaQ *util.LockFreeQ[[][]byte]
+
+	// kafkaConsumerClient handles subscription to and consumption of
+	// Kafka messages for distributed coordination
 	kafkaConsumerClient kafka.KafkaConsumerGroupI
-	// cache to prevent processing the same block / subtree multiple times
-	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
+
+	// processSubtreeNotify caches subtree processing state to prevent duplicate
+	// processing of the same subtree from multiple miners
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
-	// bloom filter stats for all blocks processed
+
+	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
 }
 
-// New will return a server instance with the logger stored within it
+// New creates a new block validation server with the provided dependencies.
+// It initializes internal channels, caches and metrics collection.
+// Parameters:
+//   - logger: provides structured logging
+//   - tSettings: configuration parameters
+//   - subtreeStore: storage for block subtrees
+//   - txStore: storage for transactions
+//   - utxoStore: manages UTXO set
+//   - validatorClient: provides transaction validation
+//   - blockchainClient: interfaces with the blockchain
+//   - kafkaConsumerClient: handles Kafka message consumption
 func New(
 	logger ulogger.Logger,
 	tSettings *settings.Settings,
@@ -106,6 +188,20 @@ func New(
 	return bVal
 }
 
+// Health performs comprehensive health and readiness checks on the block validation service.
+// It verifies both the core service and its dependencies are functioning correctly.
+//
+// When checkLiveness is true, it performs only basic service health checks without checking
+// dependencies. This is useful for determining if the service needs to be restarted.
+// When false, it performs complete dependency checking to ensure the service can function fully.
+//
+// The method returns:
+//   - An HTTP status code indicating the overall health state
+//   - A descriptive message about the health status
+//   - Any error encountered during health checking
+//
+// A return of http.StatusOK indicates the service is healthy and ready to handle requests.
+// http.StatusServiceUnavailable indicates the service or a dependency is not ready.
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -146,6 +242,13 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC provides a gRPC interface to the health checking functionality.
+// It wraps the Health method to provide standardized health information via gRPC,
+// including service status, detailed health information, and timestamps.
+//
+// The method performs a full dependency check and returns a structured response
+// suitable for gRPC health monitoring systems. Any errors are properly wrapped
+// to maintain gRPC error semantics.
 func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(u.stats),
@@ -429,7 +532,9 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	return nil
 }
 
-// Start function
+// Start initiates the block validation service, starting Kafka consumers
+// and HTTP/gRPC servers. It begins processing blocks and handling validation
+// requests.
 func (u *Server) Start(ctx context.Context) error {
 	// start blocks kafka consumer
 	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
@@ -452,6 +557,20 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// httpServer initializes and manages the HTTP server component of the validation service.
+// The server provides health check endpoints and subtree data access through a RESTful API.
+//
+// The implementation includes:
+// - Basic health and liveness checking endpoints
+// - CORS configuration for cross-origin requests
+// - Subtree data retrieval endpoint with proper error handling
+// - Graceful shutdown handling
+//
+// Parameters:
+//   - ctx: Context for server lifecycle management
+//   - httpAddress: The address on which to listen for HTTP requests
+//
+// Returns an error if server initialization fails or nil on successful startup.
 func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 	startTime := time.Now()
 
@@ -519,6 +638,20 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
+// BlockFound notifies the service about a newly discovered block that needs validation.
+// It initiates the block validation process, optionally waiting for completion based
+// on the request parameters.
+//
+// The method first checks if the block already exists to avoid duplicate processing.
+// If the block is new, it queues it for validation using the block processing channels.
+// The validation itself happens asynchronously to avoid blocking the gRPC handler.
+//
+// Parameters:
+//   - ctx: The context for handling timeouts and cancellation
+//   - req: Contains the block hash and source URL
+//
+// Returns an EmptyMessage on success or an error if validation cannot be initiated.
+// If WaitToComplete is set in the request, waits for validation to finish before returning.
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
@@ -572,6 +705,21 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
+// ProcessBlock handles validation of a complete block at a specified height.
+// This method is typically used during initial block sync or when receiving blocks
+// through legacy interfaces.
+//
+// The method performs several key operations:
+// - Validates the block height is correct, fetching from parent if needed
+// - Ensures the block can be properly deserialized
+// - Processes the block through the validation pipeline
+// - Updates chain state if validation succeeds
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - request: Contains the raw block data and target height
+//
+// Returns an EmptyMessage on successful validation or an error if validation fails.
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
 	block, err := model.NewBlockFromBytes(request.Block, u.settings)
 	if err != nil {
@@ -683,6 +831,20 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	return nil
 }
 
+// checkParentProcessingComplete ensures that a block's parent has completed validation
+// before allowing the current block's validation to proceed. This method implements
+// a backoff strategy while waiting for parent block processing to complete.
+//
+// The method:
+// - Verifies parent block validation status
+// - Implements exponential backoff for retry attempts
+// - Monitors both validation and bloom filter creation status
+// - Provides detailed logging of the waiting process
+//
+// Parameters:
+//   - ctx: Context for operation management
+//   - block: The block whose parent requires verification
+//   - baseURL: Source URL for additional data retrieval if needed
 func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseURL string) {
 	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
@@ -1030,6 +1192,22 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
+// Get retrieves a subtree from storage based on its hash identifier.
+// This method provides direct access to the underlying subtree storage system,
+// allowing retrieval of block organization structures for validation and
+// chain synchronization purposes.
+//
+// The method manages performance tracking and error handling for subtree
+// retrieval operations. It ensures proper extension management and converts
+// any storage-level errors into appropriate gRPC responses.
+//
+// Parameters:
+//   - ctx: Context for managing operation timeouts and cancellation
+//   - request: Contains the hash identifying the requested subtree
+//
+// Returns a GetSubtreeResponse containing the serialized subtree data or
+// an error if retrieval fails. Storage errors are properly wrapped to
+// maintain consistent gRPC error semantics.
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
 	start, stat, ctx := tracing.NewStatFromContext(ctx, "Get", u.stats)
 	defer func() {
@@ -1046,6 +1224,21 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 	}, nil
 }
 
+// Exists verifies whether a specific subtree exists in storage.
+// This method provides efficient existence checking for subtrees without
+// requiring full data retrieval. It is particularly useful during block
+// validation to verify the availability of required subtree structures.
+//
+// The implementation includes performance monitoring and maintains
+// consistency with the service's caching and storage layers.
+//
+// Parameters:
+//   - ctx: Context for the verification operation
+//   - request: Contains the hash of the subtree to verify
+//
+// Returns an ExistsSubtreeResponse indicating whether the subtree exists.
+// Any errors during verification are wrapped appropriately for gRPC
+// error handling.
 func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error) {
 	start, stat, ctx := tracing.NewStatFromContext(ctx, "Exists", u.stats)
 	defer func() {
@@ -1064,6 +1257,16 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 	}, nil
 }
 
+// SetTxMeta queues transaction metadata updates for processing.
+// This method handles batched updates to transaction metadata, managing them
+// through an asynchronous queue to prevent overwhelming the storage system.
+//
+// The method:
+// - Updates prometheus metrics for monitoring
+// - Enqueues the metadata for processing
+// - Returns quickly to allow high throughput
+//
+// The actual processing happens asynchronously through the SetTxMetaQ queue.
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
 	start, stat, _ := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
@@ -1083,6 +1286,15 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 	}, nil
 }
 
+// DelTxMeta removes transaction metadata from the system.
+// This method handles the deletion of transaction metadata, typically used
+// when transactions are no longer needed or during chain reorganization.
+//
+// The method:
+// - Validates the provided transaction hash
+// - Updates monitoring metrics
+// - Executes the deletion through the caching layer
+// - Handles any errors during deletion
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
 	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
@@ -1105,6 +1317,17 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 	}, nil
 }
 
+// SetMinedMulti marks multiple transactions as mined in a specific block.
+// This method efficiently handles batch updates for transaction mining status,
+// typically called when a block has been successfully validated and added to the chain.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - request: Contains block ID and list of transaction hashes
+//
+// The method ensures atomic updates and maintains consistency between the transaction
+// metadata cache and permanent storage. It includes metric tracking for monitoring
+// system performance.
 func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
 	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetMinedMulti", u.stats)
 	defer func() {
