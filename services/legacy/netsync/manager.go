@@ -336,24 +336,28 @@ func (sm *SyncManager) startSync() {
 	okPeers := make([]*peerpkg.Peer, 0)
 
 	sm.logger.Debugf("[startSync] selecting sync peer from %d candidates", len(sm.peerStates))
+
 	for peer, state := range sm.peerStates {
 		if !state.syncCandidate {
 			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.String())
+
 			continue
 		}
 
 		// Add any peers on the same block to okPeers. These should
 		// only be used as a last resort.
-		if peer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
+		if peer.LastBlock() == int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 			okPeers = append(okPeers, peer)
 			sm.logger.Debugf("[startSync][%v] peer is at the same height %d as us (%d), added to okPeers", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
+
 			continue
 		}
 
 		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
-		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) {
+		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 			sm.logger.Debugf("[startSync][%v] peer is behind us at height %d (us: %d), skipping", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
+
 			continue
 		}
 
@@ -758,7 +762,6 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 			return
 		}
-
 	}
 
 	// acceptedTxs also should contain any orphan transactions that were accepted when this transaction was processed
@@ -824,10 +827,12 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) bool {
 	// Not current if the latest main (best) chain height is before the
 	// latest known good checkpoint (when checkpoints are enabled).
-	checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
-	if checkpoint != nil && int32(bestBlockHeaderMeta.Height) < checkpoint.Height {
-		sm.logger.Debugf("[isCurrent] chain is below the latest checkpoint: %v < %v", bestBlockHeaderMeta.Height, checkpoint.Height)
-		return false
+	if len(sm.chainParams.Checkpoints) > 0 {
+		checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
+		if int32(bestBlockHeaderMeta.Height) < checkpoint.Height { // nolint:gosec
+			sm.logger.Debugf("[isCurrent] chain is below the latest checkpoint: %v < %v", bestBlockHeaderMeta.Height, checkpoint.Height)
+			return false
+		}
 	}
 
 	// Not current if the latest best block has a timestamp before 24 hours ago.
@@ -863,12 +868,13 @@ func (sm *SyncManager) current() bool {
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
+	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() { // nolint:gosec
 		sm.logger.Debugf("[current] chain is not current, lower than sync peer (%s) block height: %v < %v", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
 		return false
 	}
 
 	sm.logger.Debugf("[current] chain is current at %v, sync peer: %s (last block %d)", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
+
 	return true
 }
 
@@ -912,7 +918,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// since it is needed to verify the next round of headers links
 	// properly.
 	isCheckpointBlock := false
-	behaviorFlags := blockchain.BFNone
 
 	if sm.headersFirstMode {
 		firstNodeEl := sm.headerList.Front()
@@ -920,8 +925,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			firstNode := firstNodeEl.Value.(*headerNode)
 
 			if bmsg.blockHash.IsEqual(firstNode.hash) {
-				behaviorFlags |= blockchain.BFFastAdd
-
 				if firstNode.hash.IsEqual(sm.nextCheckpoint.Hash) {
 					isCheckpointBlock = true
 				} else {
@@ -953,7 +956,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			// TODO TEMPORARY: we should not panic here, but return the error
 			panic(err)
-			// return err
 		}
 	} else {
 		sm.logger.Infof("accepted block %v", bmsg.blockHash)
@@ -1006,7 +1008,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// the server for updating peer heights if this is an orphan or our
 	// chain is "current". This avoids sending a spammy amount of messages
 	// if we're syncing the chain from scratch.
-	if blkHashUpdate != nil && heightUpdate != 0 {
+	if heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		sm.logger.Debugf("peer %s reports new best height %d, current %v", peer.String(), peer.LastBlock(), sm.current())
 
@@ -1340,7 +1342,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if lastBlock != -1 && sm.current() {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
-			peer.UpdateLastBlockHeight(int32(blockHeaderMeta.Height))
+			peer.UpdateLastBlockHeight(int32(blockHeaderMeta.Height)) // nolint:gosec
 		}
 	}
 
@@ -1896,9 +1898,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if !config.DisableCheckpoints {
 		// Initialize the next checkpoint based on the current height.
-		sm.nextCheckpoint = sm.findNextHeaderCheckpoint(int32(bestBlockHeaderMeta.Height))
+		sm.nextCheckpoint = sm.findNextHeaderCheckpoint(int32(bestBlockHeaderMeta.Height)) // nolint:gosec
 		if sm.nextCheckpoint != nil {
-			sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height))
+			sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height)) // nolint:gosec
 		}
 	} else {
 		sm.logger.Infof("Checkpoints are disabled")
