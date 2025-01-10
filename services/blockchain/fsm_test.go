@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
-	blockchain_service "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
@@ -17,7 +16,7 @@ import (
 func Test_NewFiniteStateMachine(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
-	blockchainClient, err := blockchain_service.New(ctx, logger, getTestSettings(), nil, nil)
+	blockchainClient, err := New(ctx, logger, getTestSettings(), nil, nil)
 	require.NoError(t, err)
 
 	fsm := blockchainClient.NewFiniteStateMachine()
