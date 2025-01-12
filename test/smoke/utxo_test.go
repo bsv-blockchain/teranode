@@ -10,10 +10,16 @@
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags test_utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestConnectionPoolLimiting$" -tags test_utxo
 package smoke
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math"
+	"math/big"
+	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -282,7 +288,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 			// nolint: gosec
 			utxo := &bt.UTXO{
 				TxIDHash:      faucetTx.TxIDChainHash(),
-				Vout:          uint32(idx),
+				Vout:          uint32(idx), //nolint:gosec // G115: already checked for overflow above
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
 			}
@@ -336,7 +342,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 		assert.NoError(t, err, "Failed to wait for block height")
 
 		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
-		assert.NoError(t, err, "Failed to generate blocks")
+		assert.NoError(t, err, "Failed to generate block")
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
@@ -574,8 +580,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
 
-			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL,
-				header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
+			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
 
 			if err != nil {
 				logger.Warnf("Error checking if tx exists in block: %v", err)
@@ -841,7 +846,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 			// nolint: gosec
 			utxo := &bt.UTXO{
 				TxIDHash:      faucetTx.TxIDChainHash(),
-				Vout:          uint32(idx),
+				Vout:          uint32(idx), //nolint:gosec // G115: already checked for overflow above
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
 			}
@@ -1095,6 +1100,242 @@ func (suite *UtxoTestSuite) TestShouldAllowReassign() {
 
 	_, err = helper.SendTransaction(ctx, node1, charlestoAliceTx)
 	assert.NoError(t, err, "Failed to send transaction")
+}
+
+func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
+	t := suite.T()
+	framework := suite.TeranodeTestEnv
+	logger := framework.Logger
+	ctx := framework.Context
+	txDistributor := &framework.Nodes[0].DistributorClient
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+
+	// Generate keys and address
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	// Request funds with many outputs
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	require.NoError(t, err)
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	require.NoError(t, err)
+
+	// Get the connection queue size from settings
+	utxoStoreURL := framework.Nodes[0].Settings.UtxoStore.UtxoStore
+	qValues := utxoStoreURL.Query()
+
+	connQueueSize := 32 // Default to 32 if not specified
+
+	if qsStr := qValues.Get("ConnectionQueueSize"); qsStr != "" {
+		qs, err := strconv.Atoi(qsStr)
+		require.NoError(t, err)
+
+		connQueueSize = qs
+	}
+
+	logger.Infof("Using connection queue size: %d", connQueueSize)
+
+	// Create 2x ConnectionQueueSize transactions to ensure queuing occurs
+	numTx := connQueueSize * 2
+	txs := make([]*bt.Tx, numTx)
+
+	// Split faucet outputs into small chunks
+	outputsPerTx := len(faucetTx.Outputs) / numTx
+
+	for i := 0; i < numTx; i++ {
+		startIdx := i * outputsPerTx
+		endIdx := startIdx + outputsPerTx
+
+		if i == numTx-1 {
+			endIdx = len(faucetTx.Outputs) // Use all remaining outputs in last tx
+		}
+
+		// Create transaction with subset of outputs
+		tx := bt.NewTx()
+		utxos := make([]*bt.UTXO, 0)
+		totalSats := uint64(0)
+
+		for j, output := range faucetTx.Outputs[startIdx:endIdx] {
+			if startIdx+j > math.MaxUint32 {
+				t.Fatal("UTXO index exceeds uint32 maximum")
+			}
+
+			utxo := &bt.UTXO{
+				TxIDHash:      faucetTx.TxIDChainHash(),
+				Vout:          uint32(startIdx + j), //nolint:gosec // G115: already checked for overflow above
+				LockingScript: output.LockingScript,
+				Satoshis:      output.Satoshis,
+			}
+
+			utxos = append(utxos, utxo) // Collect UTXOs
+			totalSats += output.Satoshis
+		}
+
+		err = tx.FromUTXOs(utxos...)
+		require.NoError(t, err)
+
+		// Add output back to same address (minus fee)
+		fee := uint64(1000)
+		err = tx.AddP2PKHOutputFromAddress(address.AddressString, totalSats-fee)
+		require.NoError(t, err)
+
+		err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+		require.NoError(t, err)
+
+		txs[i] = tx
+	}
+
+	// Send all transactions concurrently and measure timing
+	errChan := make(chan error, numTx)
+	timingChan := make(chan time.Duration, numTx)
+
+	start := time.Now()
+
+	for i := 0; i < numTx; i++ {
+		go func(tx *bt.Tx, idx int) {
+			txStart := time.Now()
+			_, err := txDistributor.SendTransaction(ctx, tx)
+			timingChan <- time.Since(txStart)
+			errChan <- err
+
+			logger.Infof("Transaction %d sent in %v", idx, time.Since(txStart))
+		}(txs[i], i)
+	}
+
+	// Collect results and timing
+	var errors []error
+
+	timings := make([]time.Duration, numTx)
+
+	for i := 0; i < numTx; i++ {
+		if err := <-errChan; err != nil {
+			errors = append(errors, err)
+		}
+
+		timings[i] = <-timingChan
+	}
+
+	totalTime := time.Since(start)
+	logger.Infof("All transactions processed in %v", totalTime)
+
+	// Verify no connection pool errors occurred
+	for _, err := range errors {
+		assert.NotContains(t, err.Error(), "NO_AVAILABLE_CONNECTIONS_TO_NODE",
+			"Connection pool exhaustion occurred")
+	}
+
+	// Analyze timing distribution
+	sort.Slice(timings, func(i, j int) bool { return timings[i] < timings[j] })
+	medianTime := timings[numTx/2]
+	p90Time := timings[int(float64(numTx)*0.9)]
+
+	logger.Infof("Transaction timing statistics:")
+	logger.Infof("Median processing time: %v", medianTime)
+	logger.Infof("90th percentile processing time: %v", p90Time)
+
+	// Verify timing shows proper queuing behavior
+	fastProcessed := 0           // Count of quickly processed transactions
+	slowProcessed := 0           // Count of queued transactions
+	queueThreshold := medianTime // Transactions taking > 2x median are considered queued
+
+	// First ConnectionQueueSize (32) transactions should process quickly
+	for i := 0; i < connQueueSize; i++ {
+		if timings[i] < medianTime {
+			fastProcessed++
+		}
+	}
+
+	// Transactions beyond ConnectionQueueSize should show queuing
+	for i := connQueueSize; i < numTx; i++ {
+		if timings[i] > queueThreshold {
+			slowProcessed++
+		}
+	}
+
+	// Verify queuing behavior
+	assert.GreaterOrEqual(t, fastProcessed, connQueueSize/2,
+		"Expected majority of first %d transactions to process quickly (<%v)", connQueueSize, medianTime)
+	assert.GreaterOrEqual(t, slowProcessed, (numTx-connQueueSize)/2,
+		"Expected at least half of transactions beyond connection pool size to be queued (>%v)", queueThreshold)
+
+	// Verify timing distribution shows clear queuing
+	earlyTxMedian := timings[connQueueSize/2]       // Median of first 32 tx (middle of 0-31)
+	laterTxMedian := timings[numTx-connQueueSize/2] // Median of second 32 tx (middle of 32-63)
+	logger.Infof("Early transactions median: %v, Later transactions median: %v", earlyTxMedian, laterTxMedian)
+	assert.Greater(t, laterTxMedian, earlyTxMedian,
+		"Expected later transactions to take significantly longer, showing queuing behavior")
+
+	// Mine blocks and verify all transactions
+	height, _ := helper.GetBlockHeight("http://" + framework.Nodes[0].AssetURL)
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+	require.NoError(t, err)
+
+	blockStore := framework.Nodes[0].Blockstore
+	blockchainClient := framework.Nodes[0].BlockchainClient
+
+	// Function to verify a transaction is in a block
+	verifyTxInBlock := func(tx *bt.Tx, desc string) bool {
+		targetHeight := height + 1
+		for i := 0; i < 5; i++ {
+			err := helper.WaitForBlockHeight("http://"+framework.Nodes[0].AssetURL, targetHeight, 60)
+			assert.NoError(t, err, "Failed to wait for block height")
+
+			_, err = helper.CallRPC("http://"+framework.Nodes[0].RPCURL, "generate", []interface{}{101})
+			assert.NoError(t, err, "Failed to generate block")
+
+			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
+
+			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
+			if err != nil {
+				logger.Warnf("Error checking if tx exists in block: %v", err)
+			}
+
+			if found {
+				logger.Infof("Found %s in block at height %d", desc, targetHeight)
+				return true
+			}
+
+			targetHeight++
+
+			_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+			if err != nil {
+				logger.Warnf("Failed to mine block: %v", err)
+			}
+		}
+
+		return false
+	}
+
+	// Verify a random sample of transactions made it into blocks
+	numSamples := 3
+	seen := make(map[int]bool)
+
+	for i := 0; i < numSamples; i++ {
+		// Get random index we haven't checked yet
+		idx := -1
+
+		for {
+			max := big.NewInt(int64(len(txs)))
+
+			n, err := rand.Int(rand.Reader, max)
+			if err != nil {
+				t.Fatal("Failed to generate random number:", err)
+			}
+
+			idx = int(n.Int64())
+			if !seen[idx] {
+				seen[idx] = true
+				break
+			}
+		}
+
+		logger.Infof("Verifying random transaction %d", idx)
+		assert.True(t, verifyTxInBlock(txs[idx], fmt.Sprintf("transaction %d", idx)),
+			"Transaction %d (%s) not found in block", idx, txs[idx].TxID())
+	}
 }
 
 func TestUtxoTestSuite(t *testing.T) {
