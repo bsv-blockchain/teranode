@@ -328,7 +328,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}
 
 	// this will block
-	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
 	}); err != nil {
 		return err

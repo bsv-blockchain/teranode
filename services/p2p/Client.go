@@ -24,13 +24,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, errors.NewConfigurationError("no p2p_grpcAddress setting found")
 	}
 
-	return NewClientWithAddress(ctx, logger, p2pGrpcAddress)
+	return NewClientWithAddress(ctx, logger, p2pGrpcAddress, tSettings)
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (ClientI, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string, tSettings *settings.Settings) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init p2p service connection ", err)
 	}

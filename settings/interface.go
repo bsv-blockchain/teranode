@@ -8,22 +8,24 @@ import (
 )
 
 type Settings struct {
-	ServiceName             string
-	ClientName              string
-	DataFolder              string
-	SecurityLevelHTTP       int
-	ServerCertFile          string
-	ServerKeyFile           string
-	LogLevel                string
-	ProfilerAddr            string
-	StatsPrefix             string
-	PrometheusEndpoint      string
-	HealthCheckPort         int
-	UseDatadogProfiler      bool
-	TracingSampleRate       string
-	LocalTestStartFromState string
-	PostgresCheckAddress    string
-	UseCgoVerifier          bool
+	ServiceName              string
+	ClientName               string
+	DataFolder               string
+	SecurityLevelHTTP        int
+	ServerCertFile           string
+	ServerKeyFile            string
+	LogLevel                 string
+	ProfilerAddr             string
+	StatsPrefix              string
+	PrometheusEndpoint       string
+	HealthCheckPort          int
+	UseDatadogProfiler       bool
+	TracingSampleRate        string
+	LocalTestStartFromState  string
+	PostgresCheckAddress     string
+	UseCgoVerifier           bool
+	SecurityLevelGRPC        int
+	UsePrometheusGRPCMetrics bool
 
 	ChainCfgParams    *chaincfg.Params
 	Policy            *PolicySettings
@@ -361,6 +363,7 @@ type LegacySettings struct {
 	GRPCAddress                string
 	AllowBlockPriority         bool
 	LimitedBlockValidation     bool
+	GRPCListenAddress          string
 }
 
 type PropagationSettings struct {

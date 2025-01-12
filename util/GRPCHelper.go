@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
-	"github.com/ordishs/gocore"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -65,7 +65,7 @@ func init() {
 	resolver.SetDefaultScheme("dns")
 }
 
-func GetGRPCClient(ctx context.Context, address string, connectionOptions *ConnectionOptions) (*grpc.ClientConn, error) {
+func GetGRPCClient(ctx context.Context, address string, connectionOptions *ConnectionOptions, tSettings *settings.Settings) (*grpc.ClientConn, error) {
 	if address == "" {
 		return nil, errors.NewInvalidArgumentError("address is required")
 	}
@@ -85,7 +85,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	}
 
 	if connectionOptions.SecurityLevel == 0 {
-		securityLevel, _ := gocore.Config().GetInt("securityLevelGRPC", 0)
+		securityLevel := tSettings.SecurityLevelGRPC
 		connectionOptions.SecurityLevel = securityLevel
 	}
 
@@ -106,7 +106,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		streamClientInterceptors,
 	)
 
-	prometheusGRPCMetrics := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+	prometheusGRPCMetrics := tSettings.UsePrometheusGRPCMetrics
 	if prometheusGRPCMetrics {
 		prometheusClientMetrics := prometheus.NewClientMetrics(
 			prometheus.WithClientStreamSendHistogram(),
@@ -158,7 +158,7 @@ var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
 
-func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
+func getGRPCServer(connectionOptions *ConnectionOptions, tSettings *settings.Settings) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
 	if connectionOptions.MaxMessageSize == 0 {
@@ -187,7 +187,7 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 		streamInterceptors,
 	)
 
-	prometheusGRPCMetrics := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+	prometheusGRPCMetrics := tSettings.UsePrometheusGRPCMetrics
 	if prometheusGRPCMetrics {
 		unaryInterceptors = append(unaryInterceptors, prometheusMetrics.UnaryServerInterceptor())
 		streamInterceptors = append(streamInterceptors, prometheusMetrics.StreamServerInterceptor())

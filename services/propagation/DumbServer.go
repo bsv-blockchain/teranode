@@ -57,7 +57,7 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 	}
 
 	// this will block
-	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}); err != nil {
 		return err

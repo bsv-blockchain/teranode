@@ -111,7 +111,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger, tSettings
 	for _, address := range addresses {
 		pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
 			MaxRetries: 3,
-		})
+		}, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("error creating grpc client for propagation server %s", address, err)
 		}
@@ -128,7 +128,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger, tSettings
 func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (*propagation.Client, error) {
 	pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("error connecting to propagation server %s", address, err)
 	}

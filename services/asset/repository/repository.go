@@ -90,7 +90,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	if len(coinbaseGrpcAddress) > 0 {
 		baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
 			MaxRetries: 3,
-		})
+		}, tSettings)
 		if err != nil {
 			return nil, err
 		}

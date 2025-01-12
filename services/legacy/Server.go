@@ -228,7 +228,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("[Legacy Server] Internal server started")
 
 	// this will block
-	if err = util.StartGRPCServer(ctx, s.logger, "legacy", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "legacy", s.settings.Legacy.GRPCListenAddress, func(server *grpc.Server) {
 		peer_api.RegisterPeerServiceServer(server, s)
 	}); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))

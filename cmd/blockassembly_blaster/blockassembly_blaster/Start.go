@@ -107,6 +107,8 @@ func Start() {
 
 	logger := ulogger.New("block_assembly_blaster")
 
+	tSettings := settings.NewSettings()
+
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
@@ -115,7 +117,7 @@ func Start() {
 
 		conn, err := util.GetGRPCClient(context.Background(), grpcAddr, &util.ConnectionOptions{
 			MaxRetries: 3,
-		})
+		}, tSettings)
 		if err != nil {
 			panic(err)
 		}

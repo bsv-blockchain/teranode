@@ -258,7 +258,7 @@ func (t *TeranodeTestEnv) setupCoinbaseClient(node *TeranodeTestClient) error {
 		return errors.NewConfigurationError("error getting coinbase grpc address:", err)
 	}
 
-	coinbaseClient, err := cb.NewClientWithAddress(t.Context, t.Logger, coinbaseGrpcAddress)
+	coinbaseClient, err := cb.NewClientWithAddress(t.Context, t.Logger, node.Settings, coinbaseGrpcAddress)
 	if err != nil {
 		return errors.NewConfigurationError("error creating coinbase client:", err)
 	}

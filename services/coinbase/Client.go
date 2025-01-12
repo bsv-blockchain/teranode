@@ -29,7 +29,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	baConn, err := util.GetGRPCClient(ctx, coinbaseGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -42,10 +42,10 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}, nil
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (*Client, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, err
 	}

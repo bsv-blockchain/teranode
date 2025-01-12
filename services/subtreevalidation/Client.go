@@ -28,7 +28,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init subtree validation service connection for '%s'", source, err)
 	}

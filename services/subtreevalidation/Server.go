@@ -221,7 +221,7 @@ func (u *Server) Start(ctx context.Context) error {
 	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "subtreevalidation", u.settings.SubtreeValidation.GRPCListenAddress, func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)
 	}); err != nil {
 		return err

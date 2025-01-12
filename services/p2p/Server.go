@@ -326,7 +326,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sendBestBlockMessage(ctx)
 
 	// this will block
-	if err = util.StartGRPCServer(ctx, s.logger, "p2p", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "p2p", s.settings.P2P.GRPCListenAddress, func(server *grpc.Server) {
 		p2p_api.RegisterPeerServiceServer(server, s)
 	}); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))

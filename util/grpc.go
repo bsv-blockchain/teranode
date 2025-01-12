@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/ordishs/gocore"
@@ -15,26 +15,21 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, register func(server *grpc.Server), maxConnectionAge ...time.Duration) error {
-	grpcAddress := fmt.Sprintf("%s_grpcListenAddress", serviceName)
-	address, ok := gocore.Config().Get(grpcAddress)
-	if !ok {
-		return errors.NewConfigurationError("[%s] no setting %s found", serviceName, grpcAddress)
-	}
+func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.Settings, serviceName string, grpcListenerAddress string, register func(server *grpc.Server), maxConnectionAge ...time.Duration) error {
+	address := grpcListenerAddress
 
-	securityLevel, _ := gocore.Config().GetInt("securityLevelGRPC", 0)
+	securityLevel := tSettings.SecurityLevelGRPC
 
 	var certFile, keyFile string
 
 	if securityLevel > 0 {
-		var found bool
-
-		certFile, found = gocore.Config().Get("server_certFile")
-		if !found {
+		certFile = tSettings.ServerCertFile
+		if certFile == "" {
 			return errors.NewConfigurationError("server_certFile is required for security level %d", securityLevel)
 		}
-		keyFile, found = gocore.Config().Get("server_keyFile")
-		if !found {
+
+		keyFile = tSettings.ServerKeyFile
+		if keyFile == "" {
 			return errors.NewConfigurationError("server_keyFile is required for security level %d", securityLevel)
 		}
 	}
@@ -49,7 +44,7 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, 
 		connectionOptions.MaxConnectionAge = maxConnectionAge[0]
 	}
 
-	grpcServer, err := getGRPCServer(connectionOptions)
+	grpcServer, err := getGRPCServer(connectionOptions, tSettings)
 	if err != nil {
 		return errors.NewConfigurationError("[%s] could not create GRPC server", serviceName, err)
 	}

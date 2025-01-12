@@ -35,6 +35,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
+
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < numEnqueues; j++ {

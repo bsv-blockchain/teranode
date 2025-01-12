@@ -548,7 +548,7 @@ func (u *Server) Start(ctx context.Context) error {
 	}
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
 		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
 	}); err != nil {
 		return err

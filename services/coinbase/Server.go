@@ -116,7 +116,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// this will block
-	if err := util.StartGRPCServer(ctx, s.logger, "coinbase", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, s.logger, s.settings, "coinbase", s.settings.Coinbase.GRPCListenAddress, func(server *grpc.Server) {
 		coinbase_api.RegisterCoinbaseAPIServer(server, s)
 	}); err != nil {
 		return err

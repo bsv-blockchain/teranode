@@ -206,7 +206,7 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
-	conn, err := getClientConn(ctx, sc.settings.Propagation.GRPCAddresses)
+	conn, err := getClientConn(ctx, sc.settings.Propagation.GRPCAddresses, sc.settings)
 	if err != nil {
 		return err
 	}

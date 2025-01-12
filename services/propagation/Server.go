@@ -236,7 +236,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	// this will block
 	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
-	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
+	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 	}, maxConnectionAge); err != nil {
 		return err

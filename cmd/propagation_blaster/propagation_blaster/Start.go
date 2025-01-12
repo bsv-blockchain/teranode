@@ -134,7 +134,7 @@ func Start() {
 
 		conn, err := util.GetGRPCClient(context.Background(), propagationServerAddr[0], &util.ConnectionOptions{
 			MaxRetries: 3,
-		})
+		}, tSettings)
 		if err != nil {
 			panic(err)
 		}

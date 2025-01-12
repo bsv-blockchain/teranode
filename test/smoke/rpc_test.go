@@ -66,7 +66,7 @@ func waitForProcessToStop(pattern string, timeout time.Duration) error {
 	return errors.NewProcessingError("process did not stop within timeout")
 }
 
-func startKafka(logFile string, logger ulogger.Logger) error {
+func startKafka(logFile string, _ ulogger.Logger) error {
 	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
 	kafkaLog, err := os.Create(logFile)
 

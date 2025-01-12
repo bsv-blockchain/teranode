@@ -222,7 +222,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	//  Start gRPC server - this will block
-	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, v.logger, v.settings, "validator", v.settings.Validator.GRPCListenAddress, func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
 	}); err != nil {
 		return err

@@ -24,13 +24,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, errors.NewConfigurationError("no legacy_grpcAddress setting found")
 	}
 
-	return NewClientWithAddress(ctx, logger, legacyGrpcAddress)
+	return NewClientWithAddress(ctx, logger, tSettings, legacyGrpcAddress)
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (ClientI, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init peer service connection ", err)
 	}

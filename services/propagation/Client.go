@@ -56,7 +56,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if len(conn) > 0 {
 		useConn = conn[0]
 	} else {
-		localConn, err := getClientConn(ctx, tSettings.Propagation.GRPCAddresses)
+		localConn, err := getClientConn(ctx, tSettings.Propagation.GRPCAddresses, tSettings)
 		if err != nil {
 			return nil, err
 		}
@@ -204,10 +204,10 @@ func initResolver(logger ulogger.Logger, grpcResolver string) {
 // Returns:
 //   - *grpc.ClientConn: Established gRPC connection
 //   - error: Error if connection fails
-func getClientConn(ctx context.Context, propagationGrpcAddresses []string) (*grpc.ClientConn, error) {
+func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSettings *settings.Settings) (*grpc.ClientConn, error) {
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries: 3,
-	})
+	}, tSettings)
 	if err != nil {
 		return nil, err
 	}
