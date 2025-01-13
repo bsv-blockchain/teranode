@@ -1,8 +1,13 @@
-name: long-tests-by-category
+name: long-tests
 on:
   schedule:
     - cron: "0 1 * * *" # Runs at 1 AM UTC every day (offset from other nightly tests)
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run ID from the triggering workflow'
+        required: false
+        type: string
 
 env:
   REPO: teranode
@@ -10,6 +15,7 @@ env:
 
 jobs:
   test-services:
+    name: Services Tests (${{ github.event.inputs.run_id || 'scheduled' }})
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -36,6 +42,7 @@ jobs:
         continue-on-error: false
 
   test-model:
+    name: Model Tests (${{ github.event.inputs.run_id || 'scheduled' }})
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -62,6 +69,7 @@ jobs:
         continue-on-error: false
 
   test-stores:
+    name: Stores Tests (${{ github.event.inputs.run_id || 'scheduled' }})
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -88,6 +96,7 @@ jobs:
         continue-on-error: false
 
   test-util:
+    name: Util Tests (${{ github.event.inputs.run_id || 'scheduled' }})
     runs-on: teranode-runner
     steps:
       - name: Checkout code

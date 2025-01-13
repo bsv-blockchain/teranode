@@ -86,11 +86,11 @@ jobs:
       # Install and configure kubectl for AWS EKS
       - name: Install kubectl & Login to EKS
         run: |
-          
+
           # kubectl already installed
           kubectl version --client
           rm -rf ~/.kube
-          
+
 
       - name: Deploy to Test Net
         run: |
@@ -129,3 +129,27 @@ jobs:
             "build_number": "${{ github.run_id }}",
             "link": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           }'
+
+  trigger-long-tests:
+    runs-on: ubuntu-latest
+    needs:
+      - build_amd64
+      - build_arm64
+      - create_manifest
+      - deploy_to_operator
+    if: ${{ !contains(needs.*.result, 'failure') }}
+    steps:
+      - name: Trigger Long Tests
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'long_tests_by_category.yaml',
+              ref: '${{ github.sha }}',
+              inputs: {
+                run_id: '${{ github.run_id }}-${{ github.sha }}'
+              }
+            });
