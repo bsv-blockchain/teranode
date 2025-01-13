@@ -9,20 +9,8 @@ env:
   SETTINGS_CONTEXT_DEFAULT: "test"
 
 jobs:
-  run-category-tests:
+  test-services:
     runs-on: teranode-runner
-    strategy:
-      matrix:
-        test_config:
-          - test_dir: "test/services"
-            test_tags: "test_services"
-          - test_dir: "test/model"
-            test_tags: "test_model"
-          - test_dir: "test/stores"
-            test_tags: "test_stores"
-          - test_dir: "test/util"
-            test_tags: "test_util"
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,12 +20,67 @@ jobs:
           go-version: "1.21.0"
           cache: "false"
 
-      - name: Run Tests
+      - name: Run Services Tests
         run: |
-          cd ${{ matrix.test_config.test_dir }} && \
-          go test -v -count 1 -tags ${{ matrix.test_config.test_tags }} ./...
+          cd test/services && \
+          go test -v -count 1 -tags test_services ./...
         env:
-          test_dir: ${{ matrix.test_config.test_dir }}
-          test_tags: ${{ matrix.test_config.test_tags }}
-          settings_context: ${{ matrix.test_config.settings_context || '' }}
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+        continue-on-error: false
+
+  test-model:
+    runs-on: teranode-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+          cache: "false"
+
+      - name: Run Model Tests
+        run: |
+          cd test/model && \
+          go test -v -count 1 -tags test_model ./...
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+        continue-on-error: false
+
+  test-stores:
+    runs-on: teranode-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+          cache: "false"
+
+      - name: Run Stores Tests
+        run: |
+          cd test/stores && \
+          go test -v -count 1 -tags test_stores ./...
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+        continue-on-error: false
+
+  test-util:
+    runs-on: teranode-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+          cache: "false"
+
+      - name: Run Util Tests
+        run: |
+          cd test/util && \
+          go test -v -count 1 -tags test_util ./...
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
         continue-on-error: false
