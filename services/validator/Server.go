@@ -207,7 +207,7 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if err = v.validator.ValidateWithOptions(ctx, tx, 0, data.Options); err != nil {
+		if _, err = v.validator.ValidateWithOptions(ctx, tx, 0, data.Options); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
@@ -336,21 +336,26 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		validationOptions.skipPolicyChecks = *req.SkipPolicyChecks
 	}
 
-	err = v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
+	if req.CreateConflicting != nil {
+		validationOptions.createConflicting = *req.CreateConflicting
+	}
+
+	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 			Txid:  tx.TxIDChainHash().CloneBytes(),
-		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
+		}, errors.WrapGRPC(err)
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
 
 	return &validator_api.ValidateTransactionResponse{
-		Valid: true,
-		Txid:  tx.TxIDChainHash().CloneBytes(),
+		Valid:    true,
+		Txid:     tx.TxIDChainHash().CloneBytes(),
+		Metadata: txMetaData.Bytes(),
 	}, nil
 }
 
@@ -366,16 +371,21 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
 	errReasons := make([]string, len(req.GetTransactions()))
+	metaData := make([][]byte, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
 		idx, reqItem := idx, reqItem
 
 		g.Go(func() error {
-			_, err := v.ValidateTransaction(gCtx, reqItem)
+			validatorResponse, err := v.ValidateTransaction(gCtx, reqItem)
 			if err != nil {
 				errReasons[idx] = err.Error()
 			} else {
 				errReasons[idx] = ""
+			}
+
+			if validatorResponse.Metadata != nil {
+				metaData[idx] = validatorResponse.Metadata
 			}
 
 			return nil
@@ -386,8 +396,9 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	_ = g.Wait()
 
 	return &validator_api.ValidateTransactionBatchResponse{
-		Valid:  true,
-		Errors: errReasons,
+		Valid:    true,
+		Errors:   errReasons,
+		Metadata: metaData,
 	}, nil
 }
 

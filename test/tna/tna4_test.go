@@ -109,7 +109,7 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 
 	// Mine a block containing the transactions on Node0
 	var minedBlockBytes []byte
-	minedBlockBytes, err = helper.MineBlock(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
+	minedBlockBytes, err = helper.MineBlock(ctx, testEnv.Nodes[0].Settings, testEnv.Nodes[0].BlockassemblyClient, logger)
 	require.NoError(t, err, "Failed to mine block")
 
 	// Allow time for block propagation and notifications

@@ -183,6 +183,19 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 }
 
+func Conflicting(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	_, err := db.Create(ctx, tx, 1000, utxostore.WithConflicting(true))
+	require.NoError(t, err)
+
+	err = db.Spend(ctx, spends, 1000)
+	require.ErrorIs(t, err, errors.ErrTxConflicting)
+
+	// TODO unset conflicting and test again
+	_ = err
+}
+
 func Sanity(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 

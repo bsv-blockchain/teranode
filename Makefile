@@ -170,6 +170,16 @@ else
 	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags "testtxmetacache" $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
+.PHONY: fulltests
+fulltests: set_race_flag
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	# pipefail is needed so proper exit code is passed on in CI
+	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -tags=test_full -count=1 -p 1 -coverprofile=coverage.out $$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_full"' \; -print | xargs -n1 dirname | sort -u) | go-ctrf-json-reporter -output ctrf-report.json'
+else
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags=test_full -count=1 -p 1 -v $$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_full"' \; -print | xargs -n1 dirname | sort -u)
+endif
+
 .PHONY: racetest
 racetest: set_race_flag
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor
@@ -337,6 +347,7 @@ gen:
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	services/p2p/p2p_api/p2p_api.proto
+
 
 .PHONY: clean_gen
 clean_gen:

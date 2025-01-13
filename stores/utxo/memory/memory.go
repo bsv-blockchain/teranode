@@ -47,11 +47,14 @@ import (
 // memoryData holds transaction data and UTXO state in memory.
 type memoryData struct {
 	tx              *bt.Tx                             // The full transaction
+	blockHeight     uint32                             // Block height where tx appears
 	lockTime        uint32                             // Transaction lock time
 	blockIDs        []uint32                           // Block heights where tx appears
 	utxoMap         map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
 	utxoSpendableIn map[uint32]uint32                  // Maps output index to spendable height
 	frozenMap       map[chainhash.Hash]bool            // Tracks frozen UTXOs
+	frozen          bool                               // Tracks whether the transaction is frozen
+	conflicting     bool                               // Tracks whether the transaction is conflicting
 }
 
 // Memory implements the UTXO store interface using in-memory data structures.
@@ -83,7 +86,7 @@ func (m *Memory) Health(_ context.Context, _ bool) (int, string, error) {
 
 // Create stores a new transaction and its UTXOs in memory.
 // Returns an error if the transaction already exists.
-func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -106,11 +109,14 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 
 	m.txs[*txHash] = &memoryData{
 		tx:              tx,
+		blockHeight:     blockHeight,
 		lockTime:        tx.LockTime,
 		blockIDs:        make([]uint32, 0),
 		utxoMap:         make(map[chainhash.Hash]*chainhash.Hash),
 		utxoSpendableIn: map[uint32]uint32{},
 		frozenMap:       make(map[chainhash.Hash]bool),
+		frozen:          false,
+		conflicting:     options.Conflicting,
 	}
 
 	if len(options.BlockIDs) > 0 {
@@ -120,6 +126,10 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 	txMetaData, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, err
+	}
+
+	if options.Conflicting {
+		txMetaData.Conflicting = true
 	}
 
 	utxoHashes, err := utxo.GetUtxoHashes(tx)
@@ -218,37 +228,65 @@ func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
+	var (
+		errorThrown error
+		spendsDone  = make([]*utxo.Spend, 0, len(spends))
+	)
+
 	for _, spend := range spends {
-		if _, ok := m.txs[*spend.TxID]; !ok {
-			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+		tx, ok := m.txs[*spend.TxID]
+		if !ok {
+			errorThrown = errors.NewTxNotFoundError("%v not found", spend.TxID)
+			break
 		}
 
-		spendTxID, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]
+		if tx.frozen {
+			errorThrown = errors.NewUtxoFrozenError("%v is frozen", spend.TxID)
+			break
+		}
+
+		if tx.conflicting {
+			errorThrown = errors.NewTxConflictingError("%v is conflicting", spend.TxID)
+			break
+		}
+
+		spendTxID, ok := tx.utxoMap[*spend.UTXOHash]
 		if !ok {
-			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+			errorThrown = errors.NewTxNotFoundError("%v not found", spend.TxID)
+			break
 		}
 
 		if spendTxID != nil {
 			if *spendTxID != *spend.SpendingTxID {
-				return errors.NewUtxoSpentError(*spendTxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
+				errorThrown = errors.NewUtxoSpentError(*spendTxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
+				break
 			}
 			// same spend tx ID, just ignore and continue
 			continue
 		}
 
-		tx := m.txs[*spend.TxID]
-
 		// check utxo is frozen
 		if tx.frozenMap[*spend.UTXOHash] {
-			return errors.NewUtxoFrozenError("%v is frozen", spend.TxID)
+			errorThrown = errors.NewUtxoFrozenError("%v is frozen", spend.TxID)
+			break
 		}
 
 		// check utxo is spendable
 		if tx.utxoSpendableIn[spend.Vout] != 0 && m.txs[*spend.TxID].utxoSpendableIn[spend.Vout] > m.blockHeight.Load() {
-			return errors.NewTxLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
+			errorThrown = errors.NewTxLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
+			break
 		}
 
 		tx.utxoMap[*spend.UTXOHash] = spend.SpendingTxID
+
+		spendsDone = append(spendsDone, spend)
+	}
+
+	if errorThrown != nil {
+		// unspend all spends that were completed
+		_ = m.unSpendUnlocked(spendsDone)
+
+		return errorThrown
 	}
 
 	return nil
@@ -259,6 +297,10 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
+	return m.unSpendUnlocked(spends)
+}
+
+func (m *Memory) unSpendUnlocked(spends []*utxo.Spend) error {
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)

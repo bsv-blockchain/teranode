@@ -62,6 +62,7 @@ message ValidateTransactionRequest {
   optional bool skip_utxo_creation = 3;     // Skip UTXO creation for validation
   optional bool add_tx_to_block_assembly = 4; // Add transaction to block assembly
   optional bool skip_policy_checks = 5;     // Skip policy checks
+  optional bool create_conflicting = 6;     // Create conflicting transaction
 }
 
 // ValidateTransactionResponse provides transaction validation results
@@ -70,6 +71,7 @@ message ValidateTransactionResponse {
   bool valid = 1;        // Validation result (true if valid)
   bytes txid = 2;        // Transaction ID of the validated transaction
   string reason = 3;     // Reason for rejection if invalid
+  bytes metadata = 4;    // Additional metadata for the transaction
 }
 
 // ValidateTransactionBatchRequest contains multiple transactions for batch validation
@@ -83,6 +85,7 @@ message ValidateTransactionBatchRequest {
 message ValidateTransactionBatchResponse {
   bool valid = 1;                    // Overall batch validation status
   repeated string errors = 2;        // Array of error messages, one per transaction
+  repeated bytes metadata = 3;       // Array of metadata for each transaction
 }
 
 // GetBlockHeightResponse provides the current block height

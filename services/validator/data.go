@@ -75,6 +75,9 @@ func NewTxValidationDataFromBytes(bytes []byte) (*TxValidationData, error) {
 	// set the third bit to true if skipPolicyChecks is true
 	d.Options.skipPolicyChecks = validationOptionsByte&0x04 == 0x04
 
+	// set the fourth bit to true if createConflicting is true
+	d.Options.createConflicting = validationOptionsByte&0x08 == 0x08
+
 	// read remaining bytes as tx (if present)
 	if len(bytes) > 4 {
 		d.Tx = make([]byte, len(bytes[5:]))
@@ -122,6 +125,11 @@ func (d *TxValidationData) Bytes() []byte {
 	// set the third bit to 1 if skipPolicyChecks is true
 	if d.Options.skipPolicyChecks {
 		validationOptionsByte |= 0x04
+	}
+
+	// set the fourth bit to 1 if createConflicting is true
+	if d.Options.createConflicting {
+		validationOptionsByte |= 0x08
 	}
 
 	// Append validation options byte

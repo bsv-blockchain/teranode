@@ -16,10 +16,10 @@ type Interface interface {
 	// Returns HTTP status code, status message, and any error encountered.
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
-	// CheckSubtree validates a subtree with the given hash at a specific block height.
+	// CheckSubtreeFromBlock validates a subtree with the given hash at a specific block height.
 	// baseURL specifies the source for fetching missing transactions.
 	// blockHash is optional and can be nil.
-	CheckSubtree(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error
+	CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error
 }
 
 var _ Interface = &MockSubtreeValidation{}
@@ -31,6 +31,6 @@ func (mv *MockSubtreeValidation) Health(ctx context.Context, checkLiveness bool)
 	return 0, "MockValidator", nil
 }
 
-func (mv *MockSubtreeValidation) CheckSubtree(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {
+func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {
 	return nil
 }

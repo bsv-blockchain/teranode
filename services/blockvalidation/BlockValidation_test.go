@@ -79,15 +79,15 @@ func (m *MockSubtreeValidationClient) Health(ctx context.Context, checkLiveness 
 	return 0, "MockValidator", nil
 }
 
-func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {
-	request := subtreevalidation_api.CheckSubtreeRequest{
+func (m *MockSubtreeValidationClient) CheckSubtreeFromBlock(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {
+	request := subtreevalidation_api.CheckSubtreeFromBlockRequest{
 		Hash:        subtreeHash.CloneBytes(),
 		BaseUrl:     baseURL,
 		BlockHeight: blockHeight,
 		BlockHash:   blockHash.CloneBytes(),
 	}
 
-	_, err := m.server.CheckSubtree(ctx, &request)
+	_, err := m.server.CheckSubtreeFromBlock(ctx, &request)
 	if err != nil {
 		return errors.UnwrapGRPC(err)
 	}
@@ -341,7 +341,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		blockHeader,
 		coinbase,
 		subtreeHashes,            // should be the subtree with placeholder
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()), // nolint:gosec
 		123123,
 		0, 0, tSettings)
 	require.NoError(t, err)
@@ -459,7 +459,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		blockHeader,
 		coinbase,
 		subtreeHashes,            // should be the subtree with placeholder
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()), // nolint:gosec
 		123123,
 		0, 0, tSettings)
 	require.NoError(t, err)
@@ -865,7 +865,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 			blockHeader,
 			coinbase,
 			subtreeHashes,            // should be the subtree with placeholder
-			uint64(subtree.Length()), //nolint:gosec
+			uint64(subtree.Length()), // nolint:gosec
 			123123,
 			0, 0, tSettings)
 		require.NoError(t, err)

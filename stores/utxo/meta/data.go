@@ -40,6 +40,12 @@ type Data struct {
 	// LockTime is the block height or timestamp until which this transaction is locked.
 	// This can differ from the transaction's own locktime, especially for coinbase transactions.
 	LockTime uint32 `json:"lockTime"`
+
+	// Frozen is a flag indicating if the transaction is frozen
+	Frozen bool `json:"frozen"`
+
+	// Conflicting is a flag indicating if the transaction is conflicting
+	Conflicting bool `json:"conflicting"`
 }
 
 // PreviousOutput represents an input's previous output information.
@@ -73,7 +79,11 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64((*dataBytes)[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64((*dataBytes)[8:16])
-	d.IsCoinbase = (*dataBytes)[16] == 1
+
+	d.IsCoinbase = ((*dataBytes)[16] & 0b01) == 0b01
+	d.Frozen = ((*dataBytes)[16] & 0b10) == 0b10
+	d.Conflicting = ((*dataBytes)[16] & 0b100) == 0b100
+
 	parentTxHashesLen := binary.LittleEndian.Uint64((*dataBytes)[17:25])
 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
 
@@ -101,7 +111,11 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
-	d.IsCoinbase = dataBytes[16] == byte(1)
+
+	d.IsCoinbase = dataBytes[16]&0b01 == 0b01
+	d.Frozen = dataBytes[16]&0b10 == 0b10
+	d.Conflicting = dataBytes[16]&0b100 == 0b100
+
 	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[17:25])
 	buf := bytes.NewReader(dataBytes[25:])
 
@@ -109,6 +123,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	var hashBytes [32]byte
 
 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
+
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
 		if err != nil {
@@ -120,6 +135,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 
 	// read the tx
 	d.Tx = &bt.Tx{}
+
 	_, err := d.Tx.ReadFrom(buf)
 	if err != nil {
 		return nil, errors.NewProcessingError("could not read transaction", err)
@@ -129,6 +145,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	var blockBytes [4]byte
 
 	d.BlockIDs = make([]uint32, 0)
+
 	for {
 		_, err = io.ReadFull(buf, blockBytes[:])
 		if err != nil {
@@ -138,6 +155,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 
 			return nil, errors.NewProcessingError("could not read block bytes", err)
 		}
+
 		d.BlockIDs = append(d.BlockIDs, binary.LittleEndian.Uint32(blockBytes[:]))
 	}
 
@@ -158,13 +176,21 @@ func (d *Data) Bytes() []byte {
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+
 	if d.IsCoinbase {
-		buf[16] = byte(1)
-	} else {
-		buf[16] = byte(0)
+		buf[16] |= 0b01
+	}
+
+	if d.Frozen {
+		buf[16] |= 0b10
+	}
+
+	if d.Conflicting {
+		buf[16] |= 0b100
 	}
 
 	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
+
 	for _, parentTxHash := range d.ParentTxHashes {
 		buf = append(buf, parentTxHash.CloneBytes()...)
 	}
@@ -196,13 +222,21 @@ func (d *Data) MetaBytes() []byte {
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+
 	if d.IsCoinbase {
-		buf[16] = byte(1)
-	} else {
-		buf[16] = byte(0)
+		buf[16] |= 0b01
+	}
+
+	if d.Frozen {
+		buf[16] |= 0b10
+	}
+
+	if d.Conflicting {
+		buf[16] |= 0b100
 	}
 
 	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
+
 	for _, parentTxHash := range d.ParentTxHashes {
 		buf = append(buf, parentTxHash.CloneBytes()...)
 	}
@@ -218,7 +252,7 @@ func (d *Data) String() string {
 		return "nil"
 	}
 
-	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, LockTime: %d}",
+	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, IsFrozen: %t, IsConflicting: %t, LockTime: %d}",
 		func() string {
 			if d.Tx == nil {
 				return "nil"
@@ -231,5 +265,7 @@ func (d *Data) String() string {
 		d.Fee,
 		d.SizeInBytes,
 		d.IsCoinbase,
+		d.Frozen,
+		d.Conflicting,
 		d.LockTime)
 }

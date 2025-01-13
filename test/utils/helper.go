@@ -271,13 +271,13 @@ func GetMiningCandidate_rpc(url string) (string, error) { //nolint:stylecheck
 	return CallRPC(url, method, params)
 }
 
-func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
+func MineBlock(ctx context.Context, tSettings *settings.Settings, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting mining candidate", err)
 	}
 
-	solution, err := mining.Mine(ctx, miningCandidate, nil)
+	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
@@ -307,8 +307,8 @@ func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogg
 	return resp, nil
 }
 
-func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
-	solution, err := mining.Mine(ctx, miningCandidate, nil)
+func MineBlockWithCandidate(ctx context.Context, tSettings *settings.Settings, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
+	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}
@@ -327,8 +327,8 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 	return blockHash, nil
 }
 
-func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
-	solution, err := mining.Mine(ctx, miningCandidate, nil)
+func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, tSettings *settings.Settings, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
+	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
 	}

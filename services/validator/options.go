@@ -20,6 +20,10 @@ type Options struct {
 	// skipPolicyChecks determines whether policy checks should be skipped
 	// this is done when validating transaction from a block that has been mined
 	skipPolicyChecks bool
+
+	// createConflicting determines whether to allow conflicting transactions
+	// this is done when validating transaction from a block that has been mined
+	createConflicting bool
 }
 
 // Option defines a function type for setting options
@@ -38,6 +42,7 @@ func NewDefaultOptions() *Options {
 		skipUtxoCreation:     false,
 		addTXToBlockAssembly: true,
 		skipPolicyChecks:     false,
+		createConflicting:    false,
 	}
 }
 
@@ -80,9 +85,27 @@ func WithAddTXToBlockAssembly(add bool) Option {
 	}
 }
 
+// WithSkipPolicyChecks creates an option to control policy checks
+// Parameters:
+//   - skip: When true, policy checks will be skipped
+//
+// Returns:
+//   - Option: Function that sets the skipPolicyChecks option
 func WithSkipPolicyChecks(skip bool) Option {
 	return func(o *Options) {
 		o.skipPolicyChecks = skip
+	}
+}
+
+// WithCreateConflicting creates an option to control whether a conflicting transaction is created
+// Parameters:
+//   - create: When true, a conflicting transaction will be created
+//
+// Returns:
+//   - Option: Function that sets the createConflicting option
+func WithCreateConflicting(create bool) Option {
+	return func(o *Options) {
+		o.createConflicting = create
 	}
 }
 

@@ -33,6 +33,7 @@ var (
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxMissingParent            = New(ERR_TX_MISSING_PARENT, "missing parent tx")
 	ErrTxLockTime                 = New(ERR_TX_LOCK_TIME, "Bad tx lock time")
+	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
@@ -122,6 +123,9 @@ func NewTxMissingParentError(message string, params ...interface{}) *Error {
 }
 func NewTxLockTimeError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_LOCK_TIME, message, params...)
+}
+func NewTxConflictingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_CONFLICTING, message, params...)
 }
 func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)

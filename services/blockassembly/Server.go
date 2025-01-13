@@ -586,7 +586,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		}
 	} else {
 		// recreate coinbase tx here, nothing was passed in
-		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate()
+		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err))
 		}
@@ -937,7 +937,7 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	}
 
 	// mine the block
-	miningSolution, err := mining.Mine(ctx, miningCandidate, address)
+	miningSolution, err := mining.Mine(ctx, ba.blockAssembler.settings, miningCandidate, address)
 	if err != nil {
 		return errors.NewProcessingError("error mining block", err)
 	}

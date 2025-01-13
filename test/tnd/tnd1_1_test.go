@@ -180,7 +180,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	minedBlockHashes := make([][]byte, 0, numBlocks)
 
 	for i := uint32(0); i < numBlocks; i++ {
-		minedBlockBytes, err := helper.MineBlock(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
+		minedBlockBytes, err := helper.MineBlock(ctx, testEnv.Nodes[0].Settings, testEnv.Nodes[0].BlockassemblyClient, logger)
 		require.NoError(t, err, "Failed to mine block %d", i+1)
 
 		minedBlockHashes = append(minedBlockHashes, minedBlockBytes)

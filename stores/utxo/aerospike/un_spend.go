@@ -213,3 +213,10 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	return nil
 }
+
+// txa & txb both spending txp
+
+// processConflicting(txb)
+//    mark txa conflicting
+//    change spend of txp
+//    mark txb not conflicting

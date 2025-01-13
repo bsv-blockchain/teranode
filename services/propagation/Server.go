@@ -597,7 +597,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
-		if err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
 			err = errors.NewServiceError("failed validating transaction", err)
 			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 

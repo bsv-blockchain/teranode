@@ -129,10 +129,6 @@ func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, 
 	db, err = teranode_aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
 	require.NoError(t, err)
 
-	db.SetClient(&uaerospike.Client{Client: client})
-	db.SetNamespace("test")
-	db.SetName("test")
-
 	db.SetExternalStore(memory.New())
 
 	return client, db, ctx, func() {
@@ -278,7 +274,7 @@ func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx,
 	txHash := tx.TxIDChainHash()
 	isCoinbase := tx.IsCoinbase()
 
-	binsToStore, hasUtxos, err := s.GetBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase)
+	binsToStore, hasUtxos, err := s.GetBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase, false)
 	require.NoError(t, err)
 	require.NotNil(t, binsToStore)
 

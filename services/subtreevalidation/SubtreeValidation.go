@@ -210,7 +210,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 //   - *meta.Data: Transaction metadata if validation succeeds
 //   - error: Any error encountered during validation
 func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32, validationOptions ...validator.Option) (txMeta *meta.Data, err error) {
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
 	defer deferFn()
@@ -227,21 +227,14 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
-	// TODO return tx meta data
-	// u.logger.Debugf("[blessMissingTransaction][%s] validating transaction (pq:)", tx.TxID())
-	err = u.validatorClient.Validate(ctx, tx, blockHeight, validationOptions...)
+	txMeta, err = u.validatorClient.Validate(ctx, tx, blockHeight, validationOptions...)
 	if err != nil {
-		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
-		return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
-	}
-
-	start := gocore.CurrentTime()
-	txMeta, err = u.utxoStore.GetMeta(ctx, tx.TxIDChainHash())
-
-	stat.NewStat("getTxMeta").AddTime(start)
-
-	if err != nil {
-		return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to get tx meta", subtreeHash.String(), tx.TxID(), err)
+		if errors.Is(err, errors.ErrTxConflicting) {
+			// conflicting transaction, which has been saved, but not spent
+			u.logger.Warnf("[blessMissingTransaction][%s][%s] transaction is conflicting", subtreeHash.String(), tx.TxID())
+		} else {
+			return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
+		}
 	}
 
 	// Not recoverable, returning processing error
@@ -337,7 +330,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
 	// TODO document, what is the logic here?
-	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > int32(subtreeWarmupCount)
+	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > int32(subtreeWarmupCount) // nolint:gosec
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	// in the retry attempts, only the tx hashes that are missing will be retried, not the whole subtree
@@ -346,16 +339,20 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
 		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
 
-		if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
-			failFast = false
-			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] Priority request (fail fast=%v) - final priority attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt, failFast)
-		} else if attempt > maxRetries {
-			failFast = false
+		var logMsg string
 
-			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] final attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt)
-		} else {
-			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
+		switch {
+		case u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()):
+			failFast = false
+			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] Priority request (fail fast=%v) - final priority attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt, failFast)
+		case attempt > maxRetries:
+			failFast = false
+			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] final attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt)
+		default:
+			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
+
+		u.logger.Infof(logMsg)
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
@@ -418,7 +415,15 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
 
-			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseURL, txMetaSlice, blockHeight, validationOptions...)
+			err = u.processMissingTransactions(
+				ctx5,
+				&v.SubtreeHash,
+				missingTxHashesCompacted,
+				v.BaseURL,
+				txMetaSlice,
+				blockHeight,
+				validationOptions...,
+			)
 			if err != nil {
 				// u.logger.Errorf("SAO %s", err)
 				// Don't wrap the error again, processMissingTransactions returns the correctly formatted error.
@@ -462,6 +467,11 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
 			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
+		}
+
+		// mark the transaction as conflicting if it is
+		if txMeta.Conflicting {
+			subtree.ConflictingNodes = append(subtree.ConflictingNodes, txHash)
 		}
 
 		// add the txMeta data we need for block validation
@@ -640,6 +650,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		mTx          missingTx
 		missingCount atomic.Uint32
 	)
+
 	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
 	missedMu := sync.Mutex{}
 
@@ -674,6 +685,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 					if txMetaSlice[mTx.idx] != nil {
 						return errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), mTx.idx, mTx.tx.TxIDChainHash().String())
 					}
+
 					txMetaSlice[mTx.idx] = txMeta
 				}
 
@@ -756,6 +768,7 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 					}
 				}
 			}
+
 			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
 		}
 	}
@@ -875,6 +888,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainh
 					missingTxsMu.Unlock()
 					return errors.NewProcessingError("[getMissingTransactions][%s] #1 missing transaction is nil", subtreeHash.String())
 				}
+
 				missingTxsMap[*tx.TxIDChainHash()] = tx
 			}
 			missingTxsMu.Unlock()

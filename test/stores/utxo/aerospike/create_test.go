@@ -28,7 +28,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false, false)
 		require.Error(t, err)
 		require.Nil(t, bins)
 		require.False(t, hasUtxos)
@@ -44,7 +44,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)
@@ -105,7 +105,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, external, tx.TxIDChainHash(), false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, external, tx.TxIDChainHash(), false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)

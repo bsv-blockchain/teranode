@@ -18,4 +18,6 @@ enum Status {
   ALREADY_EXISTS = 4;
   // Status_FROZEN indicates the UTXO has been frozen by the alert system
   FROZEN = 5;
+  // Status_CONFLICTING indicates the UTXO is in conflict with another UTXO and not spendable
+  CONFLICTING = 6;
 }

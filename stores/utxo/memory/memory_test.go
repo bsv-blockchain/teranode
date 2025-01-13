@@ -48,6 +48,19 @@ func TestMemory(t *testing.T) {
 
 		tests.ReAssign(t, db)
 	})
+
+	t.Run("memory conflicting tx", func(t *testing.T) {
+		db := New(ulogger.TestLogger{})
+		err := db.delete(tests.Hash)
+		require.NoError(t, err)
+
+		tests.Conflicting(t, db)
+	})
+}
+
+func TestMemorySanity(t *testing.T) {
+	db := New(ulogger.TestLogger{})
+	tests.Sanity(t, db)
 }
 
 func BenchmarkMemory(b *testing.B) {

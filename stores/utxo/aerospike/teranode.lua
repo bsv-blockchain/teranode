@@ -16,9 +16,13 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
         return "ERROR:TX not found"
     end
 
+    if rec['conflicting'] then
+        return "CONFLICTING:TX is conflicting"
+    end
+
     if rec['frozen'] then
-		return "FROZEN:TX is frozen"
-	end
+        return "FROZEN:TX is frozen"
+    end
 
     local coinbaseSpendingHeight = rec['spendingHeight']
     if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
@@ -88,6 +92,10 @@ end
 function spendMulti(rec, spends, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
+    end
+
+    if rec['conflicting'] then
+        return "CONFLICTING:TX is conflicting"
     end
 
     if rec['frozen'] then
@@ -231,6 +239,7 @@ function unSpend(rec, offset, utxoHash)
         rec['spentUtxos'] = spentUtxos - 1
     end
 
+    -- unset the ttl directly, since we are already returning a possible signal
     record.set_ttl(rec, -1)
 
     aerospike:update(rec)
@@ -587,6 +596,12 @@ function setTTL(rec, ttl)
     local blockIDs = rec['blockIDs']
     local nrRecords = rec['nrRecords']
     local signal = ""
+
+    if rec["conflicting"] then
+        record.set_ttl(rec, ttl)
+        signal = ":TTLSET"
+        return signal
+    end
 
     if nrRecords == nil then
         -- This is a pagination record: check if all the UTXOs are spent

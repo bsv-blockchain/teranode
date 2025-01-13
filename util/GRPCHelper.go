@@ -245,7 +245,7 @@ func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClie
 				break
 			}
 
-			//log.Printf("Retry attempt %d for request: %s\n", i+1, method)
+			// log.Printf("Retry attempt %d for request: %s\n", i+1, method)
 			time.Sleep(retryBackoff)
 		}
 

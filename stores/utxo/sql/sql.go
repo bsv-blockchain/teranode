@@ -207,12 +207,16 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:Create")
 	defer deferFn()
 
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
-	defer cancelTimeout()
+	// ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+	// defer cancelTimeout()
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to get tx meta data", err)
+	}
+
+	if options.Conflicting {
+		txMeta.Conflicting = true
 	}
 
 	// Insert the transaction row...
@@ -223,12 +227,18 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,lock_time
 		,fee
 		,size_in_bytes
+		,coinbase
+		,frozen
+		,conflicting
 	  ) VALUES (
 		 $1
 		,$2
 		,$3
 		,$4
 		,$5
+		,$6
+		,$7
+		,$8
 		)
 		RETURNING id
 	`
@@ -252,7 +262,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txHash = tx.TxIDChainHash()
 	}
 
-	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
+	isCoinbase := tx.IsCoinbase()
+	if options.IsCoinbase != nil {
+		isCoinbase = *options.IsCoinbase
+	}
+
+	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting).Scan(&transactionId)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -322,11 +337,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	var coinbaseSpendingHeight uint32
 
-	isCoinbase := tx.IsCoinbase()
-	if options.IsCoinbase != nil {
-		isCoinbase = *options.IsCoinbase
-	}
-
 	if isCoinbase {
 		coinbaseSpendingHeight = blockHeight + 100
 	}
@@ -377,7 +387,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
-	if err := txn.Commit(); err != nil {
+	if err = txn.Commit(); err != nil {
 		return nil, err
 	}
 
@@ -419,19 +429,22 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		,lock_time
 		,fee
 		,size_in_bytes
+		,coinbase
+		,frozen
+		,conflicting
 		FROM transactions
 		WHERE hash = $1
 	`
 
 	data := &meta.Data{}
 
-	var id int
+	var (
+		id       int
+		version  uint32
+		lockTime uint32
+	)
 
-	var version uint32
-
-	var lockTime uint32
-
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -591,7 +604,8 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		,o.coinbase_spending_height
 		,o.utxo_hash
 		,o.spending_transaction_id
-		,o.frozen
+		,o.frozen OR t.frozen AS frozen
+		,t.conflicting
 		,o.spendableIn
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
@@ -635,10 +649,11 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				utxoHash               []byte
 				spendingTransactionID  []byte
 				frozen                 bool
+				conflicting            bool
 				spendableIn            *uint32
 			)
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &spendableIn)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &conflicting, &spendableIn)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
@@ -650,6 +665,11 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			// If the utxo is frozen, it cannot be spent
 			if frozen {
 				return errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			}
+
+			// If the tx is marked as conflicting, it cannot be spent
+			if conflicting {
+				return errors.NewTxConflictingError("[Spend] utxo is conflicting for %s:%d", spend.TxID, spend.Vout)
 			}
 
 			if spendableIn != nil {
@@ -903,7 +923,8 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		 o.utxo_hash
 		,o.coinbase_spending_height
 		,o.spending_transaction_id
-		,o.frozen
+		,o.frozen OR t.frozen AS frozen
+		,t.conflicting
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -915,9 +936,10 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		coinbaseSpendingHeight uint32
 		spendingTransactionID  []byte
 		frozen                 bool
+		conflicting            bool
 	)
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingTransactionID, &frozen)
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingTransactionID, &frozen, &conflicting)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
@@ -941,8 +963,13 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	}
 
 	utxoStatus := utxo.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())
+
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
+	}
+
+	if conflicting {
+		utxoStatus = utxo.Status_CONFLICTING
 	}
 
 	return &utxo.SpendResponse{
@@ -1024,6 +1051,9 @@ func createPostgresSchema(db *usql.DB) error {
         ,lock_time        BIGINT NOT NULL
         ,fee              BIGINT NOT NULL
 		,size_in_bytes    BIGINT NOT NULL
+		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
+		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
+        ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
 		,tombstone_millis BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
@@ -1105,6 +1135,9 @@ func createSqliteSchema(db *usql.DB) error {
         ,lock_time        BIGINT NOT NULL
         ,fee              BIGINT NOT NULL
         ,size_in_bytes    BIGINT NOT NULL
+		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
+		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
+        ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,tombstone_millis BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );

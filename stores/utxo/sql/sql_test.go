@@ -483,7 +483,7 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Store(t, db)
 	})
 
-	t.Run("memory spend", func(t *testing.T) {
+	t.Run("sql spend", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
 		err := db.Delete(ctx, tests.TXHash)
@@ -492,7 +492,7 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Spend(t, db)
 	})
 
-	t.Run("memory reset", func(t *testing.T) {
+	t.Run("sql reset", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
 		err := db.Delete(ctx, tests.TXHash)
@@ -501,7 +501,7 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Restore(t, db)
 	})
 
-	t.Run("memory freeze", func(t *testing.T) {
+	t.Run("sql freeze", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
 		err := db.Delete(ctx, tests.TXHash)
@@ -510,12 +510,21 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Freeze(t, db)
 	})
 
-	t.Run("memory reassign", func(t *testing.T) {
+	t.Run("sql reassign", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 
 		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.ReAssign(t, db)
+	})
+
+	t.Run("sql conflicting tx", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Conflicting(t, db)
 	})
 }

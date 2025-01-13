@@ -12,7 +12,7 @@ func IsExtended(tx *bt.Tx, blockHeight uint32) bool {
 	}
 
 	for _, input := range tx.Inputs {
-		if input.PreviousTxScript == nil {
+		if input.PreviousTxScript == nil || len(*input.PreviousTxScript) == 0 {
 			return false
 		}
 	}

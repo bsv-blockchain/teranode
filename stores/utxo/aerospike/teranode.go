@@ -132,6 +132,9 @@ const (
 	// LuaTxNotFound indicates transaction doesn't exist
 	LuaTxNotFound LuaReturnValue = "TX not found"
 
+	// LuaConflicting indicates conflicting transaction
+	LuaConflicting LuaReturnValue = "CONFLICTING"
+
 	// LuaError indicates operation failed
 	LuaError LuaReturnValue = "ERROR"
 )

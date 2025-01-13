@@ -39,6 +39,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/util"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -67,9 +68,9 @@ type Spend struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+	MetaFields = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting"}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
-	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting"}
 )
 
 // UnresolvedMetaData represents a transaction's metadata that needs to be resolved.
@@ -96,9 +97,11 @@ type CreateOption func(*CreateOptions)
 
 // CreateOptions holds optional parameters for UTXO creation.
 type CreateOptions struct {
-	BlockIDs   []uint32
-	TxID       *chainhash.Hash
-	IsCoinbase *bool
+	BlockIDs    []uint32
+	TxID        *chainhash.Hash
+	IsCoinbase  *bool
+	Frozen      bool
+	Conflicting bool
 }
 
 // WithBlockIDs returns a CreateOption that sets the block IDs for a UTXO.
@@ -120,6 +123,20 @@ func WithTXID(txID *chainhash.Hash) CreateOption {
 func WithSetCoinbase(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.IsCoinbase = &b
+	}
+}
+
+// WithFrozen returns a CreateOption that marks a UTXO as frozen.
+func WithFrozen(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Frozen = b
+	}
+}
+
+// WithConflicting returns a CreateOption that marks a UTXO as conflicting with another transaction.
+func WithConflicting(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Conflicting = b
 	}
 }
 
@@ -213,7 +230,12 @@ func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint
 		opt(options)
 	}
 
-	return nil, nil
+	txMeta, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return txMeta, nil
 }
 
 func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
@@ -279,5 +301,5 @@ func (mu *MockUtxostore) SetMedianBlockTime(_ uint32) error {
 	return nil
 }
 func (mu *MockUtxostore) GetMedianBlockTime() uint32 {
-	return 0
+	return 10 * 60
 }

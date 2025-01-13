@@ -50,6 +50,46 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.Equal(t, data.BlockIDs[0], d.BlockIDs[0])
 		assert.Equal(t, data.BlockIDs[1], d.BlockIDs[1])
 	})
+
+	t.Run("test frozen conflicting", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			ParentTxHashes: []chainhash.Hash{
+				*hash3,
+				*hash4,
+			},
+			BlockIDs: []uint32{
+				123,
+				321,
+			},
+			Tx:          &bt.Tx{},
+			IsCoinbase:  true,
+			Frozen:      true,
+			Conflicting: true,
+		}
+
+		b := data.Bytes()
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+
+		assert.Equal(t, data.Fee, d.Fee)
+		assert.Equal(t, data.SizeInBytes, d.SizeInBytes)
+		assert.True(t, d.IsCoinbase)
+		assert.True(t, d.Frozen)
+		assert.True(t, d.Conflicting)
+
+		require.Len(t, data.ParentTxHashes, 2)
+		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))
+		assert.Equal(t, data.ParentTxHashes[0].String(), d.ParentTxHashes[0].String())
+		assert.Equal(t, data.ParentTxHashes[1].String(), d.ParentTxHashes[1].String())
+
+		require.Len(t, data.BlockIDs, 2)
+		require.Equal(t, len(data.BlockIDs), len(d.BlockIDs))
+		assert.Equal(t, data.BlockIDs[0], d.BlockIDs[0])
+		assert.Equal(t, data.BlockIDs[1], d.BlockIDs[1])
+	})
 }
 
 func Benchmark_NewMetaDataFromBytes(b *testing.B) {

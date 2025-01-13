@@ -712,7 +712,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
-	err = sm.validationClient.Validate(ctx, btTx, 0)
+	_, err = sm.validationClient.Validate(ctx, btTx, 0)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -795,7 +795,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
-		err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		_, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) {
 				// silently exit, we will accept this transaction when the parent comes in
@@ -1865,7 +1865,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
-		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
+		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
 			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)

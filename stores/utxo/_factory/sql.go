@@ -85,6 +85,6 @@ func init() {
 		return sql.New(ctx, logger, tSettings, url)
 	}
 	availableDatabases["sqlite"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
-		return sql.New(ctx, logger, settings.NewSettings(), url)
+		return sql.New(ctx, logger, tSettings, url)
 	}
 }

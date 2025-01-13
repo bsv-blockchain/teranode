@@ -285,7 +285,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// p2p server
 	if startP2P {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "p2p")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "p2p")
 		if err != nil {
 			return err
 		}
@@ -324,27 +324,27 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// asset service
 	if startAsset {
-		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		txStore, err := getTxStore(logger)
+		txStore, err := GetTxStore(logger)
 		if err != nil {
 			return err
 		}
 
-		subtreeStore, err := getSubtreeStore(logger)
+		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockPersisterStore, err := getBlockPersisterStore(logger)
+		blockPersisterStore, err := GetBlockPersisterStore(logger)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "asset")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "asset")
 		if err != nil {
 			return err
 		}
@@ -363,7 +363,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startRPC {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "rpc")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "rpc")
 		if err != nil {
 			return err
 		}
@@ -379,12 +379,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startAlert {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "alert")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "alert")
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
@@ -406,22 +406,22 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startBlockPersister {
-		blockStore, err := getBlockStore(logger)
+		blockStore, err := GetBlockStore(logger)
 		if err != nil {
 			return err
 		}
 
-		subtreeStore, err := getSubtreeStore(logger)
+		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "blockpersister")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockpersister")
 		if err != nil {
 			return err
 		}
@@ -439,12 +439,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startUTXOPersister {
-		blockStore, err := getBlockStore(logger)
+		blockStore, err := GetBlockStore(logger)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "utxopersister")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "utxopersister")
 		if err != nil {
 			return err
 		}
@@ -462,22 +462,22 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	// blockAssembly
 	if startBlockAssembly {
 		if tSettings.BlockAssembly.GRPCListenAddress != "" {
-			txStore, err := getTxStore(logger)
+			txStore, err := GetTxStore(logger)
 			if err != nil {
 				return err
 			}
 
-			utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			subtreeStore, err := getSubtreeStore(logger)
+			subtreeStore, err := GetSubtreeStore(logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "blockassembly")
+			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockassembly")
 			if err != nil {
 				return err
 			}
@@ -497,27 +497,27 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// subtreeValidation
 	if startSubtreeValidation {
-		subtreeStore, err := getSubtreeStore(logger)
+		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		txStore, err := getTxStore(logger)
+		txStore, err := GetTxStore(logger)
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		validatorClient, err := getValidatorClient(ctx, logger, tSettings)
+		validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "subtreevalidation")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "subtreevalidation")
 		if err != nil {
 			return err
 		}
@@ -555,27 +555,27 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	// blockValidation
 	if startBlockValidation {
 		if tSettings.BlockValidation.GRPCListenAddress != "" {
-			subtreeStore, err := getSubtreeStore(logger)
+			subtreeStore, err := GetSubtreeStore(logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			txStore, err := getTxStore(logger)
+			txStore, err := GetTxStore(logger)
 			if err != nil {
 				return err
 			}
 
-			utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			validatorClient, err := getValidatorClient(ctx, logger, tSettings)
+			validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "blockvalidation")
+			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockvalidation")
 			if err != nil {
 				return err
 			}
@@ -603,12 +603,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	// validator
 	if startValidator {
 		if tSettings.Validator.GRPCListenAddress != "" {
-			utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "validator")
+			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "validator")
 			if err != nil {
 				return err
 			}
@@ -644,7 +644,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	// coinbase tracker server
 	if startCoinbase {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "coinbase")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "coinbase")
 		if err != nil {
 			return err
 		}
@@ -659,7 +659,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startFaucet {
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "faucet")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "faucet")
 		if err != nil {
 			return err
 		}
@@ -681,17 +681,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 					return err
 				}
 			} else {
-				txStore, err := getTxStore(logger)
+				txStore, err := GetTxStore(logger)
 				if err != nil {
 					return err
 				}
 
-				validatorClient, err := getValidatorClient(ctx, logger, tSettings)
+				validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
 				if err != nil {
 					return err
 				}
 
-				blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "propagation")
+				blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "propagation")
 				if err != nil {
 					return err
 				}
@@ -716,37 +716,37 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startLegacy {
-		subtreeStore, err := getSubtreeStore(logger)
+		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		tempStore, err := getTempStore(logger)
+		tempStore, err := GetTempStore(logger)
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := getUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		validatorClient, err := getValidatorClient(ctx, logger, tSettings)
+		validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger, tSettings, "legacy")
+		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "legacy")
 		if err != nil {
 			return err
 		}
 
-		subtreeValidationClient, err := getSubtreeValidationClient(ctx, logger, tSettings)
+		subtreeValidationClient, err := GetSubtreeValidationClient(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockValidationClient, err := getBlockValidationClient(ctx, logger, tSettings)
+		blockValidationClient, err := GetBlockValidationClient(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}

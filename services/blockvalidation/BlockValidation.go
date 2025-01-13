@@ -557,7 +557,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 
 	// make sure all the subtrees are loaded in the block
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return u.subtreeValidationClient.CheckSubtree(ctx, subtreeHash, u.lastUsedBaseURL, block.Height, block.Hash())
+		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, u.lastUsedBaseURL, block.Height, block.Hash())
 	}
 
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
@@ -744,6 +744,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	)
 	defer deferFn()
 
+	// TODO: Check if this is a safe thing to do
 	u.lastUsedBaseURL = baseURL
 
 	// first check if the block already exists in the blockchain
@@ -1255,7 +1256,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 					checkCtx, cancel := context.WithTimeout(gCtx, 2*time.Minute)
 					defer cancel()
 
-					err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash())
+					err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash())
 					if err != nil {
 						return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
 					}

@@ -124,6 +124,7 @@ func TestTwoTransactions(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	subtrees := make([]*util.Subtree, 1)
+
 	subtrees[0], err = util.NewTree(1)
 	require.NoError(t, err)
 
@@ -141,7 +142,6 @@ func TestTwoTransactions(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	require.NoError(t, err)
 	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
@@ -277,6 +277,7 @@ func TestTtlCache(t *testing.T) {
 	}
 
 	go cache.Start()
+
 	assert.Equal(t, 4, cache.Len())
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
@@ -286,7 +287,7 @@ func TestBlockHeadersN(t *testing.T) {
 	var catchupBlockHeaders []*model.BlockHeader
 	for i := 997; i >= 0; i-- {
 		catchupBlockHeaders = append(catchupBlockHeaders, &model.BlockHeader{
-			Version:        uint32(i), //nolint:gosec
+			Version:        uint32(i), // nolint:gosec
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 		})

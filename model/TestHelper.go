@@ -84,11 +84,11 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 	_ = subtree.AddCoinbaseNode()
 
-	var subtreeFile *os.File
-
-	var subtreeFileMerkleHashes *os.File
-
-	subtreeCount := 0
+	var (
+		subtreeFile             *os.File
+		subtreeFileMerkleHashes *os.File
+		subtreeCount            int
+	)
 
 	// create the first files
 	subtreeFile, err = os.Create(fmt.Sprintf(TestFileNameTemplate, subtreeCount))
@@ -105,14 +105,14 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 	txID := make([]byte, 32)
 
-	var hash chainhash.Hash
+	var (
+		hash chainhash.Hash
+		fees uint64
+		n    int
+	)
 
-	fees := uint64(0)
-
-	var n int
-
-	for i := 1; i < int(transactionIDCount); i++ { //nolint:gosec
-		binary.LittleEndian.PutUint64(txID, uint64(i)) //nolint:gosec
+	for i := 1; i < int(transactionIDCount); i++ { // nolint:gosec
+		binary.LittleEndian.PutUint64(txID, uint64(i)) // nolint:gosec
 		hash = chainhash.Hash(txID)
 
 		if err = subtree.AddNode(hash, uint64(i), uint64(i)); err != nil {
@@ -178,6 +178,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 			return nil, err
 		}
 	}
+
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
@@ -249,7 +250,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
 	}
@@ -330,9 +331,10 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// read from the reader and add to txMeta store
 	txHash := chainhash.Hash{}
 
-	var fee uint64
-
-	var sizeInBytes uint64
+	var (
+		fee         uint64
+		sizeInBytes uint64
+	)
 
 	g := errgroup.Group{}
 

@@ -10,6 +10,7 @@ package validator
 import (
 	"context"
 
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -35,7 +36,7 @@ type Interface interface {
 	//   - opts: Optional validation settings
 	// Returns:
 	//   - error: Any validation errors encountered
-	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error
+	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error)
 
 	// ValidateWithOptions performs comprehensive validation of a transaction with options passed in directly
 	// Parameters:
@@ -45,7 +46,7 @@ type Interface interface {
 	//   - opts: validation options
 	// Returns:
 	//   - error: Any validation errors encountered
-	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error)
+	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)
 
 	// GetBlockHeight returns the current block height
 	// Returns:
@@ -94,8 +95,8 @@ func (mv *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, s
 //
 // Returns:
 //   - error: Always returns nil
-func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
-	return nil
+func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
+	return nil, nil
 }
 
 // ValidateWithOptions implements mock transaction validation with options set directly
@@ -108,8 +109,8 @@ func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight ui
 //
 // Returns:
 //   - error: Always returns nil
-func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
-	return nil
+func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
+	return nil, nil
 }
 
 // GetBlockHeight implements mock block height retrieval

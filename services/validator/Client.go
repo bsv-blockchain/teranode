@@ -31,6 +31,7 @@ import (
 	_ "github.com/bitcoin-sv/teranode/k8sresolver"
 	"github.com/bitcoin-sv/teranode/services/validator/validator_api"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
@@ -46,7 +47,7 @@ type batchItem struct {
 	req *validator_api.ValidateTransactionRequest
 
 	// done is a channel that receives the validation result
-	done chan error
+	done chan validateBatchResponse
 }
 
 // Client implements a gRPC client for the validator service, providing transaction
@@ -189,7 +190,7 @@ func (c *Client) TriggerBatcher() {
 	}
 }
 
-func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
 	validationOptions := NewDefaultOptions()
 	for _, opt := range opts {
 		opt(validationOptions)
@@ -198,19 +199,31 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, op
 	return c.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
 }
 
-func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
+type validateBatchResponse struct {
+	metaData []byte
+	err      error
+}
+
+func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if c.batchSize == 0 {
-		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
+		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 			TransactionData:      tx.ExtendedBytes(),
 			BlockHeight:          blockHeight,
 			SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
 			AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
 			SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
-		}); err != nil {
-			return errors.UnwrapGRPC(err)
+			CreateConflicting:    &validationOptions.createConflicting,
+		})
+		if err != nil {
+			return nil, errors.UnwrapGRPC(err)
+		}
+
+		if response.Metadata != nil {
+			txMetaData = &meta.Data{}
+			meta.NewMetaDataFromBytes(&response.Metadata, txMetaData)
 		}
 	} else {
-		doneCh := make(chan error)
+		doneCh := make(chan validateBatchResponse)
 		/* batch mode */
 		c.batcher.Put(&batchItem{
 			req: &validator_api.ValidateTransactionRequest{
@@ -219,14 +232,24 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 				SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
 				AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
 				SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
+				CreateConflicting:    &validationOptions.createConflicting,
 			},
 			done: doneCh,
 		})
 
-		return <-doneCh
+		r := <-doneCh
+
+		if r.metaData != nil {
+			txMetaData = &meta.Data{}
+			meta.NewMetaDataFromBytes(&r.metaData, txMetaData)
+		}
+
+		if r.err != nil {
+			return nil, errors.UnwrapGRPC(r.err)
+		}
 	}
 
-	return nil
+	return txMetaData, nil
 }
 
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
@@ -244,7 +267,10 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 		c.logger.Errorf("%v", err)
 
 		for _, item := range batch {
-			item.done <- err
+			item.done <- validateBatchResponse{
+				metaData: nil,
+				err:      err,
+			}
 		}
 
 		return
@@ -252,9 +278,15 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 
 	for i, item := range batch {
 		if resp.Errors[i] != "" {
-			item.done <- errors.NewError(resp.Errors[i])
+			item.done <- validateBatchResponse{
+				metaData: nil,
+				err:      errors.NewError(resp.Errors[i]),
+			}
 		} else {
-			item.done <- nil
+			item.done <- validateBatchResponse{
+				metaData: resp.Metadata[i],
+				err:      nil,
+			}
 		}
 	}
 }

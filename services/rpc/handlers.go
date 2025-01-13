@@ -598,7 +598,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
-		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(true)
+		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(s.settings, true)
 		if err != nil {
 			return nil, err
 		}

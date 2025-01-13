@@ -277,9 +277,9 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 			// set the last 11 block header timestamps to be less than the current timestamps
-			Timestamp: 1231469665 - uint32(i), //nolint:gosec
+			Timestamp: 1231469665 - uint32(i), // nolint:gosec
 		}
-		currentChainIDs[i] = uint32(i) //nolint:gosec
+		currentChainIDs[i] = uint32(i) // nolint:gosec
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := &sync.Map{}

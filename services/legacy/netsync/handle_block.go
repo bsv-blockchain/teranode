@@ -350,7 +350,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
-		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil {
+		if err = sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil { // nolint:gosec
 			return nil, errors.NewSubtreeError("failed to check subtree", err)
 		}
 
@@ -457,14 +457,14 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 	for txHash := range txMap {
 		txHash := txHash
 
-		g.Go(func() error {
+		g.Go(func() (err error) {
 			timeStart := time.Now()
 			defer func() {
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}()
 
 			// call the validator to validate the transaction, but skip the utxo creation
-			return sm.validationClient.Validate(gCtx,
+			_, err = sm.validationClient.Validate(gCtx,
 				txMap[txHash].tx,
 				// nolint:gosec
 				uint32(block.Height()),
@@ -472,6 +472,8 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 				validator.WithAddTXToBlockAssembly(false),
 				validator.WithSkipPolicyChecks(true),
 			)
+
+			return err
 		})
 	}
 
@@ -511,7 +513,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			for txIdx := range blockTxsPerLevel[i] {
 				timeStart = time.Now()
 				//nolint:gosec
-				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
+				_, _ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
 
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
@@ -533,7 +535,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 					// send to validation, but only if the parent is not in the same block
 					//nolint:gosec
-					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
+					_, _ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
 
 					return nil
 				})

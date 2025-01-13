@@ -25,12 +25,13 @@ func Test_NewTxValidationData(t *testing.T) {
 		require.Equal(t, data.Options.skipUtxoCreation, data2.Options.skipUtxoCreation)
 		require.Equal(t, data.Options.addTXToBlockAssembly, data2.Options.addTXToBlockAssembly)
 		require.Equal(t, data.Options.skipPolicyChecks, data2.Options.skipPolicyChecks)
+		require.Equal(t, data.Options.createConflicting, data2.Options.createConflicting)
 	})
 
 	t.Run("NewTxValidationData", func(t *testing.T) {
 		tx := test.TX1RawBytes
 		height := uint32(478558)
-		options := &Options{skipUtxoCreation: true, addTXToBlockAssembly: false, skipPolicyChecks: true}
+		options := &Options{skipUtxoCreation: true, addTXToBlockAssembly: false, skipPolicyChecks: true, createConflicting: true}
 
 		data := NewTxValidationData(tx, height, options)
 
@@ -44,6 +45,7 @@ func Test_NewTxValidationData(t *testing.T) {
 		require.Equal(t, data.Options.skipUtxoCreation, data2.Options.skipUtxoCreation)
 		require.Equal(t, data.Options.addTXToBlockAssembly, data2.Options.addTXToBlockAssembly)
 		require.Equal(t, data.Options.skipPolicyChecks, data2.Options.skipPolicyChecks)
+		require.Equal(t, data.Options.createConflicting, data2.Options.createConflicting)
 	})
 
 	t.Run("too short", func(t *testing.T) {

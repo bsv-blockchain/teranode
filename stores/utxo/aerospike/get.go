@@ -459,6 +459,18 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 					if ok {
 						items[idx].Data.IsCoinbase = coinbaseBool
 					}
+
+				case "frozen":
+					frozenBool, ok := value.(bool)
+					if ok {
+						items[idx].Data.Frozen = frozenBool
+					}
+
+				case "conflicting":
+					conflictingBool, ok := value.(bool)
+					if ok {
+						items[idx].Data.Conflicting = conflictingBool
+					}
 				}
 			}
 		}

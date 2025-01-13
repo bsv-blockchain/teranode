@@ -1,0 +1,83 @@
+package ulogger
+
+import (
+	"fmt"
+	"runtime"
+	"sync/atomic"
+	"testing"
+)
+
+type ErrorTestLogger struct {
+	t                *testing.T
+	skipCancelOnFail atomic.Bool
+	cancelFn         func()
+}
+
+func NewErrorTestLogger(t *testing.T, cancelFn func()) *ErrorTestLogger {
+	return &ErrorTestLogger{
+		t:        t,
+		cancelFn: cancelFn,
+	}
+}
+
+func (l *ErrorTestLogger) SkipCancelOnFail(skip bool) {
+	l.skipCancelOnFail.Store(skip)
+}
+
+func (l *ErrorTestLogger) LogLevel() int {
+	return 0
+}
+
+func (l *ErrorTestLogger) SetLogLevel(level string) {}
+
+func (l *ErrorTestLogger) New(service string, options ...Option) Logger {
+	return l
+}
+
+func (l *ErrorTestLogger) Duplicate(options ...Option) Logger {
+	return l
+}
+
+func (l *ErrorTestLogger) Debugf(format string, args ...interface{}) {
+	// l.t.Logf("[DEBUG] "+format, args...)
+}
+
+func (l *ErrorTestLogger) Infof(format string, args ...interface{}) {
+	// l.t.Logf("[INFO] "+format, args...)
+}
+
+func (l *ErrorTestLogger) Warnf(format string, args ...interface{}) {
+	// l.t.Logf("[WARN] "+format, args...)
+}
+
+func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
+	_, file, line, _ := runtime.Caller(1)
+
+	prefix := fmt.Sprintf("%s:%d: [ERROR] %s ", file, line, format)
+
+	if l.skipCancelOnFail.Load() {
+		l.t.Logf(prefix, args...)
+		return
+	}
+
+	l.cancelFn()
+	l.t.Logf(prefix, args...)
+
+	l.t.FailNow()
+}
+
+func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
+	_, file, line, _ := runtime.Caller(1)
+
+	prefix := fmt.Sprintf("%s:%d: [FATAL] %s ", file, line, format)
+
+	if l.skipCancelOnFail.Load() {
+		l.t.Logf(prefix, args...)
+		return
+	}
+
+	l.cancelFn()
+	l.t.Logf(prefix, args...)
+
+	l.t.FailNow()
+}

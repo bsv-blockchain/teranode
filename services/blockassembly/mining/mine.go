@@ -6,23 +6,24 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func Mine(ctx context.Context, candidate *model.MiningCandidate, address *string) (*model.MiningSolution, error) {
+func Mine(ctx context.Context, tSettings *settings.Settings, candidate *model.MiningCandidate, address *string) (*model.MiningSolution, error) {
 	var coinbaseTx *bt.Tx
 
 	var err error
 
 	if address != nil {
-		coinbaseTx, err = candidate.CreateCoinbaseTxCandidateForAddress(address)
+		coinbaseTx, err = candidate.CreateCoinbaseTxCandidateForAddress(tSettings, address)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		coinbaseTx, err = candidate.CreateCoinbaseTxCandidate()
+		coinbaseTx, err = candidate.CreateCoinbaseTxCandidate(tSettings)
 		if err != nil {
 			return nil, err
 		}

@@ -60,7 +60,7 @@ func BenchmarkValidator(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight); err != nil {
+		if _, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		} else {
 			fmt.Println("asd")
@@ -90,7 +90,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	height, err := util.ExtractCoinbaseHeight(coinbase)
 	require.NoError(t, err)
 
-	err = v.Validate(context.Background(), coinbase, height)
+	_, err = v.Validate(context.Background(), coinbase, height)
 	require.Error(t, err)
 }
 
@@ -127,7 +127,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	err = v.Validate(context.Background(), tx, 100)
+	_, err = v.Validate(context.Background(), tx, 100)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should have 1 message")
@@ -163,7 +163,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	err = v.Validate(context.Background(), tx, 100)
+	_, err = v.Validate(context.Background(), tx, 100)
 	require.Error(t, err)
 
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")

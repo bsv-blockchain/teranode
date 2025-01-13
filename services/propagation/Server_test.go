@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
@@ -13,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,10 +25,12 @@ func TestValidatorErrors(t *testing.T) {
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)
-	err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
+
+	_, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
 	require.Error(t, err)
-	// TODO - SAO - I am disabling this as it will be changed when the new error system is applied
-	// assert.True(t, errors.Is(err, errors.ErrProcessing))
+
+	assert.True(t, errors.Is(err, errors.ErrProcessing))
+	assert.True(t, errors.Is(err, errors.ErrTxInvalid))
 }
 
 type NullStore struct{}

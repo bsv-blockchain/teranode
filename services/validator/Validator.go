@@ -190,7 +190,7 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 // It checks transaction finality, validates inputs and outputs, updates the UTXO set,
 // and optionally adds the transaction to block assembly.
 // Returns error if validation fails.
-func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (err error) {
+func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (txMeta *meta.Data, err error) {
 	return v.ValidateWithOptions(ctx, tx, blockHeight, ProcessOptions(opts...))
 }
 
@@ -198,8 +198,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // It checks transaction finality, validates inputs and outputs, updates the UTXO set,
 // and optionally adds the transaction to block assembly.
 // Returns error if validation fails.
-func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
-	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
+func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()
 
@@ -211,7 +211,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	return err
+	return txMetaData, err
 }
 
 // validateInternal performs the core validation logic for a transaction.
@@ -219,7 +219,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 // Returns error if any validation step fails.
 //
 //gocognit:ignore
-func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
+func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	txID := tx.TxID()
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
 		tracing.WithParentStat(v.stats),
@@ -251,21 +251,21 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	if blockHeight > util.LockTimeBIP113 {
 		utxoStoreMedianBlockTime := v.GetMedianBlockTime()
 		if utxoStoreMedianBlockTime == 0 {
-			return errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
+			return nil, errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
 		}
 
 		// this function should be moved into go-bt
 		if err = util.IsTransactionFinal(tx, blockHeight+1, utxoStoreMedianBlockTime); err != nil {
-			return errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
+			return nil, errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 		}
 	}
 
 	if tx.IsCoinbase() {
-		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
+		return nil, errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 	}
 
 	if err = v.validateTransaction(ctx, tx, blockHeight, validationOptions); err != nil {
-		return errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
@@ -286,41 +286,39 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
-		if errors.Is(err, errors.ErrSpent) {
-			// get the data from the spend
-			var errData *errors.UtxoSpentErrData
-			if errors.AsData(err, &errData) {
-				s := errData.SpendingTxHash
-				// freeze both transactions and remove from block assembly
-				_ = s
+		if errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxConflicting) {
+			if validationOptions.createConflicting {
+				// process this transaction as a conflicting tx
+				if txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, true); err != nil {
+					return txMetaData, err
+				}
+
+				// We successfully added the tx to the utxo store as a conflicting tx,
+				// so we can return a conflicting error
+				return txMetaData, errors.NewTxConflictingError("[Validate][%s] tx is conflicting", txID, err)
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
 			// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
 			// blessed. In this case we can just return early.
-			if _, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err == nil {
+			if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err == nil {
 				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
-				return nil
+				return txMetaData, nil
 			}
 		}
 
-		return errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
+		return nil, errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 	}
 
-	var txMetaData *meta.Data
 	if !validationOptions.skipUtxoCreation {
 		// TODO do we need to make this a 2 phase commit?
 		//      if the block assembly addition fails, the utxo should not be spendable yet
-		txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight)
+		txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, false)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
-				// stop all processing, this transaction has already been validated and passed into the block assembly
-				// buf := make([]byte, 1024)
-				// runtime.Stack(buf, false)
 				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
-				// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
 
-				return nil
+				return txMetaData, nil
 			}
 
 			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txID, err)
@@ -329,13 +327,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
 			}
 
-			return errors.NewProcessingError("error registering tx in metaStore", err)
+			return nil, errors.NewProcessingError("error registering tx in metaStore", err)
 		}
 	} else {
 		// create the tx meta needed for the block assembly
 		txMetaData, err = util.TxMetaDataFromTx(tx)
 		if err != nil {
-			return errors.NewProcessingError("failed to get tx meta data", err)
+			return nil, errors.NewProcessingError("failed to get tx meta data", err)
 		}
 	}
 
@@ -368,11 +366,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			setSpan.RecordError(err)
 
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return txMetaData, nil
 }
 
 func (v *Validator) TriggerBatcher() {
@@ -407,20 +405,20 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 	return err
 }
 
-// storeTxInUtxoMap stores transaction metadata in the UTXO store.
+// StoreTxInUtxoMap stores transaction metadata in the UTXO store.
 // Returns transaction metadata and error if storage fails.
-func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
+func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool) (*meta.Data, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "storeTxInUtxoMap",
 		tracing.WithHistogram(prometheusValidatorSetTxMeta),
 	)
 	defer deferFn()
 
-	data, err := v.utxoStore.Create(ctx, tx, blockHeight)
+	data, err := v.utxoStore.Create(ctx, tx, blockHeight, utxo.WithConflicting(markAsConflicting))
 	if err != nil {
 		return nil, err
 	}
 
-	if v.txmetaKafkaProducerClient != nil { // tests may not set this
+	if v.txmetaKafkaProducerClient != nil && !markAsConflicting { // tests may not set this
 		startKafka := time.Now()
 
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
@@ -479,16 +477,6 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	err = v.utxoStore.Spend(ctx, spends, blockHeight)
 	if err != nil {
 		traceSpan.RecordError(err)
-
-		// check whether this is a double spend error
-
-		if errors.Is(err, errors.ErrSpent) {
-			// remove the spending tx from the block assembly and freeze it
-			// TODO implement freezing in utxo store
-			if err := v.blockAssembler.RemoveTx(ctx, txIDChainHash); err != nil {
-				v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
-			}
-		}
 
 		return nil, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
 	}

@@ -170,7 +170,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := mining.Mine(ctx, miningCandidate, nil)
+		solution, err := mining.Mine(ctx, testItems.blockAssembler.settings, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -448,7 +448,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		// mine block
 
-		solution, err := mining.Mine(ctx, miningCandidate, nil)
+		solution, err := mining.Mine(ctx, testItems.blockAssembler.settings, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -554,7 +554,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash4.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := mining.Mine(ctx, miningCandidate, nil)
+		solution, err := mining.Mine(ctx, testItems.blockAssembler.settings, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -665,7 +665,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, hash2.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[3].Hash.String())
 
-		solution, err := mining.Mine(ctx, miningCandidate, nil)
+		solution, err := mining.Mine(ctx, testItems.blockAssembler.settings, miningCandidate, nil)
 		require.NoError(t, err)
 
 		blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
@@ -767,6 +767,7 @@ func createTestSettings() *settings.Settings {
 			SubtreeProcessorBatcherSize:  1,
 			DoubleSpendWindow:            1000,
 			MaxGetReorgHashes:            10000,
+			MinerWalletPrivateKeys:       []string{"5KYZdUEo39z3FPrtuX2QbbwGnNP5zTd7yyr2SC1j299sBCnWjss"},
 		},
 		SubtreeValidation: settings.SubtreeValidationSettings{
 			TxChanBufferSize: 1,

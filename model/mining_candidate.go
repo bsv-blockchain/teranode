@@ -4,23 +4,20 @@ import (
 	"crypto/rand"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/ordishs/gocore"
 )
 
 // CreateCoinbaseTxCandidate creates a coinbase transaction for the mining candidate
 // p2pk is an optional parameter to specify if the coinbase output should be a pay to public key
 // instead of a pay to public key hash
-func (mc *MiningCandidate) CreateCoinbaseTxCandidate(p2pk ...bool) (*bt.Tx, error) {
+func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Settings, p2pk ...bool) (*bt.Tx, error) {
 	// Create a new coinbase transaction
-	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+	arbitraryText := tSettings.Coinbase.ArbitraryText
 
-	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
-	if !found {
-		return nil, errors.NewConfigurationError("miner_wallet_private_keys not found in config")
-	}
+	coinbasePrivKeys := tSettings.BlockAssembly.MinerWalletPrivateKeys
 
 	walletAddresses := make([]string, len(coinbasePrivKeys))
 
@@ -79,8 +76,8 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(p2pk ...bool) (*bt.Tx, erro
 	return coinbaseTx, nil
 }
 
-func (mc *MiningCandidate) CreateCoinbaseTxCandidateForAddress(address *string) (*bt.Tx, error) {
-	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
+func (mc *MiningCandidate) CreateCoinbaseTxCandidateForAddress(tSettings *settings.Settings, address *string) (*bt.Tx, error) {
+	arbitraryText := tSettings.Coinbase.ArbitraryText
 
 	if address == nil {
 		return nil, errors.NewConfigurationError("address is required for ")

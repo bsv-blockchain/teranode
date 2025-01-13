@@ -25,6 +25,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -57,25 +58,21 @@ func (m *MockValidatorClient) GetMedianBlockTime() uint32 {
 	return m.MedianBlockTime
 }
 
-func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
 	validationOptions := ProcessOptions(opts...)
 	return m.ValidateWithOptions(context.Background(), tx, blockHeight, validationOptions)
 }
 
-func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
+func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if len(m.Errors) > 0 {
 		// return error and pop of stack
-		err := m.Errors[0]
+		err = m.Errors[0]
 		m.Errors = m.Errors[1:]
 
-		return err
+		return nil, err
 	}
 
-	if _, err := m.TxMetaStore.Create(context.Background(), tx, 0); err != nil {
-		return err
-	}
-
-	return nil
+	return m.TxMetaStore.Create(context.Background(), tx, 0)
 }
 
 func (m *MockValidatorClient) TriggerBatcher() {}

@@ -64,7 +64,7 @@ func (suite *TNC1_1TestSuite) TestVerifyMerkleRootCalculation() {
 	require.NoError(t, err, "Failed to get mining candidate")
 
 	// generate block
-	blockHash, err := helper.MineBlock(ctx, node.BlockassemblyClient, logger)
+	blockHash, err := helper.MineBlock(ctx, node.Settings, node.BlockassemblyClient, logger)
 	require.NoError(t, err, "Failed to mine block")
 	require.NotNil(t, blockHash, "Block hash should not be nil")
 

@@ -134,8 +134,10 @@ func AddressToScript(address string) (script []byte, err error) {
 }
 
 func makeCoinbaseOutputTransactions(coinbaseValue uint64, walletAddresses []string) ([]byte, error) {
-
 	numberOfOutputs := uint64(len(walletAddresses))
+	if numberOfOutputs == 0 {
+		return nil, errors.NewInvalidArgumentError("no wallet addresses provided")
+	}
 
 	outputValue := coinbaseValue / numberOfOutputs
 	outputChange := coinbaseValue % numberOfOutputs

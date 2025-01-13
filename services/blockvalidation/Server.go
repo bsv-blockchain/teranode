@@ -751,7 +751,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid height: %d", height))
 	}
 
-	block.Height = request.Height
+	block.Height = height
 
 	// GOKHAN: ERROR IS RETURNED FROM HERE: failed block validation BlockFound
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)

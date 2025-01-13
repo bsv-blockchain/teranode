@@ -48,7 +48,7 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	coinbaseValueBlock := mc0.CoinbaseValue
 	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
-	_, errMineBlock := helper.MineBlockWithCandidate(ctx, testEnv.Nodes[0].BlockassemblyClient, mc0, logger)
+	_, errMineBlock := helper.MineBlockWithCandidate(ctx, testEnv.Nodes[0].Settings, testEnv.Nodes[0].BlockassemblyClient, mc0, logger)
 	if errMineBlock != nil {
 		t.Errorf("Failed to mine block: %v", errMineBlock)
 	}

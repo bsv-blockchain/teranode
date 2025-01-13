@@ -1223,9 +1223,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 	var calculatedMerkleRootHash *chainhash.Hash
 
-	if len(hashes) == 1 { //nolint:gocritic
+	switch {
+	case len(hashes) == 1:
 		calculatedMerkleRootHash = &hashes[0]
-	} else if len(hashes) > 0 {
+	case len(hashes) > 0:
 		// Create a new subtree with the hashes of the subtrees
 		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
 		if err != nil {
@@ -1245,7 +1246,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] error creating calculated merkle root hash", b.Hash().String(), err)
 		}
-	} else {
+	default:
 		calculatedMerkleRootHash = b.CoinbaseTx.TxIDChainHash()
 	}
 

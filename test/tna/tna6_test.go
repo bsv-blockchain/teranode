@@ -79,7 +79,7 @@ func (suite *TNA6TestSuite) TestAcceptanceNextBlock() {
 	bc := testEnv.Nodes[0].BlockchainClient
 
 	// Mine a block
-	blockHash, err := helper.MineBlock(ctx, ba, logger)
+	blockHash, err := helper.MineBlock(ctx, testEnv.Nodes[0].Settings, ba, logger)
 	require.NoError(t, err, "Failed to mine block")
 	require.NotNil(t, blockHash, "Block hash should not be nil")
 

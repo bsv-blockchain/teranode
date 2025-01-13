@@ -53,7 +53,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.51
-	github.com/ordishs/gocore v1.0.75
+	github.com/ordishs/gocore v1.0.76
 	github.com/prometheus/client_golang v1.20.2
 	github.com/quic-go/quic-go v0.45.2
 	github.com/rs/zerolog v1.32.0
@@ -74,7 +74,7 @@ require (
 	golang.org/x/crypto v0.26.0
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
 	golang.org/x/sync v0.8.0
-	golang.org/x/sys v0.25.0
+	golang.org/x/sys v0.29.0
 	golang.org/x/term v0.23.0
 	golang.org/x/text v0.17.0 // indirect
 	golang.org/x/time v0.6.0

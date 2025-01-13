@@ -101,6 +101,29 @@ func TestAerospike(t *testing.T) {
 		assert.False(t, value.Bins["isCoinbase"].(bool))
 	})
 
+	t.Run("aerospike store conflicting", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+
+		_, err = db.Create(context.Background(), tx, 0, utxo.WithConflicting(true))
+		require.NoError(t, err)
+
+		var value *aerospike.Record
+		// raw aerospike get
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
+		require.NoError(t, err)
+		require.Equal(t, uint32(1), value.Generation)
+		assert.Equal(t, uint64(215), uint64(value.Bins["fee"].(int)))
+		assert.Equal(t, uint64(328), uint64(value.Bins["sizeInBytes"].(int)))
+		assert.Len(t, value.Bins["inputs"], 1)
+		binParentTxHash := chainhash.Hash(value.Bins["inputs"].([]interface{})[0].([]byte)[0:32])
+		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
+		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
+		assert.True(t, value.Bins["conflicting"].(bool))
+
+		// check ttl is set
+		require.NotEqual(t, uint32(0), value.Expiration)
+	})
+
 	t.Run("aerospike store coinbase", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -773,7 +796,7 @@ func TestCoinbase(t *testing.T) {
 //	require.NoError(t, err)
 //	txCopy := txMeta.Tx
 //	assert.Equal(t, bigTx.TxIDChainHash().String(), txCopy.TxIDChainHash().String())
-//}
+// }
 
 // func TestMultiUTXORecords(t *testing.T) {
 //	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
@@ -890,7 +913,7 @@ func TestCoinbase(t *testing.T) {
 //	nrRecords, ok = resp.Bins["nrRecords"].(int)
 //	require.True(t, ok)
 //	assert.Equal(t, 2, nrRecords)
-//}
+// }
 
 func TestIncrementNrRecords(t *testing.T) {
 	client, db, _, deferFn := initAerospike(t)
@@ -1113,7 +1136,7 @@ func TestStoreDecorate(t *testing.T) {
 //	require.NoError(t, err)
 //	assert.NotNil(t, previousOutput.LockingScript)
 //	// t.Log(previousOutput)
-//}
+// }
 
 func TestSmokeTests(t *testing.T) {
 	_, db, ctx, deferFn := initAerospike(t)
@@ -1152,6 +1175,13 @@ func TestSmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.ReAssign(t, db)
+	})
+
+	t.Run("aerospike conflicting", func(t *testing.T) {
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Conflicting(t, db)
 	})
 }
 

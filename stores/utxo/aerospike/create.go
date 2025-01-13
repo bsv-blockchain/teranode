@@ -99,6 +99,9 @@ type BatchStoreItem struct {
 	// LockTime is the transaction's lock time
 	lockTime uint32
 
+	// Conflicting indicates if this transaction is conflicting with another transaction
+	conflicting bool
+
 	// Done is used to signal completion and return errors
 	done chan error
 }
@@ -135,6 +138,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, errors.NewProcessingError("failed to get tx meta data", err)
 	}
 
+	txMeta.Conflicting = createOptions.Conflicting
+
 	errCh := make(chan error)
 	defer close(errCh)
 
@@ -145,7 +150,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txHash = tx.TxIDChainHash()
 	}
 
-	isCoinbase := tx.IsCoinbase()
+	isCoinbase := txMeta.IsCoinbase
 
 	if createOptions.IsCoinbase != nil {
 		isCoinbase = *createOptions.IsCoinbase
@@ -158,6 +163,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		blockHeight: blockHeight,
 		lockTime:    tx.LockTime,
 		blockIDs:    createOptions.BlockIDs,
+		conflicting: createOptions.Conflicting,
 		done:        errCh,
 	}
 
@@ -222,6 +228,9 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
+	batchWritePolicyWithTTL := util.GetAerospikeBatchWritePolicy(s.settings, 0, s.expiration)
+	batchWritePolicyWithTTL.RecordExistsAction = aerospike.CREATE_ONLY
+
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
 	if gocore.Config().GetBool("utxostore_verbose_debug", false) {
@@ -270,7 +279,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
+		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -378,8 +387,12 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			putOps[i] = aerospike.PutOp(bin)
 		}
 
-		record := aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
-		batchRecords[idx] = record
+		if bItem.conflicting {
+			// set the TTL on conflicting records
+			batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicyWithTTL, key, putOps...)
+		} else {
+			batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
+		}
 	}
 
 	batchID := s.batchID.Add(1)
@@ -423,7 +436,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
+					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -522,7 +535,7 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 //   - Array of bin batches
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
-func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, bool, error) {
+func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool, isConflicting bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -623,6 +636,10 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		// counts as the 1st confirmation, so we need to wait for 99 more blocks to be mined before the coinbase outputs can be spent.
 		// So, for instance an output from the coinbase transaction in block 9 can be spent in block 109.
 		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
+	}
+
+	if isConflicting {
+		commonBins = append(commonBins, aerospike.NewBin("conflicting", true))
 	}
 
 	// Split utxos into batches
