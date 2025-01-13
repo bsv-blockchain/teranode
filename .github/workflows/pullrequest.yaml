@@ -147,7 +147,7 @@ jobs:
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v4.2.1
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.UBSV_OLD_SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarqube.ubsv.dev
 
   # Get version tag
