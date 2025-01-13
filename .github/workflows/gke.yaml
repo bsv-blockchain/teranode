@@ -148,7 +148,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'long_tests.yaml',
-              ref: '${{ github.sha }}',
+              ref: '${{ github.ref_name }}',
               inputs: {
                 run_id: '${{ github.run_id }}-${{ github.sha }}'
               }
