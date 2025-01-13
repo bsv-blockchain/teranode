@@ -147,7 +147,7 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'long_tests_by_category.yaml',
+              workflow_id: 'long_tests.yaml',
               ref: '${{ github.sha }}',
               inputs: {
                 run_id: '${{ github.run_id }}-${{ github.sha }}'
