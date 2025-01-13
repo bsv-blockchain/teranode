@@ -34,7 +34,6 @@ jobs:
 
       - name: Run Tests
         run: |
-          make install-tools
           cd ${{ matrix.test_config.test_dir }} && \
           go test -v -tags ${{ matrix.test_config.test_tags }} ./...
         env:
