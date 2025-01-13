@@ -20,8 +20,8 @@ jobs:
             test_tags: "test_model"
           - test_dir: "test/stores"
             test_tags: "test_stores"
-          - test_dir: "test/utils"
-            test_tags: "test_utils"
+          - test_dir: "test/util"
+            test_tags: "test_util"
 
     steps:
       - name: Checkout code
@@ -35,9 +35,9 @@ jobs:
       - name: Run Tests
         run: |
           cd ${{ matrix.test_config.test_dir }} && \
-          go test -v -tags ${{ matrix.test_config.test_tags }} ./...
+          go test -v -count 1 -tags ${{ matrix.test_config.test_tags }} ./...
         env:
           test_dir: ${{ matrix.test_config.test_dir }}
           test_tags: ${{ matrix.test_config.test_tags }}
           settings_context: ${{ matrix.test_config.settings_context || '' }}
-        continue-on-error: true
+        continue-on-error: false
