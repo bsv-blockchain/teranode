@@ -366,6 +366,10 @@ out:
 // savePeers saves all the known addresses to a file so they can be read back
 // in at next run.
 func (a *AddrManager) savePeers() {
+	if a.peersFile == "" {
+		return
+	}
+
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 
@@ -428,6 +432,10 @@ func (a *AddrManager) savePeers() {
 // loadPeers loads the known address from the saved file.  If empty, missing, or
 // malformed file, just don't load anything and start fresh
 func (a *AddrManager) loadPeers() {
+	if a.peersFile == "" {
+		return
+	}
+
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 
@@ -1154,9 +1162,15 @@ func New(logger ulogger.Logger, dataDir string, lookupFunc func(string) ([]net.I
 	// #nosec G404
 	r := rand.New(randSource)
 
+	peersFile := ""
+	// if we do not have a data directory, do not try to save peers.
+	if dataDir != "" {
+		peersFile = filepath.Join(dataDir, "peers.json")
+	}
+
 	am := AddrManager{
 		logger:         logger,
-		peersFile:      filepath.Join(dataDir, "peers.json"),
+		peersFile:      peersFile,
 		lookupFunc:     lookupFunc,
 		rand:           r,
 		quit:           make(chan struct{}),

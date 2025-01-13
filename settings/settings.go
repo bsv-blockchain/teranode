@@ -362,6 +362,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			AllowBlockPriority:         getBool("legacy_allowBlockPriority", false),
 			LimitedBlockValidation:     getBool("legacy_limitedBlockValidation", false),
 			GRPCListenAddress:          getString("legacy_grpcListenAddress", ""),
+			SavePeers:                  getBool("legacy_savePeers", false), // by default we do not save the peers
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:        getString("ipv6_addresses", "", alternativeContext...),

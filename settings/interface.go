@@ -364,6 +364,7 @@ type LegacySettings struct {
 	AllowBlockPriority         bool
 	LimitedBlockValidation     bool
 	GRPCListenAddress          string
+	SavePeers                  bool
 }
 
 type PropagationSettings struct {

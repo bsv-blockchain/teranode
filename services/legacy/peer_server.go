@@ -2390,7 +2390,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	services &^= wire.SFNodeNetwork
 	services |= wire.SFNodeNetworkLimited
 
-	amgr := addrmgr.New(logger, cfg.DataDir, bsvdLookup)
+	peersDir := cfg.DataDir
+	if !tSettings.Legacy.SavePeers {
+		peersDir = ""
+	}
+
+	amgr := addrmgr.New(logger, peersDir, bsvdLookup)
 
 	var listeners []net.Listener
 	var nat NAT
