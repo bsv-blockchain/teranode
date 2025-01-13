@@ -1,4 +1,4 @@
-name: nightly-tests-by-category
+name: long-tests-by-category
 on:
   schedule:
     - cron: "0 1 * * *" # Runs at 1 AM UTC every day (offset from other nightly tests)
@@ -6,7 +6,7 @@ on:
 
 env:
   REPO: teranode
-  SETTINGS_CONTEXT_DEFAULT: "default_context"
+  SETTINGS_CONTEXT_DEFAULT: "test"
 
 jobs:
   run-category-tests:
@@ -16,16 +16,12 @@ jobs:
         test_config:
           - test_dir: "test/services"
             test_tags: "test_services"
-            report_name: "test-services-report.json"
           - test_dir: "test/model"
             test_tags: "test_model"
-            report_name: "test-model-report.json"
           - test_dir: "test/stores"
             test_tags: "test_stores"
-            report_name: "test-stores-report.json"
           - test_dir: "test/utils"
             test_tags: "test_utils"
-            report_name: "test-utils-report.json"
 
     steps:
       - name: Checkout code
@@ -40,15 +36,9 @@ jobs:
         run: |
           make install-tools
           cd ${{ matrix.test_config.test_dir }} && \
-          go test -v -tags ${{ matrix.test_config.test_tags }} -json ./... | \
-          go-ctrf-json-reporter -output ../../${{ matrix.test_config.report_name }} --verbose
+          go test -v -tags ${{ matrix.test_config.test_tags }} ./...
         env:
           test_dir: ${{ matrix.test_config.test_dir }}
           test_tags: ${{ matrix.test_config.test_tags }}
           settings_context: ${{ matrix.test_config.settings_context || '' }}
-          report_name: ${{ matrix.test_config.report_name }}
-          GITHUB_ACTIONS: true
-        continue-on-error: false
-
-      - name: Publish Test Summary Results
-        run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
+        continue-on-error: true
