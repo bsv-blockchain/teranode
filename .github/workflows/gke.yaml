@@ -132,12 +132,12 @@ jobs:
 
   trigger-long-tests:
     runs-on: ubuntu-latest
+    if: always()
     needs:
       - build_amd64
       - build_arm64
       - create_manifest
       - deploy_to_operator
-    if: ${{ !contains(needs.*.result, 'failure') }}
     steps:
       - name: Trigger Long Tests
         uses: actions/github-script@v7
