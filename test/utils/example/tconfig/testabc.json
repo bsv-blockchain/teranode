@@ -1,0 +1,18 @@
+{
+  "suite": {
+    "testid": "ValueFromJSONFILE",
+    "name": "ValueFromJSONFILE",
+    "composes": [
+      "Value1FromJSONFILE",
+      "Value2FromJSONFILE"
+    ],
+    "loglevel": "ValueFromJSONFILE",
+    "tconfigfile": "ValueFromJSONFILE"
+  },
+  "teranode": {
+    "contexts": [
+      "Value3FromJSONFILE",
+      "Value4FromJSONFILE"
+    ]
+  }
+}

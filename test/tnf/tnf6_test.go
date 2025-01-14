@@ -12,6 +12,7 @@ import (
 	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -21,11 +22,16 @@ type TNFTestSuite struct {
 }
 
 func (suite *TNFTestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnf6",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnf6.stage1",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnf6",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tnf6",
+				"docker.teranode2.test.tnf6.stage1",
+				"docker.teranode3.test.tnf6",
+			},
+		},
+	)
+
 }
 
 const (
@@ -49,7 +55,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	ctx := cluster.Context
 	t := suite.T()
 	logger := cluster.Logger
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 
 	defer func() {
 		if r := recover(); r != nil {

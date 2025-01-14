@@ -17,7 +17,7 @@ type TECTestSuite struct {
 func (suite *TECTestSuite) TestShutDownPropagationService() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
@@ -61,7 +61,7 @@ func (suite *TECTestSuite) TestShutDownBlockAssembly() {
 
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.teranode2.test.resilience.tc2"
@@ -90,7 +90,7 @@ func (suite *TECTestSuite) TestShutDownBlockAssembly() {
 func (suite *TECTestSuite) TestShutDownBlockValidation() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
@@ -128,7 +128,7 @@ func (suite *TECTestSuite) TestShutDownBlockValidation() {
 func (suite *TECTestSuite) TestShutDownBlockchain() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
@@ -165,7 +165,7 @@ func (suite *TECTestSuite) TestShutDownBlockchain() {
 func (suite *TECTestSuite) TestShutDownP2P() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
@@ -203,7 +203,7 @@ func (suite *TECTestSuite) TestShutDownP2P() {
 func (suite *TECTestSuite) TestShutDownAsset() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	ctx := testenv.Context
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 

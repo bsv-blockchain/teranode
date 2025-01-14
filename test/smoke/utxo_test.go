@@ -752,7 +752,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	t := suite.T()
 	framework := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := framework.Logger
 	ctx := framework.Context
 

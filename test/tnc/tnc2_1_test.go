@@ -29,6 +29,7 @@ import (
 	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -40,20 +41,21 @@ type TNC2_1TestSuite struct {
 }
 
 func (suite *TNC2_1TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tnc2_1Test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tnc2_1Test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tnc2_1Test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tnc2_1Test",
+				"docker.teranode2.test.tnc2_1Test",
+				"docker.teranode3.test.tnc2_1Test",
+			},
+		},
+	)
 }
 
 func (suite *TNC2_1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
-
-// func (suite *TNC2_1TestSuite) TearDownTest() {
-// }
 
 // TestUniqueCandidateIdentifiers verifies that each mining candidate has a unique identifier
 func (suite *TNC2_1TestSuite) TestUniqueCandidateIdentifiers() {

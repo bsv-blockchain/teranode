@@ -26,7 +26,7 @@ func (suite *TNJDoubleSpendTestSuite) TearDownTest() {
 func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := testEnv.Logger
 	ctx := testEnv.Context
 
@@ -101,7 +101,7 @@ TestDoubleSpendMultipleUtxos tests double spending of multiple UTXOs across node
 func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := testEnv.Logger
 	ctx := testEnv.Context
 

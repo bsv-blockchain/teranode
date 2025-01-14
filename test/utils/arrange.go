@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
@@ -20,20 +21,7 @@ const stringTrue = "true"
 type TeranodeTestSuite struct {
 	suite.Suite
 	TeranodeTestEnv *TeranodeTestEnv
-	ComposeFiles    []string
-	SettingsMap     map[string]string
-}
-
-func (suite *TeranodeTestSuite) DefaultComposeFiles() []string {
-	return []string{"../../docker-compose.e2etest.yml"}
-}
-
-func (suite *TeranodeTestSuite) DefaultSettingsMap() map[string]string {
-	return map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
-	}
+	TConfig         tconfig.TConfig
 }
 
 // const (
@@ -43,7 +31,8 @@ func (suite *TeranodeTestSuite) DefaultSettingsMap() map[string]string {
 // )
 
 func (suite *TeranodeTestSuite) SetupTest() {
-	suite.SetupTestEnv(suite.DefaultSettingsMap(), suite.DefaultComposeFiles(), false)
+	suite.TConfig = tconfig.LoadTConfig(nil)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 func (suite *TeranodeTestSuite) TearDownTest() {
@@ -68,9 +57,6 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
 	var err error
 
-	suite.ComposeFiles = composeFiles
-	suite.SettingsMap = settingsMap
-
 	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
 	suite.T().Log("Removing data directory")
@@ -89,7 +75,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 	suite.T().Log("Setting up TeranodeTestEnv")
 
-	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.ComposeFiles, suite.SettingsMap)
+	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.TConfig.Suite.Composes, suite.TConfig.Teranode.SettingsMap())
 	if err != nil {
 		if suite.T() != nil && suite.TeranodeTestEnv != nil {
 			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)

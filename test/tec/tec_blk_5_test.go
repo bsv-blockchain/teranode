@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	helpler "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -19,20 +20,26 @@ type TECBlk5TestSuite struct {
 }
 
 func (suite *TECBlk5TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tec5",
-		"SETTINGS_CONTEXT_2": "docker.teranode1.test.tec5",
-		"SETTINGS_CONTEXT_3": "docker.teranode1.test.tec5",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeySuiteComposes: []string{
+				"../../docker-compose.yml",
+				"../../docker-compose.aerospike.override.yml",
+				"../../docker-compose.e2etest.yml",
+				"../docker-compose.utxo.override.yml",
+			},
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tec5",
+				"docker.teranode1.test.tec5",
+				"docker.teranode1.test.tec5",
+			},
+		},
+	)
 }
 
 func (suite *TECBlk5TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(
-		suite.SettingsMap,
-		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.utxo.override.yml"},
-		false,
-	)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 func (suite *TECBlk5TestSuite) TestP2PRecoverability() {

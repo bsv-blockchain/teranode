@@ -16,6 +16,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,16 +28,20 @@ type TNE1_1TestSuite struct {
 }
 
 func (suite *TNE1_1TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test",
+				"docker.teranode2.test",
+				"docker.teranode3.test",
+			},
+		},
+	)
 }
 
 func (suite *TNE1_1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 // func (suite *TNE1_1TestSuite) TearDownTest() {
@@ -45,7 +50,7 @@ func (suite *TNE1_1TestSuite) SetupTest() {
 func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified() {
 	t := suite.T()
 	framework := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient

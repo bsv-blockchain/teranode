@@ -182,7 +182,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 func (suite *FsmTestSuite) TestNodeCatchUpStateSingleNode_WithP2PSwitch() {
 	t := suite.T()
 	framework := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
@@ -372,7 +372,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateSingleNode_WithP2PSwitch() {
 func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 	t := suite.T()
 	framework := suite.TeranodeTestEnv
-	settingsMap := suite.SettingsMap
+	settingsMap := suite.TConfig.Teranode.SettingsMap()
 	logger := framework.Logger
 	ctx := framework.Context
 

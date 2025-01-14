@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -19,20 +20,26 @@ type TECBlk6TestSuite struct {
 }
 
 func (suite *TECBlk6TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tec6",
-		"SETTINGS_CONTEXT_2": "docker.teranode1.test.tec6",
-		"SETTINGS_CONTEXT_3": "docker.teranode1.test.tec6",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeySuiteComposes: []string{
+				"../../docker-compose.yml",
+				"../../docker-compose.aerospike.override.yml",
+				"../../docker-compose.e2etest.yml",
+				"../docker-compose.utxo.override.yml",
+			},
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tec6",
+				"docker.teranode1.test.tec6",
+				"docker.teranode1.test.tec6",
+			},
+		},
+	)
 }
 
 func (suite *TECBlk6TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(
-		suite.SettingsMap,
-		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.utxo.override.yml"},
-		false,
-	)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverability() {
@@ -61,11 +68,7 @@ func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
 
 	fmt.Println("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
 
-	suite.SetupTestEnv(
-		suite.SettingsMap,
-		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.yml", "../docker-compose.asset.override.yml"},
-		false,
-	)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 
 	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {

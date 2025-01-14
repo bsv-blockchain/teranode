@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
@@ -21,16 +22,21 @@ type TNB2TestSuite struct {
 }
 
 func (suite *TNB2TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test",
+				"docker.teranode2.test",
+				"docker.teranode3.test",
+			},
+		},
+	)
+
 }
 
 func (suite *TNB2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 // func (suite *TNB2TestSuite) TearDownTest() {

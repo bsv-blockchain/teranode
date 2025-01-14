@@ -20,6 +20,7 @@ import (
 	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -28,16 +29,21 @@ type TNA2TestSuite struct {
 }
 
 func (suite *TNA2TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tna1Test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tna1Test",
+				"docker.teranode2.test.tna1Test",
+				"docker.teranode3.test.tna1Test",
+			},
+		},
+	)
+
 }
 
 func (suite *TNA2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {

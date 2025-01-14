@@ -1,0 +1,12 @@
+suite:
+    testid: ValueFromYAMLFILE
+    name: ValueFromYAMLFILE
+    composes:
+        - Value1FromYAMLFILE
+        - Value2FromYAMLFILE
+    loglevel: ValueFromYAMLFILE
+    tconfigfile: ValueFromYAMLFILE
+teranode:
+    contexts:
+        - Value3FromYAMLFILE
+        - Value4FromYAMLFILE

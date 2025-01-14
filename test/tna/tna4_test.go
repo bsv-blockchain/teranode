@@ -31,6 +31,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -44,17 +45,22 @@ type TNA4TestSuite struct {
 
 // InitSuite initializes the test suite with configuration settings for three test nodes.
 func (suite *TNA4TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.teranode1.test.tna1Test",
-		"SETTINGS_CONTEXT_2": "docker.teranode2.test.tna1Test",
-		"SETTINGS_CONTEXT_3": "docker.teranode3.test.tna1Test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tna1Test",
+				"docker.teranode2.test.tna1Test",
+				"docker.teranode3.test.tna1Test",
+			},
+		},
+	)
+
 }
 
 // SetupTest sets up the test environment with the initialized settings and default compose files.
 func (suite *TNA4TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.SettingsMap, suite.DefaultComposeFiles(), false)
+	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
 }
 
 // TestBlockBroadcast verifies that Teranode broadcasts blocks to all nodes after finding

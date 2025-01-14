@@ -8,6 +8,7 @@ import (
 	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -17,11 +18,15 @@ type TNJ4TestSuite struct {
 }
 
 func (suite *TNJ4TestSuite) InitSuite() {
-	suite.SettingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.teranode1.tnj4Test",
-		"SETTINGS_CONTEXT_2": "docker.ci.teranode2.tnj4Test",
-		"SETTINGS_CONTEXT_3": "docker.ci.teranode3.tnj4Test",
-	}
+	suite.TConfig = tconfig.LoadTConfig(
+		map[string]any{
+			tconfig.KeyTeranodeContexts: []string{
+				"docker.teranode1.test.tnj4Test",
+				"docker.teranode2.test.tnj4Test",
+				"docker.teranode3.test.tnj4Test",
+			},
+		},
+	)
 }
 
 func (suite *TNJ4TestSuite) TestBlockSubsidy() {
