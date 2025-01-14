@@ -1250,6 +1250,223 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 
+func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPCWithP2PK() {
+	tSettings := settings.NewSettings("dev.system.test")
+
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(tSettings.LogLevel))
+
+	ctx := context.Background()
+	t := suite.T()
+	url := "http://localhost:8090"
+
+	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Failed to create Blockchain client")
+
+	txDistributor, err := distributor.NewDistributor(ctx, logger, tSettings,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+	require.NoError(t, err, "Failed to create distributor client")
+
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
+	if err != nil {
+		t.Errorf("Failed to generate initial blocks: %v", err)
+	}
+
+	coinbaseClient, _ := coinbase.NewClient(ctx, logger, tSettings)
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
+	coinbasePrivateKey, _ := wif.DecodeWIF(coinbasePrivKey)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	var tx *bt.Tx
+
+	for attempts := 0; attempts < 5; attempts++ {
+		tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+		if err == nil {
+			break
+		}
+
+		t.Logf("Attempt %d: Failed to request funds: %v. Retrying in 1 second...", attempts+1, err)
+		time.Sleep(time.Second)
+
+		utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+		t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+	}
+
+	require.NoError(t, err, "Failed to request funds after 5 attempts")
+
+	t.Logf("Sending Faucet Transaction: %s\n", tx.TxIDChainHash())
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	require.NoError(t, err, "Failed to broadcast faucet tx")
+
+	t.Logf("Faucet Transaction sent: %s\n", tx.TxIDChainHash())
+
+	output := tx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	_ = newTx.FromUTXOs(utxo)
+	_ = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+	_ = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+
+	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+	height, _ := helper.GetBlockHeight(url)
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+
+	resp, err := helper.CallRPC(teranode1RPCEndpoint, "sendrawtransaction", []interface{}{txBytes})
+	require.NoError(t, err, "Failed to send new tx with rpc")
+	t.Logf("Transaction sent with RPC: %s\n", resp)
+
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(delay * time.Millisecond)
+	}
+
+	miningCandidateResp, err := helper.CallRPC(teranode1RPCEndpoint, "getminingcandidate", []interface{}{true})
+	t.Logf("Mining candidate response from rpc %v", miningCandidateResp)
+	require.NoError(t, err, "Failed to get mining candidate")
+
+	var miningCandidate helper.MiningCandidate
+
+	require.NoError(t, err, "Failed to marshal mining candidate")
+
+	err = json.Unmarshal([]byte(miningCandidateResp), &miningCandidate)
+	require.NoError(t, err, "Failed to unmarshal mining candidate")
+
+	result := miningCandidate.Result
+	mjson, err := json.Marshal(result)
+	t.Logf("Mining candidate json from RPC: %s", mjson)
+
+	require.NoError(t, err, "Failed to create chainhash from string")
+
+	// create a block header from the mining candidate
+	coinbase, err := bt.NewTxFromString(result.Coinbase)
+	require.NoError(t, err, "Failed to create coinbase tx")
+	blockHeader, err := model.NewBlockHeaderFromJSON(string(mjson), coinbase)
+	require.NoError(t, err, "Failed to create block header from json")
+
+	// print the block header
+	t.Logf("Block Header Merkle Root: %s", blockHeader.HashMerkleRoot.String())
+
+	var (
+		nonce       uint32
+		hash        *chainhash.Hash
+		headerValid bool
+		validHash   *chainhash.Hash
+	)
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeader.Nonce = nonce
+
+		headerValid, hash, err = blockHeader.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			validHash = hash
+
+			break
+		}
+	}
+
+	solution := map[string]interface{}{
+		"id":       result.ID,
+		"nonce":    nonce,
+		"time":     blockHeader.Timestamp,
+		"version":  blockHeader.Version,
+		"coinbase": hex.EncodeToString(coinbase.Bytes()),
+	}
+
+	submitSolnResp, err := helper.CallRPC(teranode1RPCEndpoint, "submitminingsolution", []interface{}{solution})
+	t.Logf("Submit solution response from rpc %v", submitSolnResp)
+	require.NoError(t, err, "Failed to submit mining solution")
+
+	var getBlockHash helper.GetBlockHashResponse
+
+	resp, err = helper.CallRPC(teranode1RPCEndpoint, "getbestblockhash", []interface{}{})
+
+	require.NoError(t, err, "Error getting best blockhash")
+
+	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
+	assert.Equal(t, getBlockHash.Result, validHash.String(), "Best block hash mismatch")
+
+	require.NoError(t, errJSON, "Error unmarshalling getblock response")
+
+	blockStoreURL := tSettings.Block.BlockStore
+
+	if blockStoreURL == nil {
+		t.Errorf("Error finding blockstore")
+	}
+
+	t.Logf("blockStoreURL: %s", blockStoreURL.String())
+
+	targetHeight := height + 1
+
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
+	if err != nil {
+		t.Errorf("Failed to generate blocks: %v", err)
+	}
+
+	err = helper.WaitForBlockHeight(url, 202, 60)
+	require.NoError(t, err)
+
+	t.Logf("Target height: %d", targetHeight)
+
+	block, err := blockchainClient.GetBlockByHeight(ctx, targetHeight)
+	require.NoError(t, err)
+
+	subtreeStore, err := blob.NewStore(logger, tSettings.SubtreeValidation.SubtreeStore, options.WithHashPrefix(2))
+	require.NoError(t, err)
+
+	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
+		return block.SubTreesFromBytes(subtreeHash[:])
+	}
+
+	time.Sleep(30 * time.Second)
+
+	subtree, err := block.GetSubtrees(ctx, logger, subtreeStore, fallbackGetFunc)
+	require.NoError(t, err)
+
+	blFound := false
+
+	for i := 0; i < len(subtree); i++ {
+		st := subtree[i]
+		for _, node := range st.Nodes {
+			t.Logf("node.Hash: %s", node.Hash.String())
+			t.Logf("tx.TxIDChainHash().String(): %s", tx.TxIDChainHash().String())
+
+			if node.Hash.String() == tx.TxIDChainHash().String() {
+				blFound = true
+				break
+			}
+		}
+	}
+
+	assert.True(t, blFound, "TX not found in the blockstore")
+}
+
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
 }
