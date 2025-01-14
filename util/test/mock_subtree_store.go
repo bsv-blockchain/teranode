@@ -79,6 +79,14 @@ func (l TestSubtreeStore) Del(_ context.Context, _ []byte, _ ...options.FileOpti
 	panic("not implemented")
 }
 
+func (l TestSubtreeStore) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	panic("not implemented")
+}
+
+func (l TestSubtreeStore) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	panic("not implemented")
+}
+
 func (l TestSubtreeStore) Close(_ context.Context) error {
 	return nil
 }

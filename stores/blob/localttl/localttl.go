@@ -21,6 +21,8 @@ type blobStore interface {
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
 	GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error)
 	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
+	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	Close(ctx context.Context) error
 }
 
@@ -96,7 +98,14 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 			return err
 		}
 
-		return l.blobStore.SetFromReader(ctx, key, reader, opts...)
+		defer reader.Close()
+
+		err = l.blobStore.SetFromReader(ctx, key, reader, opts...)
+		if err == nil {
+			err = l.ttlStore.Del(ctx, key, opts...)
+		}
+
+		return err
 	}
 
 	// we are setting a ttl, if it's already in the ttl store, reset the ttl, if it is not in the ttl store, move it there
@@ -111,12 +120,13 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 		return err
 	}
 
+	defer reader.Close()
+
 	if err = l.ttlStore.SetFromReader(ctx, key, reader, options.WithTTL(duration)); err != nil {
 		return err
 	}
 
-	// delete from the blob store ?
-	return l.blobStore.Del(ctx, key, opts...)
+	return nil
 }
 
 func (l *LocalTTL) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
@@ -178,4 +188,12 @@ func (l *LocalTTL) Exists(ctx context.Context, key []byte, opts ...options.FileO
 func (l *LocalTTL) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
 	_ = l.ttlStore.Del(ctx, key, opts...)
 	return l.blobStore.Del(ctx, key, opts...)
+}
+
+func (l *LocalTTL) GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return l.blobStore.GetHeader(ctx, key, opts...)
+}
+
+func (l *LocalTTL) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return l.blobStore.GetFooterMetaData(ctx, key, opts...)
 }

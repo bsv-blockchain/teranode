@@ -237,3 +237,11 @@ func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.FileOpt
 func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
 	return errors.NewStorageError("del is not supported in a batcher store")
 }
+
+func (b *Batcher) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("get header is not supported in a batcher store")
+}
+
+func (b *Batcher) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("get meta data is not supported in a batcher store")
+}

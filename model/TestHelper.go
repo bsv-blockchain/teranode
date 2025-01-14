@@ -489,32 +489,42 @@ func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, opts .
 	return subtreeFile, nil
 }
 
+const notImplemented = "not implemented"
+
 func (l TestLocalSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
-	panic("not implemented")
+	panic(notImplemented)
+}
+
+func (l TestLocalSubtreeStore) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (l TestLocalSubtreeStore) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	panic(notImplemented)
 }
 
 func (l TestLocalSubtreeStore) Close(_ context.Context) error {
-	return nil
+	panic(notImplemented)
 }
 
 type BlobStoreStub struct {
@@ -586,5 +596,13 @@ func (n *BlobStoreStub) Del(_ context.Context, _ []byte, opts ...options.FileOpt
 }
 
 func (n *BlobStoreStub) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (n *BlobStoreStub) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (n *BlobStoreStub) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
 	return nil, nil
 }

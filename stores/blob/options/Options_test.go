@@ -1,8 +1,10 @@
 package options
 
 import (
+	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,4 +135,141 @@ func TestOptionsConstructFilename(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestNewFileOptions(t *testing.T) {
+	t.Run("Empty options", func(t *testing.T) {
+		opts := NewFileOptions()
+		assert.NotNil(t, opts)
+		assert.Nil(t, opts.TTL)
+		assert.Empty(t, opts.Filename)
+		assert.Empty(t, opts.Extension)
+		assert.Empty(t, opts.SubDirectory)
+		assert.False(t, opts.AllowOverwrite)
+	})
+
+	t.Run("With multiple options", func(t *testing.T) {
+		opts := NewFileOptions(
+			WithFilename("test.txt"),
+			WithFileExtension("meta"),
+			WithSubDirectory("subdir"),
+		)
+		assert.Equal(t, "test.txt", opts.Filename)
+		assert.Equal(t, "meta", opts.Extension)
+		assert.Equal(t, "subdir", opts.SubDirectory)
+	})
+}
+
+func TestTTLOptions(t *testing.T) {
+	duration := 5 * time.Minute
+
+	t.Run("WithDefaultTTL", func(t *testing.T) {
+		opts := NewStoreOptions(WithDefaultTTL(duration))
+		assert.Equal(t, duration, *opts.TTL)
+	})
+
+	t.Run("WithTTL", func(t *testing.T) {
+		opts := NewFileOptions(WithTTL(duration))
+		assert.Equal(t, duration, *opts.TTL)
+	})
+}
+
+func TestDirectoryOptions(t *testing.T) {
+	t.Run("WithSubDirectory", func(t *testing.T) {
+		opts := NewFileOptions(WithSubDirectory("custom/path"))
+		assert.Equal(t, "custom/path", opts.SubDirectory)
+	})
+}
+
+func TestAllowOverwriteOption(t *testing.T) {
+	t.Run("WithAllowOverwrite", func(t *testing.T) {
+		opts := NewFileOptions(WithAllowOverwrite(true))
+		assert.True(t, opts.AllowOverwrite)
+	})
+}
+
+func TestHeaderFooterOptions(t *testing.T) {
+	t.Run("WithHeader", func(t *testing.T) {
+		header := []byte("header-data")
+		opts := NewStoreOptions(WithHeader(header))
+		assert.Equal(t, header, opts.Header)
+	})
+
+	t.Run("WithFooter", func(t *testing.T) {
+		footer := &Footer{} // Add appropriate footer data if needed
+		opts := NewStoreOptions(WithFooter(footer))
+		assert.Equal(t, footer, opts.Footer)
+	})
+}
+
+func TestFileOptionsToQuery(t *testing.T) {
+	t.Run("Empty options", func(t *testing.T) {
+		query := FileOptionsToQuery()
+		assert.Empty(t, query)
+	})
+
+	t.Run("All options", func(t *testing.T) {
+		ttl := 5 * time.Minute
+		opts := []FileOption{
+			WithTTL(ttl),
+			WithFilename("test.txt"),
+			WithFileExtension("meta"),
+			WithAllowOverwrite(true),
+		}
+
+		query := FileOptionsToQuery(opts...)
+
+		assert.Equal(t, "300000000000", query.Get("ttl"))
+		assert.Equal(t, "test.txt", query.Get("filename"))
+		assert.Equal(t, "meta", query.Get("extension"))
+		assert.Equal(t, "true", query.Get("allowOverwrite"))
+	})
+}
+
+func TestQueryToFileOptions(t *testing.T) {
+	t.Run("Empty query", func(t *testing.T) {
+		query := url.Values{}
+		opts := QueryToFileOptions(query)
+		assert.Empty(t, opts)
+	})
+
+	t.Run("All query parameters", func(t *testing.T) {
+		query := url.Values{
+			"ttl":            []string{"300"},
+			"filename":       []string{"test.txt"},
+			"extension":      []string{"meta"},
+			"allowOverwrite": []string{"true"},
+		}
+
+		opts := QueryToFileOptions(query)
+		options := NewFileOptions(opts...)
+
+		expectedTTL := 300 * time.Second
+		assert.Equal(t, expectedTTL, *options.TTL)
+		assert.Equal(t, "test.txt", options.Filename)
+		assert.Equal(t, "meta", options.Extension)
+		assert.True(t, options.AllowOverwrite)
+	})
+
+	t.Run("Invalid TTL", func(t *testing.T) {
+		query := url.Values{
+			"ttl": []string{"invalid"},
+		}
+
+		opts := QueryToFileOptions(query)
+		options := NewFileOptions(opts...)
+		assert.Nil(t, options.TTL)
+	})
+}
+
+func TestWithSHA256Checksum(t *testing.T) {
+	t.Run("Default value", func(t *testing.T) {
+		opts := NewStoreOptions()
+		assert.False(t, opts.GenerateSHA256)
+	})
+
+	t.Run("With SHA256 enabled", func(t *testing.T) {
+		opts := NewStoreOptions(WithSHA256Checksum())
+		assert.True(t, opts.GenerateSHA256)
+	})
 }

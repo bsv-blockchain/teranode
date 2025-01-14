@@ -1,7 +1,10 @@
 package lustre
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/blob/helper"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/blob/s3"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -23,6 +27,7 @@ type s3Store interface {
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
 	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 }
 
 type Lustre struct {
@@ -44,6 +49,25 @@ type Lustre struct {
 func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, opts ...options.StoreOption) (*Lustre, error) {
 	logger = logger.New("lustre")
 
+	// Add header/footer handling
+	if header := s3Url.Query().Get("header"); header != "" {
+		headerBytes, err := base64.StdEncoding.DecodeString(header)
+		if err != nil {
+			headerBytes = []byte(header)
+		}
+
+		opts = append(opts, options.WithHeader(headerBytes))
+	}
+
+	if eofMarker := s3Url.Query().Get("eofmarker"); eofMarker != "" {
+		eofMarkerBytes, err := hex.DecodeString(eofMarker)
+		if err != nil {
+			eofMarkerBytes = []byte(eofMarker)
+		}
+
+		opts = append(opts, options.WithFooter(options.NewFooter(len(eofMarkerBytes), eofMarkerBytes, nil)))
+	}
+
 	var (
 		err      error
 		s3Client s3Store
@@ -52,7 +76,7 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 	logger.Infof("Creating lustre store s3 Url: %s, dir: %s, persistDir: %s", s3Url, dir, persistDir)
 
 	if s3Url != nil && s3Url.Host != "" && s3Url.Path != "" {
-		s3Client, err = s3.New(logger, s3Url)
+		s3Client, err = s3.New(logger, s3Url, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("[Lustre] failed to create s3 client", err)
 		}
@@ -123,28 +147,29 @@ func checkDirectoryPermissions(path string) error {
 	// Check if directory exists
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("failed to stat directory: %w", err)
+		return errors.NewStorageError("[Lustre] failed to stat directory", err)
 	}
+
 	if !info.IsDir() {
-		return fmt.Errorf("path is not a directory")
+		return errors.NewStorageError("[Lustre] path is not a directory", nil)
 	}
 
 	// Check read, write, and delete permissions with a single file operation
 	testFile := filepath.Join(path, ".lustre_test_rwx")
 
 	// Check write permission
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		return fmt.Errorf("failed to write test file: %w", err)
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil { // nolint:gosec
+		return errors.NewStorageError("[Lustre] failed to write test file", err)
 	}
 
 	// Check read permission
 	if _, err := os.ReadFile(testFile); err != nil {
-		return fmt.Errorf("failed to read test file: %w", err)
+		return errors.NewStorageError("[Lustre] failed to read test file", err)
 	}
 
 	// Check delete permission
 	if err := os.Remove(testFile); err != nil {
-		return fmt.Errorf("failed to delete test file: %w", err)
+		return errors.NewStorageError("[Lustre] failed to delete test file", err)
 	}
 
 	return nil
@@ -159,10 +184,11 @@ func checkS3Connection(ctx context.Context, s3Client s3Store) error {
 	// This should return false without an error if the connection is working
 	exists, err := s3Client.Exists(ctx, []byte("lustre_health_check_nonexistent_key"))
 	if err != nil {
-		return fmt.Errorf("failed to check S3 connection: %w", err)
+		return errors.NewStorageError("[Lustre] failed to check S3 connection", err)
 	}
+
 	if exists {
-		return fmt.Errorf("unexpected result from S3 connection check")
+		return errors.NewStorageError("[Lustre] unexpected result from S3 connection check", nil)
 	}
 
 	return nil
@@ -199,8 +225,27 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	}
 	defer f.Close()
 
+	// Write header if present
+	if merged.Header != nil {
+		if _, err = f.Write(merged.Header); err != nil {
+			return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to write header", filename, err)
+		}
+	}
+
 	if _, err := io.Copy(f, reader); err != nil {
 		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to write data to file", filename, err)
+	}
+
+	// Write footer if present
+	if merged.Footer != nil {
+		footer, err := merged.Footer.GetFooter()
+		if err != nil {
+			return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to get footer", filename, err)
+		}
+
+		if _, err = f.Write(footer); err != nil {
+			return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to write footer", filename, err)
+		}
 	}
 
 	if err := os.Rename(tmpFilename, filename); err != nil {
@@ -228,13 +273,29 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
+	// Prepare the full content with header and footer
+	var content []byte
+	if merged.Header != nil {
+		content = append(merged.Header, content...)
+	}
+
+	content = append(content, value...)
+
+	if merged.Footer != nil {
+		footer, err := merged.Footer.GetFooter()
+		if err != nil {
+			return errors.NewStorageError("[Lustre][Set] [%s] failed to get footer", filename, err)
+		}
+
+		content = append(content, footer...)
+	}
+
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err := os.WriteFile(tmpFilename, value, 0644); err != nil {
+	if err := os.WriteFile(tmpFilename, content, 0644); err != nil {
 		return errors.NewStorageError("[Lustre][Set] [%s] failed to write data to file", filename, err)
 	}
 
-	// rename the file to the final name
 	if err := os.Rename(tmpFilename, filename); err != nil {
 		return errors.NewStorageError("[Lustre][Set] [%s] failed to rename file from tmp", filename, err)
 	}
@@ -287,14 +348,15 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 		return nil
 	}
 
+	// We have a TTL set, so we need to check if the file exists in the ttl dir
 	_, err = os.Stat(filename)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.NewStorageError("[Lustre] [%s] unable to stat file", persistedFilename, err)
+		return errors.NewStorageError("[Lustre] [%s] unable to stat file", filename, err)
 	}
 
 	// the file is already exists in the main dir, remove it from the persist dir
 	if err == nil {
-		return os.Remove(filename)
+		return os.Remove(persistedFilename)
 	}
 
 	// the filename should be moved from the persist sub dir to the main dir
@@ -304,7 +366,7 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOption) (time.Duration, error) {
 	merged := options.MergeOptions(s.options, opts)
 
-	filename, err := merged.ConstructFilename(s.path, hash)
+	filename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
 	if err != nil {
 		return 0, err
 	}
@@ -313,7 +375,7 @@ func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			persistedFilename, err := merged.ConstructFilename(s.path, hash)
 			if err != nil {
 				return 0, err
 			}
@@ -327,64 +389,81 @@ func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 				return 0, errors.NewStorageError("[Lustre] failed to read data from persist file", err)
 			}
 
-			return 0, nil
+			// file exists in the ttl dir, so we can return the default TTL
+			return *s.options.TTL, nil
 		}
 
 		return 0, errors.NewStorageError("[Lustre] failed to read data from file", err)
 	}
 
-	// file exists in the ttl dir, so we can return the default TTL
-	return *s.options.TTL, nil
+	// file exists in the persist dir, so we can return 0
+	return 0, nil
 }
 
 func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	merged := options.MergeOptions(s.options, opts)
 
-	filename, err := merged.ConstructFilename(s.path, hash)
+	f, filename, err := s.openFile(s.path, hash, merged)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] failed to open file", filename, err)
+	}
+
+	if f == nil {
+		// check the persist sub dir
+		f, filename, err = s.openFile(filepath.Join(s.path, s.persistSubDir), hash, merged)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] failed to open file", filename, err)
+		}
+	}
+
+	if f == nil {
+		// s.logger.Warnf("[Lustre][GetIoReader] [%s] file not found in persist dir: %v", filename, err)
+		if s.s3Client == nil {
+			return nil, errors.ErrNotFound
+		}
+
+		// check s3
+		fileReader, err := s.s3Client.GetIoReader(ctx, hash, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open S3 file", filename, err)
+		}
+
+		return helper.ReaderWithHeaderAndFooterRemoved(fileReader, merged.Header, merged.Footer)
+	}
+
+	return helper.ReaderWithHeaderAndFooterRemoved(f, merged.Header, merged.Footer)
+}
+
+func (s *Lustre) readFile(basePath string, hash []byte, merged *options.Options) ([]byte, string, error) {
+	filename, err := merged.ConstructFilename(basePath, hash)
 	if err != nil {
-		return nil, err
+		return nil, filename, err
+	}
+
+	b, err := os.ReadFile(filename)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, filename, errors.NewStorageError("[Lustre][readFile] [%s] failed to read data from file", filename, err)
+	}
+
+	return b, filename, nil
+}
+
+func (s *Lustre) openFile(basePath string, hash []byte, merged *options.Options) (*os.File, string, error) {
+	filename, err := merged.ConstructFilename(basePath, hash)
+	if err != nil {
+		return nil, filename, err
 	}
 
 	f, err := os.Open(filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// check the persist sub dir
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return nil, err
-			}
-
-			f, err = os.Open(persistedFilename)
-			if err != nil {
-				// s.logger.Warnf("[Lustre][GetIoReader] [%s] file not found in subtree temp dir: %v", filename, err)
-				if errors.Is(err, os.ErrNotExist) {
-					if s.s3Client == nil {
-						return nil, errors.ErrNotFound
-					}
-
-					// check s3
-					fileReader, err := s.s3Client.GetIoReader(ctx, hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, errors.ErrNotFound
-						}
-
-						return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open S3 file", filename, err)
-					}
-
-					return fileReader, nil
-				}
-
-				return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open persist file", filename, err)
-			}
-
-			return f, nil
-		}
-
-		return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open file", filename, err)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, filename, errors.NewStorageError("[Lustre][openFile] [%s] failed to read data from file", filename, err)
 	}
 
-	return f, nil
+	return f, filename, nil
 }
 
 func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
@@ -392,53 +471,43 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOptio
 
 	merged := options.MergeOptions(s.options, opts)
 
-	filename, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	bytes, err := os.ReadFile(filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			s.logger.Warnf("[Lustre][Get] [%s] file not found in local dir: %v", filename, err)
-			// check the persist sub dir
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return nil, err
-			}
-
-			bytes, err = os.ReadFile(persistedFilename)
-			if err != nil {
-				s.logger.Warnf("[Lustre][Get] [%s] file not found in persist dir: %v", filename, err)
-
-				if errors.Is(err, os.ErrNotExist) {
-					if s.s3Client == nil {
-						return nil, errors.ErrNotFound
-					}
-
-					// check s3
-					bytes, err = s.s3Client.Get(ctx, hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, errors.ErrNotFound
-						}
-
-						return nil, errors.NewStorageError("[Lustre][Get] [%s] unable to open S3 file", filename, err)
-					}
-
-					return bytes, nil
-				}
-
-				return nil, errors.NewStorageError("[Lustre][Get] [%s] failed to read data from persist file", filename, err)
-			}
-
-			return bytes, nil
-		}
-
+	b, filename, err := s.readFile(s.path, hash, merged)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.NewStorageError("[Lustre][Get] [%s] failed to read data from file", filename, err)
 	}
 
-	return bytes, err
+	if b == nil {
+		// s.logger.Warnf("[Lustre][Get] [%s] file not found in local dir: %v", filename, err)
+		// check the persist sub dir
+		b, filename, err = s.readFile(filepath.Join(s.path, s.persistSubDir), hash, merged)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[Lustre][Get] [%s] failed to read data from persist file", filename, err)
+		}
+	}
+
+	if b == nil {
+		// s.logger.Warnf("[Lustre][Get] [%s] file not found in persist dir: %v", filename, err)
+		if s.s3Client == nil {
+			return nil, errors.ErrNotFound
+		}
+
+		// check s3
+		b, err = s.s3Client.Get(ctx, hash, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[Lustre][Get] [%s] unable to open S3 file", filename, err)
+		}
+	}
+
+	b, err = helper.BytesWithHeadAndFooterRemoved(b, merged.Header, merged.Footer)
+	if err != nil {
+		return nil, errors.NewStorageError("[File][Get] [%s] failed to remove header and footer", filename, err)
+	}
+
+	return b, nil
 }
 
 func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
@@ -446,51 +515,41 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 
 	merged := options.MergeOptions(s.options, opts)
 
-	filename, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	bytes, err := os.ReadFile(filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// check the persist sub dir
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return nil, err
-			}
-
-			bytes, err = os.ReadFile(persistedFilename)
-			if err != nil {
-				// s.logger.Warnf("[Lustre][GetHead] [%s] file not found in subtree temp dir: %v", filename, err)
-				if errors.Is(err, os.ErrNotExist) {
-					if s.s3Client == nil {
-						return nil, errors.ErrNotFound
-					}
-
-					// check s3
-					bytes, err = s.s3Client.Get(ctx, hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, errors.ErrNotFound
-						}
-
-						return nil, errors.NewStorageError("[Lustre][GetHead] [%s] unable to open S3 file", filename, err)
-					}
-
-					return bytes[:nrOfBytes], nil
-				}
-
-				return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from persist file", filename, err)
-			}
-
-			return bytes[:nrOfBytes], nil
-		}
-
+	b, filename, err := s.readFile(s.path, hash, merged)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from file", filename, err)
 	}
 
-	return bytes[:nrOfBytes], err
+	if b == nil {
+		// check the persist sub dir
+		b, filename, err = s.readFile(filepath.Join(s.path, s.persistSubDir), hash, merged)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from persist file", filename, err)
+		}
+	}
+
+	if b == nil {
+		if s.s3Client == nil {
+			return nil, errors.ErrNotFound
+		}
+
+		// check s3
+		b, err = s.s3Client.Get(ctx, hash, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[Lustre][GetHead] [%s] unable to open S3 file", filename, err)
+		}
+	}
+
+	b, err = helper.BytesWithHeadAndFooterRemoved(b, merged.Header, merged.Footer)
+	if err != nil {
+		return nil, errors.NewStorageError("[File][GetHead] [%s] failed to remove header and footer", filename, err)
+	}
+
+	return b[:nrOfBytes], nil
 }
 
 func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
@@ -584,4 +643,123 @@ func (s *Lustre) getFilenameForSet(hash []byte, opts []options.FileOption) (stri
 	}
 
 	return filename, nil
+}
+
+func (s *Lustre) GetHeader(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	if merged.Header == nil {
+		return nil, nil
+	}
+
+	// Try to get the file content from any of our storage locations
+	b, err := s.getFileContent(context.Background(), hash, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	headerLen := len(merged.Header)
+	if len(b) < headerLen {
+		return nil, errors.NewStorageError("[Lustre][GetHeader] file is smaller than header length", nil)
+	}
+
+	header := b[:headerLen]
+	if !bytes.Equal(header, merged.Header) {
+		return nil, errors.NewStorageError("[Lustre][GetHeader] header mismatch", nil)
+	}
+
+	return header, nil
+}
+
+// getFileContent attempts to read file content from local, persist, or S3 storage
+func (s *Lustre) getFileContent(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	// Try reading from main directory
+	b, filename, err := s.readFile(s.path, hash, merged)
+	if err == nil && b != nil {
+		return b, nil
+	}
+
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.NewStorageError("[Lustre][GetHeader] failed to read data from file %s", filename, err)
+	}
+
+	// Try reading from persist directory
+	b, filename, err = s.readFile(filepath.Join(s.path, s.persistSubDir), hash, merged)
+	if err == nil && b != nil {
+		return b, nil
+	}
+
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.NewStorageError("[Lustre][GetHeader] failed to read data from persist file %s", filename, err)
+	}
+
+	// Try reading from S3 if available
+	if s.s3Client == nil {
+		return nil, errors.ErrNotFound
+	}
+
+	b, err = s.s3Client.Get(ctx, hash, opts...)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.ErrNotFound
+		}
+
+		return nil, errors.NewStorageError("[Lustre][GetHeader] unable to open S3 file %s", filename, err)
+	}
+
+	return b, nil
+}
+
+func (s *Lustre) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	if merged.Footer == nil {
+		return nil, nil
+	}
+
+	filename, err := merged.ConstructFilename(s.path, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try reading from main directory
+	f, err := os.Open(filename)
+	if err == nil {
+		defer f.Close()
+
+		return helper.FooterMetaData(f, merged.Footer)
+	}
+
+	// Try reading from persist directory
+	persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err = os.Open(persistedFilename)
+	if err == nil {
+		defer f.Close()
+
+		return helper.FooterMetaData(f, merged.Footer)
+	}
+
+	if s.s3Client == nil {
+		return nil, errors.ErrNotFound
+	}
+
+	// Try reading from S3
+	b, err := s.s3Client.GetFooterMetaData(ctx, hash, opts...)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.ErrNotFound
+		}
+
+		return nil, errors.NewStorageError("[Lustre][GetMetaData] [%s] unable to open S3 file", filename, err)
+	}
+
+	defer f.Close()
+
+	return b, nil
 }

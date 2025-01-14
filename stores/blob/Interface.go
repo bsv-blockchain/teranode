@@ -19,5 +19,7 @@ type Store interface {
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
 	GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error)
 	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
+	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	Close(ctx context.Context) error
 }

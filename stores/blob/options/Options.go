@@ -18,13 +18,18 @@ type Options struct {
 	SubDirectory   string
 	HashPrefix     int
 	AllowOverwrite bool
+	Header         []byte
+	Footer         *Footer
+	GenerateSHA256 bool
 }
 
 type StoreOption func(*Options)
 type FileOption func(*Options)
 
 func NewStoreOptions(opts ...StoreOption) *Options {
-	options := &Options{}
+	options := &Options{
+		GenerateSHA256: false,
+	}
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -106,6 +111,18 @@ func WithAllowOverwrite(allowOverwrite bool) FileOption {
 	}
 }
 
+func WithHeader(header []byte) StoreOption {
+	return func(s *Options) {
+		s.Header = header
+	}
+}
+
+func WithFooter(footer *Footer) StoreOption {
+	return func(o *Options) {
+		o.Footer = footer
+	}
+}
+
 // MergeOptions combines StoreOptions and FileOptions into a single MergedOptions struct
 func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	options := &Options{}
@@ -117,6 +134,9 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 
 		options.SubDirectory = storeOpts.SubDirectory
 		options.HashPrefix = storeOpts.HashPrefix
+		options.Header = storeOpts.Header
+		options.Footer = storeOpts.Footer
+		options.GenerateSHA256 = storeOpts.GenerateSHA256
 	}
 
 	for _, opt := range fileOpts {
@@ -233,4 +253,10 @@ func (o *Options) CalculatePrefix(filename string) string {
 	}
 
 	return prefix
+}
+
+func WithSHA256Checksum() StoreOption {
+	return func(o *Options) {
+		o.GenerateSHA256 = true
+	}
 }

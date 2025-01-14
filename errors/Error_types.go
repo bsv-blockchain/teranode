@@ -175,3 +175,6 @@ func NewBlobNotFoundError(message string, params ...interface{}) *Error {
 func NewBlobError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ERROR, message, params...)
 }
+func NewBlobFooterSizeMismatchError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_FOOTER_SIZE_MISMATCH, message, params...)
+}

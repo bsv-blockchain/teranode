@@ -3,7 +3,10 @@ package file
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/blob/helper"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/go-utils"
@@ -28,7 +32,6 @@ type File struct {
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
-	// mu     sync.RWMutex
 }
 
 /*
@@ -37,9 +40,39 @@ type File struct {
 * Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
  */
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
-	if storeURL != nil && storeURL.Query().Get("ttlCleanerInterval") != "" {
-		// This is a special case for testing where we want to set the ttlCleanerInterval to a very short interval
-		// so we don't have to wait long to see the effect of the ttl cleaner.
+	if storeURL == nil {
+		return nil, errors.NewConfigurationError("storeURL is nil")
+	}
+
+	// Add header/footer handling
+	if header := storeURL.Query().Get("header"); header != "" {
+		// Try hex decode first
+		headerBytes, err := hex.DecodeString(header)
+		if err != nil {
+			// If hex decode fails, use as plain text
+			headerBytes = []byte(header)
+		}
+
+		opts = append(opts, options.WithHeader(headerBytes))
+	}
+
+	if eofMarker := storeURL.Query().Get("eofmarker"); eofMarker != "" {
+		// Try hex decode first
+		eofMarkerBytes, err := hex.DecodeString(eofMarker)
+		if err != nil {
+			// If hex decode fails, use as plain text
+			eofMarkerBytes = []byte(eofMarker)
+		}
+
+		opts = append(opts, options.WithFooter(options.NewFooter(len(eofMarkerBytes), eofMarkerBytes, nil)))
+	}
+
+	// Add SHA256 handling from URL query parameter
+	if storeURL.Query().Get("checksum") == "true" {
+		opts = append(opts, options.WithSHA256Checksum())
+	}
+
+	if storeURL.Query().Get("ttlCleanerInterval") != "" {
 		ttlCleanerInterval, err := time.ParseDuration(storeURL.Query().Get("ttlCleanerInterval"))
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse ttlCleanerInterval", err)
@@ -185,6 +218,13 @@ func (s *File) ttlCleaner(ctx context.Context, interval time.Duration) {
 func cleanExpiredFiles(s *File) {
 	s.logger.Debugf("[File] Cleaning file TTLs")
 
+	filesToRemove := getExpiredFiles(s)
+	for _, fileName := range filesToRemove {
+		cleanupExpiredFile(s, fileName)
+	}
+}
+
+func getExpiredFiles(s *File) []string {
 	s.fileTTLsMu.Lock()
 	filesToRemove := make([]string, 0, len(s.fileTTLs))
 
@@ -195,65 +235,64 @@ func cleanExpiredFiles(s *File) {
 	}
 	s.fileTTLsMu.Unlock()
 
-	for _, fileName := range filesToRemove {
-		// check if the ttl file still exists, even if the map says it has expired, another process might have updated it
-		fileTTL, err := s.readTTLFromFile(fileName + ".ttl")
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				s.logger.Warnf("[File] ttl file %s does not exist", fileName+".ttl")
+	return filesToRemove
+}
 
-				// remove from map, we do not have to keep on checking this
-				s.fileTTLsMu.Lock()
-				delete(s.fileTTLs, fileName)
-				s.fileTTLsMu.Unlock()
-
-				continue
-			}
-
-			s.logger.Warnf("[File] failed to read ttl from file: %s", fileName+".ttl")
-
-			continue
-		}
-
-		if fileTTL == nil {
-			s.logger.Warnf("[File] ttl file %s does not have a valud ttl: %v", fileName+".ttl", fileTTL)
-
-			// remove from map, we do not have to keep on checking this
-			s.fileTTLsMu.Lock()
-			delete(s.fileTTLs, fileName)
-			s.fileTTLsMu.Unlock()
-
-			continue
-		}
-
-		if !fileTTL.Before(time.Now()) {
-			// set the correct ttl in our map
-			s.fileTTLsMu.Lock()
-			mapTTL := s.fileTTLs[fileName]
-			s.fileTTLs[fileName] = *fileTTL
-			s.fileTTLsMu.Unlock()
-
-			s.logger.Warnf("[File] ttl file %s has expiry of %s, but map has %s", fileName+".ttl", fileTTL.UTC().Format(time.RFC3339), mapTTL.UTC().Format(time.RFC3339))
-
-			continue
-		}
-
-		if err = os.Remove(fileName); err != nil {
-			if !os.IsNotExist(err) {
-				s.logger.Warnf("[File] failed to remove file: %s", fileName)
-			}
-		}
-
-		if err = os.Remove(fileName + ".ttl"); err != nil {
-			if !os.IsNotExist(err) {
-				s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
-			}
-		}
-
-		s.fileTTLsMu.Lock()
-		delete(s.fileTTLs, fileName)
-		s.fileTTLsMu.Unlock()
+func cleanupExpiredFile(s *File, fileName string) {
+	// check if the ttl file still exists, even if the map says it has expired, another process might have updated it
+	fileTTL, err := s.readTTLFromFile(fileName + ".ttl")
+	if err != nil {
+		s.logger.Warnf("[File] failed to read ttl from file: %s", fileName+".ttl")
+		return
 	}
+
+	if fileTTL == nil {
+		removeTTLFromMap(s, fileName)
+		return
+	}
+
+	if !shouldRemoveFile(s, fileName, fileTTL) {
+		return
+	}
+
+	removeFiles(s, fileName)
+	removeTTLFromMap(s, fileName)
+}
+
+func shouldRemoveFile(s *File, fileName string, fileTTL *time.Time) bool {
+	now := time.Now()
+	if !fileTTL.Before(now) {
+		// Update the TTL in our map
+		s.fileTTLsMu.Lock()
+		mapTTL := s.fileTTLs[fileName]
+		s.fileTTLs[fileName] = *fileTTL
+		s.fileTTLsMu.Unlock()
+
+		s.logger.Warnf("[File] ttl file %s has expiry of %s, but map has %s",
+			fileName+".ttl",
+			fileTTL.UTC().Format(time.RFC3339),
+			mapTTL.UTC().Format(time.RFC3339))
+
+		return false
+	}
+
+	return true
+}
+
+func removeFiles(s *File, fileName string) {
+	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
+		s.logger.Warnf("[File] failed to remove file: %s", fileName)
+	}
+
+	if err := os.Remove(fileName + ".ttl"); err != nil && !os.IsNotExist(err) {
+		s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
+	}
+}
+
+func removeTTLFromMap(s *File, fileName string) {
+	s.fileTTLsMu.Lock()
+	delete(s.fileTTLs, fileName)
+	s.fileTTLsMu.Unlock()
 }
 
 func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
@@ -304,6 +343,16 @@ func (s *File) Close(_ context.Context) error {
 	return nil
 }
 
+func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
+	if !opts.AllowOverwrite {
+		if _, err := os.Stat(filename); err == nil {
+			return errors.NewBlobAlreadyExistsError("[File][allowOverwrite] [%s] already exists in store", filename)
+		}
+	}
+
+	return nil
+}
+
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	filename, err := s.constructFilenameWithTTL(key, opts)
 	if err != nil {
@@ -312,23 +361,41 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 	merged := options.MergeOptions(s.options, opts)
 
-	if !merged.AllowOverwrite {
-		if _, err := os.Stat(filename); err == nil {
-			return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", filename)
-		}
+	if err := s.errorOnOverwrite(filename, merged); err != nil {
+		return err
 	}
 
 	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
-	// write the bytes from the reader to a file with the filename
+	// Create the file first
 	file, err := os.Create(tmpFilename)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", filename, err)
 	}
 	defer file.Close()
 
-	if _, err = io.Copy(file, reader); err != nil {
+	// Set up the writer and hasher
+	writer, hasher := s.createWriter(file, merged)
+
+	if merged.Header != nil {
+		if _, err = writer.Write(merged.Header); err != nil {
+			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
+		}
+	}
+
+	if _, err = io.Copy(writer, reader); err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
+	}
+
+	if merged.Footer != nil {
+		b, err := merged.Footer.GetFooter()
+		if err != nil {
+			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write footer to file", filename, err)
+		}
+
+		if _, err = writer.Write(b); err != nil {
+			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write footer to file", filename, err)
+		}
 	}
 
 	// rename the file to remove the .tmp extension
@@ -336,33 +403,131 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
 	}
 
+	// Write SHA256 hash file
+	if err = s.writeHashFile(hasher, filename); err != nil {
+		return errors.NewStorageError("[File][SetFromReader] failed to write hash file", err)
+	}
+
 	return nil
 }
 
-func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
-	filename, err := s.constructFilenameWithTTL(hash, opts)
+func (s *File) createWriter(file *os.File, opts *options.Options) (io.Writer, hash.Hash) {
+	// Then set up the writer and hasher
+	var (
+		writer io.Writer
+		hasher hash.Hash
+	)
+
+	// Only create hasher if SHA256 is enabled
+	if opts.GenerateSHA256 {
+		hasher = sha256.New()
+		writer = io.MultiWriter(file, hasher)
+	} else {
+		writer = file
+	}
+
+	return writer, hasher
+}
+
+func (s *File) createWriterToBuffer(buf *bytes.Buffer, opts *options.Options) (io.Writer, hash.Hash) {
+	// Set up the writer and hasher
+	var (
+		writer io.Writer = buf
+		hasher hash.Hash
+	)
+
+	// Only create hasher if SHA256 is enabled
+	if opts.GenerateSHA256 {
+		hasher = sha256.New()
+		writer = io.MultiWriter(writer, hasher)
+	}
+
+	return writer, hasher
+}
+
+func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
+	if hasher == nil {
+		return nil
+	}
+
+	// Get the base name and extension separately
+	base := filepath.Base(filename)
+
+	// Format: "<hash>  <reversed_key>.<extension>\n"
+	hashStr := fmt.Sprintf("%x  %s\n", // N.B. The 2 spaces is important for the hash to be valid
+		hasher.Sum(nil),
+		base)
+
+	hashFilename := filename + ".sha256"
+	tmpHashFilename := hashFilename + ".tmp"
+
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	if err := os.WriteFile(tmpHashFilename, []byte(hashStr), 0644); err != nil {
+		return errors.NewStorageError("[File] failed to write hash file", err)
+	}
+
+	if err := os.Rename(tmpHashFilename, hashFilename); err != nil {
+		return errors.NewStorageError("[File] failed to rename hash file from tmp", err)
+	}
+
+	return nil
+}
+
+func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+	filename, err := s.constructFilenameWithTTL(key, opts)
 	if err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
+		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	merged := options.MergeOptions(s.options, opts)
 
-	if !merged.AllowOverwrite {
-		if _, err = os.Stat(filename); err == nil {
-			return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", filename)
-		}
+	if err := s.errorOnOverwrite(filename, merged); err != nil {
+		return err
 	}
 
 	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
-	// write bytes to file
+	// Set up writers
+	var buf bytes.Buffer
+	writer, hasher := s.createWriterToBuffer(&buf, merged)
+
+	// Write header if present
+	if merged.Header != nil {
+		if _, err := writer.Write(merged.Header); err != nil {
+			return errors.NewStorageError("[File][Set] [%s] failed to write header", filename, err)
+		}
+	}
+
+	// Write main content
+	if _, err := writer.Write(value); err != nil {
+		return errors.NewStorageError("[File][Set] [%s] failed to write content", filename, err)
+	}
+
+	// Write footer if present
+	if merged.Footer != nil {
+		b, err := merged.Footer.GetFooter()
+		if err != nil {
+			return errors.NewStorageError("[File][Set] [%s] failed to get footer", filename, err)
+		}
+
+		if _, err := writer.Write(b); err != nil {
+			return errors.NewStorageError("[File][Set] [%s] failed to write footer", filename, err)
+		}
+	}
+
+	// Write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(tmpFilename, value, 0644); err != nil {
+	if err = os.WriteFile(tmpFilename, buf.Bytes(), 0644); err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to write data to file", filename, err)
 	}
 
 	if err = os.Rename(tmpFilename, filename); err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to rename file from tmp", filename, err)
+	}
+
+	// Write SHA256 hash file
+	if err = s.writeHashFile(hasher, filename); err != nil {
+		return errors.NewStorageError("[File][Set] failed to write hash file", err)
 	}
 
 	return nil
@@ -505,17 +670,16 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileO
 		return nil, err
 	}
 
-	file, err := os.Open(fileName)
-	// file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
+	f, err := os.Open(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
 
-		return nil, errors.NewStorageError("[File] [%s] unable to open file", fileName, err)
+		return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open file", fileName, err)
 	}
 
-	return file, nil
+	return helper.ReaderWithHeaderAndFooterRemoved(f, merged.Header, merged.Footer)
 }
 
 func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
@@ -523,21 +687,26 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) (
 
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, hash)
+	filename, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
 
-	bytes, err := os.ReadFile(fileName)
+	b, err := os.ReadFile(filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
 
-		return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", fileName, err)
+		return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", filename, err)
 	}
 
-	return bytes, err
+	b, err = helper.BytesWithHeadAndFooterRemoved(b, merged.Header, merged.Footer)
+	if err != nil {
+		return nil, errors.NewStorageError("[File][Get] [%s] failed to remove header and footer", filename, err)
+	}
+
+	return b, nil
 }
 
 func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
@@ -626,4 +795,56 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 	}
 
 	return a, nil
+}
+
+func (s *File) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	if merged.Header == nil {
+		return nil, nil
+	}
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.ErrNotFound
+		}
+
+		return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open file", fileName, err)
+	}
+
+	defer f.Close()
+
+	return helper.HeaderMetaData(f, len(merged.Header))
+}
+
+func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	if merged.Footer == nil {
+		return nil, nil
+	}
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(fileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.ErrNotFound
+		}
+
+		return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open file", fileName, err)
+	}
+
+	defer f.Close()
+
+	return helper.FooterMetaData(f, merged.Footer)
 }

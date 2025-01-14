@@ -67,3 +67,11 @@ func (n *Null) Exists(_ context.Context, _ []byte, opts ...options.FileOption) (
 func (n *Null) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
 	return nil
 }
+
+func (n *Null) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (n *Null) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}

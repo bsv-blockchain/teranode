@@ -9,26 +9,64 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
 type Memory struct {
 	mu         sync.RWMutex
-	blobs      map[[32]byte][]byte
-	ttls       map[[32]byte]time.Time
+	headers    map[string][]byte
+	footers    map[string][]byte
+	keys       map[string][]byte
+	blobs      map[string][]byte
+	blobTimes  map[string]time.Time
+	ttls       map[string]time.Duration
 	options    *options.Options
 	Counters   map[string]int
 	countersMu sync.Mutex
 }
 
 func New(opts ...options.StoreOption) *Memory {
-	return &Memory{
-		blobs:    make(map[[32]byte][]byte),
-		ttls:     make(map[[32]byte]time.Time),
-		options:  options.NewStoreOptions(opts...),
-		Counters: make(map[string]int),
+	m := &Memory{
+		keys:      make(map[string][]byte),
+		blobs:     make(map[string][]byte),
+		blobTimes: make(map[string]time.Time),
+		ttls:      make(map[string]time.Duration),
+		headers:   make(map[string][]byte),
+		footers:   make(map[string][]byte),
+		options:   options.NewStoreOptions(opts...),
+		Counters:  make(map[string]int),
+	}
+
+	go m.ttlCleaner(context.Background(), 1*time.Minute)
+
+	return m
+}
+
+func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			cleanExpiredFiles(m)
+		}
+	}
+}
+
+func cleanExpiredFiles(m *Memory) {
+	for key, expiryTime := range m.blobTimes {
+		ttl, ok := m.ttls[key]
+		if !ok {
+			continue
+		}
+
+		if time.Now().After(expiryTime.Add(ttl)) {
+			delete(m.blobs, key)
+			delete(m.blobTimes, key)
+			delete(m.ttls, key)
+			delete(m.headers, key)
+			delete(m.footers, key)
+		}
 	}
 }
 
@@ -96,10 +134,25 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	m.Counters["set"]++
 	m.countersMu.Unlock()
 
+	m.keys[string(hash)] = []byte{}
 	m.blobs[storeKey] = value
+	m.blobTimes[storeKey] = time.Now()
+
+	if merged.Header != nil {
+		m.headers[storeKey] = merged.Header
+	}
+
+	if merged.Footer != nil {
+		footer, err := merged.Footer.GetFooter()
+		if err != nil {
+			return err
+		}
+
+		m.footers[storeKey] = footer
+	}
 
 	if merged.TTL != nil && *merged.TTL > 0 {
-		m.ttls[storeKey] = time.Now().Add(*merged.TTL)
+		m.ttls[storeKey] = *merged.TTL
 	}
 
 	return nil
@@ -111,7 +164,8 @@ func (m *Memory) SetTTL(_ context.Context, hash []byte, newTTL time.Duration, op
 	storeKey := hashKey(hash, merged)
 
 	if newTTL > 0 {
-		m.ttls[storeKey] = time.Now().Add(newTTL)
+		m.blobTimes[storeKey] = time.Now()
+		m.ttls[storeKey] = newTTL
 	} else {
 		delete(m.ttls, storeKey)
 	}
@@ -133,7 +187,7 @@ func (m *Memory) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 		return 0, nil
 	}
 
-	return time.Until(ttl), nil
+	return ttl, nil
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
@@ -219,11 +273,12 @@ func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	m.countersMu.Unlock()
 
 	delete(m.blobs, storeKey)
+	delete(m.keys, string(hash))
 
 	return nil
 }
 
-func hashKey(key []byte, options *options.Options) [32]byte {
+func hashKey(key []byte, options *options.Options) string {
 	var storeKey []byte
 
 	if len(options.Filename) > 0 {
@@ -236,5 +291,37 @@ func hashKey(key []byte, options *options.Options) [32]byte {
 		storeKey = append(storeKey, []byte(options.Extension)...)
 	}
 
-	return chainhash.HashH(storeKey)
+	return string(storeKey)
+}
+
+func (m *Memory) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(m.options, opts)
+
+	storeKey := hashKey(hash, merged)
+
+	return m.headers[storeKey], nil
+}
+
+func (m *Memory) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(m.options, opts)
+
+	if merged.Footer == nil {
+		return nil, nil
+	}
+
+	storeKey := hashKey(hash, merged)
+
+	return merged.Footer.GetFooterMetaData(m.footers[storeKey]), nil
+}
+
+func (m *Memory) ListKeys() [][]byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	keys := make([][]byte, 0, len(m.keys))
+	for k := range m.keys {
+		keys = append(keys, []byte(k))
+	}
+
+	return keys
 }

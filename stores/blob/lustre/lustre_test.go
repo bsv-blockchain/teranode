@@ -9,11 +9,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
-
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -309,7 +310,7 @@ func TestFileGetFromReader(t *testing.T) {
 }
 
 func TestFileNew(t *testing.T) {
-	url, err := url.ParseRequestURI("lustre://s3.com/teranode?localDir=/data/subtrees&localPersist=s3")
+	url, err := url.ParseRequestURI("lustre:///teranode?localDir=/data/subtrees&localPersist=s3")
 	require.NoError(t, err)
 
 	store, err := New(ulogger.TestLogger{}, url, "data", "persist")
@@ -352,6 +353,10 @@ func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Fi
 	}
 
 	return true, s.err
+}
+
+func (s *s3StoreMock) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, s.err
 }
 
 func TestFileNameForPersist(t *testing.T) {
@@ -480,6 +485,10 @@ func (s *HealthyS3StoreMock) Exists(ctx context.Context, key []byte, opts ...opt
 	return false, nil
 }
 
+func (s *HealthyS3StoreMock) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
 type UnhealthyS3StoreMock struct{}
 
 func NewUnhealthyS3StoreMock() *UnhealthyS3StoreMock {
@@ -496,4 +505,630 @@ func (s *UnhealthyS3StoreMock) GetIoReader(ctx context.Context, key []byte, opts
 
 func (s *UnhealthyS3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	return false, assert.AnError
+}
+
+func (s *UnhealthyS3StoreMock) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, assert.AnError
+}
+
+func TestLustreWithHeader(t *testing.T) {
+	t.Run("set and get with header", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "TestLustreWithHeader")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		header := "This is the header"
+		l, err := NewLustreStore(ulogger.TestLogger{}, nil, tempDir, "persist", options.WithHeader([]byte(header)))
+		require.NoError(t, err)
+
+		key := []byte("key-with-header")
+		content := "This is the main content - TestLustreWithHeader"
+
+		// Test setting content with header using Set
+		err = l.Set(context.Background(), key, []byte(content))
+		require.NoError(t, err)
+
+		// Verify content using Get
+		value, err := l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, content, string(value))
+
+		// Verify content using GetIoReader
+		reader, err := l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+
+		// Read all the content from the reader
+		readContent, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		reader.Close()
+		require.Equal(t, content, string(readContent))
+
+		// delete the file
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+
+		// Test setting content with header using SetFromReader
+		newContent := "New content from reader"
+		contentReader := strings.NewReader(newContent)
+		readCloser := io.NopCloser(contentReader)
+
+		err = l.SetFromReader(context.Background(), key, readCloser)
+		require.NoError(t, err)
+
+		// Verify new content using Get
+		value, err = l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, newContent, string(value))
+
+		// Verify new content using GetIoReader
+		reader, err = l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+
+		readContent, err = io.ReadAll(reader)
+		require.NoError(t, err)
+		reader.Close()
+		require.Equal(t, newContent, string(readContent))
+
+		// delete the file
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+	})
+}
+
+func TestLustreWithFooter(t *testing.T) {
+	t.Run("set and get with footer", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "TestLustreWithFooter")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		footer := "This is the footer"
+		l, err := NewLustreStore(ulogger.TestLogger{}, nil, tempDir, "persist", options.WithFooter(options.NewFooter(len(footer), []byte(footer), nil)))
+		require.NoError(t, err)
+
+		key := []byte("key-with-footer")
+		content := "This is the main content - TestLustreWithFooter"
+
+		// Test setting content with footer using Set
+		err = l.Set(context.Background(), key, []byte(content))
+		require.NoError(t, err)
+
+		// Verify content using Get
+		value, err := l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, content, string(value))
+
+		// Verify content using GetIoReader
+		reader, err := l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+
+		// Read all the content from the reader
+		readContent, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		reader.Close()
+		require.Equal(t, content, string(readContent))
+
+		// delete the file
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+
+		// Test setting content with footer using SetFromReader
+		newContent := "New content from reader"
+		contentReader := strings.NewReader(newContent)
+		readCloser := io.NopCloser(contentReader)
+
+		err = l.SetFromReader(context.Background(), key, readCloser)
+		require.NoError(t, err)
+
+		// Verify new content using Get
+		value, err = l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, newContent, string(value))
+
+		// Verify new content using GetIoReader
+		reader, err = l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+
+		readContent, err = io.ReadAll(reader)
+		require.NoError(t, err)
+		reader.Close()
+		require.Equal(t, newContent, string(readContent))
+
+		// delete the file
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+	})
+}
+
+func TestLustreWithHeaderAndFooter(t *testing.T) {
+	t.Run("set and get with both header and footer", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "TestLustreWithHeaderAndFooter")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		header := "This is the header"
+		footer := "This is the footer"
+
+		l, err := NewLustreStore(ulogger.TestLogger{}, nil, tempDir, "persist", options.WithHeader([]byte(header)), options.WithFooter(options.NewFooter(len(footer), []byte(footer), nil)))
+		require.NoError(t, err)
+
+		key := []byte("key-with-both")
+		content := "This is the main content - set and get with both header and footer"
+
+		// Test setting content with both header and footer
+		err = l.Set(context.Background(), key, []byte(content))
+		require.NoError(t, err)
+
+		// Verify content using Get
+		value, err := l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, content, string(value))
+
+		// Verify content using GetIoReader
+		reader, err := l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+
+		readContent, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		reader.Close()
+		require.Equal(t, content, string(readContent))
+
+		// delete the file
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+	})
+}
+
+func TestLustreWithURLHeaderFooter(t *testing.T) {
+	t.Run("with header and footer in URL", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test-lustre-header-footer")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		// Create persist directory
+		persistDir := filepath.Join(tempDir, "persist")
+		err = os.MkdirAll(persistDir, 0755)
+		require.NoError(t, err)
+
+		// Create URL with header and footer parameters
+		u, err := url.Parse("lustre://s3.com/ubsv?header=START&eofmarker=END")
+		require.NoError(t, err)
+
+		l, err := New(ulogger.TestLogger{}, u, tempDir, "persist")
+		require.NoError(t, err)
+
+		key := []byte("test-key")
+		content := "test content"
+
+		// Test Set with TTL to ensure it goes to the main directory
+		err = l.Set(context.Background(), key, []byte(content), options.WithTTL(time.Hour))
+		require.NoError(t, err)
+
+		// Read raw file to verify header and footer
+		filename, err := l.options.ConstructFilename(tempDir, key)
+		require.NoError(t, err)
+
+		// Ensure directory exists
+		err = os.MkdirAll(filepath.Dir(filename), 0755)
+		require.NoError(t, err)
+
+		rawData, err := os.ReadFile(filename)
+		require.NoError(t, err)
+
+		// Verify header and footer are present in raw data
+		expectedData := append([]byte("START"), []byte(content)...)
+		expectedData = append(expectedData, []byte("END")...)
+		require.Equal(t, expectedData, rawData)
+
+		// Test Get - should return content without header/footer
+		value, err := l.Get(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, content, string(value))
+
+		// Test GetIoReader - should return content without header/footer
+		reader, err := l.GetIoReader(context.Background(), key)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		readContent, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.Equal(t, content, string(readContent))
+
+		// Clean up
+		err = l.Del(context.Background(), key)
+		require.NoError(t, err)
+	})
+}
+
+func TestLustre_GetHeader(t *testing.T) {
+	url, err := url.ParseRequestURI("lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	store, err := New(ulogger.TestLogger{}, url, dir, "persist")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := []byte("test-key")
+	value := []byte("test-value")
+	header := []byte("header-bytes")
+
+	tests := []struct {
+		name    string
+		key     []byte
+		value   []byte
+		header  []byte
+		setup   func()
+		wantErr bool
+	}{
+		{
+			name:    "successful header retrieval",
+			key:     key,
+			value:   value,
+			header:  header,
+			wantErr: false,
+			setup: func() {
+				store.options = options.NewStoreOptions(options.WithHeader(header))
+				_ = store.Del(ctx, key)
+				err := store.Set(ctx, key, value)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:  "no header configured",
+			key:   key,
+			value: value,
+			setup: func() {
+				store.options = options.NewStoreOptions() // Reset options
+				_ = store.Del(ctx, key)
+				err = store.Set(ctx, key, value)
+				require.NoError(t, err)
+			},
+			wantErr: false,
+		},
+		{
+			name:   "non-existent key",
+			key:    []byte("non-existent"),
+			header: header,
+			setup: func() {
+				store.options = options.NewStoreOptions(options.WithHeader(header))
+				_ = store.Del(ctx, key)
+			},
+			wantErr: true,
+		},
+		{
+			name:    "header mismatch",
+			key:     key,
+			value:   value,
+			header:  header,
+			wantErr: true,
+			setup: func() {
+				// Set up file with different header
+				store.options = options.NewStoreOptions(options.WithHeader([]byte("different-header")))
+				_ = store.Del(ctx, key)
+				err := store.Set(ctx, key, value)
+				require.NoError(t, err)
+
+				// Switch to expected header for test
+				store.options = options.NewStoreOptions(options.WithHeader(header))
+			},
+		},
+		{
+			name:    "empty file",
+			key:     []byte("empty-file"),
+			value:   []byte{},
+			header:  header,
+			wantErr: true,
+			setup: func() {
+				store.options = options.NewStoreOptions(options.WithHeader(header))
+				_ = store.Del(ctx, key)
+				err := store.Set(ctx, key, []byte{})
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setup()
+
+			got, err := store.GetHeader(ctx, tt.key)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.header == nil {
+				assert.Nil(t, got)
+			} else {
+				assert.Equal(t, tt.header, got)
+			}
+		})
+	}
+}
+
+func TestLustre_GetMetaData(t *testing.T) {
+	url, err := url.ParseRequestURI("lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+
+	var store *Lustre
+
+	ctx := context.Background()
+	key := []byte("test-key")
+	value := []byte("test-value")
+	footer := []byte("footer-bytes")
+	metadata := []byte("metadata-content")
+	footerObj := options.NewFooter(len(footer)+len(metadata), footer, func() []byte { return metadata })
+
+	tests := []struct {
+		name     string
+		key      []byte
+		value    []byte
+		footer   []byte
+		metadata []byte
+		setup    func()
+		wantErr  bool
+	}{
+		{
+			name:     "successful metadata retrieval",
+			key:      key,
+			value:    value,
+			footer:   footer,
+			metadata: metadata,
+			wantErr:  false,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(footerObj))
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err = store.Set(ctx, key, value)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:     "successful metadata retrieval with ttl",
+			key:      key,
+			value:    value,
+			footer:   footer,
+			metadata: metadata,
+			wantErr:  false,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(footerObj))
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err = store.Set(ctx, key, value, options.WithTTL(time.Hour))
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:  "no footer configured",
+			key:   key,
+			value: value,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist")
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err = store.Set(ctx, key, value)
+				require.NoError(t, err)
+			},
+			wantErr: false,
+		},
+		{
+			name:     "non-existent key",
+			key:      []byte("non-existent"),
+			footer:   footer,
+			metadata: metadata,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(footerObj))
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+			},
+			wantErr: true,
+		},
+		{
+			name:     "invalid footer",
+			key:      key,
+			value:    value,
+			footer:   footer,
+			metadata: metadata,
+			wantErr:  true,
+			setup: func() {
+				// Set up file with invalid footer
+				invalidFooter := options.NewFooter(len([]byte("invalid-footer")), []byte("invalid-footer"), nil)
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(invalidFooter))
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err = store.Set(ctx, key, value)
+				require.NoError(t, err)
+
+				// Switch to expected footer for test
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(footerObj))
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:     "empty file",
+			key:      []byte("empty-file"),
+			value:    []byte{},
+			footer:   footer,
+			metadata: metadata,
+			wantErr:  true,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist", options.WithFooter(footerObj))
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err := store.Set(ctx, key, []byte{})
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:     "file too small for footer",
+			key:      key,
+			value:    []byte("small"),
+			footer:   footer,
+			metadata: metadata,
+			wantErr:  true,
+			setup: func() {
+				store, err = New(ulogger.TestLogger{}, url, dir, "persist")
+				require.NoError(t, err)
+				_ = store.Del(ctx, key)
+				err := store.Set(ctx, key, []byte("small"))
+				require.NoError(t, err)
+				store.options = options.NewStoreOptions(options.WithFooter(footerObj))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup()
+			}
+
+			got, err := store.GetFooterMetaData(ctx, tt.key)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.metadata == nil {
+				assert.Nil(t, got)
+			} else {
+				assert.Equal(t, tt.metadata, got)
+			}
+		})
+	}
+}
+
+func TestLustre_GetTTL(t *testing.T) {
+	// Create temp directories for testing
+	mainDir := t.TempDir()
+	persistDir := "persist"
+
+	logger := ulogger.TestLogger{}
+	defaultTTL := 24 * time.Hour
+
+	store, err := NewLustreStore(
+		logger,
+		nil, // no S3 client needed for this test
+		mainDir,
+		persistDir,
+		options.WithDefaultTTL(defaultTTL),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create lustre store: %v", err)
+	}
+
+	testKey := []byte("testkey123")
+	testData := []byte("test data")
+
+	t.Run("file in main directory should return default TTL", func(t *testing.T) {
+		_ = store.Del(context.Background(), testKey)
+		// Set file in main directory
+		err = store.Set(context.Background(), testKey, testData)
+		if err != nil {
+			t.Fatalf("Failed to set test data: %v", err)
+		}
+
+		ttl, err := store.GetTTL(context.Background(), testKey)
+		if err != nil {
+			t.Errorf("GetTTL failed: %v", err)
+		}
+
+		if ttl != defaultTTL {
+			t.Errorf("Expected TTL %v, got %v", defaultTTL, ttl)
+		}
+	})
+
+	t.Run("file in persist directory should return 0 TTL", func(t *testing.T) {
+		_ = store.Del(context.Background(), testKey)
+		// Set file and move it to persist directory
+		err = store.Set(context.Background(), testKey, testData)
+		if err != nil {
+			t.Fatalf("Failed to set test data: %v", err)
+		}
+
+		// Set TTL to 0 to move file to persist directory
+		err = store.SetTTL(context.Background(), testKey, 0)
+		if err != nil {
+			t.Fatalf("Failed to set TTL to 0: %v", err)
+		}
+
+		ttl, err := store.GetTTL(context.Background(), testKey)
+		if err != nil {
+			t.Errorf("GetTTL failed: %v", err)
+		}
+
+		if ttl != 0 {
+			t.Errorf("Expected TTL 0, got %v", ttl)
+		}
+	})
+
+	t.Run("non-existent file should return error", func(t *testing.T) {
+		nonExistentKey := []byte("nonexistent")
+
+		_, err := store.GetTTL(context.Background(), nonExistentKey)
+		if !errors.Is(err, errors.ErrNotFound) {
+			t.Errorf("Expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("file moved between directories should return correct TTL", func(t *testing.T) {
+		_ = store.Del(context.Background(), testKey)
+		// First set file in main directory
+		err = store.Set(context.Background(), testKey, testData)
+		if err != nil {
+			t.Fatalf("Failed to set test data: %v", err)
+		}
+
+		// Verify default TTL
+		ttl, err := store.GetTTL(context.Background(), testKey)
+		if err != nil {
+			t.Errorf("GetTTL failed: %v", err)
+		}
+
+		if ttl != defaultTTL {
+			t.Errorf("Expected TTL %v, got %v", defaultTTL, ttl)
+		}
+
+		// Move to persist directory
+		err = store.SetTTL(context.Background(), testKey, 0)
+		if err != nil {
+			t.Fatalf("Failed to set TTL to 0: %v", err)
+		}
+
+		// Verify 0 TTL
+		ttl, err = store.GetTTL(context.Background(), testKey)
+		if err != nil {
+			t.Errorf("GetTTL failed: %v", err)
+		}
+
+		if ttl != 0 {
+			t.Errorf("Expected TTL 0, got %v", ttl)
+		}
+
+		// Move back to main directory
+		err = store.SetTTL(context.Background(), testKey, defaultTTL)
+		if err != nil {
+			t.Fatalf("Failed to set TTL to default: %v", err)
+		}
+
+		// Verify default TTL again
+		ttl, err = store.GetTTL(context.Background(), testKey)
+		if err != nil {
+			t.Errorf("GetTTL failed: %v", err)
+		}
+
+		if ttl != defaultTTL {
+			t.Errorf("Expected TTL %v, got %v", defaultTTL, ttl)
+		}
+	})
 }

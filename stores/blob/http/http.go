@@ -217,7 +217,7 @@ func (s *HTTPStore) GetTTL(ctx context.Context, key []byte, opts ...options.File
 		return 0, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetTTL failed with status code %d", resp.StatusCode), nil)
 	}
 
-	ttl, err := io.ReadAll(req.Body)
+	ttl, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to read response body", err)
 	}
@@ -253,6 +253,14 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOpt
 	}
 
 	return nil
+}
+
+func (s *HTTPStore) GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("get header is not supported in a http store")
+}
+
+func (s *HTTPStore) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("get meta data is not supported in a http store")
 }
 
 func (s *HTTPStore) Close(ctx context.Context) error {
