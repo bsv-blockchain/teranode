@@ -43,7 +43,7 @@ func (suite *TNA2TestSuite) InitSuite() {
 
 func (suite *TNA2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {

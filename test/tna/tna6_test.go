@@ -62,7 +62,7 @@ func (suite *TNA6TestSuite) InitSuite() {
 // SetupTest sets up the test environment with the initialized settings and default compose files.
 func (suite *TNA6TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 // TestAcceptanceNextBlock verifies that Teranode expresses block acceptance by using

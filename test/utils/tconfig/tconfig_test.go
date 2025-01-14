@@ -14,8 +14,8 @@ func TestTConfig(t *testing.T) {
 		assert.Equal(t, testConfig.Suite.Name, "TestNameFromEnv")
 
 		// These are set in environment variable in main_test.go
-		assert.Equal(t, len(testConfig.Suite.Composes), 2)
-		assert.Equal(t, testConfig.Suite.Composes, []string{"Compose1FromEnv", "Compose2FromEnv"})
+		assert.Equal(t, len(testConfig.LocalSystem.Composes), 2)
+		assert.Equal(t, testConfig.LocalSystem.Composes, []string{"Compose1FromEnv", "Compose2FromEnv"})
 	})
 
 	t.Run("SetConfigProgrammatically", func(t *testing.T) {

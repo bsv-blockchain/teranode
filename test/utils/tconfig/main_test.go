@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 // setup once, used for all suites
 func setup() error {
 	os.Setenv("SUITE_NAME", "TestNameFromEnv")
-	os.Setenv("SUITE_COMPOSES", "Compose1FromEnv Compose2FromEnv")
+	os.Setenv("LOCALSYSTEM_COMPOSES", "Compose1FromEnv Compose2FromEnv")
 	os.Setenv("TERANODE_CONTEXTS", "Context1FromEnv Context2FromEnv")
 
 	// Load the test config, customizable by

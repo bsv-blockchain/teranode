@@ -39,7 +39,7 @@ func (suite *TNA1TestSuite) InitSuite() {
 
 func (suite *TNA1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
@@ -99,7 +99,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		t.Log("hashes is empty!")
 	}
 
-	baseDir := filepath.Join("../../data/test", testEnv.TestID)
+	baseDir := filepath.Join(testEnv.TConfig.LocalSystem.DataDir, testEnv.TConfig.Suite.TestID)
 
 	t.Logf("num of subtrees: %d", len(hashes))
 

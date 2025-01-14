@@ -10,7 +10,7 @@ import (
 
 // How to run
 //
-//	SUITE_NAME="OverrideEnv" SUITE_COMPOSES="OverrideEnv1 OverrideEnv2" go run test/utils/example/tconfig/main.go
+//	SUITE_NAME="OverrideEnv" LOCALSYSTEM_COMPOSES="OverrideEnv1 OverrideEnv2" go run test/utils/example/tconfig/main.go
 //	SUITE_TESTID="OverrideEnv" TERANODE_CONTEXTS="OverrideEnv1 OverrideEnv2" go run test/utils/example/tconfig/main.go --config-file=./test/utils/example/tconfig/testabc.env
 func main() {
 	tconfig := tconfig.LoadTConfig(

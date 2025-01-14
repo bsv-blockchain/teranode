@@ -60,7 +60,7 @@ func (suite *TNA4TestSuite) InitSuite() {
 // SetupTest sets up the test environment with the initialized settings and default compose files.
 func (suite *TNA4TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 // TestBlockBroadcast verifies that Teranode broadcasts blocks to all nodes after finding

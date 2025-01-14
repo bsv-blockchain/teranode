@@ -14,11 +14,14 @@ package tconfig
 //   It befinit the strong type of the language and avoid bugs
 
 const (
-	// Keys for meta config
+	// Keys for suite config
 	KeySuiteTestID   = "suite.testid"
 	KeySuiteName     = "suite.name"
-	KeySuiteComposes = "suite.composes"
 	KeySuiteLogLevel = "suite.loglevel"
+
+	// Keys for localsystem config
+	KeyLocalSystemComposes = "localsystem.composes"
+	KeyLocalSystemDataDir  = "localsystem.datadir"
 
 	// Keys for Teranodes setup
 	KeyTeranodeContexts = "teranode.contexts"

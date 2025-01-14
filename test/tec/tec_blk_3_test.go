@@ -22,7 +22,7 @@ type TECBlk3TestSuite struct {
 func (suite *TECBlk3TestSuite) InitSuite() {
 	suite.TConfig = tconfig.LoadTConfig(
 		map[string]any{
-			tconfig.KeySuiteComposes: []string{
+			tconfig.KeyLocalSystemComposes: []string{
 				"../../docker-compose.yml",
 				"../../docker-compose.aerospike.override.yml",
 				"../../docker-compose.e2etest.yml",
@@ -39,7 +39,7 @@ func (suite *TECBlk3TestSuite) InitSuite() {
 
 func (suite *TECBlk3TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {

@@ -22,7 +22,7 @@ type TECBlk6TestSuite struct {
 func (suite *TECBlk6TestSuite) InitSuite() {
 	suite.TConfig = tconfig.LoadTConfig(
 		map[string]any{
-			tconfig.KeySuiteComposes: []string{
+			tconfig.KeyLocalSystemComposes: []string{
 				"../../docker-compose.yml",
 				"../../docker-compose.aerospike.override.yml",
 				"../../docker-compose.e2etest.yml",
@@ -39,7 +39,7 @@ func (suite *TECBlk6TestSuite) InitSuite() {
 
 func (suite *TECBlk6TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverability() {
@@ -68,7 +68,7 @@ func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
 
 	fmt.Println("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
 
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 
 	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {

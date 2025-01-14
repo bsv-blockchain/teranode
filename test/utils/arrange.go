@@ -32,7 +32,7 @@ type TeranodeTestSuite struct {
 
 func (suite *TeranodeTestSuite) SetupTest() {
 	suite.TConfig = tconfig.LoadTConfig(nil)
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 func (suite *TeranodeTestSuite) TearDownTest() {
@@ -54,7 +54,7 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 	}
 }
 
-func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
+func (suite *TeranodeTestSuite) SetupTestEnv(skipSetUpTestClient bool) {
 	var err error
 
 	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
@@ -75,7 +75,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 	suite.T().Log("Setting up TeranodeTestEnv")
 
-	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.TConfig.Suite.Composes, suite.TConfig.Teranode.SettingsMap())
+	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.TConfig)
 	if err != nil {
 		if suite.T() != nil && suite.TeranodeTestEnv != nil {
 			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
@@ -225,9 +225,9 @@ func cleanUpE2EContainers(isGitHubActions bool) (err error) {
 	return nil
 }
 
-func SetupTeranodeTestEnv(composeFiles []string, settingsMap map[string]string) (*TeranodeTestEnv, error) {
-	testEnv := NewTeraNodeTestEnv(composeFiles)
-	if err := testEnv.SetupDockerNodes(settingsMap); err != nil {
+func SetupTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error) {
+	testEnv := NewTeraNodeTestEnv(cfg)
+	if err := testEnv.SetupDockerNodes(); err != nil {
 		return nil, errors.NewConfigurationError("Error setting up nodes", err)
 	}
 

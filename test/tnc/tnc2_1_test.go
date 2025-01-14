@@ -54,7 +54,7 @@ func (suite *TNC2_1TestSuite) InitSuite() {
 
 func (suite *TNC2_1TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 // TestUniqueCandidateIdentifiers verifies that each mining candidate has a unique identifier

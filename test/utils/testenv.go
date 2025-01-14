@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	bcs "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	distributor "github.com/bitcoin-sv/teranode/util/distributor"
 	"github.com/docker/go-connections/nat"
@@ -26,33 +27,31 @@ import (
 
 // Teranode test environment is a compose stack of 3 teranode instances.
 type TeranodeTestEnv struct {
-	ComposeFilePaths []string
-	Context          context.Context
-	Compose          tc.ComposeStack
-	Nodes            []TeranodeTestClient
-	Logger           ulogger.Logger
-	Cancel           context.CancelFunc
-	TestID           string
+	TConfig tconfig.TConfig
+	Context context.Context
+	Compose tc.ComposeStack
+	Nodes   []TeranodeTestClient
+	Logger  ulogger.Logger
+	Cancel  context.CancelFunc
 }
 
 type TeranodeTestClient struct {
-	Name                   string
-	SettingsContext        string
-	CoinbaseClient         cb.Client
-	BlockchainClient       bc.ClientI
-	BlockassemblyClient    ba.Client
-	DistributorClient      distributor.Distributor
-	Blockstore             blob.Store
-	SubtreeStore           blob.Store
-	BlockstoreURL          *url.URL
-	UtxoStore              *utxostore.Store
-	SubtreesKafkaURL       *url.URL
-	AssetURL               string
-	RPCURL                 string
-	IPAddress              string
-	Settings               *settings.Settings
-	BlockChainDB           bcs.Store
-	DefaultSettingsContext string
+	Name                string
+	SettingsContext     string
+	CoinbaseClient      cb.Client
+	BlockchainClient    bc.ClientI
+	BlockassemblyClient ba.Client
+	DistributorClient   distributor.Distributor
+	Blockstore          blob.Store
+	SubtreeStore        blob.Store
+	BlockstoreURL       *url.URL
+	UtxoStore           *utxostore.Store
+	SubtreesKafkaURL    *url.URL
+	AssetURL            string
+	RPCURL              string
+	IPAddress           string
+	Settings            *settings.Settings
+	BlockChainDB        bcs.Store
 }
 
 const (
@@ -61,37 +60,35 @@ const (
 )
 
 // NewTeraNodeTestEnv creates a new test environment with the provided Compose file paths.
-func NewTeraNodeTestEnv(composeFilePaths []string) *TeranodeTestEnv {
-	var logLevelStr, _ = gocore.Config().Get("logLevel.docker.test", "ERROR")
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
+func NewTeraNodeTestEnv(c tconfig.TConfig) *TeranodeTestEnv {
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(c.Suite.LogLevel))
 	ctx, cancel := context.WithCancel(context.Background())
-	testID := fmt.Sprintf("test_%d", time.Now().UnixNano())
 
 	return &TeranodeTestEnv{
-		ComposeFilePaths: composeFilePaths,
-		Context:          ctx,
-		Logger:           logger,
-		Cancel:           cancel,
-		TestID:           testID,
+		TConfig: c,
+		Context: ctx,
+		Logger:  logger,
+		Cancel:  cancel,
 	}
 }
 
 // SetupDockerNodes initializes Docker Compose with the provided environment settings.
-func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error {
+func (t *TeranodeTestEnv) SetupDockerNodes() error {
 	testRunMode := os.Getenv(testEnvKey) == containerMode
 	if !testRunMode {
-		identifier := tc.StackIdentifier(t.TestID)
-		compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(t.ComposeFilePaths...), identifier)
+		identifier := tc.StackIdentifier(t.TConfig.Suite.TestID)
+		compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(t.TConfig.LocalSystem.Composes...), identifier)
 
 		if err != nil {
 			return err
 		}
 
 		// Set TEST_ID in environment settings
-		envSettings["TEST_ID"] = t.TestID
+		envSettings := t.TConfig.Teranode.SettingsMap()
+		envSettings["TEST_ID"] = t.TConfig.Suite.TestID
 
 		// Create test directory if it doesn't exist
-		testDir := fmt.Sprintf("./data/test/%s", t.TestID)
+		testDir := fmt.Sprintf("./data/test/%s", t.TConfig.Suite.TestID)
 		if err := os.MkdirAll(testDir, 0755); err != nil {
 			return err
 		}
@@ -103,21 +100,18 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 		// time.Sleep(30 * time.Second)
 
 		t.Compose = compose
+		mapSettings := t.TConfig.Teranode.SettingsMap()
 
-		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
-		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
-		defaultSettings := []string{"docker.teranode1.test", "docker.teranode2.test", "docker.teranode3.test"}
-
-		for idx, key := range order {
-			settings := settings.NewSettings(envSettings[key])
+		for key, val := range mapSettings {
+			settings := settings.NewSettings(val)
+			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
-				DefaultSettingsContext: defaultSettings[idx],
-				SettingsContext:        envSettings[key],
-				Name:                   nodeNames[len(t.Nodes)],
-				Settings:               settings,
+				SettingsContext: val,
+				Name:            nodeName,
+				Settings:        settings,
 			})
 			t.Logger.Infof("Settings context: %s", envSettings[key])
-			t.Logger.Infof("Node name: %s", nodeNames[len(t.Nodes)-1])
+			t.Logger.Infof("Node name: %s", nodeName)
 			t.Logger.Infof("Node settings: %s", t.Nodes[len(t.Nodes)-1].Settings)
 			os.Setenv("SETTINGS_CONTEXT", "")
 		}
@@ -384,7 +378,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		// Insert test ID into the path
 		parts := strings.Split(path, "/test/")
 		if len(parts) == 2 {
-			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TestID, parts[1])
+			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TConfig.Suite.TestID, parts[1])
 			t.Logger.Infof("Modified blockstore path: %s", path)
 			blockStoreURL.Path = path
 		}
@@ -402,7 +396,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 		parts = strings.Split(path, "/test/")
 		if len(parts) == 2 {
-			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TestID, parts[1])
+			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TConfig.Suite.TestID, parts[1])
 			t.Logger.Infof("Modified subtreestore path: %s", path)
 			subtreeStoreURL.Path = path
 		}
@@ -440,7 +434,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 			}
 
 			// Modify the path to point to the correct test directory
-			relativePath := fmt.Sprintf("./../../data/test/%s/%s/external", t.TestID, node.Name)
+			relativePath := fmt.Sprintf("./%s/%s/%s/external", t.TConfig.LocalSystem.DataDir, t.TConfig.Suite.TestID, node.Name)
 			t.Logger.Infof("Modified externalStore path: %s", relativePath)
 
 			// Manually construct the query string to avoid encoding issues
@@ -582,9 +576,9 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 			return err
 		}
 
-		identifier := tc.StackIdentifier(t.TestID)
+		identifier := tc.StackIdentifier(t.TConfig.Suite.TestID)
 
-		compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(t.ComposeFilePaths...), identifier)
+		compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(t.TConfig.LocalSystem.Composes...), identifier)
 		if err != nil {
 			return err
 		}
@@ -599,11 +593,8 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 
 		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
-		defaultSettings := []string{"docker.teranode1.test", "docker.teranode2.test", "docker.teranode3.test"}
-
 		for idx, key := range order {
 			settings := settings.NewSettings(envSettings[key])
-			t.Nodes[idx].DefaultSettingsContext = defaultSettings[idx]
 			t.Nodes[idx].SettingsContext = envSettings[key]
 			t.Nodes[idx].Name = nodeNames[idx]
 			t.Nodes[idx].Settings = settings

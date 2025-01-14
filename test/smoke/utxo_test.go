@@ -965,9 +965,9 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 
 	time.Sleep(10 * time.Second)
 
-	srcFile := fmt.Sprintf("../../data/test/%s/teranode1/external/%s.tx", framework.TestID, faucetTx.TxID())
+	srcFile := fmt.Sprintf("%s/%s/teranode1/external/%s.tx", framework.TConfig.LocalSystem.DataDir, framework.TConfig.Suite.TestID, faucetTx.TxID())
 
-	destFile := fmt.Sprintf("../../data/test/%s/teranode2/external/%s.tx", framework.TestID, faucetTx.TxID())
+	destFile := fmt.Sprintf("%s/%s/teranode2/external/%s.tx", framework.TConfig.LocalSystem.DataDir, framework.TConfig.Suite.TestID, faucetTx.TxID())
 
 	err = helper.CopyFile(srcFile, destFile)
 	if err != nil {

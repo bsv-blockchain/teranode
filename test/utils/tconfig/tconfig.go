@@ -24,8 +24,11 @@ type TConfig struct {
 	// viper hold Viper instance as a helper to load configuration to TConfig structure
 	viper *viper.Viper
 
-	// ConfigSuite hold the meta information to configure for a test suite
+	// Suite hold the meta information to configure for a test suite
 	Suite ConfigSuite `mapstructure:"suite" json:"suite" yaml:"suite"`
+
+	// LocalSystem hold the meta information to configure for a test localsystem
+	LocalSystem ConfigLocalSystem `mapstructure:"localsystem" json:"localsystem" yaml:"localsystem"`
 
 	// Teranode hold the informations for teranodes to be tested
 	Teranode ConfigTeranode `mapstructure:"teranode" json:"teranode" yaml:"teranode"`
@@ -37,6 +40,7 @@ func LoadAllConfig() TConfigLoader {
 	return func(s *TConfig) error {
 		allLoader := []TConfigLoader{
 			LoadConfigSuite(),
+			LoadConfigLocalSystem(),
 			LoadConfigTeranode(),
 		}
 

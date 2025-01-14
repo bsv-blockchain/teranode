@@ -36,7 +36,7 @@ func (suite *TNB2TestSuite) InitSuite() {
 
 func (suite *TNB2TestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.SetupTestEnv(suite.TConfig.Teranode.SettingsMap(), suite.TConfig.Suite.Composes, false)
+	suite.SetupTestEnv(false)
 }
 
 // func (suite *TNB2TestSuite) TearDownTest() {

@@ -24,7 +24,7 @@ type ConfigTeranode struct {
 //
 //	["contextA", "contextB"]  --> map[string]string{ "SETTINGS_CONTEXT_0": "contextA", SETTINGS_CONTEXT_1": "contextB" }
 func (ct *ConfigTeranode) SettingsMap() map[string]string {
-	ret := map[string]string{}
+	ret := make(map[string]string)
 
 	for i, val := range ct.Contexts {
 		key := fmt.Sprintf("SETTINGS_CONTEXT_%v", i+1)
