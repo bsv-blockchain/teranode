@@ -91,6 +91,7 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	config.Producer.Flush.Bytes = cfg.FlushBytes
 	config.Producer.Flush.Messages = cfg.FlushMessages
 	config.Producer.Flush.Frequency = cfg.FlushFrequency
+	// config.Producer.Return.Successes = true
 
 	cfg.Logger.Infof("Starting Kafka async producer for %s topic", cfg.Topic)
 
@@ -123,6 +124,20 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	return client, nil
 }
 
+func (c *KafkaAsyncProducer) decodeKeyOrValue(encoder sarama.Encoder) string {
+	if encoder == nil {
+		return ""
+	}
+
+	bytes := encoder.(sarama.ByteEncoder)
+
+	if len(bytes) > 80 {
+		return fmt.Sprintf("%x", bytes[:80]) + "... (truncated)"
+	}
+
+	return fmt.Sprintf("%x", bytes)
+}
+
 func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
@@ -133,19 +148,28 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 
 	go func() {
 		context, cancel := context.WithCancel(ctx)
+
 		defer cancel()
 
 		c.publishChannel = ch
 
 		go func() {
 			for s := range c.Producer.Successes() {
-				c.Config.Logger.Infof("Successfully sent message offset: %d", s.Offset)
+				key := c.decodeKeyOrValue(s.Key)
+				value := c.decodeKeyOrValue(s.Value)
+
+				c.Config.Logger.Infof("Successfully sent message to topic %s, offset: %d, key: %v, value: %v",
+					s.Topic, s.Offset, key, value)
 			}
 		}()
 
 		go func() {
 			for err := range c.Producer.Errors() {
-				c.Config.Logger.Errorf("Failed to deliver message: %v", err)
+				key := c.decodeKeyOrValue(err.Msg.Key)
+				value := c.decodeKeyOrValue(err.Msg.Value)
+
+				c.Config.Logger.Errorf("Failed to deliver message to topic %s: %v, Key: %v, Value: %v",
+					err.Msg.Topic, err.Err, key, value)
 			}
 		}()
 

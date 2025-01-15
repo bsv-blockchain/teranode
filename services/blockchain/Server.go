@@ -389,6 +389,10 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 			return nil, errors.WrapGRPC(err)
 		}
 
+		if len(value) >= 500_000 { // kafka default limit is actually 1MB and we don't ever expecta block to be even close to that
+			b.logger.Warnf("[AddBlock] blocks-final message size %d bytes maybe too large for Kafka, block hash: %s (height: %d)", len(value), block.Header.Hash(), block.Height)
+		}
+
 		b.kafkaChan <- &kafka.Message{
 			Key:   key,
 			Value: value,
