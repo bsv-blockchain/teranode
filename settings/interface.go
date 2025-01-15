@@ -14,6 +14,7 @@ type Settings struct {
 	SecurityLevelHTTP        int
 	ServerCertFile           string
 	ServerKeyFile            string
+	Logger                   string
 	LogLevel                 string
 	ProfilerAddr             string
 	StatsPrefix              string
@@ -26,6 +27,7 @@ type Settings struct {
 	UseCgoVerifier           bool
 	SecurityLevelGRPC        int
 	UsePrometheusGRPCMetrics bool
+	TracingCollectorURL      *url.URL
 
 	ChainCfgParams    *chaincfg.Params
 	Policy            *PolicySettings
@@ -246,21 +248,26 @@ type AdvertisingSettings struct {
 }
 
 type UtxoStoreSettings struct {
-	UtxoStore                  *url.URL
-	OutpointBatcherSize        int
-	SpendBatcherConcurrency    int
-	SpendBatcherDurationMillis int
-	SpendBatcherSize           int
-	StoreBatcherConcurrency    int
-	StoreBatcherDurationMillis int
-	StoreBatcherSize           int
-	UtxoBatchSize              int
-	GetBatcherSize             int
-	DBTimeout                  time.Duration
-	UseExternalTxCache         bool
-	ExternalizeAllTransactions bool
-	PostgresMaxIdleConns       int
-	PostgresMaxOpenConns       int
+	UtxoStore                      *url.URL
+	OutpointBatcherSize            int
+	OutpointBatcherDurationMillis  int
+	SpendBatcherConcurrency        int
+	SpendBatcherDurationMillis     int
+	SpendBatcherSize               int
+	StoreBatcherConcurrency        int
+	StoreBatcherDurationMillis     int
+	StoreBatcherSize               int
+	UtxoBatchSize                  int
+	IncrementBatcherSize           int
+	IncrementBatcherDurationMillis int
+	GetBatcherSize                 int
+	GetBatcherDurationMillis       int
+	DBTimeout                      time.Duration
+	UseExternalTxCache             bool
+	ExternalizeAllTransactions     bool
+	PostgresMaxIdleConns           int
+	PostgresMaxOpenConns           int
+	VerboseDebug                   bool
 }
 
 type P2PSettings struct {
@@ -341,6 +348,7 @@ type SubtreeValidationSettings struct {
 	SubtreeValidationTimeout                  int
 	SubtreeValidationAbandonThreshold         int
 	TxMetaCacheEnabled                        bool
+	TxMetaCacheMaxMB                          int
 	ValidationMaxRetries                      int
 	ValidationRetrySleep                      string
 	TxChanBufferSize                          int

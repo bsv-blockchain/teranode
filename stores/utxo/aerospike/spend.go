@@ -69,7 +69,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -214,7 +213,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchID := s.batchID.Add(1)
 
-	if gocore.Config().GetBool("utxostore_verbose_debug") {
+	if s.settings.UtxoStore.VerboseDebug {
 		s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends", batchID, len(batch))
 
 		defer func() {

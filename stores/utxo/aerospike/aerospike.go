@@ -78,7 +78,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 const MaxTxSizeInStoreInBytes = 32 * 1024
@@ -220,8 +219,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
 	}
 
-	getBatchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
-	getBatchDurationStr, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
+	getBatchSize := s.settings.UtxoStore.GetBatcherSize
+	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
 	s.getBatcher = batcher.New[batchGetItem](getBatchSize, getBatchDuration, s.sendGetBatch, true)
 
@@ -231,18 +230,18 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
 	}
 
-	spendBatchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
-	spendBatchDurationStr, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
+	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
+	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	s.spendBatcher = batcher.New[batchSpend](spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
 
-	outpointBatchSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 256)
-	outpointBatchDurationStr, _ := gocore.Config().GetInt("utxostore_outpointBatcherDurationMillis", 10)
+	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
+	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
 	s.outpointBatcher = batcher.New[batchOutpoint](outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, true)
 
-	incrementBatchSize, _ := gocore.Config().GetInt("utxostore_incrementBatcherSize", 256)
-	incrementBatchDurationStr, _ := gocore.Config().GetInt("utxostore_incrementBatcherDurationMillis", 10)
+	incrementBatchSize := tSettings.UtxoStore.IncrementBatcherSize
+	incrementBatchDurationStr := tSettings.UtxoStore.IncrementBatcherDurationMillis
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
 	s.incrementBatcher = batcher.New[batchIncrement](incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, true)
 

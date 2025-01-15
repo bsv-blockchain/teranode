@@ -73,7 +73,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 // Used for NOOP batch operations
@@ -233,7 +232,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
-	if gocore.Config().GetBool("utxostore_verbose_debug", false) {
+	if s.settings.UtxoStore.VerboseDebug {
 		s.logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
 	}
 

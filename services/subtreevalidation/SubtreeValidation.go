@@ -859,8 +859,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 }
 
 func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
-	baseUrl string) (missingTxs []missingTx, err error) {
-
+	baseURL string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}
@@ -877,7 +876,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainh
 		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
 
 		g.Go(func() error {
-			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, subtreeHash, missingTxHashesBatch, baseUrl)
+			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, subtreeHash, missingTxHashesBatch, baseURL)
 			if err != nil {
 				return errors.NewProcessingError("[getMissingTransactions][%s] failed to get missing transactions batch", subtreeHash.String(), err)
 			}

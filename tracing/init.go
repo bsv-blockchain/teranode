@@ -17,7 +17,7 @@ func InitTracer(serviceName string, samplingRate float64, tSettings *settings.Se
 	}
 
 	if tSettings.UseOtelTracing {
-		return InitOtelTracer(serviceName, samplingRate)
+		return InitOtelTracer(serviceName, samplingRate, tSettings)
 	}
 
 	return nil, nil

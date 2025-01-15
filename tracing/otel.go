@@ -6,26 +6,21 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/teranode/settings"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/trace"
-
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 )
 
 // InitOtelTracer initializes the OpenTelemetry tracer
 // serviceName: the name of the service
 // samplingRate: the rate at which to sample traces (0.0 - 1.0)
-func InitOtelTracer(serviceName string, samplingRate float64) (io.Closer, error) {
-	tracerURL, err, found := gocore.Config().GetURL("tracing_collector_url")
-	if err != nil {
-		return nil, err
-	}
-
-	if !found {
+func InitOtelTracer(serviceName string, samplingRate float64, tSettings *settings.Settings) (io.Closer, error) {
+	tracerURL := tSettings.TracingCollectorURL
+	if tracerURL == nil {
 		return nil, errors.NewConfigurationError("tracing_collector_url not found in config", nil)
 	}
 

@@ -99,7 +99,6 @@ func NewDistributorFromAddress(ctx context.Context, logger ulogger.Logger, tSett
 }
 
 func getPropagationServers(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (map[string]*propagation.Client, error) {
-	// addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	addresses := tSettings.Propagation.GRPCAddresses
 
 	if len(addresses) == 0 {

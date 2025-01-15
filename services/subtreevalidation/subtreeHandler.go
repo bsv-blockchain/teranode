@@ -5,7 +5,6 @@ package subtreevalidation
 
 import (
 	"context"
-
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -81,12 +80,12 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
 		}
 
-		var baseUrl string
+		var baseURL string
 		if len(msg.Value) > 32 {
-			baseUrl = string(msg.Value[32:])
+			baseURL = string(msg.Value[32:])
 		}
 
-		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
+		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseURL)
 		defer u.logger.Infof("Finished processing subtree message for %s", hash.String())
 
 		gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash)
@@ -103,7 +102,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 
 		v := ValidateSubtree{
 			SubtreeHash:   *hash,
-			BaseURL:       baseUrl,
+			BaseURL:       baseURL,
 			TxHashes:      nil,
 			AllowFailFast: true, // allow subtrees to fail fast, when getting from the network, will be retried if in a block
 		}

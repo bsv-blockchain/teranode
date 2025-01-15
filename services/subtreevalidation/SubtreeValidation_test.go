@@ -51,6 +51,7 @@ var (
 func newTx(random uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = random
+
 	return tx
 }
 
@@ -199,6 +200,7 @@ func TestServer_prepareTxsPerLevel(t *testing.T) {
 			s := &Server{}
 
 			transactions := make([]missingTx, 0)
+
 			for _, wireTx := range block.Transactions() {
 				// Serialize the tx
 				var txBytes bytes.Buffer
@@ -216,9 +218,11 @@ func TestServer_prepareTxsPerLevel(t *testing.T) {
 			maxLevel, blockTXsPerLevel := s.prepareTxsPerLevel(context.Background(), transactions)
 			assert.Equal(t, tc.expectedLevels, maxLevel)
 			allParents := 0
+
 			for i := range blockTXsPerLevel {
 				allParents += len(blockTXsPerLevel[i])
 			}
+
 			assert.Equal(t, tc.expectedTxMapLen, allParents)
 		})
 	}

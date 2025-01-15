@@ -58,5 +58,6 @@ func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 			}
 		}
 	}
+
 	return nil
 }

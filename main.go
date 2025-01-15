@@ -117,7 +117,7 @@ func main() {
 		return
 	}
 
-	logger := initLogger(progname)
+	logger := initLogger(progname, tSettings)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -125,8 +125,8 @@ func main() {
 	daemon.New().Start(logger, os.Args[1:], tSettings)
 }
 
-func initLogger(progname string) ulogger.Logger {
-	logLevel, _ := gocore.Config().Get("logLevel", "info")
+func initLogger(progname string, tSettings *settings.Settings) ulogger.Logger {
+	logLevel := tSettings.LogLevel
 	logOptions := []ulogger.Option{
 		ulogger.WithLevel(logLevel),
 	}
@@ -140,8 +140,8 @@ func initLogger(progname string) ulogger.Logger {
 
 	logOptions = append(logOptions, ulogger.WithWriter(output))
 
-	useLogger, ok := gocore.Config().Get("logger")
-	if ok && useLogger != "" {
+	useLogger := tSettings.Logger
+	if useLogger != "" {
 		logOptions = append(logOptions, ulogger.WithLoggerType(useLogger))
 	}
 
