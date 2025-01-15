@@ -258,6 +258,12 @@ func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
 	} else {
 		t.Logf("Test succeeded: BestBlockHash is not empty")
 	}
+
+	if len(blockchainInfo.Result.Chainwork) < 64 || blockchainInfo.Result.Chainwork == "" {
+		t.Errorf("Test failed: Chainwork value not valid")
+	} else {
+		t.Logf("Test succeeded: Chainwork value is valid: %v", blockchainInfo.Result.Chainwork)
+	}
 }
 
 func (suite *RPCTestSuite) TestRPCGetPeerInfo() {
