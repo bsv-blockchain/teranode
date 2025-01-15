@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -24,37 +25,98 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// miningCandidateResponse encapsulates all data needed for a mining candidate response.
 type miningCandidateResponse struct {
+	// miningCandidate contains the block template for mining
 	miningCandidate *model.MiningCandidate
-	subtrees        []*util.Subtree
-	err             error
+
+	// subtrees contains all transaction subtrees included in the candidate
+	subtrees []*util.Subtree
+
+	// err contains any error encountered during candidate creation
+	err error
 }
 
+// BlockAssembler manages the assembly of new blocks and coordinates mining operations.
 type BlockAssembler struct {
-	logger           ulogger.Logger
-	stats            *gocore.Stat
-	settings         *settings.Settings
-	utxoStore        utxo.Store
-	subtreeStore     blob.Store
+	// logger provides logging functionality for the assembler
+	logger ulogger.Logger
+
+	// stats tracks operational statistics for monitoring and debugging
+	stats *gocore.Stat
+
+	// settings contains configuration parameters for block assembly
+	settings *settings.Settings
+
+	// utxoStore manages the UTXO set storage and retrieval
+	utxoStore utxo.Store
+
+	// subtreeStore manages persistent storage of transaction subtrees
+	subtreeStore blob.Store
+
+	// blockchainClient interfaces with the blockchain for network operations
 	blockchainClient blockchain.ClientI
+
+	// subtreeProcessor handles the processing and organization of transaction subtrees
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh        chan chan *miningCandidateResponse
-	bestBlockHeader          atomic.Pointer[model.BlockHeader]
-	bestBlockHeight          atomic.Uint32
-	currentChain             []*model.BlockHeader
-	currentChainMap          map[chainhash.Hash]uint32
-	currentChainMapIDs       map[uint32]struct{}
-	currentChainMapMu        sync.RWMutex
+	// miningCandidateCh coordinates requests for mining candidates
+	miningCandidateCh chan chan *miningCandidateResponse
+
+	// bestBlockHeader atomically stores the current best block header
+	bestBlockHeader atomic.Pointer[model.BlockHeader]
+
+	// bestBlockHeight atomically stores the current best block height
+	bestBlockHeight atomic.Uint32
+
+	// currentChain stores the current blockchain state
+	currentChain []*model.BlockHeader
+
+	// currentChainMap maps block hashes to their heights
+	currentChainMap map[chainhash.Hash]uint32
+
+	// currentChainMapIDs tracks block IDs in the current chain
+	currentChainMapIDs map[uint32]struct{}
+
+	// currentChainMapMu protects access to chain maps
+	currentChainMapMu sync.RWMutex
+
+	// blockchainSubscriptionCh receives blockchain notifications
 	blockchainSubscriptionCh chan *blockchain.Notification
-	currentDifficulty        *model.NBit
-	defaultMiningNBits       *model.NBit
-	resetCh                  chan struct{}
-	resetWaitCount           atomic.Int32
-	resetWaitTime            atomic.Int32
-	currentRunningState      atomic.Value
+
+	// currentDifficulty stores the current mining difficulty target
+	currentDifficulty *model.NBit
+
+	// defaultMiningNBits stores the default mining difficulty
+	defaultMiningNBits *model.NBit
+
+	// resetCh handles reset requests for the assembler
+	resetCh chan struct{}
+
+	// resetWaitCount tracks the number of blocks to wait after reset
+	resetWaitCount atomic.Int32
+
+	// resetWaitTime tracks the time to wait after reset
+	resetWaitTime atomic.Int32
+
+	// currentRunningState tracks the current operational state
+	currentRunningState atomic.Value
 }
 
+// NewBlockAssembler creates and initializes a new BlockAssembler instance.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - logger: Logger for recording operations
+//   - tSettings: Teranode settings configuration
+//   - stats: Statistics tracking instance
+//   - utxoStore: UTXO set storage
+//   - subtreeStore: Subtree storage
+//   - blockchainClient: Interface to blockchain operations
+//   - newSubtreeChan: Channel for new subtree notifications
+//
+// Returns:
+//   - *BlockAssembler: New block assembler instance
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) (*BlockAssembler, error) {
 	bytesLittleEndian := make([]byte, 4)
@@ -97,18 +159,35 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	return b, nil
 }
 
+// TxCount returns the total number of transactions in the assembler.
+//
+// Returns:
+//   - uint64: Total transaction count
 func (b *BlockAssembler) TxCount() uint64 {
 	return b.subtreeProcessor.TxCount()
 }
 
+// QueueLength returns the current length of the transaction queue.
+//
+// Returns:
+//   - int64: Current queue length
 func (b *BlockAssembler) QueueLength() int64 {
 	return b.subtreeProcessor.QueueLength()
 }
 
+// SubtreeCount returns the total number of subtrees.
+//
+// Returns:
+//   - int: Total number of subtrees
 func (b *BlockAssembler) SubtreeCount() int {
 	return b.subtreeProcessor.SubtreeCount()
 }
 
+// startChannelListeners initializes and starts all channel listeners for block assembly operations.
+// It handles blockchain notifications, mining candidate requests, and reset operations.
+//
+// Parameters:
+//   - ctx: Context for cancellation
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	var err error
 
@@ -260,6 +339,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	}()
 }
 
+// UpdateBestBlock updates the best block information.
+//
+// Parameters:
+//   - ctx: Context for cancellation
 func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	_, _, deferFn := tracing.StartTracing(ctx, "UpdateBestBlock",
 		tracing.WithParentStat(b.stats),
@@ -341,10 +424,21 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	}
 }
 
+// GetCurrentRunningState returns the current operational state.
+//
+// Returns:
+//   - string: Current state description
 func (b *BlockAssembler) GetCurrentRunningState() string {
 	return b.currentRunningState.Load().(string)
 }
 
+// Start initializes and begins the block assembler operations.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) error {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	b.bestBlockHeight.Store(bestBlockHeight)
@@ -392,6 +486,15 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	return nil
 }
 
+// GetState retrieves the current state of the block assembler from the blockchain.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *model.BlockHeader: Current best block header
+//   - uint32: Current block height
+//   - error: Any error encountered during state retrieval
 func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	state, err := b.blockchainClient.GetState(ctx, "BlockAssembler")
 	if err != nil {
@@ -408,6 +511,13 @@ func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint
 	return bestBlockHeader, bestBlockHeight, nil
 }
 
+// SetState persists the current state of the block assembler to the blockchain.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during state persistence
 func (b *BlockAssembler) SetState(ctx context.Context) error {
 	blockHeader := b.bestBlockHeader.Load()
 	if blockHeader == nil {
@@ -427,22 +537,41 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
+// CurrentBlock returns the current best block header and height.
+//
+// Returns:
+//   - *model.BlockHeader: Current best block header
+//   - uint32: Current block height
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return b.bestBlockHeader.Load(), b.bestBlockHeight.Load()
 }
 
+// AddTx adds a transaction to the block assembler.
+//
+// Parameters:
+//   - node: Transaction node to add
 func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
 	b.subtreeProcessor.Add(node)
 }
 
+// RemoveTx removes a transaction from the block assembler.
+//
+// Parameters:
+//   - hash: Hash of the transaction to remove
+//
+// Returns:
+//   - error: Any error encountered during removal
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 	return b.subtreeProcessor.Remove(hash)
 }
 
+// DeDuplicateTransactions triggers deduplication of transactions in the subtree processor.
 func (b *BlockAssembler) DeDuplicateTransactions() {
 	b.subtreeProcessor.DeDuplicateTransactions()
 }
 
+// Reset triggers a reset of the block assembler state.
+// This operation runs asynchronously to prevent blocking.
 func (b *BlockAssembler) Reset() {
 	// run in a go routine to prevent blocking
 	go func() {
@@ -450,6 +579,15 @@ func (b *BlockAssembler) Reset() {
 	}()
 }
 
+// GetMiningCandidate retrieves a candidate block for mining.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *model.MiningCandidate: Mining candidate block
+//   - []*util.Subtree: Associated subtrees
+//   - error: Any error encountered during retrieval
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	responseCh := make(chan *miningCandidateResponse)
@@ -467,6 +605,13 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 	}
 }
 
+// getMiningCandidate creates a new mining candidate from the current block state.
+// This is an internal method called by GetMiningCandidate.
+//
+// Returns:
+//   - *model.MiningCandidate: Created mining candidate
+//   - []*util.Subtree: Associated subtrees
+//   - error: Any error encountered during candidate creation
 func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
@@ -601,6 +746,15 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	return miningCandidate, subtreesToInclude, nil
 }
 
+// handleReorg handles blockchain reorganization.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - header: New block header
+//   - height: New block height
+//
+// Returns:
+//   - error: Any error encountered during reorganization
 func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader, height uint32) error {
 	startTime := time.Now()
 
@@ -628,6 +782,17 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	return nil
 }
 
+// getReorgBlocks retrieves blocks involved in reorganization.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - header: Target block header
+//   - height: Target block height
+//
+// Returns:
+//   - []*model.Block: Blocks to move down
+//   - []*model.Block: Blocks to move up
+//   - error: Any error encountered
 func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader, height uint32) ([]*model.Block, []*model.Block, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
 		tracing.WithParentStat(b.stats),
@@ -749,6 +914,11 @@ FoundAncestor:
 	return filteredMoveDown, moveUpBlockHeaders, nil
 }
 
+// getNextNbits retrieves the next required work difficulty target.
+//
+// Returns:
+//   - *model.NBit: Next difficulty target
+//   - error: Any error encountered during retrieval
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
 	if err != nil {

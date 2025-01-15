@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -34,38 +35,86 @@ import (
 var (
 	// addTxBatchGrpc = blockAssemblyStat.NewStat("AddTxBatch_grpc", true)
 
+	// jobTTL defines the time-to-live for mining jobs
 	// channelStats = blockAssemblyStat.NewStat("channels", false)
 	jobTTL = 10 * time.Minute
 )
 
+// BlockSubmissionRequest encapsulates a request to submit a mined block solution
+// along with a channel for receiving the processing result.
 type BlockSubmissionRequest struct {
+	// SubmitMiningSolutionRequest contains the actual mining solution data
+	// including nonce, timestamp, and other block header fields
 	*blockassembly_api.SubmitMiningSolutionRequest
+
+	// responseChan receives the result of the submission processing
+	// A nil error indicates successful submission
+	// This channel is optional and only used when waiting for response is enabled
 	responseChan chan error
 }
 
-// BlockAssembly type carries the logger within it
+// BlockAssembly represents the main service for block assembly operations.
 type BlockAssembly struct {
+	// UnimplementedBlockAssemblyAPIServer provides default implementations for gRPC methods
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
-	blockAssembler *BlockAssembler
-	logger         ulogger.Logger
-	stats          *gocore.Stat
-	settings       *settings.Settings
 
-	blockchainClient    blockchain.ClientI
-	txStore             blob.Store
-	utxoStore           utxostore.Store
-	subtreeStore        blob.Store
-	jobStore            *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	// blockAssembler handles the core block assembly logic
+	blockAssembler *BlockAssembler
+
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// stats tracks operational statistics
+	stats *gocore.Stat
+
+	// settings contains configuration parameters
+	settings *settings.Settings
+
+	// blockchainClient interfaces with the blockchain
+	blockchainClient blockchain.ClientI
+
+	// txStore manages transaction storage
+	txStore blob.Store
+
+	// utxoStore manages UTXO storage
+	utxoStore utxostore.Store
+
+	// subtreeStore manages subtree storage
+	subtreeStore blob.Store
+
+	// jobStore caches mining jobs with TTL
+	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+
+	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
 }
 
+// subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
+// This is used when initial storage attempts fail and need to be retried with backoff
 type subtreeRetrySend struct {
-	subtreeHash  chainhash.Hash
+	// subtreeHash uniquely identifies the subtree being stored
+	subtreeHash chainhash.Hash
+
+	// subtreeBytes contains the serialized subtree data to be stored
 	subtreeBytes []byte
-	retries      int
+
+	// retries tracks the number of storage attempts made for this subtree
+	// Used to implement exponential backoff and maximum retry limits
+	retries int
 }
 
-// New will return a server instance with the logger stored within it
+// New creates a new BlockAssembly instance.
+//
+// Parameters:
+//   - logger: Logger for recording operations
+//   - tSettings: Teranode settings configuration
+//   - txStore: Transaction storage
+//   - utxoStore: UTXO storage
+//   - subtreeStore: Subtree storage
+//   - blockchainClient: Interface to blockchain operations
+//
+// Returns:
+//   - *BlockAssembly: New block assembly instance
 func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, utxoStore utxostore.Store, subtreeStore blob.Store,
 	blockchainClient blockchain.ClientI) *BlockAssembly {
 	// initialize Prometheus metrics, singleton, will only happen once
@@ -88,6 +137,16 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 	return ba
 }
 
+// Health checks the health status of the BlockAssembly service.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - checkLiveness: Whether to perform liveness check
+//
+// Returns:
+//   - int: HTTP status code indicating health state
+//   - string: Health status message
+//   - error: Any error encountered during health check
 func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -122,6 +181,15 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC implements the gRPC health check endpoint.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - _: Empty message request (unused)
+//
+// Returns:
+//   - *blockassembly_api.HealthResponse: Health check response
+//   - error: Any error encountered during health check
 func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(ba.stats),
@@ -139,6 +207,13 @@ func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.Em
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the BlockAssembly service.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during initialization
 func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// this is passed into the block assembler and subtree processor where new subtrees are created
 	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, ba.settings.BlockAssembly.NewSubtreeChanBuffer)
@@ -323,7 +398,13 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	return nil
 }
 
-// Start function
+// Start begins the BlockAssembly service operation.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during startup
 func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 
 	if err = ba.blockAssembler.Start(ctx); err != nil {
@@ -340,13 +421,30 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	return nil
 }
 
+// Stop gracefully shuts down the BlockAssembly service.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//
+// Returns:
+//   - error: Any error encountered during shutdown
 func (ba *BlockAssembly) Stop(_ context.Context) error {
 	ba.jobStore.Stop()
 	return nil
 }
 
+// txsProcessed tracks the total number of transactions processed atomically
 var txsProcessed = atomic.Uint64{}
 
+// AddTx adds a transaction to the block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Transaction addition request
+//
+// Returns:
+//   - *blockassembly_api.AddTxResponse: Response indicating success
+//   - error: Any error encountered during addition
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
@@ -409,6 +507,15 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
+// AddTxBatch processes a batch of transactions for block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - batch: Batch of transactions to process
+//
+// Returns:
+//   - *blockassembly_api.AddTxBatchResponse: Response indicating success
+//   - error: Any error encountered during batch processing
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "AddTxBatch",
 		tracing.WithParentStat(ba.stats),
@@ -448,10 +555,23 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	return resp, nil
 }
 
+// TxCount returns the total number of transactions processed.
+//
+// Returns:
+//   - uint64: Total transaction count
 func (ba *BlockAssembly) TxCount() uint64 {
 	return ba.blockAssembler.TxCount()
 }
 
+// GetMiningCandidate retrieves a candidate block for mining.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Empty message request
+//
+// Returns:
+//   - *model.MiningCandidate: Mining candidate block
+//   - error: Any error encountered during retrieval
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(ba.stats),
@@ -509,6 +629,16 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	return miningCandidate, nil
 }
 
+// submitMiningSolution processes a mining solution submission.
+// It validates the solution, creates a block, and adds it to the blockchain.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Mining solution submission request
+//
+// Returns:
+//   - *blockassembly_api.SubmitMiningSolutionResponse: Submission response
+//   - error: Any error encountered during submission processing
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "SubmitMiningSolution",
 		tracing.WithParentStat(ba.stats),
@@ -932,6 +1062,14 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
+// generateBlock creates a new block by getting a mining candidate and mining it.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - address: Optional address for mining rewards
+//
+// Returns:
+//   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})

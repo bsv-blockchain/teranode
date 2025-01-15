@@ -1,3 +1,4 @@
+// Package subtreeprocessor provides functionality for processing transaction subtrees in Teranode.
 package subtreeprocessor
 
 import (
@@ -26,70 +27,157 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Job represents a mining job with its associated data.
 type Job struct {
-	ID              *chainhash.Hash
-	Subtrees        []*util.Subtree
-	MiningCandidate *model.MiningCandidate
+	ID              *chainhash.Hash        // Unique identifier for the job
+	Subtrees        []*util.Subtree        // Collection of subtrees for the job
+	MiningCandidate *model.MiningCandidate // Mining candidate information
 }
 
+// NewSubtreeRequest encapsulates a request to process a new subtree.
 type NewSubtreeRequest struct {
-	Subtree *util.Subtree
-	ErrChan chan error
+	Subtree *util.Subtree // The subtree to process
+	ErrChan chan error    // Channel for error reporting
 }
 
+// moveBlockRequest represents a request to move a block in the chain.
 type moveBlockRequest struct {
-	block   *model.Block
+	block   *model.Block // The block to move
+	errChan chan error   // Channel for error reporting
+}
+
+// reorgBlocksRequest represents a request to reorganize blocks in the chain.
+type reorgBlocksRequest struct {
+	// moveDownBlocks contains blocks that need to be removed from the current chain
+	moveDownBlocks []*model.Block
+
+	// moveUpBlocks contains blocks that need to be added to form the new chain
+	moveUpBlocks []*model.Block
+
+	// errChan receives any error encountered during reorganization
 	errChan chan error
 }
-type reorgBlocksRequest struct {
-	moveDownBlocks []*model.Block
-	moveUpBlocks   []*model.Block
-	errChan        chan error
-}
 
+// resetBlocks encapsulates the data needed for a processor reset operation.
 type resetBlocks struct {
-	blockHeader    *model.BlockHeader
+	// blockHeader represents the new block header to reset to
+	blockHeader *model.BlockHeader
+
+	// moveDownBlocks contains blocks that need to be removed during reset
 	moveDownBlocks []*model.Block
-	moveUpBlocks   []*model.Block
-	responseCh     chan ResetResponse
-	isLegacySync   bool
+
+	// moveUpBlocks contains blocks that need to be added during reset
+	moveUpBlocks []*model.Block
+
+	// responseCh receives the reset operation response
+	responseCh chan ResetResponse
+
+	// isLegacySync indicates whether this is a legacy synchronization operation
+	isLegacySync bool
 }
 
+// ResetResponse encapsulates the response from a reset operation.
 type ResetResponse struct {
+	// Err contains any error encountered during the reset operation
 	Err error
 }
 
+// SubtreeProcessor manages the processing of transaction subtrees and block assembly.
 type SubtreeProcessor struct {
-	settings                  *settings.Settings
-	currentItemsPerFile       int
-	txChan                    chan *[]TxIDAndFee
-	getSubtreesChan           chan chan []*util.Subtree
-	moveUpBlockChan           chan moveBlockRequest
-	reorgBlockChan            chan reorgBlocksRequest
+	// settings contains the configuration parameters for the processor
+	settings *settings.Settings
+
+	// currentItemsPerFile specifies the maximum number of items per subtree file
+	currentItemsPerFile int
+
+	// txChan receives transaction batches for processing
+	txChan chan *[]TxIDAndFee
+
+	// getSubtreesChan handles requests to retrieve current subtrees
+	getSubtreesChan chan chan []*util.Subtree
+
+	// moveUpBlockChan receives requests to process new blocks
+	moveUpBlockChan chan moveBlockRequest
+
+	// reorgBlockChan handles blockchain reorganization requests
+	reorgBlockChan chan reorgBlocksRequest
+
+	// deDuplicateTransactionsCh triggers transaction deduplication
 	deDuplicateTransactionsCh chan struct{}
-	resetCh                   chan *resetBlocks
-	removeTxCh                chan chainhash.Hash
-	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
-	chainedSubtrees           []*util.Subtree        // TODO change this to use badger under the hood, so we can scale beyond RAM
-	chainedSubtreeCount       atomic.Int32
-	currentSubtree            *util.Subtree
-	currentBlockHeader        *model.BlockHeader
+
+	// resetCh handles requests to reset the processor state
+	resetCh chan *resetBlocks
+
+	// removeTxCh receives transactions to be removed
+	removeTxCh chan chainhash.Hash
+
+	// newSubtreeChan receives notifications about new subtrees
+	newSubtreeChan chan NewSubtreeRequest
+
+	// chainedSubtrees stores the ordered list of completed subtrees
+	chainedSubtrees []*util.Subtree
+
+	// chainedSubtreeCount tracks the number of chained subtrees atomically
+	chainedSubtreeCount atomic.Int32
+
+	// currentSubtree represents the subtree currently being built
+	currentSubtree *util.Subtree
+
+	// currentBlockHeader stores the current block header being processed
+	currentBlockHeader *model.BlockHeader
+
+	// Mutex provides thread-safe access to shared resources
 	sync.Mutex
-	txCount             atomic.Uint64
-	batcher             *TxIDAndFeeBatch
-	queue               *LockFreeQueue
-	removeMap           *util.SwissMap
-	subtreeStore        blob.Store
-	utxoStore           utxostore.Store
-	logger              ulogger.Logger
-	stats               *gocore.Stat
+
+	// txCount tracks the total number of transactions processed
+	txCount atomic.Uint64
+
+	// batcher manages transaction batching operations
+	batcher *TxIDAndFeeBatch
+
+	// queue manages the transaction processing queue
+	queue *LockFreeQueue
+
+	// removeMap tracks transactions marked for removal
+	removeMap *util.SwissMap
+
+	// subtreeStore provides persistent storage for subtrees
+	subtreeStore blob.Store
+
+	// utxoStore manages UTXO set storage
+	utxoStore utxostore.Store
+
+	// logger handles logging operations
+	logger ulogger.Logger
+
+	// stats tracks operational statistics
+	stats *gocore.Stat
+
+	// currentRunningState tracks the processor's operational state
 	currentRunningState atomic.Value
 }
 
 var (
-	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
+	// ExpectedNumberOfSubtrees defines the expected number of subtrees in a block.
+	// This is calculated based on a subtree being created approximately every second,
+	// and is used for initial capacity allocation to optimize memory usage.
+	ExpectedNumberOfSubtrees = 1024
 )
 
+// NewSubtreeProcessor creates and initializes a new SubtreeProcessor instance.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - logger: Logger instance for recording operations
+//   - tSettings: Teranode settings configuration
+//   - subtreeStore: Storage for subtrees
+//   - utxoStore: Storage for UTXOs
+//   - newSubtreeChan: Channel for new subtree notifications
+//   - options: Optional configuration functions
+//
+// Returns:
+//   - *SubtreeProcessor: Initialized subtree processor
+//   - error: Any error encountered during initialization
 func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, utxoStore utxostore.Store,
 	newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
 	initPrometheusMetrics()
@@ -290,13 +378,25 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	return stp, nil
 }
 
+// GetCurrentRunningState returns the current operational state of the processor.
+//
+// Returns:
+//   - string: Current state description
 func (stp *SubtreeProcessor) GetCurrentRunningState() string {
 	return stp.currentRunningState.Load().(string)
 }
 
-// Reset resets the subtree processor, removing all subtrees and transactions
-// this will be called from the block assembler in a channel select, making sure no other operations are happening
-// the queue will still be ingesting transactions
+// Reset resets the processor to a clean state,  removing all subtrees and transactions
+// This will be called from the block assembler in a channel select, making sure no other operations are happening
+// Note - the queue will still be ingesting transactions
+// Parameters:
+//   - blockHeader: New block header to reset to
+//   - moveDownBlocks: Blocks to move down in the chain
+//   - moveUpBlocks: Blocks to move up in the chain
+//   - isLegacySync: Whether this is a legacy sync operation
+//
+// Returns:
+//   - ResetResponse: Response containing any errors encountered
 func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, isLegacySync bool) ResetResponse {
 	responseCh := make(chan ResetResponse)
 	stp.resetCh <- &resetBlocks{
@@ -395,40 +495,76 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 	return nil
 }
 
+// SetCurrentBlockHeader updates the current block header.
+//
+// Parameters:
+//   - blockHeader: New block header to set
 func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	// TODO should this also be in the channel select ?
 	stp.currentBlockHeader = blockHeader
 }
 
+// GetCurrentBlockHeader returns the current block header being processed.
+//
+// Returns:
+//   - *model.BlockHeader: Current block header
 func (stp *SubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
 	return stp.currentBlockHeader
 }
 
+// GetCurrentSubtree returns the subtree currently being built.
+//
+// Returns:
+//   - *util.Subtree: Current subtree
 func (stp *SubtreeProcessor) GetCurrentSubtree() *util.Subtree {
 	return stp.currentSubtree
 }
 
+// GetChainedSubtrees returns all completed subtrees in the chain.
+//
+// Returns:
+//   - []*util.Subtree: Array of chained subtrees
 func (stp *SubtreeProcessor) GetChainedSubtrees() []*util.Subtree {
 	return stp.chainedSubtrees
 }
 
+// GetUtxoStore returns the UTXO store instance.
+//
+// Returns:
+//   - utxostore.Store: UTXO store instance
 func (stp *SubtreeProcessor) GetUtxoStore() utxostore.Store {
 	return stp.utxoStore
 }
 
+// SetCurrentItemsPerFile updates the maximum items per subtree file.
+//
+// Parameters:
+//   - v: New maximum items value
 func (stp *SubtreeProcessor) SetCurrentItemsPerFile(v int) {
 	stp.currentItemsPerFile = v
 }
 
+// TxCount returns the total number of transactions processed.
+//
+// Returns:
+//   - uint64: Total transaction count
 func (stp *SubtreeProcessor) TxCount() uint64 {
 	return stp.txCount.Load()
 }
 
+// QueueLength returns the current length of the transaction queue.
+//
+// Returns:
+//   - int64: Current queue length
 func (stp *SubtreeProcessor) QueueLength() int64 {
 	return stp.queue.length()
 }
 
-// SubtreeCount is used to gather prometheus statics
+// SubtreeCount returns the total number of subtrees.
+// This method is primarily used for prometheus statistics.
+//
+// Returns:
+//   - int: Total number of subtrees
 func (stp *SubtreeProcessor) SubtreeCount() int {
 	// not using len(chainSubtrees) to avoid Race condition
 	// should we be using locks around all chainSubtree operations instead?
@@ -436,6 +572,14 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 	return int(stp.chainedSubtreeCount.Load()) + 01
 }
 
+// addNode adds a new transaction node to the current subtree.
+//
+// Parameters:
+//   - node: Transaction node to add
+//   - skipNotification: Whether to skip notification of new subtrees
+//
+// Returns:
+//   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification bool) (err error) {
 	prometheusSubtreeProcessorAddTx.Inc()
 
@@ -472,13 +616,22 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 	return nil
 }
 
-// Add adds a tx hash to a channel
+// Add adds a transaction node to the processor.
+//
+// Parameters:
+//   - node: Transaction node to add
 func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
 	stp.queue.enqueue(&TxIDAndFee{node: node})
 }
 
-// Remove prevents a tx to be processed from the queue into a subtree
-// this needs to happen before the delay time in the queue has passed
+// Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.
+// This can only take place before the delay time in the queue has passed.
+//
+// Parameters:
+//   - hash: Hash of the transaction to remove
+//
+// Returns:
+//   - error: Any error encountered during removal
 func (stp *SubtreeProcessor) Remove(hash chainhash.Hash) error {
 	// add to the removeMap to make sure it gets removed if processing
 	// or if it comes in later after cleaning the subtrees
@@ -545,6 +698,12 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 
 // reChainSubtrees will cycle through all subtrees from the given index and create new subtrees from the nodes
 // in the same order as they were before
+//
+// Parameters:
+//   - fromIndex: Starting index for rechaining
+//
+// Returns:
+//   - error: Any error encountered during rechaining
 func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	// copy the original subtrees from the given index into a new structure
 	originalSubtrees := stp.chainedSubtrees[fromIndex:]
@@ -571,6 +730,10 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	return nil
 }
 
+// GetCompletedSubtreesForMiningCandidate retrieves all completed subtrees for block mining.
+//
+// Returns:
+//   - []*util.Subtree: Array of completed subtrees
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
 	stp.logger.Infof("GetCompletedSubtreesForMiningCandidate")
 
@@ -586,7 +749,13 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 	return subtrees
 }
 
-// MoveUpBlock the subtrees when a new block is found
+// MoveUpBlock updates the subtrees when a new block is found.
+//
+// Parameters:
+//   - block: Block to process
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) MoveUpBlock(block *model.Block) error {
 	errChan := make(chan error)
 	stp.moveUpBlockChan <- moveBlockRequest{
@@ -597,6 +766,14 @@ func (stp *SubtreeProcessor) MoveUpBlock(block *model.Block) error {
 	return <-errChan
 }
 
+// Reorg handles blockchain reorganization by processing moved blocks.
+//
+// Parameters:
+//   - moveDownBlocks: Blocks to move down in the chain
+//   - moveUpBlocks: Blocks to move up in the chain
+//
+// Returns:
+//   - error: Any error encountered during reorganization
 func (stp *SubtreeProcessor) Reorg(moveDownBlocks []*model.Block, modeUpBlocks []*model.Block) error {
 	errChan := make(chan error)
 	stp.reorgBlockChan <- reorgBlocksRequest{
@@ -647,6 +824,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 	return nil
 }
 
+// setTxCountFromSubtrees recalculates the total transaction count
+// by summing transactions across all subtrees, the current subtree,
+// and the queue. This ensures the transaction count remains accurate
+// after chain modifications.
 func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Store(0)
 
@@ -658,9 +839,17 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Add(uint64(stp.queue.length()))
 }
 
-// moveDownBlock adds all transactions that are in the block given to the current subtrees
-// TODO handle conflicting transactions
+// moveDownBlock processes a block during downward chain movement.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - block: Block to process
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) (err error) {
+	// TODO handle conflicting transactions
+
 	if block == nil {
 		return errors.NewProcessingError("[moveDownBlock] you must pass in a block to moveDownBlock")
 	}
@@ -786,7 +975,15 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	return nil
 }
 
-// moveDownBlocks adds all transactions that are in given blocks to current stp subtrees
+// moveDownBlocks processes multiple blocks during downward chain movement.
+// It adds all transactions from the given blocks to the current subtrees.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - blocks: Array of blocks to process
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model.Block) (err error) {
 	if len(blocks) == 0 || blocks[0] == nil {
 		return errors.NewProcessingError("[moveDownBlocks] you must pass in a block to moveDownBlock")
@@ -1101,6 +1298,14 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	return nil
 }
 
+// moveUpBlockDeQueue processes the transaction queue during block movement.
+//
+// Parameters:
+//   - transactionMap: Map of transactions to process
+//   - skipNotification: Whether to skip notification of new subtrees
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap, skipNotification bool) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
@@ -1128,9 +1333,14 @@ func (stp *SubtreeProcessor) moveUpBlockDeQueue(transactionMap util.TxMap, skipN
 	return nil
 }
 
+// deDuplicateTransactions removes duplicate transactions from the processor.
 func (stp *SubtreeProcessor) DeDuplicateTransactions() {
 	stp.deDuplicateTransactionsCh <- struct{}{}
 }
+
+// deDuplicateTransactions removes duplicate transactions from all subtrees
+// and reconstructs the subtree chain with unique transactions only.
+// This operation modifies the internal state of the processor.
 
 func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	var err error
@@ -1186,6 +1396,14 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions DONE")
 }
 
+// processCoinbaseUtxos processes UTXOs from coinbase transactions.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - block: Block containing the coinbase transaction
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *model.Block) error {
 	startTime := time.Now()
 
@@ -1237,6 +1455,16 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	return nil
 }
 
+// processRemainderTxHashes processes remaining transaction hashes after reorganization.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - chainedSubtrees: List of subtrees to process
+//   - transactionMap: Map of transactions to process
+//   - skipNotification: Whether to skip notification of new subtrees
+//
+// Returns:
+//   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree, transactionMap util.TxMap, skipNotification bool) error {
 	var hashCount atomic.Int64
 
@@ -1293,6 +1521,15 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	return nil
 }
 
+// CreateTransactionMap creates a map of transactions from the provided subtrees.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - blockSubtreesMap: Map of subtree hashes to their indices
+//
+// Returns:
+//   - util.TxMap: Created transaction map
+//   - error: Any error encountered during map creation
 func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (util.TxMap, error) {
 	startTime := time.Now()
 
@@ -1358,6 +1595,15 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	return transactionMap, nil
 }
 
+// DeserializeHashesFromReaderIntoBuckets deserializes transaction hashes from a reader into buckets.
+//
+// Parameters:
+//   - reader: Source reader containing hash data
+//   - nBuckets: Number of buckets to distribute hashes into
+//
+// Returns:
+//   - map[uint16][][32]byte: Map of bucketed hash arrays
+//   - error: Any error encountered during deserialization
 func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][][32]byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {

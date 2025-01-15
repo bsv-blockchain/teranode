@@ -1,3 +1,4 @@
+// Package mining provides functionality for Bitcoin mining operations in Teranode.
 package mining
 
 import (
@@ -12,6 +13,19 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// Mine attempts to mine a block using the provided mining candidate and optional address.
+// It performs the mining operation by trying different nonce values until finding one that
+// produces a valid block hash meeting the target difficulty.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - tSettings: The Teranode settings
+//   - candidate: The mining candidate containing block template information
+//   - address: Optional address to receive mining rewards
+//
+// Returns:
+//   - *model.MiningSolution: Contains the successful mining solution if found
+//   - error: Any error encountered during mining
 func Mine(ctx context.Context, tSettings *settings.Settings, candidate *model.MiningCandidate, address *string) (*model.MiningSolution, error) {
 	var coinbaseTx *bt.Tx
 

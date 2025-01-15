@@ -214,6 +214,13 @@ func Test_queueLarge(t *testing.T) {
 	assert.Equal(t, 10_000_000, items)
 }
 
+// enqueueItems adds test items to a queue for testing.
+//
+// Parameters:
+//   - t: Testing instance
+//   - q: Queue to populate
+//   - threads: Number of concurrent threads
+//   - iter: Number of iterations per thread
 func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	startTime := time.Now()
 
@@ -242,6 +249,9 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	t.Logf("Time queue %d items: %s\n", threads*iter, time.Since(startTime))
 }
 
+// Benchmark functions for performance testing
+
+// BenchmarkQueue tests queue performance.
 func BenchmarkQueue(b *testing.B) {
 	q := NewLockFreeQueue()
 
@@ -258,6 +268,7 @@ func BenchmarkQueue(b *testing.B) {
 	}
 }
 
+// BenchmarkAtomicPointer tests atomic pointer operations.
 func BenchmarkAtomicPointer(b *testing.B) {
 	var v atomic.Pointer[TxIDAndFee]
 
@@ -285,6 +296,10 @@ func BenchmarkAtomicPointer(b *testing.B) {
 	}
 }
 
+// printAlloc formats memory allocation information for testing.
+//
+// Returns:
+//   - string: Formatted memory allocation string
 func printAlloc() string {
 	var m runtime.MemStats
 

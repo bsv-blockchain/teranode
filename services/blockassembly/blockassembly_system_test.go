@@ -1,5 +1,6 @@
 //go:build system
 
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -32,6 +33,13 @@ var kafkaCmd *exec.Cmd
 var appCmd *exec.Cmd
 var appPID int
 
+// startKafka initializes Kafka for testing.
+//
+// Parameters:
+//   - logFile: Path to log file
+//
+// Returns:
+//   - error: Any error encountered during startup
 func startKafka(logFile string) error {
 	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
 
@@ -47,6 +55,13 @@ func startKafka(logFile string) error {
 	return kafkaCmd.Start()
 }
 
+// startApp initializes the application for testing.
+//
+// Parameters:
+//   - logFile: Path to log file
+//
+// Returns:
+//   - error: Any error encountered during startup
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
 
@@ -74,6 +89,7 @@ func startApp(logFile string) error {
 	return nil
 }
 
+// stopKafka terminates Kafka after testing.
 func stopKafka() {
 	log.Println("Stopping Kafka...")
 	cmd := exec.Command("docker", "stop", "kafka-server")
@@ -84,6 +100,7 @@ func stopKafka() {
 	}
 }
 
+// stopTeranode terminates the Teranode application after testing.
 func stopTeranode() {
 	log.Println("Stopping TERANODE...")
 	cmd := exec.Command("pkill", "-f", "teranode")
@@ -94,7 +111,10 @@ func stopTeranode() {
 	}
 }
 
-// TestMain runs setup before tests and teardown after tests
+// TestMain handles test suite setup and teardown.
+//
+// Parameters:
+//   - m: Testing framework instance
 func TestMain(m *testing.M) {
 	// Start Kafka
 	if err := startKafka("kafka.log"); err != nil {
@@ -119,7 +139,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// Health check
+// TestHealth verifies the health check functionality of the block assembly service.
 func TestHealth(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -144,7 +164,7 @@ func TestHealth(t *testing.T) {
 	assert.Equal(t, "OK", message, "Liveness check should return 'OK' message")
 }
 
-// Test coinbase value
+// TestCoinbaseSubsidyHeight verifies correct coinbase subsidy calculation at different heights.
 func TestCoinbaseSubsidyHeight(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -189,6 +209,7 @@ func TestCoinbaseSubsidyHeight(t *testing.T) {
 	//TODO: Add an assertion for height
 }
 
+// TestDifficultyAdjustment verifies the difficulty adjustment mechanism.
 func TestDifficultyAdjustment(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	t.Skip("Skipping difficulty adjustment test")
@@ -255,6 +276,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 	assert.InDelta(t, 1.0, blocksPerMinute, 1.0, "Block generation rate should be roughly 2 blocks per minute")
 }
 
+// TestShouldFollowLongerChain verifies chain selection logic.
 func TestShouldFollowLongerChain(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -621,6 +643,16 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	assert.Equal(t, 3, foundTxs, "All transactions should be included in the mining candidate")
 }
 
+// CallRPC performs an RPC call to a Bitcoin node.
+//
+// Parameters:
+//   - url: RPC endpoint URL
+//   - method: RPC method to call
+//   - params: Parameters for the RPC call
+//
+// Returns:
+//   - string: RPC response
+//   - error: Any error encountered during the call
 func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	// Create the request payload
@@ -665,6 +697,7 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 	return string(body), nil
 }
 
+// TestShouldHandleReorg verifies blockchain reorganization handling.
 func TestShouldHandleReorg(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Block.StoreCacheEnabled = false
@@ -818,6 +851,7 @@ func TestShouldHandleReorg(t *testing.T) {
 		"Block assembler should follow Chain B due to higher difficulty")
 }
 
+// TestShouldHandleReorgWithLongerChain verifies reorganization with extended chains.
 func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Block.StoreCacheEnabled = false

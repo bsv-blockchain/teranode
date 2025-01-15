@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -30,15 +31,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// baTestItems represents test fixtures for block assembly testing.
 type baTestItems struct {
-	utxoStore        utxoStore.Store
-	txStore          *memory.Memory
-	blobStore        *memory.Memory
-	newSubtreeChan   chan subtreeprocessor.NewSubtreeRequest
-	blockAssembler   *BlockAssembler
+	// utxoStore manages UTXO storage for testing
+	utxoStore utxoStore.Store
+
+	// txStore manages transaction storage for testing
+	txStore *memory.Memory
+
+	// blobStore manages blob storage for testing
+	blobStore *memory.Memory
+
+	// newSubtreeChan handles new subtree notifications in tests
+	newSubtreeChan chan subtreeprocessor.NewSubtreeRequest
+
+	// blockAssembler is the test instance of BlockAssembler
+	blockAssembler *BlockAssembler
+
+	// blockchainClient provides blockchain operations for testing
 	blockchainClient blockchain.ClientI
 }
 
+// addBlock adds a test block to the blockchain.
+//
+// Parameters:
+//   - blockHeader: Header of the block to add
+//
+// Returns:
+//   - error: Any error encountered during addition
 func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
 	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 
@@ -319,6 +339,13 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 	})
 }
 
+// setupBlockAssemblyTest prepares a test environment for block assembly.
+//
+// Parameters:
+//   - t: Testing instance
+//
+// Returns:
+//   - *baTestItems: Test fixtures and utilities
 func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items := baTestItems{}
 
@@ -747,6 +774,10 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	})
 }
 
+// createTestSettings creates settings for testing purposes.
+//
+// Returns:
+//   - *settings.Settings: Test configuration settings
 func createTestSettings() *settings.Settings {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000

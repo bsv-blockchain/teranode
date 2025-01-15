@@ -308,6 +308,11 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 	})
 }
 
+// assertMerkleProof verifies merkle proof correctness in tests.
+//
+// Parameters:
+//   - t: Testing instance
+//   - stp: Subtree processor instance
 func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 	// get the merkle proof for the coinbase
 	merkleProof, err := util.GetMerkleProofForCoinbase(stp.chainedSubtrees) //
@@ -877,7 +882,11 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	}
 }
 
-// generateTxID generates a random 32-byte hexadecimal string.
+// generateTxID generates a random transaction ID (32-byte hexadecimal string) for testing.
+//
+// Returns:
+//   - string: Generated transaction ID
+//   - error: Any error encountered during generation
 func generateTxID() (string, error) {
 	b := make([]byte, 32)
 
@@ -889,7 +898,11 @@ func generateTxID() (string, error) {
 	return fmt.Sprintf("%x", b), nil
 }
 
-// generateTxID generates a random chainhash.Hash.
+// generateTxHash generates a random transaction hash for testing.
+//
+// Returns:
+//   - chainhash.Hash: Generated transaction hash
+//   - error: Any error encountered during generation
 func generateTxHash() (chainhash.Hash, error) {
 	b := make([]byte, 32)
 
@@ -1134,6 +1147,15 @@ func TestMoveDownBlocks(t *testing.T) {
 	})
 }
 
+// createSubtree creates a test subtree with specified parameters.
+//
+// Parameters:
+//   - t: Testing instance
+//   - length: Number of transactions in subtree
+//   - createCoinbase: Whether to include coinbase transaction
+//
+// Returns:
+//   - *util.Subtree: Created test subtree
 func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
 	//nolint:gosec
 	subtree, err := util.NewTreeByLeafCount(int(length))
@@ -1210,6 +1232,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	})
 }
 
+// BenchmarkAddNode tests node addition performance.
 func BenchmarkAddNode(t *testing.B) {
 	g, stp, txHashes := initTestAddNodeBenchmark(t)
 
@@ -1252,6 +1275,15 @@ func BenchmarkAddNodeWithMap(t *testing.B) {
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
 
+// initTestAddNodeBenchmark initializes benchmark environment for AddNode testing.
+//
+// Parameters:
+//   - t: Benchmark testing instance
+//
+// Returns:
+//   - *errgroup.Group: Error group for concurrent operations
+//   - *SubtreeProcessor: Processor instance for testing
+//   - []chainhash.Hash: Test transaction hashes
 func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}

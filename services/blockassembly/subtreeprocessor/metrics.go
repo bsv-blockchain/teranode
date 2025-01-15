@@ -1,3 +1,4 @@
+// Package subtreeprocessor provides functionality for processing transaction subtrees in Teranode.
 package subtreeprocessor
 
 import (
@@ -8,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics variables for monitoring subtree processor operations
 var (
 	prometheusSubtreeProcessorAddTx               prometheus.Counter
 	prometheusSubtreeProcessorMoveUpBlock         prometheus.Counter
@@ -28,10 +30,14 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics for the subtree processor.
+// This function is called once during package initialization.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the actual implementation of metrics initialization.
+// It creates and registers all Prometheus metrics used by the subtree processor.
 func _initPrometheusMetrics() {
 	prometheusSubtreeProcessorAddTx = promauto.NewCounter(
 		prometheus.CounterOpts{

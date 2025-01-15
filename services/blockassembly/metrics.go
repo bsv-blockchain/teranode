@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -8,24 +9,36 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics variables for monitoring block assembly operations
 var (
-	// in Server
-	prometheusBlockAssemblyHealth                     prometheus.Counter
-	prometheusBlockAssemblyAddTx                      prometheus.Histogram
-	prometheusBlockAssemblyRemoveTx                   prometheus.Histogram
+	// prometheusBlockAssemblyHealth tracks health check calls
+	prometheusBlockAssemblyHealth prometheus.Counter
+
+	// prometheusBlockAssemblyAddTx measures transaction addition time
+	prometheusBlockAssemblyAddTx prometheus.Histogram
+
+	// prometheusBlockAssemblyRemoveTx measures transaction removal time
+	prometheusBlockAssemblyRemoveTx prometheus.Histogram
+
+	// prometheusBlockAssemblyGetMiningCandidateDuration measures mining candidate retrieval time
 	prometheusBlockAssemblyGetMiningCandidateDuration prometheus.Histogram
-	prometheusBlockAssemblySubmitMiningSolutionCh     prometheus.Gauge
-	prometheusBlockAssemblySubmitMiningSolution       prometheus.Histogram
-	prometheusBlockAssemblyUpdateSubtreesTTL          prometheus.Histogram
 
-	// in BlockAssembler
-	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
-	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
-	prometheusBlockAssemblerTransactions       prometheus.Gauge
-	prometheusBlockAssemblerQueuedTransactions prometheus.Gauge
-	prometheusBlockAssemblerSubtrees           prometheus.Gauge
-	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
+	// prometheusBlockAssemblySubmitMiningSolutionCh tracks mining solution submission queue size
+	prometheusBlockAssemblySubmitMiningSolutionCh prometheus.Gauge
 
+	// prometheusBlockAssemblySubmitMiningSolution measures mining solution submission time
+	prometheusBlockAssemblySubmitMiningSolution prometheus.Histogram
+
+	// prometheusBlockAssemblyUpdateSubtreesTTL measures subtree TTL update time
+	prometheusBlockAssemblyUpdateSubtreesTTL prometheus.Histogram
+
+	// Additional metrics for block assembler operations
+	prometheusBlockAssemblerGetMiningCandidate     prometheus.Counter
+	prometheusBlockAssemblerSubtreeCreated         prometheus.Counter
+	prometheusBlockAssemblerTransactions           prometheus.Gauge
+	prometheusBlockAssemblerQueuedTransactions     prometheus.Gauge
+	prometheusBlockAssemblerSubtrees               prometheus.Gauge
+	prometheusBlockAssemblerTxMetaGetDuration      prometheus.Histogram
 	prometheusBlockAssemblerReorg                  prometheus.Counter
 	prometheusBlockAssemblerReorgDuration          prometheus.Histogram
 	prometheusBlockAssemblerGetReorgBlocksDuration prometheus.Histogram
@@ -39,6 +52,8 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics.
+// This function is called once during package initialization.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }

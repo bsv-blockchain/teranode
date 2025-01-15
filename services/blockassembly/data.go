@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -6,10 +7,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// Data represents transaction metadata used in block assembly.
 type Data struct {
+	// TxIDChainHash is the transaction ID hash
 	TxIDChainHash *chainhash.Hash
-	Fee           uint64
-	Size          uint64
+
+	// Fee represents the transaction fee
+	Fee uint64
+
+	// Size represents the transaction size in bytes
+	Size uint64
 }
 
 func NewFromBytes(bytes []byte) (*Data, error) {

@@ -8,40 +8,54 @@ import "model/model.proto";
 
 import "google/protobuf/timestamp.proto";
 
-/*
- * The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.
+/**
+ * BlockAssemblyAPI Service
+ * Responsible for assembling new blocks and managing the blockchain's block creation process.
+ * This service handles transaction management, mining operations, and block state management.
  */
 service BlockAssemblyAPI {
-  // Health returns the health of the API.
+  // HealthGRPC checks the health status of the block assembly service.
+  // Returns detailed health information including service status and timestamp.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
 
-  // Adds a transaction to the list of transactions to be included in the next available Subtree.
+  // AddTx adds a single transaction to the next available subtree.
+  // The transaction will be included in block assembly for mining.
   rpc AddTx (AddTxRequest) returns (AddTxResponse) {}
 
-  // Removes a transaction from the list of transactions to be included in the next available Subtree.
+  // RemoveTx removes a transaction from consideration for block inclusion.
+  // This is useful for handling double-spends or invalid transactions.
   rpc RemoveTx (RemoveTxRequest) returns (EmptyMessage) {}
 
-  // Adds a batch of transactions to the list of transactions to be included in the next available Subtree.
+  // AddTxBatch efficiently adds multiple transactions in a single request.
+  // Provides better performance than multiple individual AddTx calls.
   rpc AddTxBatch (AddTxBatchRequest) returns (AddTxBatchResponse) {}
 
-  // Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
+  // GetMiningCandidate retrieves a block template ready for mining.
+  // Includes all necessary components for miners to begin work.
   rpc GetMiningCandidate (EmptyMessage) returns (model.MiningCandidate) {}
 
-  // Get the current difficulty of the blockchain.
+  // GetCurrentDifficulty retrieves the current network mining difficulty.
+  // Used by miners to understand the current mining requirements.
   rpc GetCurrentDifficulty (EmptyMessage) returns (GetCurrentDifficultyResponse) {}
 
-  // Submits a mining solution to the blockchain.
+  // SubmitMiningSolution submits a solved block to the network.
+  // Includes the proof-of-work solution and block details.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
 
-  // De-duplicate transaction in block assembly subtree processor.
+  // DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
+  // Ensures transaction uniqueness within blocks.
   rpc DeDuplicateBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
 
-  // Reset transaction in block assembly subtree processor.
+  // ResetBlockAssembly resets the block assembly state.
+  // Useful for handling reorgs or recovering from errors.
   rpc ResetBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
 
-  // Get the block assembly state.
+  // GetBlockAssemblyState retrieves the current state of block assembly.
+  // Provides detailed information about the assembly process status.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
 
+  // GenerateBlocks creates new blocks (typically for testing purposes).
+  // Allows specification of block count and recipient address.
   rpc GenerateBlocks (GenerateBlocksRequest) returns (EmptyMessage) {}
 }
 

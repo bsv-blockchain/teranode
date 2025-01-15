@@ -1,3 +1,4 @@
+// Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
@@ -15,20 +16,46 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// batchItem represents an item in a transaction batch.
 type batchItem struct {
-	req  *blockassembly_api.AddTxRequest
+	// req contains the transaction request
+	req *blockassembly_api.AddTxRequest
+
+	// done signals completion of batch processing
 	done chan error
 }
 
+// Client implements the ClientI interface for block assembly operations.
 type Client struct {
-	client    blockassembly_api.BlockAssemblyAPIClient
-	logger    ulogger.Logger
-	settings  *settings.Settings
+	// client is the gRPC client for block assembly API
+	client blockassembly_api.BlockAssemblyAPIClient
+
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains configuration parameters
+	settings *settings.Settings
+
+	// batchSize determines the size of transaction batches
 	batchSize int
-	batchCh   chan []*batchItem
-	batcher   batcher.Batcher2[batchItem]
+
+	// batchCh handles batch processing
+	batchCh chan []*batchItem
+
+	// batcher manages transaction batching
+	batcher batcher.Batcher2[batchItem]
 }
 
+// NewClient creates a new block assembly client.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - logger: Logger for operations
+//   - tSettings: Teranode settings configuration
+//
+// Returns:
+//   - *Client: New client instance
+//   - error: Any error encountered during creation
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*Client, error) {
 	blockAssemblyGrpcAddress := tSettings.BlockAssembly.GRPCAddress
 	if blockAssemblyGrpcAddress == "" {
@@ -79,6 +106,17 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
+// NewClientWithAddress creates a new block assembly client with a specific address.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - logger: Logger for operations
+//   - tSettings: Teranode settings configuration
+//   - blockAssemblyGrpcAddress: Specific gRPC address for block assembly
+//
+// Returns:
+//   - *Client: New client instance
+//   - error: Any error encountered during creation
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockAssemblyGrpcAddress string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
@@ -112,6 +150,16 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	return client, nil
 }
 
+// Health checks the health status of the block assembly service.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - checkLiveness: Whether to perform liveness check
+//
+// Returns:
+//   - int: HTTP status code indicating health state
+//   - string: Health status message
+//   - error: Any error encountered during health check
 func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -132,6 +180,17 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, "OK", nil
 }
 
+// Store stores a transaction in block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - hash: Transaction hash
+//   - fee: Transaction fee in satoshis
+//   - size: Transaction size in bytes
+//
+// Returns:
+//   - bool: True if storage was successful
+//   - error: Any error encountered during storage
 func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
 		Txid: hash[:],
@@ -160,6 +219,14 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 	return true, nil
 }
 
+// RemoveTx removes a transaction from block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - hash: Hash of transaction to remove
+//
+// Returns:
+//   - error: Any error encountered during removal
 func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	_, err := s.client.RemoveTx(ctx, &blockassembly_api.RemoveTxRequest{
 		Txid: hash[:],
@@ -173,6 +240,14 @@ func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return unwrappedErr
 }
 
+// GetMiningCandidate retrieves a candidate block for mining.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *model.MiningCandidate: Mining candidate block
+//   - error: Any error encountered during retrieval
 func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
 	req := &blockassembly_api.EmptyMessage{}
 
@@ -184,6 +259,14 @@ func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate
 	return res, nil
 }
 
+// GetCurrentDifficulty retrieves the current mining difficulty.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - float64: Current difficulty value
+//   - error: Any error encountered during retrieval
 func (s *Client) GetCurrentDifficulty(ctx context.Context) (float64, error) {
 	req := &blockassembly_api.EmptyMessage{}
 
@@ -195,6 +278,14 @@ func (s *Client) GetCurrentDifficulty(ctx context.Context) (float64, error) {
 	return res.Difficulty, nil
 }
 
+// SubmitMiningSolution submits a solution for a mined block.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - solution: Mining solution to submit
+//
+// Returns:
+//   - error: Any error encountered during submission
 func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
 	_, err := s.client.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
 		Id:         solution.Id,
@@ -211,6 +302,14 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 	return nil
 }
 
+// GenerateBlocks generates a specified number of blocks.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Block generation request parameters
+//
+// Returns:
+//   - error: Any error encountered during generation
 func (s *Client) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error {
 	_, err := s.client.GenerateBlocks(ctx, req)
 
@@ -222,6 +321,11 @@ func (s *Client) GenerateBlocks(ctx context.Context, req *blockassembly_api.Gene
 	return unwrappedErr
 }
 
+// sendBatchToBlockAssembly sends a batch of transactions to block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - batch: Batch of transactions to send
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
 	txRequests := make([]*blockassembly_api.AddTxRequest, len(batch))
 	for i, item := range batch {
@@ -248,6 +352,13 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	}
 }
 
+// DeDuplicateBlockAssembly triggers transaction deduplication in block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during deduplication
 func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
 	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
 
@@ -259,6 +370,13 @@ func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
 	return unwrappedErr
 }
 
+// ResetBlockAssembly triggers a reset of the block assembly state.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - error: Any error encountered during reset
 func (s *Client) ResetBlockAssembly(_ context.Context) error {
 	_, err := s.client.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
 
@@ -270,6 +388,14 @@ func (s *Client) ResetBlockAssembly(_ context.Context) error {
 	return unwrappedErr
 }
 
+// GetBlockAssemblyState retrieves the current state of block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *blockassembly_api.StateMessage: Current state
+//   - error: Any error encountered during retrieval
 func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	state, err := s.client.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
 	if err != nil {
@@ -278,6 +404,11 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 
 	return state, nil
 }
+
+// BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.
+//
+// Returns:
+//   - blockassembly_api.BlockAssemblyAPIClient: The gRPC client instance
 
 func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient {
 	return s.client

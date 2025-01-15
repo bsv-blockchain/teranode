@@ -1,3 +1,4 @@
+// Package mining provides functionality for Bitcoin mining operations in Teranode.
 package mining
 
 import (
@@ -8,7 +9,17 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
-// BuildBlockHeader builds the block header byte array from the specific fields in the header.
+// BuildBlockHeader constructs a block header byte array from the mining candidate and solution.
+// It assembles the various components of a block header including version, previous block hash,
+// merkle root, timestamp, difficulty bits, and nonce.
+//
+// Parameters:
+//   - candidate: The mining candidate containing block template information
+//   - solution: The mining solution containing the successful nonce and other parameters
+//
+// Returns:
+//   - []byte: The constructed block header as a byte array
+//   - error: Any error encountered during header construction
 func BuildBlockHeader(candidate *model.MiningCandidate, solution *model.MiningSolution) ([]byte, error) {
 	version := candidate.Version
 	if solution.Version != nil {
