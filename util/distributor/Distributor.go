@@ -63,7 +63,7 @@ func NewDistributor(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		logger:             logger,
 		propagationServers: propagationServers,
 		attempts:           1,
-		failureTolerance:   50,
+		failureTolerance:   tSettings.Coinbase.DistributorFailureTolerance,
 		settings:           tSettings,
 	}
 
@@ -360,7 +360,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		}
 
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
-		if failurePercentage > float32(d.failureTolerance) {
+		if failurePercentage > float32(d.failureTolerance) || errorCount == len(d.propagationServers) {
 			return responses, errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
 		} else if errorCount > 0 {
 			d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
