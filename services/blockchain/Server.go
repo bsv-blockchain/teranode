@@ -371,10 +371,12 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, height, err := b.store.StoreBlock(ctx, block, request.PeerId)
+	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
 	block.Height = height
 

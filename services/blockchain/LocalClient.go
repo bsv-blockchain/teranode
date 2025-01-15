@@ -63,8 +63,14 @@ func (c LocalClient) Health(ctx context.Context, checkLiveness bool) (int, strin
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	_, _, err := c.store.StoreBlock(ctx, block, peerID)
-	return err
+	ID, height, err := c.store.StoreBlock(ctx, block, peerID)
+	if err != nil {
+		return err
+	}
+
+	c.logger.Infof("[Blockchain LocalClient] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
+
+	return nil
 }
 
 func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
