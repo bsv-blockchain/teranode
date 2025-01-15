@@ -5,6 +5,7 @@
 package netsync
 
 import (
+	"bufio"
 	"bytes"
 	"container/list"
 	"context"
@@ -34,6 +35,7 @@ import (
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libsv/go-bt/v2"
@@ -53,7 +55,7 @@ const (
 
 	// maxRejectedTxns is the maximum number of rejected transactions
 	// hashes to store in memory.
-	maxRejectedTxns = 1000
+	maxRejectedTxns = 10_000
 
 	// maxRequestedBlocks is the maximum number of requested block
 	// hashes to store in memory.
@@ -67,6 +69,10 @@ const (
 	// stay with a sync peer while below the current blockchain height.
 	// Set to 3 minutes.
 	maxLastBlockTime = 60 * 3 * time.Second
+
+	// maxMsgQueuePerPeer is the maximum number of messages that can be
+	// queued for a peer. This is the size if the msgChan buffer.
+	maxMsgQueueSize = 10_000
 
 	// syncPeerTickerInterval is how often we check the current
 	// syncPeer. Set to 30 seconds.
@@ -117,24 +123,6 @@ type getSyncPeerMsg struct {
 	reply chan int32
 }
 
-// processBlockResponse is a response sent to the reply channel of a
-// processBlockMsg.
-type processBlockResponse struct {
-	isOrphan bool
-	err      error
-}
-
-// processBlockMsg is a message type to be sent across the message channel
-// for requested a block is processed.  Note this call differs from blockMsg
-// above in that blockMsg is intended for blocks that came from peers and have
-// extra handling, whereas this message essentially is just a concurrent safe
-// way to call ProcessBlock on the internal blockchain instance.
-type processBlockMsg struct {
-	block *bsvutil.Block
-	flags blockchain.BehaviorFlags
-	reply chan processBlockResponse
-}
-
 // isCurrentMsg is a message type to be sent across the message channel for
 // requesting whether or not the sync manager believes it is synced with the
 // currently connected peers.
@@ -161,9 +149,9 @@ type headerNode struct {
 // about a peer.
 type peerSyncState struct {
 	syncCandidate   bool
-	requestQueue    []*wire.InvVect
-	requestedTxns   map[chainhash.Hash]struct{}
-	requestedBlocks map[chainhash.Hash]struct{}
+	requestQueue    *util.SyncedSlice[wire.InvVect]
+	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 }
 
 // syncPeerState stores additional info about the sync peer.
@@ -201,7 +189,7 @@ func (sps *syncPeerState) validNetworkSpeed(minSyncPeerNetworkSpeed uint64) int 
 
 type orphanTxAndParents struct {
 	tx      *bt.Tx
-	parents map[chainhash.Hash]struct{}
+	parents *util.SyncedMap[chainhash.Hash, struct{}] // map of parent tx hashes
 	addedAt time.Time
 }
 
@@ -225,7 +213,6 @@ type SyncManager struct {
 	peerNotifier PeerNotifier
 	started      int32
 	shutdown     int32
-	chain        *blockchain.BlockChain
 	orphanTxs    *expiringmap.ExpiringMap[chainhash.Hash, *orphanTxAndParents]
 	chainParams  *chaincfg.Params
 	msgChan      chan interface{}
@@ -245,12 +232,12 @@ type SyncManager struct {
 	txAnnounceBatcher *batcher.Batcher2[chainhash.Hash]
 
 	// These fields should only be accessed from the blockHandler thread.
-	rejectedTxns    map[chainhash.Hash]struct{}
-	requestedTxns   map[chainhash.Hash]struct{}
-	requestedBlocks map[chainhash.Hash]struct{}
+	rejectedTxns    *util.SyncedMap[chainhash.Hash, struct{}]
+	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	syncPeer        *peerpkg.Peer
 	syncPeerState   *syncPeerState
-	peerStates      map[*peerpkg.Peer]*peerSyncState
+	peerStates      *util.SyncedMap[*peerpkg.Peer, *peerSyncState]
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode bool
@@ -335,9 +322,9 @@ func (sm *SyncManager) startSync() {
 
 	okPeers := make([]*peerpkg.Peer, 0)
 
-	sm.logger.Debugf("[startSync] selecting sync peer from %d candidates", len(sm.peerStates))
+	sm.logger.Debugf("[startSync] selecting sync peer from %d candidates", sm.peerStates.Length())
 
-	for peer, state := range sm.peerStates {
+	for peer, state := range sm.peerStates.Range() {
 		if !state.syncCandidate {
 			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.String())
 
@@ -398,7 +385,7 @@ func (sm *SyncManager) startSync() {
 		// Clear the requestedBlocks if the sync peer changes, otherwise
 		// we may ignore blocks we need that the last sync peer failed
 		// to send.
-		sm.requestedBlocks = make(map[chainhash.Hash]struct{})
+		sm.requestedBlocks.Clear()
 
 		locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
 		if err != nil {
@@ -517,11 +504,12 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
 
-	sm.peerStates[peer] = &peerSyncState{
+	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
-		requestedTxns:   make(map[chainhash.Hash]struct{}),
-		requestedBlocks: make(map[chainhash.Hash]struct{}),
-	}
+		requestQueue:    util.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second), // allow the node 60 seconds to respond to the block request
+	})
 
 	// Start syncing by choosing the best candidate if needed.
 	if isSyncCandidate && sm.syncPeer == nil {
@@ -574,7 +562,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 	sm.logger.Debugf("sync peer %s is not at the same height (%d) as us (%d), updating sync peer", sm.syncPeer.String(), sm.topBlock(), bestBlockHeaderMeta.Height)
 
-	state, exists := sm.peerStates[sm.syncPeer]
+	state, exists := sm.peerStates.Get(sm.syncPeer)
 	if !exists {
 		return
 	}
@@ -603,14 +591,14 @@ func (sm *SyncManager) topBlock() int32 {
 // the current sync peer, attempts to select a new best peer to sync from.  It
 // is invoked from the syncHandler goroutine.
 func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
-	state, exists := sm.peerStates[peer]
+	state, exists := sm.peerStates.Get(peer)
 	if !exists {
 		sm.logger.Debugf("Received done peer message for unknown peer %s", peer)
 		return
 	}
 
 	// Remove the peer from the list of candidate peers.
-	delete(sm.peerStates, peer)
+	sm.peerStates.Delete(peer)
 
 	sm.logger.Infof("Lost peer %s", peer)
 
@@ -628,15 +616,11 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 	// Remove requested transactions from the global map so that they will
 	// be fetched from elsewhere next time we get an inv.
-	for txHash := range state.requestedTxns {
-		delete(sm.requestedTxns, txHash)
-	}
+	state.requestedTxns.Clear()
 
 	// Remove requested blocks from the global map so that they will be
 	// fetched from elsewhere next time we get an inv.
-	for blockHash := range state.requestedBlocks {
-		delete(sm.requestedBlocks, blockHash)
-	}
+	state.requestedBlocks.Clear()
 }
 
 // updateSyncPeer picks a new peer to sync from.
@@ -675,7 +659,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 	peer := tmsg.peer
 
-	state, exists := sm.peerStates[peer]
+	state, exists := sm.peerStates.Get(peer)
 	if !exists {
 		sm.logger.Warnf("Received tx message from unknown peer %s", peer)
 		return
@@ -694,7 +678,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// Ignore transactions that we have already rejected.  Do not
 	// send a reject message here because if the transaction was already
 	// rejected, the transaction was unsolicited.
-	if _, exists = sm.rejectedTxns[*txHash]; exists {
+	if _, exists = sm.rejectedTxns.Get(*txHash); exists {
 		sm.logger.Debugf("Ignoring unsolicited previously rejected transaction %v from %s", txHash, peer)
 		return
 	}
@@ -709,7 +693,6 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		return
 	}
 
-	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
 	_, err = sm.validationClient.Validate(ctx, btTx, 0)
@@ -720,8 +703,8 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// already knows about it and as such we shouldn't have any more
 	// instances of trying to fetch it, or we failed to insert and thus
 	// we'll retry next time we get an inv.
-	delete(state.requestedTxns, *txHash)
-	delete(sm.requestedTxns, *txHash)
+	state.requestedTxns.Delete(*txHash)
+	sm.requestedTxns.Delete(*txHash)
 
 	if err != nil {
 		if errors.Is(err, errors.ErrTxMissingParent) {
@@ -731,9 +714,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 				sm.logger.Debugf("orphan transaction %v added from %s", txHash, peer)
 
 				// create a map of the parents of the transaction for faster lookups
-				txParents := make(map[chainhash.Hash]struct{})
+				txParents := util.NewSyncedMap[chainhash.Hash, struct{}]()
 				for _, input := range tmsg.tx.MsgTx().TxIn {
-					txParents[input.PreviousOutPoint.Hash] = struct{}{}
+					txParents.Set(input.PreviousOutPoint.Hash, struct{}{})
 				}
 
 				sm.orphanTxs.Set(*txHash, &orphanTxAndParents{
@@ -747,8 +730,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		} else {
 			// Do not request this transaction again until a new block
 			// has been processed.
-			sm.rejectedTxns[*txHash] = struct{}{}
-			sm.limitMap(sm.rejectedTxns, maxRejectedTxns)
+			sm.rejectedTxns.Set(*txHash, struct{}{})
 
 			// When the error is a rule error, it means the transaction was
 			// simply rejected as opposed to something actually going wrong,
@@ -789,7 +771,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 	for _, orphanTx := range orphanTxs {
 		// check if the orphan transaction has this transaction as a parent
-		if _, ok := orphanTx.parents[*txHash]; !ok {
+		if _, ok := orphanTx.parents.Get(*txHash); !ok {
 			continue
 		}
 
@@ -830,7 +812,6 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	if len(sm.chainParams.Checkpoints) > 0 {
 		checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
 		if int32(bestBlockHeaderMeta.Height) < checkpoint.Height { // nolint:gosec
-			sm.logger.Debugf("[isCurrent] chain is below the latest checkpoint: %v < %v", bestBlockHeaderMeta.Height, checkpoint.Height)
 			return false
 		}
 	}
@@ -842,7 +823,6 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	minus24Hours := time.Now().Add(-24 * time.Hour).Unix()
 
 	current := int64(bestBlockHeaderMeta.BlockTime) >= minus24Hours
-	sm.logger.Debugf("[isCurrent] chain is current based on time: %v (%d >= %d)", current, bestBlockHeaderMeta.BlockTime, minus24Hours)
 
 	return current
 }
@@ -857,23 +837,18 @@ func (sm *SyncManager) current() bool {
 	}
 
 	if !sm.isCurrent(bestBlockHeaderMeta) {
-		sm.logger.Debugf("[current] chain is not current: %v", bestBlockHeaderMeta.Height)
 		return false
 	}
 
 	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
 	if sm.syncPeer == nil {
-		sm.logger.Debugf("[current] no sync peer, chain is current")
 		return true
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
 	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() { // nolint:gosec
-		sm.logger.Debugf("[current] chain is not current, lower than sync peer (%s) block height: %v < %v", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
 		return false
 	}
-
-	sm.logger.Debugf("[current] chain is current at %v, sync peer: %s (last block %d)", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
 
 	return true
 }
@@ -883,22 +858,25 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
 	peer := bmsg.peer
 
-	state, exists := sm.peerStates[peer]
+	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		return errors.NewServiceError("Received block message from unknown peer %s", peer)
+		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
 	}
 
 	legacySyncMode := false
 
+	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		return errors.NewProcessingError("failed to get current FSM state", err)
+		sm.logger.Errorf("[handleBlockMsg][%s] Failed to get current FSM state: %v", bmsg.blockHash, err)
+		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
 	} else if fsmState != nil && *fsmState == teranodeblockchain.FSMStateLEGACYSYNCING {
 		legacySyncMode = true
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
-	if _, exists = state.requestedBlocks[bmsg.blockHash]; !exists {
+	if _, exists = state.requestedBlocks.Get(bmsg.blockHash); !exists {
 		// The regression test intentionally sends some blocks twice
 		// to test duplicate block insertion fails.  Don't disconnect
 		// the peer or ignore the block when we're in regression test
@@ -906,6 +884,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		// duplicate blocks.
 		if sm.chainParams != &chaincfg.RegressionNetParams {
 			peer.Disconnect()
+			sm.logger.Errorf("[handleBlockMsg][%s] Got unrequested block from %s -- disconnected", bmsg.blockHash, peer)
 			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", bmsg.blockHash, peer)
 		}
 	}
@@ -920,6 +899,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	isCheckpointBlock := false
 
 	if sm.headersFirstMode {
+		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
 		firstNodeEl := sm.headerList.Front()
 		if firstNodeEl != nil {
 			firstNode := firstNodeEl.Value.(*headerNode)
@@ -934,17 +914,15 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
-	// Remove block from request maps. Either chain will know about it and
+	// Remove block from request maps. Either chain will know about it, and
 	// so we shouldn't have any more instances of trying to fetch it, or we
 	// will fail the insert, and thus we'll retry next time we get an inv.
-	delete(state.requestedBlocks, bmsg.blockHash)
-	delete(sm.requestedBlocks, bmsg.blockHash)
+	state.requestedBlocks.Delete(bmsg.blockHash)
+	sm.requestedBlocks.Delete(bmsg.blockHash)
 
-	// TODO: this should be only done when Legacy Sync mode is active
-	// if not in Legacy Sync mode, we need to potentially download the block,
-	// promote block to the block validation via kafka (p2p -> blockvalidation message),
-	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash); err != nil {
+	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
+
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
@@ -1002,7 +980,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	}
 
 	// Clear the rejected transactions.
-	sm.rejectedTxns = make(map[chainhash.Hash]struct{})
+	sm.rejectedTxns.Clear()
 
 	// Update the block height for this peer. But only send a message to
 	// the server for updating peer heights if this is an orphan or our
@@ -1027,9 +1005,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// request more blocks using the header list when the request queue is
 	// getting short.
 	if !isCheckpointBlock {
-		if sm.startHeader != nil && len(state.requestedBlocks) < minInFlightBlocks {
+		if sm.startHeader != nil && state.requestedBlocks.Len() < minInFlightBlocks {
 			sm.fetchHeaderBlocks()
-		} else if !sm.current() && len(state.requestedBlocks) == 0 {
+		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
 			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
 
 			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
@@ -1127,10 +1105,10 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		}
 
 		if !haveInv {
-			peerState := sm.peerStates[sm.syncPeer]
+			peerState, _ := sm.peerStates.Get(sm.syncPeer)
 
-			sm.requestedBlocks[*node.hash] = struct{}{}
-			peerState.requestedBlocks[*node.hash] = struct{}{}
+			sm.requestedBlocks.Set(*node.hash, struct{}{})
+			peerState.requestedBlocks.Set(*node.hash, struct{}{})
 
 			_ = getDataMessage.AddInvVect(iv)
 			numRequested++
@@ -1154,7 +1132,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
-	_, exists := sm.peerStates[peer]
+	_, exists := sm.peerStates.Get(peer)
 	if !exists {
 		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
 		return
@@ -1176,7 +1154,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		return
 	}
 
-	// Process all of the received headers ensuring each one connects to the
+	// Process all the received headers ensuring each one connects to the
 	// previous and that checkpoints match.
 	receivedCheckpoint := false
 
@@ -1242,7 +1220,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	}
 
 	// When this header is a checkpoint, switch to fetching the blocks for
-	// all of the headers since the last checkpoint.
+	// all the headers since the last checkpoint.
 	if receivedCheckpoint {
 		// Since the first entry of the list is always the final block
 		// that is already in the database and is only used to ensure
@@ -1260,10 +1238,8 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	// next checkpoint.
 	locator := blockchain.BlockLocator([]*chainhash.Hash{finalHash})
 
-	err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
-	if err != nil {
+	if err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
 		sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.String(), err)
-		return
 	}
 }
 
@@ -1304,9 +1280,9 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
-	state, exists := sm.peerStates[peer]
+	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("Received inv message from unknown peer %s", peer)
+		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
 		return
 	}
 
@@ -1352,111 +1328,117 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get current FSM state: %v", err)
+		sm.logger.Errorf("[handleInvMsg] Failed to get current FSM state: %v", err)
 	} else if fsmState != nil && *fsmState == teranodeblockchain.FSMStateRUNNING {
 		processInvs = true
 	}
+
+	wg := sync.WaitGroup{}
 
 	// Request the advertised inventory if we don't already have it.  Also,
 	// request parent blocks of orphans if we receive one we already have.
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
 	for i, iv := range invVects {
-		// Ignore unsupported inventory types.
-		switch iv.Type {
-		case wire.InvTypeBlock:
-		case wire.InvTypeTx:
-			if !processInvs {
-				// If we are not in running state, we are not interested in new transaction or block messages
-				sm.logger.Debugf("Ignoring inv message from %s, not in running state", peer)
-				continue
+		// process all the inv vectors in parallel
+		wg.Add(1)
+
+		go func(i int, iv *wire.InvVect) {
+			defer wg.Done()
+
+			// Ignore unsupported inventory types.
+			switch iv.Type {
+			case wire.InvTypeBlock:
+			case wire.InvTypeTx:
+				if !processInvs {
+					// If we are not in running state, we are not interested in new transaction or block messages
+					sm.logger.Debugf("[handleInvMsg] Ignoring inv message from %s, not in running state", peer)
+					return
+				}
+			default:
+				return
 			}
-		default:
-			continue
-		}
 
-		// Add the inventory to the cache of known inventory
-		// for the peer.
-		peer.AddKnownInventory(iv)
+			// Add the inventory to the cache of known inventory
+			// for the peer.
+			peer.AddKnownInventory(iv)
 
-		// Ignore inventory when we're in headers-first mode.
-		if sm.headersFirstMode {
-			continue
-		}
+			// Ignore inventory when we're in headers-first mode.
+			if sm.headersFirstMode {
+				return
+			}
 
-		// Request the inventory if we don't already have it.
-		haveInv, err := sm.haveInventory(iv)
-		if err != nil {
-			sm.logger.Warnf("Unexpected failure when checking for "+
-				"existing inventory during inv message "+
-				"processing: %v", err)
+			// Request the inventory if we don't already have it.
+			haveInv, err := sm.haveInventory(iv)
+			if err != nil {
+				sm.logger.Warnf("[handleInvMsg] Unexpected failure when checking for "+
+					"existing inventory during inv message "+
+					"processing: %v", err)
 
-			continue
-		}
+				return
+			}
 
-		if !haveInv {
-			if iv.Type == wire.InvTypeTx {
-				// Skip the transaction if it has already been rejected.
-				if _, exists := sm.rejectedTxns[iv.Hash]; exists {
-					continue
+			if !haveInv {
+				if iv.Type == wire.InvTypeTx {
+					// Skip the transaction if it has already been rejected.
+					if _, exists = sm.rejectedTxns.Get(iv.Hash); exists {
+						return
+					}
+				}
+
+				// Add it to the request queue.
+				state.requestQueue.Append(iv)
+
+				return
+			}
+
+			if iv.Type == wire.InvTypeBlock {
+				// We already have the final block advertised by this inventory message, so force a request for more.  This
+				// should only happen if we're on a really long side chain.
+				if i == lastBlock {
+					// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
+					locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, &iv.Hash, 0)
+					if err != nil {
+						sm.logger.Errorf("[handleInvMsg] Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
+					} else {
+						_ = peer.PushGetBlocksMsg(locator, &zeroHash)
+					}
 				}
 			}
-
-			// Add it to the request queue.
-			state.requestQueue = append(state.requestQueue, iv)
-
-			continue
-		}
-
-		if iv.Type == wire.InvTypeBlock {
-			// We already have the final block advertised by this inventory message, so force a request for more.  This
-			// should only happen if we're on a really long side chain.
-			if i == lastBlock {
-				// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
-				locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, &iv.Hash, 0)
-				if err != nil {
-					sm.logger.Errorf("Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
-				} else {
-					_ = peer.PushGetBlocksMsg(locator, &zeroHash)
-				}
-			}
-		}
+		}(i, iv)
 	}
+
+	// wait for all inv vectors to be processed
+	wg.Wait()
 
 	// Request as much as possible at once.  Anything that won't fit into
 	// the request will be requested on the next inv message.
 	numRequested := 0
 	gdmsg := wire.NewMsgGetData()
-	requestQueue := state.requestQueue
 
-	for len(requestQueue) != 0 {
-		iv := requestQueue[0]
-		requestQueue[0] = nil
-		requestQueue = requestQueue[1:]
+	for state.requestQueue.Length() != 0 {
+		// shift the first items from the request queue until we have enough to send in a single message
+		iv, found := state.requestQueue.Shift()
+		if !found {
+			break
+		}
 
 		switch iv.Type {
 		case wire.InvTypeBlock:
-			// Request the block if there is not already a pending
-			// request.
-			if _, exists = sm.requestedBlocks[iv.Hash]; !exists {
-				sm.requestedBlocks[iv.Hash] = struct{}{}
-				sm.limitMap(sm.requestedBlocks, maxRequestedBlocks)
-
-				state.requestedBlocks[iv.Hash] = struct{}{}
+			// Request the block if there is not already a pending request.
+			if _, exists = sm.requestedBlocks.Get(iv.Hash); !exists {
+				sm.requestedBlocks.Set(iv.Hash, struct{}{})
+				state.requestedBlocks.Set(iv.Hash, struct{}{})
 
 				_ = gdmsg.AddInvVect(iv)
 				numRequested++
 			}
 
 		case wire.InvTypeTx:
-			// Request the transaction if there is not already a
-			// pending request.
-			if _, exists = sm.requestedTxns[iv.Hash]; !exists {
-				sm.requestedTxns[iv.Hash] = struct{}{}
-
-				sm.limitMap(sm.requestedTxns, maxRequestedTxns)
-
-				state.requestedTxns[iv.Hash] = struct{}{}
+			// Request the transaction if there is not already a pending request.
+			if _, exists = sm.requestedTxns.Get(iv.Hash); !exists {
+				sm.requestedTxns.Set(iv.Hash, struct{}{})
+				state.requestedTxns.Set(iv.Hash, struct{}{})
 
 				_ = gdmsg.AddInvVect(iv)
 				numRequested++
@@ -1468,32 +1450,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
-	state.requestQueue = requestQueue
-
 	if len(gdmsg.InvList) > 0 {
+		sm.logger.Debugf("[handleInvMsg] Requesting %d items from %s", len(gdmsg.InvList), peer)
 		peer.QueueMessage(gdmsg, nil)
 	}
 }
 
-// limitMap is a helper function for maps that require a maximum limit by
-// evicting a random transaction if adding a new value would cause it to
-// overflow the maximum allowed.
-func (sm *SyncManager) limitMap(m map[chainhash.Hash]struct{}, limit int) {
-	if len(m)+1 > limit {
-		// Remove a random entry from the map.  For most compilers, Go's
-		// range statement iterates starting at a random item although
-		// that is not 100% guaranteed by the spec.  The iteration order
-		// is not important here because an adversary would have to be
-		// able to pull off preimage attacks on the hashing function in
-		// order to target eviction of specific entries anyways.
-		for txHash := range m {
-			delete(m, txHash)
-			return
-		}
-	}
-}
-
 type blockQueueMsg struct {
+	block       *wire.MsgBlock
 	blockHash   chainhash.Hash
 	blockHeight int32
 	peer        *peerpkg.Peer
@@ -1515,6 +1479,7 @@ func (sm *SyncManager) blockHandler() {
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
+	blockDiskWriter := make(chan struct{}, 1) // buffer size 1, allows only one block to be written to disk at a time
 
 	// start the block queue handler
 	go func() {
@@ -1523,6 +1488,7 @@ func (sm *SyncManager) blockHandler() {
 			case <-sm.quit:
 				return
 			case msg := <-blockQueue:
+				sm.logger.Debugf("[blockHandler][%s] processing block queue message into handleBlockMsg", msg.blockHash)
 				err := sm.handleBlockMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- err
@@ -1538,14 +1504,15 @@ out:
 			sm.handleCheckSyncPeer()
 		case m := <-sm.msgChan:
 			// whenever legacy receives a message, check if we are current
-			if sm.current() {
-				currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-				if err != nil {
-					sm.logger.Errorf("[SyncManager] failed to get fsm current state")
-				}
+			// this call should have the current state cached, so it should be fast
+			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+			if err != nil {
+				sm.logger.Errorf("[SyncManager] failed to get fsm current state")
+			}
 
-				// we reached current in legacy, and current FSM state is not Running, send RUN event
-				if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
+			// we reached current in legacy, and current FSM state is not Running, send RUN event
+			if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
+				if sm.current() { // only call this when we are not in the running state, it's an expensive call
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
 					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
@@ -1561,58 +1528,83 @@ out:
 				}
 
 			case *txMsg:
-				sm.handleTxMsg(msg)
-				if msg.reply != nil {
-					msg.reply <- struct{}{}
-				}
+				go func(msg *txMsg) {
+					// process tx messages in parallel
+					sm.handleTxMsg(msg)
+					if msg.reply != nil {
+						msg.reply <- struct{}{}
+					}
+				}(msg)
 
 			case *blockMsg:
-				// write the block directly to disk and queue for validation in a reader pipe
-				reader, writer := io.Pipe()
+				// we process the block message in the background, so we do not block the main loop
+				go func(msg *blockMsg) {
+					// block the disk writer until we are done with the previous block
+					// we must make sure the block is written to disk before continuing
+					blockDiskWriter <- struct{}{}
 
-				// start writing to the pipe in the background
-				go func() {
-					if err := msg.block.MsgBlock().Serialize(writer); err != nil {
-						sm.logger.Errorf("failed to serialize block: %v", err)
+					ctx, _, _ := tracing.StartTracing(sm.ctx, "blockHandler",
+						tracing.WithLogMessage(sm.logger, "[blockHandler][%s] processing block message", msg.block.Hash()),
+					)
+
+					var msgBlock *wire.MsgBlock
+					if sm.settings.Legacy.WriteMsgBlocksToDisk {
+						// write the block directly to disk and queue for validation in a reader pipe
+						reader, writer := io.Pipe()
+
+						bufferSize := 4 * 1024 * 1024
+						bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize))
+
+						// start writing to the pipe in the background
+						go func() {
+							if err := msg.block.MsgBlock().Serialize(writer); err != nil {
+								sm.logger.Errorf("failed to serialize block: %v", err)
+							}
+
+							// close the writer to signal the end of the block
+							if err := writer.Close(); err != nil {
+								sm.logger.Errorf("failed to close writer: %v", err)
+							}
+						}()
+
+						sm.logger.Debugf("[blockHandler][%s] writing block to disk", msg.block.Hash())
+						if err := sm.tempStore.SetFromReader(ctx,
+							msg.block.Hash().CloneBytes(),
+							bufferedReader,
+							options.WithTTL(90*time.Minute),
+							options.WithFileExtension("msgBlock"),
+							options.WithSubDirectory("blocks"),
+							options.WithAllowOverwrite(true),
+						); err != nil {
+							sm.logger.Errorf("failed to write block to disk: %v", err)
+						}
+
+						// close the reader to signal the end of the block
+						if err := reader.Close(); err != nil {
+							sm.logger.Errorf("failed to close reader: %v", err)
+						}
+					} else {
+						msgBlock = msg.block.MsgBlock()
 					}
 
-					// close the writer to signal the end of the block
-					if err := writer.Close(); err != nil {
-						sm.logger.Errorf("failed to close writer: %v", err)
+					sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
+					blockQueue <- &blockQueueMsg{
+						block:       msgBlock,
+						blockHash:   *msg.block.Hash(),
+						blockHeight: msg.block.Height(),
+						peer:        msg.peer,
+						reply:       msg.reply,
 					}
-				}()
 
-				if err := sm.tempStore.SetFromReader(sm.ctx,
-					msg.block.Hash().CloneBytes(),
-					reader,
-					options.WithTTL(90*time.Minute),
-					options.WithFileExtension("msgBlock"),
-					options.WithSubDirectory("blocks"),
-					options.WithAllowOverwrite(true),
-				); err != nil {
-					sm.logger.Errorf("failed to write block to disk: %v", err)
-				}
-
-				// close the reader to signal the end of the block
-				if err := reader.Close(); err != nil {
-					sm.logger.Errorf("failed to close reader: %v", err)
-				}
-
-				blockQueue <- &blockQueueMsg{
-					blockHash:   *msg.block.Hash(),
-					blockHeight: msg.block.Height(),
-					peer:        msg.peer,
-					reply:       msg.reply,
-				}
-
-				// clear the block from memory
-				msg.block = nil
+					// unblock the disk writer
+					<-blockDiskWriter
+				}(msg)
 
 			case *invMsg:
-				sm.handleInvMsg(msg)
+				go sm.handleInvMsg(msg)
 
 			case *headersMsg:
-				sm.handleHeadersMsg(msg)
+				go sm.handleHeadersMsg(msg)
 
 			case *donePeerMsg:
 				sm.handleDonePeerMsg(msg.peer)
@@ -1629,6 +1621,7 @@ out:
 				msg.reply <- peerID
 
 			case isCurrentMsg:
+				sm.logger.Warnf("isCurrentMsg is deprecated, use current() instead")
 				msg.reply <- sm.current()
 
 			case pauseMsg:
@@ -1796,10 +1789,7 @@ func (sm *SyncManager) SyncPeerID() int32 {
 // IsCurrent returns whether the sync manager believes it is synced with
 // the connected peers.
 func (sm *SyncManager) IsCurrent() bool {
-	reply := make(chan bool)
-	sm.msgChan <- isCurrentMsg{reply: reply}
-
-	return <-reply
+	return sm.current()
 }
 
 // Pause pauses the sync manager until the returned channel is closed.
@@ -1825,16 +1815,15 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:          ctx,
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
-		chain:        config.Chain,
 		// txMemPool:     config.TxMemPool,
 		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
 		chainParams:     config.ChainParams,
-		rejectedTxns:    make(map[chainhash.Hash]struct{}),
-		requestedTxns:   make(map[chainhash.Hash]struct{}),
-		requestedBlocks: make(map[chainhash.Hash]struct{}),
-		peerStates:      make(map[*peerpkg.Peer]*peerSyncState),
+		rejectedTxns:    util.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),  // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),  // give peers 60 seconds to respond
+		peerStates:      util.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
-		msgChan:    make(chan interface{}, config.MaxPeers*3),
+		msgChan:    make(chan interface{}, maxMsgQueueSize),
 		headerList: list.New(),
 		quit:       make(chan struct{}),
 		// feeEstimator:            config.FeeEstimator,
@@ -2002,8 +1991,8 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 
 		sm.logger.Debugf("Received INV message from Kafka from peer %s", wireInvMsg.peer)
 
-		// Queue the INV message on the internal message channel
-		sm.msgChan <- wireInvMsg
+		// Process the INV message directly, requesting data from other nodes will be queued on the outputQueue
+		go sm.handleInvMsg(wireInvMsg)
 
 		return nil
 	})

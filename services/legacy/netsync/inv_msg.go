@@ -61,7 +61,8 @@ func (sm *SyncManager) newInvFromBytes(invMsgBytes []byte) (*invMsg, error) {
 	}
 
 	// get the peer from our peer list, we should be able to get it by Addr
-	for peer := range sm.peerStates {
+
+	for peer := range sm.peerStates.Range() {
 		if peer.Addr() == peerAddr {
 			return &invMsg{
 				inv:  inv,

@@ -55,22 +55,25 @@ type BlockAssembler struct {
 	currentRunningState      atomic.Value
 }
 
-const DifficultyAdjustmentWindow = 144
-
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) (*BlockAssembler, error) {
 	bytesLittleEndian := make([]byte, 4)
 
 	if tSettings.ChainCfgParams == nil {
-		logger.Errorf("[BlockAssembler] chain cfg params are nil")
-		return nil
+		return nil, errors.NewError("chain cfg params are nil")
 	}
 
 	binary.LittleEndian.PutUint32(bytesLittleEndian, tSettings.ChainCfgParams.PowLimitBits)
 
-	defaultMiningBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+	defaultMiningBits, err := model.NewNBitFromSlice(bytesLittleEndian)
+	if err != nil {
+		return nil, err
+	}
 
-	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, utxoStore, newSubtreeChan)
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, utxoStore, newSubtreeChan)
+	if err != nil {
+		return nil, err
+	}
 
 	b := &BlockAssembler{
 		logger:              logger,
@@ -91,7 +94,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	}
 	b.currentRunningState.Store("starting")
 
-	return b
+	return b, nil
 }
 
 func (b *BlockAssembler) TxCount() uint64 {

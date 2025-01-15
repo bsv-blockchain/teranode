@@ -347,7 +347,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	assert.NotNil(t, settings)
 
 	// we cannot rely on the settings to be set in the test environment
-	ba := NewBlockAssembler(
+	ba, _ := NewBlockAssembler(
 		context.Background(),
 		ulogger.TestLogger{},
 		settings,

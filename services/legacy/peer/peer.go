@@ -41,7 +41,7 @@ const (
 	MinAcceptableProtocolVersion = wire.MultipleAddressVersion
 
 	// outputBufferSize is the number of elements the output channels use.
-	outputBufferSize = 50
+	outputBufferSize = 5000
 
 	// invTrickleSize is the maximum amount of inventory to send in a single
 	// message when trickling inventory to remote peers.
@@ -509,6 +509,7 @@ func (p *Peer) String() string {
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 	p.statsMtx.Lock()
+	defer p.statsMtx.Unlock()
 
 	p.logger.Debugf("Updating last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 
@@ -516,8 +517,6 @@ func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 		p.lastBlock = newHeight
 		p.logger.Infof("Updated last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 	}
-
-	p.statsMtx.Unlock()
 }
 
 // UpdateLastAnnouncedBlock updates meta-data about the last block hash this
@@ -918,6 +917,7 @@ func (p *Peer) PushGetBlocksMsg(locator blockchain.BlockLocator, stopHash *chain
 	p.prevGetBlocksBegin = beginHash
 	p.prevGetBlocksStop = stopHash
 	p.prevGetBlocksMtx.Unlock()
+
 	return nil
 }
 

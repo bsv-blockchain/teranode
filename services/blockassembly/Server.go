@@ -147,7 +147,10 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	subtreeRetryChan := make(chan *subtreeRetrySend, ba.settings.BlockAssembly.SubtreeRetryChanBuffer)
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	if err != nil {
+		return errors.NewServiceError("failed to init block assembler", err)
+	}
 
 	// start the new subtree retry processor in the background
 	go func() {

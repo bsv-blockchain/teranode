@@ -6,7 +6,6 @@ package netsync
 
 import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
-	"github.com/bitcoin-sv/teranode/services/legacy/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
@@ -29,7 +28,6 @@ type PeerNotifier interface {
 // Config is a configuration struct used to initialize a new SyncManager.
 type Config struct {
 	PeerNotifier PeerNotifier
-	Chain        *blockchain.BlockChain
 	ChainParams  *chaincfg.Params
 
 	DisableCheckpoints bool

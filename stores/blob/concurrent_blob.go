@@ -39,9 +39,9 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	c.mu.RLock()
 
 	// Check if the value is already in the cache
-	if found, err = c.blobStore.Exists(ctx, key[:]); found && err == nil {
+	if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
 		c.mu.RUnlock()
-		return c.blobStore.GetIoReader(ctx, key[:])
+		return c.blobStore.GetIoReader(ctx, key[:], c.options...)
 	}
 
 	// Upgrade to a write lock if the value is not found
@@ -49,9 +49,9 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	c.mu.Lock()
 
 	// Check again to avoid race conditions
-	if found, err = c.blobStore.Exists(ctx, key[:]); found && err == nil {
+	if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
 		c.mu.Unlock()
-		return c.blobStore.GetIoReader(ctx, key[:])
+		return c.blobStore.GetIoReader(ctx, key[:], c.options...)
 	}
 
 	// If not, check if there is an ongoing request
@@ -59,8 +59,8 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 		c.mu.Unlock()
 		wg.Wait() // Wait for the other goroutine to finish
 
-		if found, err = c.blobStore.Exists(ctx, key[:]); found && err == nil {
-			return c.blobStore.GetIoReader(ctx, key[:])
+		if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
+			return c.blobStore.GetIoReader(ctx, key[:], c.options...)
 		}
 
 		return nil, errors.NewProcessingError("failed to get blob while waiting for another goroutine to finish")
@@ -99,5 +99,5 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	_ = resultReader.Close()
 
 	// Return a reader to the cached blob
-	return c.blobStore.GetIoReader(ctx, key[:])
+	return c.blobStore.GetIoReader(ctx, key[:], c.options...)
 }

@@ -365,6 +365,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 					v,
 					request.BlockHeight,
 					validator.WithSkipPolicyChecks(true),
+					validator.WithAddTXToBlockAssembly(false),
 					validator.WithCreateConflicting(true),
 				); err != nil {
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)

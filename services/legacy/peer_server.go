@@ -168,42 +168,51 @@ type updatePeerHeightsMsg struct {
 // peerState maintains state of inbound, persistent, outbound peers as well
 // as banned peers and outbound groups.
 type peerState struct {
-	inboundPeers    map[int32]*serverPeer
-	outboundPeers   map[int32]*serverPeer
-	persistentPeers map[int32]*serverPeer
-	banned          map[string]time.Time
-	outboundGroups  map[string]int
-	connectionCount map[string]int
+	inboundPeers    *util.SyncedMap[int32, *serverPeer]
+	outboundPeers   *util.SyncedMap[int32, *serverPeer]
+	persistentPeers *util.SyncedMap[int32, *serverPeer]
+	banned          *util.SyncedMap[string, time.Time]
+	outboundGroups  *util.SyncedMap[string, int]
+	connectionCount *util.SyncedMap[string, int]
 }
 
 // Count returns the count of all known peers.
 func (ps *peerState) Count() int {
-	return len(ps.inboundPeers) + len(ps.outboundPeers) +
-		len(ps.persistentPeers)
+	return ps.inboundPeers.Length() + ps.outboundPeers.Length() + ps.persistentPeers.Length()
 }
 
 // CountIP returns the count of all peers matching the IP.
 func (ps *peerState) CountIP(host string) int {
-	return ps.connectionCount[host]
+	count, found := ps.connectionCount.Get(host)
+	if !found {
+		return 0
+	}
+
+	return count
 }
 
 // forAllOutboundPeers is a helper function that runs closure on all outbound
 // peers known to peerState.
 func (ps *peerState) forAllOutboundPeers(closure func(sp *serverPeer)) {
-	for _, e := range ps.outboundPeers {
-		closure(e)
-	}
-	for _, e := range ps.persistentPeers {
-		closure(e)
-	}
+	ps.outboundPeers.Iterate(func(i int32, peer *serverPeer) bool {
+		closure(peer)
+		return false // continue always
+	})
+
+	ps.persistentPeers.Iterate(func(i int32, peer *serverPeer) bool {
+		closure(peer)
+		return false // continue always
+	})
 }
 
 // forAllPeers is a helper function that runs closure on all peers known to
 // peerState.
 func (ps *peerState) forAllPeers(closure func(sp *serverPeer)) {
-	for _, e := range ps.inboundPeers {
-		closure(e)
-	}
+	ps.inboundPeers.Iterate(func(i int32, peer *serverPeer) bool {
+		closure(peer)
+		return false // continue always
+	})
+
 	ps.forAllOutboundPeers(closure)
 }
 
@@ -560,6 +569,7 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnTx",
 		tracing.WithHistogram(peerServerMetrics["OnTx"]),
+		tracing.WithDebugLogMessage(sp.server.logger, "[serverPeer.OnTx][%s] OnTx from %s", msg.TxHash(), sp),
 	)
 
 	if cfg.BlocksOnly {
@@ -579,8 +589,7 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	// processed and known good or bad.  This helps prevent a malicious peer
 	// from queuing up a bunch of bad transactions before disconnecting (or
 	// being disconnected) and wasting memory.
-	sp.server.syncManager.QueueTx(tx, sp.Peer, sp.txProcessed)
-	<-sp.txProcessed
+	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It
@@ -644,17 +653,22 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 	newInv := wire.NewMsgInvSizeHint(uint(len(msg.InvList)))
 	for _, invVect := range msg.InvList {
 		if invVect.Type == wire.InvTypeTx {
-			sp.server.logger.Infof("Ignoring tx %v in inv from %v -- blocksonly enabled", invVect.Hash, sp)
+			sp.server.logger.Infof("[OnInv] Ignoring tx %v in inv from %v -- blocksonly enabled", invVect.Hash, sp)
 			if sp.ProtocolVersion() >= wire.BIP0037Version {
-				sp.server.logger.Infof("Peer %v is announcing transactions -- disconnecting", sp)
+				sp.server.logger.Infof("[OnInv] Peer %v is announcing transactions -- disconnecting", sp)
 				sp.Disconnect()
 				return
 			}
 			continue
 		}
+
+		if invVect.Type == wire.InvTypeBlock {
+			sp.server.logger.Infof("[OnInv] Got block inventory from %s: %s", sp, invVect.Hash)
+		}
+
 		err := newInv.AddInvVect(invVect)
 		if err != nil {
-			sp.server.logger.Errorf("Failed to add inventory vector: %v", err)
+			sp.server.logger.Errorf("[OnInv] Failed to add inventory vector: %v", err)
 			break
 		}
 	}
@@ -1389,7 +1403,8 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		sp.Disconnect()
 		return false
 	}
-	if banEnd, ok := state.banned[host]; ok {
+
+	if banEnd, ok := state.banned.Get(host); ok {
 		if time.Now().Before(banEnd) {
 			sp.server.logger.Debugf("Peer %s is banned for another %v - disconnecting",
 				host, time.Until(banEnd))
@@ -1398,25 +1413,25 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		}
 
 		s.logger.Infof("Peer %s is no longer banned", host)
-		delete(state.banned, host)
+		state.banned.Delete(host)
 	}
 
 	// check whether we are already connected to this peer
-	for _, outboundPeer := range state.outboundPeers {
+	for _, outboundPeer := range state.outboundPeers.Range() {
 		if outboundPeer.Addr() == sp.Addr() {
 			s.logger.Infof("[handleAddPeerMsg] Already connected to outbound peer %s, disconnecting in favor of new connection", sp)
 			outboundPeer.Disconnect()
 			// remove from state.outboundPeers
-			delete(state.outboundPeers, outboundPeer.ID())
+			state.outboundPeers.Delete(outboundPeer.ID())
 		}
 	}
 
-	for _, inboundPeer := range state.inboundPeers {
+	for _, inboundPeer := range state.inboundPeers.Range() {
 		if inboundPeer.Addr() == sp.Addr() {
 			s.logger.Infof("[handleAddPeerMsg] Already connected to inbound peer %s, disconnecting in favor of new connection", sp)
 			inboundPeer.Disconnect()
 			// remove from state.inboundPeers
-			delete(state.inboundPeers, inboundPeer.ID())
+			state.inboundPeers.Delete(inboundPeer.ID())
 		}
 	}
 
@@ -1443,16 +1458,21 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	sp.server.logger.Debugf("New peer %s", sp)
 
 	if sp.Inbound() {
-		state.inboundPeers[sp.ID()] = sp
-		state.connectionCount[host]++
+		state.inboundPeers.Set(sp.ID(), sp)
+
+		count, _ := state.connectionCount.Get(host)
+		state.connectionCount.Set(host, count+1)
 	} else {
-		state.outboundGroups[addrmgr.GroupKey(sp.NA())]++
+		count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
+		state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count+1)
 
 		if sp.persistent {
-			state.persistentPeers[sp.ID()] = sp
+			state.persistentPeers.Set(sp.ID(), sp)
 		} else {
-			state.outboundPeers[sp.ID()] = sp
-			state.connectionCount[host]++
+			state.outboundPeers.Set(sp.ID(), sp)
+
+			count, _ = state.connectionCount.Get(host)
+			state.connectionCount.Set(host, count+1)
 		}
 	}
 
@@ -1468,16 +1488,17 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	var list map[int32]*serverPeer
 
 	if sp.persistent {
-		list = state.persistentPeers
+		list = state.persistentPeers.Range()
 	} else if sp.Inbound() {
-		list = state.inboundPeers
+		list = state.inboundPeers.Range()
 	} else {
-		list = state.outboundPeers
+		list = state.outboundPeers.Range()
 	}
 
 	if _, ok := list[sp.ID()]; ok {
 		if !sp.Inbound() && sp.VersionKnown() {
-			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
+			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
+			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
 		}
 
 		if !sp.Inbound() && sp.connReq != nil {
@@ -1488,7 +1509,8 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 
 		host, _, err := net.SplitHostPort(sp.Addr())
 		if err == nil && !sp.persistent {
-			state.connectionCount[host]--
+			count, _ := state.connectionCount.Get(host)
+			state.connectionCount.Set(host, count-1)
 		}
 
 		sp.server.logger.Debugf("Removed peer %s", sp)
@@ -1517,10 +1539,12 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
 		return
 	}
+
 	direction := directionString(sp.Inbound())
-	s.logger.Infof("Banned peer %s (%s) for %v", host, direction,
-		cfg.BanDuration)
-	state.banned[host] = time.Now().Add(cfg.BanDuration)
+
+	s.logger.Infof("Banned peer %s (%s) for %v", host, direction, cfg.BanDuration)
+
+	state.banned.Set(host, time.Now().Add(cfg.BanDuration))
 }
 
 // handleRelayInvMsg deals with relaying inventory to peers that are not already
@@ -1675,8 +1699,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			return
 		}
 
-		for _, peer := range state.persistentPeers {
-			if peer.Addr() == msg.addr {
+		for _, persistentPeer := range state.persistentPeers.Range() {
+			if persistentPeer.Addr() == msg.addr {
 				if msg.permanent {
 					msg.reply <- errors.New("peer already connected")
 				} else {
@@ -1705,7 +1729,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
-			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
+			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
+			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
 		})
 
 		if found {
@@ -1714,7 +1739,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			msg.reply <- errors.New("peer not found")
 		}
 	case getOutboundGroup:
-		count, ok := state.outboundGroups[msg.key]
+		count, ok := state.outboundGroups.Get(msg.key)
 		if ok {
 			msg.reply <- count
 		} else {
@@ -1723,8 +1748,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	// Request a list of the persistent (added) peers.
 	case getAddedNodesMsg:
 		// Respond with a slice of the relevant peers.
-		peers := make([]*serverPeer, 0, len(state.persistentPeers))
-		for _, sp := range state.persistentPeers {
+		peers := make([]*serverPeer, 0, state.persistentPeers.Length())
+		for _, sp := range state.persistentPeers.Range() {
 			peers = append(peers, sp)
 		}
 		msg.reply <- peers
@@ -1741,7 +1766,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
-			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
+			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
+			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
 		})
 		if found {
 			// If there are multiple outbound connections to the same
@@ -1749,7 +1775,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			// peers are found.
 			for found {
 				found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
-					state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
+					count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
+					state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
 				})
 			}
 			msg.reply <- nil
@@ -1767,8 +1794,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 // to be located. If the peer is found, and the passed callback: `whenFound'
 // isn't nil, we call it with the peer as the argument before it is removed
 // from the peerList, and is disconnected from the server.
-func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
-	for addr, peer := range peerList {
+func disconnectPeer(peerList *util.SyncedMap[int32, *serverPeer], compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
+	for addr, peer := range peerList.Range() {
 		if compareFunc(peer) {
 			if whenFound != nil {
 				whenFound(peer)
@@ -1776,7 +1803,7 @@ func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer
 
 			// This is ok because we are not continuing
 			// to iterate so won't corrupt the loop.
-			delete(peerList, addr)
+			peerList.Delete(addr)
 			peer.Disconnect()
 			return true
 		}
@@ -1923,12 +1950,12 @@ func (s *server) peerHandler() {
 	defer s.wg.Done()
 
 	state := &peerState{
-		inboundPeers:    make(map[int32]*serverPeer),
-		outboundPeers:   make(map[int32]*serverPeer),
-		persistentPeers: make(map[int32]*serverPeer),
-		banned:          make(map[string]time.Time),
-		outboundGroups:  make(map[string]int),
-		connectionCount: make(map[string]int),
+		inboundPeers:    util.NewSyncedMap[int32, *serverPeer](),
+		outboundPeers:   util.NewSyncedMap[int32, *serverPeer](),
+		persistentPeers: util.NewSyncedMap[int32, *serverPeer](),
+		banned:          util.NewSyncedMap[string, time.Time](),
+		outboundGroups:  util.NewSyncedMap[string, int](),
+		connectionCount: util.NewSyncedMap[string, int](),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2021,14 +2048,19 @@ func (s *server) BanPeer(sp *serverPeer) {
 // RelayInventory relays the passed inventory vector to all connected peers
 // that are not already known to have it.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
-	s.relayInv <- relayMsg{invVect: invVect, data: data}
+	// dont' block on inv relay, losing invs on restart is fine.
+	go func(invVect *wire.InvVect, data interface{}) {
+		s.relayInv <- relayMsg{invVect: invVect, data: data}
+	}(invVect, data)
 }
 
 // BroadcastMessage sends msg to all peers currently connected to the server
 // except those in the passed peers to exclude.
 func (s *server) BroadcastMessage(msg wire.Message, exclPeers ...*serverPeer) {
-	bmsg := broadcastMsg{message: msg, excludePeers: exclPeers}
-	s.broadcast <- bmsg
+	// dont' block on broadcast, losing messages on restart is fine.
+	go func(msg wire.Message, exclPeers ...*serverPeer) {
+		s.broadcast <- broadcastMsg{message: msg, excludePeers: exclPeers}
+	}(msg, exclPeers...)
 }
 
 // ConnectedCount returns the number of currently connected peers.

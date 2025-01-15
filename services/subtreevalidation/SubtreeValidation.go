@@ -213,13 +213,12 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
+
 	defer deferFn()
 
 	if tx == nil {
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
 	}
-
-	u.logger.Debugf("[blessMissingTransaction][%s][%s] called", subtreeHash.String(), tx.TxID())
 
 	if tx.IsCoinbase() {
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is coinbase", subtreeHash.String(), tx.TxID())
@@ -609,7 +608,10 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 // in a subtree. It supports both file-based and network-based transaction retrieval.
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
 	baseURL string, txMetaSlice []*meta.Data, blockHeight uint32, validationOptions ...validator.Option) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions",
+		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
+	)
+
 	defer func() {
 		deferFn(err)
 	}()
@@ -657,36 +659,40 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	// process the transactions in parallel, based on the number of parents in the list
 	maxLevel, txsPerLevel := u.prepareTxsPerLevel(ctx, missingTxs)
 
+	u.logger.Debugf("[processMissingTransactions][%s] maxLevel: %d", subtreeHash.String(), maxLevel)
+
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
 		g.SetLimit(u.settings.SubtreeValidation.SpendBatcherSize * 2)
 
+		u.logger.Debugf("[processMissingTransactions][%s] processing level %d with %d transactions", subtreeHash.String(), level, len(txsPerLevel[level]))
 		for _, mTx = range txsPerLevel[level] {
-			mTx := mTx
-			if mTx.tx == nil {
+			tx := mTx.tx
+			txIdx := mTx.idx
+
+			if tx == nil {
 				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 			}
 
+			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, mTx.tx, blockHeight, validationOptions...)
+				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, validationOptions...)
 				if err != nil {
-					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
+					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 				}
 
 				if txMeta == nil {
 					missingCount.Add(1)
 					missedMu.Lock()
-					missed = append(missed, mTx.tx.TxIDChainHash())
+					missed = append(missed, tx.TxIDChainHash())
 					missedMu.Unlock()
-					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), tx.TxIDChainHash().String())
 				} else {
-					u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-
-					if txMetaSlice[mTx.idx] != nil {
-						return errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), mTx.idx, mTx.tx.TxIDChainHash().String())
+					if txMetaSlice[txIdx] != nil {
+						return errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
 					}
 
-					txMetaSlice[mTx.idx] = txMeta
+					txMetaSlice[txIdx] = txMeta
 				}
 
 				return nil
@@ -723,7 +729,10 @@ type txMapWrapper struct {
 // this code is very similar to the one in the legacy netsync/handle_block handler, but works on different base tx data
 
 func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
-	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
+	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel",
+		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevel] preparing %d transactions per level", len(transactions)),
+	)
+
 	defer deferFn()
 
 	// create a map of transactions for easy lookup when determining parents

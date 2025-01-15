@@ -1,9 +1,11 @@
 package netsync
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -11,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -23,7 +26,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash) (err error) {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
+	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
+
 	// Make sure we have the correct height for this block before continuing
 	var (
 		blockHeight             uint32
@@ -33,6 +38,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// check whether this block already exists
 	blockExists, err := sm.blockchainClient.GetBlockExists(ctx, &blockHash)
 	if err != nil {
+		sm.logger.Errorf("[HandleBlockDirect][%s] failed to check if block exists: %s", blockHash.String(), err)
 		return errors.NewProcessingError("failed to check if block exists", err)
 	}
 
@@ -41,29 +47,42 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return nil
 	}
 
-	// read block from disk
-	blockReader, err := sm.tempStore.GetIoReader(ctx,
-		blockHash.CloneBytes(),
-		options.WithFileExtension("msgBlock"),
-		options.WithSubDirectory("blocks"),
+	var (
+		blockReader io.ReadCloser
+		block       *bsvutil.Block
 	)
-	if err != nil {
-		return errors.NewStorageError("failed to get block reader from disk", err)
-	}
 
-	block, err := bsvutil.NewBlockFromReader(blockReader)
-	if err != nil {
-		return errors.NewProcessingError("failed to read block from disk", err)
-	}
+	if msgBlock == nil {
+		// read block from disk
+		blockReader, err = sm.tempStore.GetIoReader(ctx,
+			blockHash.CloneBytes(),
+			options.WithFileExtension("msgBlock"),
+			options.WithSubDirectory("blocks"),
+		)
+		if err != nil {
+			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block reader from disk: %s", blockHash.String(), err)
+			return errors.NewStorageError("failed to get block reader from disk", err)
+		}
 
-	// close the reader
-	if err = blockReader.Close(); err != nil {
-		return errors.NewStorageError("failed to close block reader", err)
+		block, err = bsvutil.NewBlockFromReader(bufio.NewReaderSize(blockReader, 4*1024*1024))
+		if err != nil {
+			sm.logger.Errorf("[HandleBlockDirect][%s] failed to read block from disk: %s", blockHash.String(), err)
+			return errors.NewProcessingError("failed to read block from disk", err)
+		}
+
+		// close the reader
+		if err = blockReader.Close(); err != nil {
+			sm.logger.Errorf("[HandleBlockDirect][%s] failed to close block reader: %s", blockHash.String(), err)
+			return errors.NewStorageError("failed to close block reader", err)
+		}
+	} else {
+		block = bsvutil.NewBlock(msgBlock)
 	}
 
 	// Lookup previous block height from blockchain
 	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 	if err != nil {
+		sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
 		return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
 	}
 

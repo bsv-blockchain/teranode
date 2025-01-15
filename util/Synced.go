@@ -7,13 +7,22 @@ import (
 )
 
 type SyncedMap[K comparable, V any] struct {
-	mu sync.RWMutex
-	m  map[K]V
+	mu    sync.RWMutex
+	m     map[K]V
+	limit int
 }
 
-func NewSyncedMap[K comparable, V any]() *SyncedMap[K, V] {
+// NewSyncedMap creates a new SyncedMap with an optional limit.
+// If the limit is set, the map will automatically delete a random item when the limit is reached.
+func NewSyncedMap[K comparable, V any](l ...int) *SyncedMap[K, V] {
+	limit := 0
+	if len(l) > 0 {
+		limit = l[0]
+	}
+
 	return &SyncedMap[K, V]{
-		m: make(map[K]V),
+		m:     make(map[K]V),
+		limit: limit,
 	}
 }
 
@@ -58,6 +67,7 @@ func (m *SyncedMap[K, V]) Range() map[K]V {
 
 // Iterate iterates over the map and calls the function f for each key-value pair.
 // unlike Range(), Iterate does not return a copy of the map and keeps the lock for the duration of the iteration.
+// If f returns false, the iteration stops.
 func (m *SyncedMap[K, V]) Iterate(f func(key K, value V) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -73,6 +83,18 @@ func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.setUnlocked(key, value)
+}
+
+func (m *SyncedMap[K, V]) setUnlocked(key K, value V) {
+	if m.limit > 0 && len(m.m) >= m.limit {
+		for k := range m.m {
+			// delete a random item
+			delete(m.m, k)
+			break
+		}
+	}
+
 	m.m[key] = value
 }
 
@@ -80,8 +102,9 @@ func (m *SyncedMap[K, V]) SetMulti(keys []K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// add the keys
 	for _, key := range keys {
-		m.m[key] = value
+		m.setUnlocked(key, value)
 	}
 }
 
@@ -92,6 +115,87 @@ func (m *SyncedMap[K, V]) Delete(key K) bool {
 	delete(m.m, key)
 
 	return true
+}
+
+func (m *SyncedMap[K, V]) Clear() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.m = make(map[K]V)
+
+	return true
+}
+
+type SyncedSlice[V any] struct {
+	mu    sync.RWMutex
+	items []*V
+}
+
+// NewSyncedSlice creates a new SyncedSlice.
+func NewSyncedSlice[V any](length ...int) *SyncedSlice[V] {
+	initialLength := 0
+	if len(length) > 0 {
+		initialLength = length[0]
+	}
+
+	return &SyncedSlice[V]{
+		items: make([]*V, 0, initialLength),
+	}
+}
+
+func (s *SyncedSlice[V]) Length() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return len(s.items)
+}
+
+func (s *SyncedSlice[V]) Get(index int) (*V, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if index < 0 || index >= len(s.items) {
+		return nil, false
+	}
+
+	return s.items[index], true
+}
+
+func (s *SyncedSlice[V]) Append(item *V) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.items = append(s.items, item)
+}
+
+// Pop removes and returns the last item in the slice.
+func (s *SyncedSlice[V]) Pop() (*V, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.items) == 0 {
+		return nil, false
+	}
+
+	item := s.items[len(s.items)-1]
+	s.items = s.items[:len(s.items)-1]
+
+	return item, true
+}
+
+// Shift removes and returns the first item in the slice.
+func (s *SyncedSlice[V]) Shift() (*V, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.items) == 0 {
+		return nil, false
+	}
+
+	item := s.items[0]
+	s.items = s.items[1:]
+
+	return item, true
 }
 
 type SyncedSwissMap[K comparable, V any] struct {
@@ -120,7 +224,7 @@ func (m *SyncedSwissMap[K, V]) Range() map[K]V {
 
 	m.swissMap.Iter(func(key K, value V) bool {
 		items[key] = value
-		return true
+		return false
 	})
 
 	return items
