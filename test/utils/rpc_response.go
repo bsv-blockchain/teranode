@@ -31,14 +31,15 @@ type BlockchainInfo struct {
 type P2PNode struct {
 	ID             int    `json:"id"`
 	Addr           string `json:"addr"`
+	AddrLocal      string `json:"addrlocal"`
 	Services       string `json:"services"`
 	ServicesStr    string `json:"servicesStr"`
 	RelayTxes      bool   `json:"relaytxes"`
-	LastSend       int    `json:"lastsend"`
-	LastRecv       int    `json:"lastrecv"`
+	LastSend       int64  `json:"lastsend"`
+	LastRecv       int64  `json:"lastrecv"`
 	BytesSent      int    `json:"bytessent"`
 	BytesRecv      int    `json:"bytesrecv"`
-	ConnTime       int    `json:"conntime"`
+	ConnTime       int64  `json:"conntime"`
 	TimeOffset     int    `json:"timeoffset"`
 	PingTime       int    `json:"pingtime"`
 	Version        int    `json:"version"`

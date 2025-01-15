@@ -284,6 +284,29 @@ func (suite *RPCTestSuite) TestRPCGetPeerInfo() {
 	} else {
 		t.Logf("Test succeeded, retrieved P2P peers informations")
 	}
+
+	if p2pResp.Result[0].ID == 0 {
+		t.Errorf("Test failed: peers list is empty")
+	} else {
+		t.Logf("Test succeeded, retrieved P2PNode ID informations")
+	}
+
+	if p2pResp.Result[0].Addr != "" {
+		t.Errorf("Successfull check: peer addr not empty")
+	} else {
+		t.Logf("Test failed, peer addr is empty")
+	}
+
+	if p2pResp.Result[0].AddrLocal != "" {
+		t.Errorf("Successfull check: peer local addr not empty")
+	} else {
+		t.Logf("Test failed, peer local addr is empty")
+	}
+
+	now := time.Now().Unix()
+	if p2pResp.Result[0].LastSend > now || p2pResp.Result[0].LastRecv > now || p2pResp.Result[0].ConnTime > now {
+		t.Errorf("Timestamp is not valid: it can't be in the future")
+	}
 }
 
 func (suite *RPCTestSuite) TestRPCGetInfo() {
