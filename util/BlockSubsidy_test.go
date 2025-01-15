@@ -2,6 +2,8 @@ package util
 
 import (
 	"testing"
+
+	"github.com/bitcoin-sv/teranode/chaincfg"
 )
 
 func TestGetBlockSubsidyForHeight(t *testing.T) {
@@ -27,7 +29,7 @@ func TestGetBlockSubsidyForHeight(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			subsidy := GetBlockSubsidyForHeight(tt.height)
+			subsidy := GetBlockSubsidyForHeight(tt.height, &chaincfg.MainNetParams)
 			if subsidy != tt.expectedSubsidy {
 				t.Errorf("GetBlockSubsidyForHeight(%d) = %d, want %d",
 					tt.height, subsidy, tt.expectedSubsidy)
@@ -43,7 +45,7 @@ func TestSubsidyHalvingInterval(t *testing.T) {
 	for i := uint32(0); i < 64; i++ {
 		height := i * interval
 		expectedSubsidy := initialSubsidy >> i
-		subsidy := GetBlockSubsidyForHeight(height)
+		subsidy := GetBlockSubsidyForHeight(height, &chaincfg.MainNetParams)
 
 		if subsidy != expectedSubsidy {
 			t.Errorf("Incorrect subsidy at height %d: got %d, want %d",

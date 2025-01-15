@@ -1,8 +1,10 @@
 package util
 
+import "github.com/bitcoin-sv/teranode/chaincfg"
+
 // GetBlockSubsidyForHeight func
-func GetBlockSubsidyForHeight(height uint32) uint64 {
-	halvings := height / 210000
+func GetBlockSubsidyForHeight(height uint32, params *chaincfg.Params) uint64 {
+	halvings := height / uint32(params.SubsidyReductionInterval) //nolint:gosec
 	// Force block reward to zero when right shift is undefined.
 	if halvings >= 64 {
 		return 0

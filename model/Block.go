@@ -631,7 +631,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 		subtreeFees += subtree.Fees
 	}
 
-	coinbaseReward := util.GetBlockSubsidyForHeight(height)
+	coinbaseReward := util.GetBlockSubsidyForHeight(height, b.settings.ChainCfgParams)
 
 	if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
 		return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)

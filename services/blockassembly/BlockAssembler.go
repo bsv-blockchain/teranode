@@ -578,7 +578,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNow)
 
-	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load() + 1)
+	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load()+1, b.settings.ChainCfgParams)
 
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{

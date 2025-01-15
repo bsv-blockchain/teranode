@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/chaincfg"
 	teranode_model "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
@@ -129,7 +130,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 
 	// add a P2PKH output to the coinbase transaction with fees
 	coinbase.Outputs = nil
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1)+subtree.Fees)
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1, &chaincfg.MainNetParams)+subtree.Fees)
 	nBits, _ := teranode_model.NewNBitFromString("2000ffff")
 
 	// get subtree root hash

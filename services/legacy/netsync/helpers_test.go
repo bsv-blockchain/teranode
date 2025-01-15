@@ -11,13 +11,12 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/util"
-
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -65,21 +64,26 @@ func solveBlock(header *wire.BlockHeader, targetDifficulty *big.Int) bool {
 
 	startNonce := uint32(0)
 	stopNonce := uint32(math.MaxUint32)
-	numCores := uint32(runtime.NumCPU())
+	numCores := uint32(runtime.NumCPU()) //nolint:gosec
 	noncesPerCore := (stopNonce - startNonce) / numCores
+
 	for i := uint32(0); i < numCores; i++ {
 		rangeStart := startNonce + (noncesPerCore * i)
 		rangeStop := startNonce + (noncesPerCore * (i + 1)) - 1
 		if i == numCores-1 {
 			rangeStop = stopNonce
 		}
+
 		go solver(*header, rangeStart, rangeStop)
 	}
+
 	for i := uint32(0); i < numCores; i++ {
 		result := <-results
 		if result.found {
 			close(quit)
+
 			header.Nonce = result.nonce
+
 			return true
 		}
 	}
@@ -92,15 +96,14 @@ func solveBlock(header *wire.BlockHeader, targetDifficulty *big.Int) bool {
 // it starts with the block height that is required by version 2 blocks.
 func standardCoinbaseScript(nextBlockHeight int32, extraNonce uint64) ([]byte, error) {
 	return txscript.NewScriptBuilder().AddInt64(int64(nextBlockHeight)).
-		AddInt64(int64(extraNonce)).Script()
+		AddInt64(int64(extraNonce)).Script() //nolint:gosec
 }
 
 // createCoinbaseTx returns a coinbase transaction paying an appropriate
 // subsidy based on the passed block height to the provided address.
 func createCoinbaseTx(coinbaseScript []byte, nextBlockHeight int32,
 	addr bsvutil.Address, mineTo []wire.TxOut,
-	net *chaincfg.Params) (*bsvutil.Tx, error) {
-
+	_ *chaincfg.Params) (*bsvutil.Tx, error) {
 	// Create the script to pay to the provided payment address.
 	pkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
@@ -116,9 +119,10 @@ func createCoinbaseTx(coinbaseScript []byte, nextBlockHeight int32,
 		SignatureScript: coinbaseScript,
 		Sequence:        wire.MaxTxInSequenceNum,
 	})
+
 	if len(mineTo) == 0 {
 		tx.AddTxOut(&wire.TxOut{
-			Value:    int64(util.GetBlockSubsidyForHeight(uint32(nextBlockHeight))), // TODO net missing
+			Value:    int64(util.GetBlockSubsidyForHeight(uint32(nextBlockHeight), &chaincfg.MainNetParams)), //nolint:gosec
 			PkScript: pkScript,
 		})
 	} else {
@@ -137,7 +141,6 @@ func createCoinbaseTx(coinbaseScript []byte, nextBlockHeight int32,
 func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 	blockVersion int32, blockTime time.Time, miningAddr bsvutil.Address,
 	mineTo []wire.TxOut, net *chaincfg.Params) (*bsvutil.Block, error) {
-
 	var (
 		prevHash      *chainhash.Hash
 		blockHeight   int32
@@ -160,6 +163,7 @@ func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 	// timestamp. Otherwise, add one second to the previous block unless
 	// it's the genesis block in which case use the current time.
 	var ts time.Time
+
 	switch {
 	case !blockTime.IsZero():
 		ts = blockTime
@@ -168,10 +172,12 @@ func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 	}
 
 	extraNonce := uint64(0)
+
 	coinbaseScript, err := standardCoinbaseScript(blockHeight, extraNonce)
 	if err != nil {
 		return nil, err
 	}
+
 	coinbaseTx, err := createCoinbaseTx(coinbaseScript, blockHeight,
 		miningAddr, mineTo, net)
 	if err != nil {
@@ -183,8 +189,10 @@ func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 	if inclusionTxs != nil {
 		blockTxns = append(blockTxns, inclusionTxs...)
 	}
+
 	blockTxns = append([]*bsvutil.Tx{coinbaseTx}, blockTxns...)
 	merkles := blockchain.BuildMerkleTreeStore(blockTxns)
+
 	var block wire.MsgBlock
 	block.Header = wire.BlockHeader{
 		Version:    blockVersion,
@@ -193,6 +201,7 @@ func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 		Timestamp:  ts,
 		Bits:       net.PowLimitBits,
 	}
+
 	for _, tx := range blockTxns {
 		if err := block.AddTransaction(tx.MsgTx()); err != nil {
 			return nil, err
@@ -215,6 +224,7 @@ func HashToBig(hash *chainhash.Hash) *big.Int {
 	// A Hash is in little-endian, but the big package wants the bytes in
 	// big-endian, so reverse them.
 	buf := *hash
+
 	blen := len(buf)
 	for i := 0; i < blen/2; i++ {
 		buf[i], buf[blen-1-i] = buf[blen-1-i], buf[i]

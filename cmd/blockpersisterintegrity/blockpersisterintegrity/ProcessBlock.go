@@ -6,6 +6,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	p_model "github.com/bitcoin-sv/teranode/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -13,14 +14,16 @@ import (
 )
 
 type BlockProcessor struct {
-	logger ulogger.Logger
-	store  blob.Store
+	logger   ulogger.Logger
+	store    blob.Store
+	settings *settings.Settings
 }
 
-func NewBlockProcessor(logger ulogger.Logger, store blob.Store) *BlockProcessor {
+func NewBlockProcessor(logger ulogger.Logger, store blob.Store, tSettings *settings.Settings) *BlockProcessor {
 	return &BlockProcessor{
-		logger: logger,
-		store:  store,
+		logger:   logger,
+		store:    store,
+		settings: tSettings,
 	}
 }
 
@@ -86,7 +89,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 	}
 
 	blockReward := block.CoinbaseTx.TotalOutputSatoshis()
-	blockSubsidy := util.GetBlockSubsidyForHeight(height)
+	blockSubsidy := util.GetBlockSubsidyForHeight(height, bp.settings.ChainCfgParams)
 	if blockFees+blockSubsidy != blockReward {
 		return errors.NewBlockError("block %s has incorrect fees: %d != %d\n", block.Hash(), blockFees, blockReward)
 		// } else {

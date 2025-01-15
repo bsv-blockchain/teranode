@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -320,6 +321,9 @@ func TestServer_processBlockFound(t *testing.T) {
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings()
+	// regtest SubsidyReductionInterval is 150
+	// so use mainnet params
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	blockHex := "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
 	blockBytes, err := hex.DecodeString(blockHex)

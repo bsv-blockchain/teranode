@@ -110,7 +110,7 @@ func Start() {
 		previousBlockHeader = blockHeader
 	}
 
-	bp := NewBlockProcessor(logger, blobStore)
+	bp := NewBlockProcessor(logger, blobStore, tSettings)
 
 	// range through the block headers in reverse order, oldest first
 	for i := len(blockHeaders) - 4010; i >= 0; i-- {

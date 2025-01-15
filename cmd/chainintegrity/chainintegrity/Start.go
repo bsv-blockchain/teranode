@@ -353,7 +353,7 @@ func Start() {
 
 		blockReward := block.CoinbaseTx.TotalOutputSatoshis()
 
-		blockSubsidy := util.GetBlockSubsidyForHeight(height)
+		blockSubsidy := util.GetBlockSubsidyForHeight(height, tSettings.ChainCfgParams)
 		if blockFees+blockSubsidy != blockReward {
 			logger.Errorf("block %s has incorrect fees: %d != %d", block.Hash(), blockFees, blockReward)
 		} else {
