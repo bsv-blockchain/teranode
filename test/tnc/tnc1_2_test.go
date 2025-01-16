@@ -39,25 +39,22 @@ type TNC1_2TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNC1_2TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnc1_2Test",
-				"docker.teranode2.test.tnc1_2Test",
-				"docker.teranode3.test.tnc1_2Test",
-			},
+func TestTNC1_2TestSuite(t *testing.T) {
+	suite.Run(t, &TNC1_2TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnc1_2Test",
+						"docker.teranode2.test.tnc1_2Test",
+						"docker.teranode3.test.tnc1_2Test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
-
-func (suite *TNC1_2TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNC1_2TestSuite) TearDownTest() {
-// }
 
 // TestCheckPrevBlockHash verifies that the mining candidate correctly references
 // the hash of the previous block
@@ -142,8 +139,4 @@ func (suite *TNC1_2TestSuite) TestPrevBlockHashAfterReorg() {
 	// Verify that node0's mining candidate now references the tip of the longer chain
 	require.Equal(t, bestBlockHeader.String(), prevHash.String(),
 		"Mining candidate's previous hash does not match the new best block after reorg")
-}
-
-func TestTNC1_2TestSuite(t *testing.T) {
-	suite.Run(t, new(TNC1_2TestSuite))
 }

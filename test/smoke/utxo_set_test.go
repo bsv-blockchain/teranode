@@ -38,6 +38,10 @@ type UTXOVerificationTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestUTXOVerificationTestSuite(t *testing.T) {
+	suite.Run(t, &UTXOVerificationTestSuite{})
+}
+
 func (suite *UTXOVerificationTestSuite) TearDownTest() {
 }
 
@@ -177,8 +181,4 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].Blockstore, *blockModel.Hash(), "utxo-deletions")
 		require.NoError(t, err, "Failed to verify UTXO deletions file")
 	}
-}
-
-func TestUTXOVerificationTestSuite(t *testing.T) {
-	suite.Run(t, new(UTXOVerificationTestSuite))
 }

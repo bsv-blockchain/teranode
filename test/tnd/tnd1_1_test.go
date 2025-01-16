@@ -24,6 +24,10 @@ type TND1_1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestTND1_1TestSuite(t *testing.T) {
+	suite.Run(t, &TND1_1TestSuite{})
+}
+
 func (suite *TND1_1TestSuite) TearDownTest() {
 }
 
@@ -253,8 +257,4 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 		require.Equal(t, meta0.Height, metaN.Height,
 			"Best block height mismatch between Node0 and Node%d", i)
 	}
-}
-
-func TestTND1_1TestSuite(t *testing.T) {
-	suite.Run(t, new(TND1_1TestSuite))
 }

@@ -21,17 +21,25 @@ type TNFTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNFTestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnf6",
-				"docker.teranode2.test.tnf6.stage1",
-				"docker.teranode3.test.tnf6",
-			},
+func TestTNFTestSuite(t *testing.T) {
+	suite.Run(t, &TNFTestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnf6",
+						"docker.teranode2.test.tnf6.stage1",
+						"docker.teranode3.test.tnf6",
+					},
+				},
+			),
 		},
+	},
 	)
+}
 
+func (suite *TNFTestSuite) TearDownTest() {
+	// suite.BitcoinTestSuite.TearDownTest()
 }
 
 const (
@@ -45,10 +53,6 @@ const (
 	miner2 = "/m2-us/"
 	miner3 = "/m3-asia/"
 )
-
-func (suite *TNFTestSuite) TearDownTest() {
-	// suite.BitcoinTestSuite.TearDownTest()
-}
 
 func (suite *TNFTestSuite) TestInvalidateBlock() {
 	cluster := suite.TeranodeTestEnv
@@ -154,7 +158,4 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	header3, _, _ = blockchainNode3.GetBestBlockHeader(ctx)
 
 	assert.Equal(t, header1.Hash(), header3.Hash(), "Blocks should be equal")
-}
-func TestTNFTestSuite(t *testing.T) {
-	suite.Run(t, new(TNFTestSuite))
 }

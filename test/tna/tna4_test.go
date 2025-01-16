@@ -43,24 +43,22 @@ type TNA4TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-// InitSuite initializes the test suite with configuration settings for three test nodes.
-func (suite *TNA4TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tna1Test",
-				"docker.teranode2.test.tna1Test",
-				"docker.teranode3.test.tna1Test",
-			},
+// TestTNA4TestSuite runs the TNA4TestSuite test suite.
+func TestTNA4TestSuite(t *testing.T) {
+	suite.Run(t, &TNA4TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tna1Test",
+						"docker.teranode2.test.tna1Test",
+						"docker.teranode3.test.tna1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-
-}
-
-// SetupTest sets up the test environment with the initialized settings and default compose files.
-func (suite *TNA4TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 // TestBlockBroadcast verifies that Teranode broadcasts blocks to all nodes after finding
@@ -140,9 +138,4 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 
 	}
 	mu.Unlock()
-}
-
-// TestTNA4TestSuite runs the TNA4TestSuite test suite.
-func TestTNA4TestSuite(t *testing.T) {
-	suite.Run(t, new(TNA4TestSuite))
 }

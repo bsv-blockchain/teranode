@@ -31,6 +31,10 @@ type FsmTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestFsmTestSuite(t *testing.T) {
+	suite.Run(t, &FsmTestSuite{})
+}
+
 func (suite *FsmTestSuite) TearDownTest() {
 }
 
@@ -96,13 +100,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
 	blockchainNode1 = framework.Nodes[1].BlockchainClient
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -219,13 +223,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateSingleNode_WithP2PSwitch() {
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
 	// wait for all blockchain nodes to be ready
 	for index, node := range suite.TeranodeTestEnv.Nodes {
@@ -275,13 +279,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateSingleNode_WithP2PSwitch() {
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
 	// wait for all blockchain nodes to be ready
 	for index, node := range suite.TeranodeTestEnv.Nodes {
@@ -413,13 +417,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
 	// wait for all blockchain nodes to be ready
 	for index, node := range suite.TeranodeTestEnv.Nodes {
@@ -489,27 +493,27 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
-		blockchainNode0 = framework.Nodes[0].BlockchainClient
-		blockchainNode1 = framework.Nodes[1].BlockchainClient
-		blockchainNode2 = framework.Nodes[2].BlockchainClient
+	}
+	blockchainNode0 = framework.Nodes[0].BlockchainClient
+	blockchainNode1 = framework.Nodes[1].BlockchainClient
+	blockchainNode2 = framework.Nodes[2].BlockchainClient
 
-		// Wait for all blockchain nodes to be ready
-		for index, node := range suite.TeranodeTestEnv.Nodes {
-			suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
-			err := helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+	// Wait for all blockchain nodes to be ready
+	for index, node := range suite.TeranodeTestEnv.Nodes {
+		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+		err := helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
-		suite.T().Log("All nodes ready")
+	suite.T().Log("All nodes ready")
 
 	// Monitor state changes and wait for catch up
 	wait := func() {
@@ -645,13 +649,13 @@ func (suite *FsmTestSuite) TestNodeDoesNotSendMiningCandidate_CatchUpState_WithS
 			suite.T().Fatal(err)
 		}
 
-			suite.T().Logf("Waiting for node %d to be ready", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
 		}
+	}
 
 	blockchainNode1 = framework.Nodes[1].BlockchainClient
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -746,8 +750,4 @@ func (suite *FsmTestSuite) TestNodeDoesNotSendMiningCandidate_CatchUpState_WithS
 
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 	assert.True(t, stateFound, "State 3 (CATCHINGBLOCKS) was not captured")
-}
-
-func TestFsmTestSuite(t *testing.T) {
-	suite.Run(t, new(FsmTestSuite))
 }

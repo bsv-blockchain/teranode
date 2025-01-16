@@ -27,25 +27,22 @@ type TNE1_1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNE1_1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test",
-				"docker.teranode2.test",
-				"docker.teranode3.test",
-			},
+func TestTNE1_1TestSuite(t *testing.T) {
+	suite.Run(t, &TNE1_1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test",
+						"docker.teranode2.test",
+						"docker.teranode3.test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
-
-func (suite *TNE1_1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNE1_1TestSuite) TearDownTest() {
-// }
 
 func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified() {
 	t := suite.T()
@@ -205,8 +202,4 @@ checkHeaders:
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
-}
-
-func TestTNE1_1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNE1_1TestSuite))
 }

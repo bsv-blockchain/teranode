@@ -25,21 +25,21 @@ type TNA1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNA1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tna1Test",
-				"docker.teranode2.test.tna1Test",
-				"docker.teranode3.test.tna1Test",
-			},
+func TestTNA1TestSuite(t *testing.T) {
+	suite.Run(t, &TNA1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tna1Test",
+						"docker.teranode2.test.tna1Test",
+						"docker.teranode3.test.tna1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-}
-
-func (suite *TNA1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
@@ -158,8 +158,4 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 	// Verify that all transactions were found
 	require.Equal(t, 0, remainingTxs, "Not all transactions were found in the subtrees")
-}
-
-func TestTNA1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNA1TestSuite))
 }

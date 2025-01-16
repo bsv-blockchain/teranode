@@ -28,6 +28,10 @@ type PeerTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestPeerTestSuite(t *testing.T) {
+	suite.Run(t, &PeerTestSuite{})
+}
+
 func (suite *PeerTestSuite) TearDownTest() {
 }
 
@@ -201,8 +205,4 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	assert.NotEqual(t, bestBlockHeightNode1, bestBlockHeightNode2, "Best block height mismatch")
 	assert.NotEqual(t, bestBlockHeightNode2, bestBlockHeightNode3, "Best block height mismatch")
 	assert.Equal(t, bestBlockHeightNode1, bestBlockHeightNode3, "Best block height mismatch")
-}
-
-func TestPeerTestSuite(t *testing.T) {
-	suite.Run(t, new(PeerTestSuite))
 }

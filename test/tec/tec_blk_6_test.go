@@ -19,27 +19,27 @@ type TECBlk6TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TECBlk6TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyLocalSystemComposes: []string{
-				"../../docker-compose.yml",
-				"../../docker-compose.aerospike.override.yml",
-				"../../docker-compose.e2etest.yml",
-				"../docker-compose.utxo.override.yml",
-			},
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tec6",
-				"docker.teranode1.test.tec6",
-				"docker.teranode1.test.tec6",
-			},
+func TestTECBlk6TestSuite(t *testing.T) {
+	suite.Run(t, &TECBlk6TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyLocalSystemComposes: []string{
+						"../../docker-compose.yml",
+						"../../docker-compose.aerospike.override.yml",
+						"../../docker-compose.e2etest.yml",
+						"../docker-compose.utxo.override.yml",
+					},
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tec6",
+						"docker.teranode1.test.tec6",
+						"docker.teranode1.test.tec6",
+					},
+				},
+			),
 		},
+	},
 	)
-}
-
-func (suite *TECBlk6TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverability() {
@@ -80,8 +80,4 @@ func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
 	}
 
 	fmt.Println("Asset Server Startup Recoverability Test passed successfully...")
-}
-
-func TestTECBlk6TestSuite(t *testing.T) {
-	suite.Run(t, new(TECBlk6TestSuite))
 }

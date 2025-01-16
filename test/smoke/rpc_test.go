@@ -50,6 +50,10 @@ type RPCTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestRPCTestSuite(t *testing.T) {
+	suite.Run(t, &RPCTestSuite{})
+}
+
 // waitForProcessToStop waits for a process matching the given pattern to stop
 func waitForProcessToStop(pattern string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -1494,10 +1498,6 @@ func (suite *RPCTestSuite) TestShouldAllowSubmitMiningSolutionUsingMiningCandida
 	}
 
 	assert.True(t, blFound, "TX not found in the blockstore")
-}
-
-func TestRPCTestSuite(t *testing.T) {
-	suite.Run(t, new(RPCTestSuite))
 }
 
 func newHashFromStr(hexStr string) *chainhash.Hash {

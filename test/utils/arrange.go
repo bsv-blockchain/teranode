@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 
@@ -31,7 +32,12 @@ type TeranodeTestSuite struct {
 // )
 
 func (suite *TeranodeTestSuite) SetupTest() {
-	suite.TConfig = tconfig.LoadTConfig(nil)
+	// If the suite.TConfig equal to empty instance, then initialize it with default constructor
+	empty := tconfig.TConfig{}
+	if reflect.DeepEqual(suite.TConfig, empty) {
+		suite.TConfig = tconfig.LoadTConfig(nil)
+	}
+
 	suite.SetupTestEnv(false)
 }
 

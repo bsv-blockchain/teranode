@@ -37,25 +37,22 @@ type TNC1_1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNC1_1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnc1_1Test",
-				"docker.teranode2.test.tnc1_1Test",
-				"docker.teranode3.test.tnc1_1Test",
-			},
+func TestTNC1_1TestSuite(t *testing.T) {
+	suite.Run(t, &TNC1_1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnc1_1Test",
+						"docker.teranode2.test.tnc1_1Test",
+						"docker.teranode3.test.tnc1_1Test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
-
-func (suite *TNC1_1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNC1_1TestSuite) TearDownTest() {
-// }
 
 func (suite *TNC1_1TestSuite) TestVerifyMerkleRootCalculation() {
 	testEnv := suite.TeranodeTestEnv
@@ -79,8 +76,4 @@ func (suite *TNC1_1TestSuite) TestVerifyMerkleRootCalculation() {
 	require.NotNil(t, block)
 	err = block.CheckMerkleRoot(ctx) // broken
 	require.NoError(t, err)
-}
-
-func TestTNC1_1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNC1_1TestSuite))
 }

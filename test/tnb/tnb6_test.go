@@ -69,26 +69,22 @@ type TNB6TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNB6TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test",
-				"docker.teranode2.test",
-				"docker.teranode3.test",
-			},
+func TestTNB6TestSuite(t *testing.T) {
+	suite.Run(t, &TNB6TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test",
+						"docker.teranode2.test",
+						"docker.teranode3.test",
+					},
+				},
+			),
 		},
+	},
 	)
-
 }
-
-func (suite *TNB6TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNB6TestSuite) TearDownTest() {
-// }
 
 // TestUTXOSetManagement verifies that transaction outputs are correctly added to the UTXO set.
 // This test ensures that:
@@ -179,8 +175,4 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 		SpendingTxID: invalidTx.TxIDChainHash(),
 	}}, 0)
 	require.Error(t, err)
-}
-
-func TestTNB6TestSuite(t *testing.T) {
-	suite.Run(t, new(TNB6TestSuite))
 }

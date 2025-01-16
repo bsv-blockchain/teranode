@@ -26,25 +26,22 @@ type TNC1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNC1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnc1Test",
-				"docker.teranode2.test.tnc1Test",
-				"docker.teranode3.test.tnc1Test",
-			},
+func TestTNC1TestSuite(t *testing.T) {
+	suite.Run(t, &TNC1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnc1Test",
+						"docker.teranode2.test.tnc1Test",
+						"docker.teranode3.test.tnc1Test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
-
-func (suite *TNC1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNC1TestSuite) TearDownTest() {
-// }
 
 // TNC-1.1
 func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
@@ -246,8 +243,4 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	if coinbaseValueBlock < amount {
 		t.Errorf("Error calculating fees")
 	}
-}
-
-func TestTNC1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNC1TestSuite))
 }

@@ -14,6 +14,10 @@ type TECTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestTECTestSuite(t *testing.T) {
+	suite.Run(t, &TECTestSuite{})
+}
+
 func (suite *TECTestSuite) TestShutDownPropagationService() {
 	t := suite.T()
 	testenv := suite.TeranodeTestEnv
@@ -236,8 +240,4 @@ func (suite *TECTestSuite) TestShutDownAsset() {
 	if coinbaseHealth != 200 {
 		t.Errorf("Expected coinbaseHealth to be 200, but got %d", coinbaseHealth)
 	}
-}
-
-func TestTECTestSuite(t *testing.T) {
-	suite.Run(t, new(TECTestSuite))
 }

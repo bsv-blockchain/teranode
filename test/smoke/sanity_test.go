@@ -27,8 +27,9 @@ type SanityTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-// func (suite *SanityTestSuite) TearDownTest() {
-// }
+func TestSanityTestSuite(t *testing.T) {
+	suite.Run(t, &SanityTestSuite{})
+}
 
 func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	t := suite.T()
@@ -166,8 +167,4 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")
-}
-
-func TestSanityTestSuite(t *testing.T) {
-	suite.Run(t, new(SanityTestSuite))
 }

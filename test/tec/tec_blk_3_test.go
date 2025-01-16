@@ -19,27 +19,27 @@ type TECBlk3TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TECBlk3TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyLocalSystemComposes: []string{
-				"../../docker-compose.yml",
-				"../../docker-compose.aerospike.override.yml",
-				"../../docker-compose.e2etest.yml",
-				"../docker-compose.utxo.override.yml",
-			},
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tec3",
-				"docker.teranode1.test.tec3",
-				"docker.teranode1.test.tec3",
-			},
+func TestTECBlk3TestSuite(t *testing.T) {
+	suite.Run(t, &TECBlk3TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyLocalSystemComposes: []string{
+						"../../docker-compose.yml",
+						"../../docker-compose.aerospike.override.yml",
+						"../../docker-compose.e2etest.yml",
+						"../docker-compose.utxo.override.yml",
+					},
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tec3",
+						"docker.teranode1.test.tec3",
+						"docker.teranode1.test.tec3",
+					},
+				},
+			),
 		},
+	},
 	)
-}
-
-func (suite *TECBlk3TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {
@@ -59,8 +59,4 @@ func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {
 	}
 
 	fmt.Println("Block Assembly Recoverability Test passed successfully...")
-}
-
-func TestTECBlk3TestSuite(t *testing.T) {
-	suite.Run(t, new(TECBlk3TestSuite))
 }

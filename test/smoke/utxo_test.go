@@ -42,6 +42,10 @@ type UtxoTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestUtxoTestSuite(t *testing.T) {
+	suite.Run(t, &UtxoTestSuite{})
+}
+
 func (suite *UtxoTestSuite) TearDownTest() {
 }
 
@@ -1336,8 +1340,4 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 		assert.True(t, verifyTxInBlock(txs[idx], fmt.Sprintf("transaction %d", idx)),
 			"Transaction %d (%s) not found in block", idx, txs[idx].TxID())
 	}
-}
-
-func TestUtxoTestSuite(t *testing.T) {
-	suite.Run(t, new(UtxoTestSuite))
 }

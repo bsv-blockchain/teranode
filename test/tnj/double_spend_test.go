@@ -20,6 +20,10 @@ type TNJDoubleSpendTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestTNJDoubleSpendTestSuite(t *testing.T) {
+	suite.Run(t, &TNJDoubleSpendTestSuite{})
+}
+
 func (suite *TNJDoubleSpendTestSuite) TearDownTest() {
 }
 
@@ -267,8 +271,4 @@ func (suite *TNJDoubleSpendTestSuite) TestDoubleSpendMultipleUtxos() {
 		assert.Nil(t, tx1OnNode2.Tx, "Node2 should reject tx1")
 		logger.Infof("Transaction 2 was accepted, Transaction 1 was rejected")
 	}
-}
-
-func TestTNJDoubleSpendTestSuite(t *testing.T) {
-	suite.Run(t, new(TNJDoubleSpendTestSuite))
 }

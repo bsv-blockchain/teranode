@@ -49,26 +49,22 @@ type TNB1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNB1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnb1Test",
-				"docker.teranode2.test.tnb1Test",
-				"docker.teranode3.test.tnb1Test",
-			},
+func TestTNB1TestSuite(t *testing.T) {
+	suite.Run(t, &TNB1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnb1Test",
+						"docker.teranode2.test.tnb1Test",
+						"docker.teranode3.test.tnb1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-
 }
-
-func (suite *TNB1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNB1TestSuite) TearDownTest() {
-// }
 
 func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	testEnv := suite.TeranodeTestEnv
@@ -266,10 +262,6 @@ func (suite *TNB1TestSuite) TestNoReformattingRequired() {
 		}
 	}
 	require.Empty(t, missingTxs, "Transactions not found in block's subtrees: %v", missingTxs)
-}
-
-func TestTNB1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNB1TestSuite))
 }
 
 func allTransactionsIncluded(pendingTxs map[chainhash.Hash]bool) bool {

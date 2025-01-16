@@ -28,22 +28,21 @@ type TNA2TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNA2TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tna1Test",
-				"docker.teranode2.test.tna1Test",
-				"docker.teranode3.test.tna1Test",
-			},
+func TestTNA2TestSuite(t *testing.T) {
+	suite.Run(t, &TNA2TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tna1Test",
+						"docker.teranode2.test.tna1Test",
+						"docker.teranode3.test.tna1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-
-}
-
-func (suite *TNA2TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
@@ -113,8 +112,4 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 			}
 		}
 	})
-}
-
-func TestTNA2TestSuite(t *testing.T) {
-	suite.Run(t, new(TNA2TestSuite))
 }

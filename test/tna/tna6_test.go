@@ -44,25 +44,22 @@ type TNA6TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-// InitSuite initializes the test suite with configuration settings for three test nodes.
-// Each node is configured with a unique docker context for isolated testing.
-func (suite *TNA6TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tna1Test",
-				"docker.teranode2.test.tna1Test",
-				"docker.teranode3.test.tna1Test",
-			},
+// TestTNA6TestSuite runs the TNA6TestSuite test suite.
+func TestTNA6TestSuite(t *testing.T) {
+	suite.Run(t, &TNA6TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tna1Test",
+						"docker.teranode2.test.tna1Test",
+						"docker.teranode3.test.tna1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-
-}
-
-// SetupTest sets up the test environment with the initialized settings and default compose files.
-func (suite *TNA6TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 // TestAcceptanceNextBlock verifies that Teranode expresses block acceptance by using
@@ -123,9 +120,4 @@ func (suite *TNA6TestSuite) TestAcceptanceNextBlock() {
 		require.Equal(t, bestBlockHeader.Hash().String(), nodePrevHash.String(),
 			"Node %d should be building on top of the accepted block", i)
 	}
-}
-
-// TestTNA6TestSuite runs the TNA6TestSuite test suite.
-func TestTNA6TestSuite(t *testing.T) {
-	suite.Run(t, new(TNA6TestSuite))
 }

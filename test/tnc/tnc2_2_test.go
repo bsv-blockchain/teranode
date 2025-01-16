@@ -40,25 +40,22 @@ type TNC2_2TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNC2_2TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnc2_2Test",
-				"docker.teranode2.test.tnc2_2Test",
-				"docker.teranode3.test.tnc2_2Test",
-			},
+func TestTNC2_2TestSuite(t *testing.T) {
+	suite.Run(t, &TNC2_2TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnc2_2Test",
+						"docker.teranode2.test.tnc2_2Test",
+						"docker.teranode3.test.tnc2_2Test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
-
-// func (suite *TNC2_2TestSuite) SetupTest() {
-// 	suite.InitSuite()
-// 	suite.SetupTestEnv(false)
-// }
-
-// func (suite *TNC2_2TestSuite) TearDownTest() {
-// }
 
 // TestCandidateBlockStorage verifies that Teranode properly stores candidate blocks
 // and allows retrieving them by their unique identifiers
@@ -76,8 +73,4 @@ func (suite *TNC2_2TestSuite) TestCandidateBlockRetention() {
 // multiple candidate blocks being stored and retrieved concurrently
 func (suite *TNC2_2TestSuite) TestConcurrentCandidateStorage() {
 	// TODO
-}
-
-func TestTNC2_2TestSuite(t *testing.T) {
-	suite.Run(t, new(TNC2_2TestSuite))
 }

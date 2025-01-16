@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"testing"
 
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	helpler "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/stretchr/testify/suite"
@@ -19,27 +20,27 @@ type TECBlk5TestSuite struct {
 	helpler.TeranodeTestSuite
 }
 
-func (suite *TECBlk5TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyLocalSystemComposes: []string{
-				"../../docker-compose.yml",
-				"../../docker-compose.aerospike.override.yml",
-				"../../docker-compose.e2etest.yml",
-				"../docker-compose.utxo.override.yml",
-			},
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tec5",
-				"docker.teranode1.test.tec5",
-				"docker.teranode1.test.tec5",
-			},
+func TestTECBlk5TestSuite(t *testing.T) {
+	suite.Run(t, &TECBlk5TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyLocalSystemComposes: []string{
+						"../../docker-compose.yml",
+						"../../docker-compose.aerospike.override.yml",
+						"../../docker-compose.e2etest.yml",
+						"../docker-compose.utxo.override.yml",
+					},
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tec5",
+						"docker.teranode1.test.tec5",
+						"docker.teranode1.test.tec5",
+					},
+				},
+			),
 		},
+	},
 	)
-}
-
-func (suite *TECBlk5TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 func (suite *TECBlk5TestSuite) TestP2PRecoverability() {
@@ -59,8 +60,4 @@ func (suite *TECBlk5TestSuite) TestP2PRecoverability() {
 	}
 
 	fmt.Println("P2P Recoverability Test passed successfully...")
-}
-
-func TestTECBlk5TestSuite(t *testing.T) {
-	suite.Run(t, new(TECBlk5TestSuite))
 }

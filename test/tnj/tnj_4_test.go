@@ -17,15 +17,20 @@ type TNJ4TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNJ4TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnj4Test",
-				"docker.teranode2.test.tnj4Test",
-				"docker.teranode3.test.tnj4Test",
-			},
+func TestTNJ4TestSuite(t *testing.T) {
+	suite.Run(t, &TNJ4TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnj4Test",
+						"docker.teranode2.test.tnj4Test",
+						"docker.teranode3.test.tnj4Test",
+					},
+				},
+			),
 		},
+	},
 	)
 }
 
@@ -93,8 +98,4 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	}
 
 	assert.Equal(t, false, bl, "Test Tx was not expected in the block")
-}
-
-func TestTNJ4TestSuite(t *testing.T) {
-	suite.Run(t, new(TNJ4TestSuite))
 }

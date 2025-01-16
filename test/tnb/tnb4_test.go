@@ -21,26 +21,22 @@ type TNB4TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNB4TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test",
-				"docker.teranode2.test",
-				"docker.teranode3.test",
-			},
+func TestTNB4TestSuite(t *testing.T) {
+	suite.Run(t, &TNB4TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test",
+						"docker.teranode2.test",
+						"docker.teranode3.test",
+					},
+				},
+			),
 		},
+	},
 	)
-
 }
-
-func (suite *TNB4TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNB4TestSuite) TearDownTest() {
-// }
 
 // TestP2PKHScriptValidation verifies that Teranode correctly validates P2PKH transaction scripts.
 // This test ensures that:
@@ -96,8 +92,4 @@ func (suite *TNB4TestSuite) TestP2PKHScriptValidation() {
 	require.Contains(t, err.Error(), "script validation failed", "Error should indicate script validation failure")
 
 	t.Log("P2PKH script validation test completed successfully")
-}
-
-func TestTNB4TestSuite(t *testing.T) {
-	suite.Run(t, new(TNB4TestSuite))
 }

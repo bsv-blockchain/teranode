@@ -21,26 +21,22 @@ type TNB2TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNB2TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test",
-				"docker.teranode2.test",
-				"docker.teranode3.test",
-			},
+func TestTNB2TestSuite(t *testing.T) {
+	suite.Run(t, &TNB2TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test",
+						"docker.teranode2.test",
+						"docker.teranode3.test",
+					},
+				},
+			),
 		},
+	},
 	)
-
 }
-
-func (suite *TNB2TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
-}
-
-// func (suite *TNB2TestSuite) TearDownTest() {
-// }
 
 // How to run this test:
 // $ cd test/tnb/
@@ -218,8 +214,4 @@ func (suite *TNB2TestSuite) TestScriptValidation() {
 	require.Contains(t, err.Error(), "script validation failed", "Error should indicate script validation failure")
 
 	t.Log("Script validation test completed successfully")
-}
-
-func TestTNB2TestSuite(t *testing.T) {
-	suite.Run(t, new(TNB2TestSuite))
 }

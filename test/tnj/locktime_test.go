@@ -26,6 +26,10 @@ type TNJLockTimeTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
+func TestTNJLockTimeTestSuite(t *testing.T) {
+	suite.Run(t, &TNJLockTimeTestSuite{})
+}
+
 type LockTimeScenario struct {
 	name           string
 	lockTime       uint32
@@ -177,8 +181,4 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	}
 
 	assert.Equal(t, scenario.expectInBlock, bl, "Test Tx not found in block")
-}
-
-func TestTNJLockTimeTestSuite(t *testing.T) {
-	suite.Run(t, new(TNJLockTimeTestSuite))
 }

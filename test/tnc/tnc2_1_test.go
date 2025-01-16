@@ -40,21 +40,21 @@ type TNC2_1TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func (suite *TNC2_1TestSuite) InitSuite() {
-	suite.TConfig = tconfig.LoadTConfig(
-		map[string]any{
-			tconfig.KeyTeranodeContexts: []string{
-				"docker.teranode1.test.tnc2_1Test",
-				"docker.teranode2.test.tnc2_1Test",
-				"docker.teranode3.test.tnc2_1Test",
-			},
+func TestTNC2_1TestSuite(t *testing.T) {
+	suite.Run(t, &TNC2_1TestSuite{
+		TeranodeTestSuite: helper.TeranodeTestSuite{
+			TConfig: tconfig.LoadTConfig(
+				map[string]any{
+					tconfig.KeyTeranodeContexts: []string{
+						"docker.teranode1.test.tnc2_1Test",
+						"docker.teranode2.test.tnc2_1Test",
+						"docker.teranode3.test.tnc2_1Test",
+					},
+				},
+			),
 		},
+	},
 	)
-}
-
-func (suite *TNC2_1TestSuite) SetupTest() {
-	suite.InitSuite()
-	suite.SetupTestEnv(false)
 }
 
 // TestUniqueCandidateIdentifiers verifies that each mining candidate has a unique identifier
@@ -144,8 +144,4 @@ func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 	// Verify we got the expected number of unique IDs
 	require.Equal(t, numRequests, len(ids),
 		"Expected %d unique mining candidate IDs, got %d", numRequests, len(ids))
-}
-
-func TestTNC2_1TestSuite(t *testing.T) {
-	suite.Run(t, new(TNC2_1TestSuite))
 }
