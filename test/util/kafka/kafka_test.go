@@ -754,3 +754,27 @@ func produceMessages(logger ulogger.Logger, client ukafka.KafkaAsyncProducerI, n
 		logger.Infof("pushed message: %v", string(msg))
 	}
 }
+
+func Test3Containers(t *testing.T) {
+	ctx := context.Background()
+
+	kafkaContainer1, err := RunTestContainer(ctx)
+	require.NoError(t, err)
+
+	kafkaContainer2, err := RunTestContainer(ctx)
+	require.NoError(t, err)
+
+	kafkaContainer3, err := RunTestContainer(ctx)
+	require.NoError(t, err)
+
+	//assert ports
+	require.NotEqual(t, kafkaContainer1.KafkaPort, kafkaContainer2.KafkaPort)
+	require.NotEqual(t, kafkaContainer1.KafkaPort, kafkaContainer3.KafkaPort)
+	require.NotEqual(t, kafkaContainer2.KafkaPort, kafkaContainer3.KafkaPort)
+
+	t.Cleanup(func() {
+		_ = kafkaContainer1.CleanUp()
+		_ = kafkaContainer2.CleanUp()
+		_ = kafkaContainer3.CleanUp()
+	})
+}

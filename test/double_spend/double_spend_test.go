@@ -1,4 +1,4 @@
-//go:build test_full
+////go:build test_full
 
 package doublespendtest
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
@@ -28,6 +30,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +61,15 @@ func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
 
 	memoryStore, err := url.Parse("memory:///")
 	require.NoError(t, err)
+
+	// Start Kafka container with default port 9092
+	kafkaContainer, err := testkafka.RunTestContainer(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = kafkaContainer.CleanUp()
+	})
+
+	gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
 
 	tSettings := settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 

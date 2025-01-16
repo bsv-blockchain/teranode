@@ -842,8 +842,8 @@ github.com/ordishs/go-bt/v2 v2.2.12 h1:gdvc/HLbvnGSYACoDGAyDWGsGTowrndDeFAtE7SEc
 github.com/ordishs/go-bt/v2 v2.2.12/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
 github.com/ordishs/go-utils v1.0.51/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.76 h1:u/v/h9gMBlqR1WiEZSIqCdP0WCu/CBa6gOXX/NbvtDc=
-github.com/ordishs/gocore v1.0.76/go.mod h1:8/PDn0aIq7/AQcrGBXHE1rkw8bkd33bwgCo2SXDq09s=
+github.com/ordishs/gocore v1.0.77 h1:HnwpJRhdtNYmY+bWufEz0JEgxETw5EHV882QJ/+QMws=
+github.com/ordishs/gocore v1.0.77/go.mod h1:8/PDn0aIq7/AQcrGBXHE1rkw8bkd33bwgCo2SXDq09s=
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/ory/dockertest/v3 v3.10.0 h1:4K3z2VMe8Woe++invjaTB7VRyQXQy5UY+loujO4aNE4=
 github.com/ory/dockertest/v3 v3.10.0/go.mod h1:nr57ZbRWMqfsdGdFNLHz5jjNdDb7VVFnzAeW1n5N1Lg=
