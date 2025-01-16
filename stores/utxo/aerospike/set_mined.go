@@ -146,7 +146,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 			LuaPackage,
 			"setMined",
 			aerospike.NewValue(blockID),
-			aerospike.NewValue(s.expiration), // ttl
+			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		)
 	}
 

@@ -227,7 +227,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
-	batchWritePolicyWithTTL := util.GetAerospikeBatchWritePolicy(s.settings, 0, s.expiration)
+	batchWritePolicyWithTTL := util.GetAerospikeBatchWritePolicy(s.settings, 0, uint32(s.expiration.Seconds()))
 	batchWritePolicyWithTTL.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
@@ -333,7 +333,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a TTL to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithTTL(time.Duration(s.expiration)*time.Second))
+					setOptions = append(setOptions, options.WithTTL(s.expiration))
 				}
 
 				if err = s.externalStore.Set(
@@ -360,7 +360,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a TTL to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithTTL(time.Duration(s.expiration)*time.Second))
+					setOptions = append(setOptions, options.WithTTL(s.expiration))
 				}
 
 				// store the tx data externally, it is not in our aerospike record
@@ -680,7 +680,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 
 	if !hasUtxos {
 		// add a TTL to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithTTL(time.Duration(s.expiration)*time.Second))
+		opts = append(opts, options.WithTTL(s.expiration))
 	}
 
 	if err := s.externalStore.Set(
@@ -777,7 +777,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 
 	if !hasUtxos {
 		// add a TTL to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithTTL(time.Duration(s.expiration)*time.Second))
+		opts = append(opts, options.WithTTL(s.expiration))
 	}
 
 	if err := s.externalStore.Set(

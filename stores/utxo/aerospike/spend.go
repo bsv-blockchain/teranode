@@ -284,7 +284,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(thisBlockHeight),
-			aerospike.NewValue(s.expiration), // ttl
+			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		))
 	}
 
@@ -336,7 +336,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							// record has been set to expire, we need to set the TTL on the external transaction file
 							if res.External {
 								// add ttl to the externally stored transaction, if applicable
-								go s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+								go s.setTTLExternalTransaction(ctx, txID, s.expiration)
 							}
 						}
 
@@ -415,7 +415,7 @@ func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
 
 				if ret.External {
 					// add ttl to the externally stored transaction, if applicable
-					s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+					s.setTTLExternalTransaction(ctx, txID, s.expiration)
 				}
 			}
 		}
@@ -468,7 +468,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementNrRecords",
 			aerospike.NewIntegerValue(item.increment),
-			aerospike.NewValue(s.expiration), // ttl
+			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		))
 	}
 

@@ -63,7 +63,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -107,7 +106,7 @@ type Store struct {
 	client           *uaerospike.Client
 	namespace        string
 	setName          string
-	expiration       uint32
+	expiration       time.Duration
 	blockHeight      atomic.Uint32
 	medianBlockTime  atomic.Uint32
 	logger           ulogger.Logger
@@ -149,21 +148,24 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		log.Fatal("Failed to init placeholder key")
 	}
 
-	expiration := uint32(0)
+	expiration := time.Duration(0)
 
 	expirationValue := aerospikeURL.Query().Get("expiration")
 	if expirationValue != "" {
-		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		expiration, err = time.ParseDuration(expirationValue)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
 
-		if expiration64 == 0 {
-			logger.Infof("expiration is set to 0 meaning the default aerospike namespace TTL setting will be used")
+		if expiration > 0 && expiration < time.Second {
+			return nil, errors.NewInvalidArgumentError("expiration must be at least 1 second")
 		}
 
-		// nolint: gosec
-		expiration = uint32(expiration64)
+		if expiration == 0 {
+			logger.Infof("expiration is set to 0 meaning the default Aerospike TTL setting will be used")
+		} else {
+			logger.Infof("expiration is set to %s (%.0f seconds)", expirationValue, expiration.Seconds())
+		}
 	}
 
 	setName := aerospikeURL.Query().Get("set")

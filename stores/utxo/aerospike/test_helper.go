@@ -57,6 +57,8 @@
 package aerospike
 
 import (
+	"time"
+
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -115,7 +117,7 @@ func (s *Store) GetExternalStore() blob.Store {
 }
 
 // SetExpiration was implemented to facilitate testing
-func (s *Store) SetExpiration(v uint32) {
+func (s *Store) SetExpiration(v time.Duration) {
 	s.expiration = v
 }
 
