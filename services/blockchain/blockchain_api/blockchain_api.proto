@@ -2,376 +2,465 @@ syntax = "proto3";
 
 option go_package = "./;blockchain_api";
 
+// Package blockchain_api defines the gRPC service interface for blockchain operations.
 package blockchain_api;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "model/model.proto";
 
+// BlockchainAPI service provides comprehensive blockchain management functionality.
 service BlockchainAPI {
-  // Health returns the health of the API.
+  // HealthGRPC checks the health status of the blockchain service.
   rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
 
-  // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
+  // AddBlock adds a new block to the blockchain.
+  // Called by BlockValidator to add validated blocks.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
+
+  // GetBlock retrieves a block by its hash.
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+
+  // GetBlocks retrieves multiple blocks starting from a specific hash.
   rpc GetBlocks (GetBlocksRequest) returns (GetBlocksResponse) {}
+
+  // GetBlockByHeight retrieves a block at a specific height.
   rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
+
+  // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
+
+  // GetBlockGraphData retrieves data points for blockchain visualization.
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
+
+  // GetLastNBlocks retrieves the most recent N blocks from the blockchain.
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
+
+  // GetSuitableBlock finds a suitable block for mining purposes.
   rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
+
+  // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
   rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
+
+  // GetNextWorkRequired calculates the required proof of work for the next block.
   rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
+
+  // GetBlockExists checks if a block exists in the blockchain.
   rpc GetBlockExists (GetBlockRequest) returns (GetBlockExistsResponse) {}
+
+  // GetBlockHeaders retrieves headers for multiple blocks.
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+
+  // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
   rpc GetBlockHeadersFromTill(GetBlockHeadersFromTillRequest) returns (GetBlockHeadersResponse) {}
+
+  // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
+
+  // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
+
+  // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
+
+  // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
+
+  // CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
   rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
+
+  // GetBlockHeader retrieves the header of a specific block.
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
+
+  // InvalidateBlock marks a block as invalid in the blockchain.
   rpc InvalidateBlock(InvalidateBlockRequest) returns (google.protobuf.Empty) {}
+
+  // RevalidateBlock restores a previously invalidated block.
   rpc RevalidateBlock(RevalidateBlockRequest) returns (google.protobuf.Empty) {}
+
+  // Subscribe creates a subscription for blockchain notifications.
   rpc Subscribe (SubscribeRequest) returns (stream Notification) {}
+
+  // SendNotification broadcasts a notification to subscribers.
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
+
+  // GetState retrieves state data by key.
   rpc GetState(GetStateRequest) returns (StateResponse) {}
+
+  // SetState stores state data with a key.
   rpc SetState(SetStateRequest) returns (google.protobuf.Empty) {}
+
+  // SetBlockMinedSet marks a block as mined.
   rpc SetBlockMinedSet(SetBlockMinedSetRequest) returns (google.protobuf.Empty) {}
+
+  // GetBlocksMinedNotSet retrieves blocks not marked as mined.
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
+
+  // SetBlockSubtreesSet marks a block's subtrees as set.
   rpc SetBlockSubtreesSet(SetBlockSubtreesSetRequest) returns (google.protobuf.Empty) {}
+
+  // GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
+
+  // FSM-related methods
+
+  // SendFSMEvent sends an event to the blockchain FSM.
   rpc SendFSMEvent(SendFSMEventRequest) returns (GetFSMStateResponse) {}
+
+  // GetFSMCurrentState retrieves the current state of the FSM.
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
+
+  // WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
   rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
+
+  // Run transitions the blockchain service to running state.
   rpc Run(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // CatchUpTransactions initiates transaction catch-up process.
   rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // CatchUpBlocks initiates block catch-up process.
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // Restore initiates blockchain restoration process.
   rpc Restore(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // LegacySync initiates legacy synchronization process.
   rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // Unavailable marks the service as unavailable.
   rpc Unavailable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // Legacy sync methods
+
+  // GetBlockLocator retrieves a block locator for chain synchronization.
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
+
+  // LocateBlockHeaders finds block headers using a locator.
   rpc LocateBlockHeaders(LocateBlockHeadersRequest) returns (LocateBlockHeadersResponse) {}
+
+  // GetBestHeightAndTime retrieves the current best height and median time.
   rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
 }
 
-// swagger:model HealthResponse
+// HealthResponse represents the health status of the blockchain service.
 message HealthResponse {
-  bool ok = 1;
-  string details = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  bool ok = 1;                                    // Overall health status
+  string details = 2;                            // Detailed health information
+  google.protobuf.Timestamp timestamp = 3;       // Timestamp of the health check
 }
 
-// swagger:model AddBlockRequest
+// AddBlockRequest contains data for adding a new block to the blockchain.
 message AddBlockRequest {
-  bytes header = 1;
-  repeated bytes subtree_hashes = 2; // The fist subtree will contain the coinbase txid (not the placeholder)
-  bytes coinbase_tx = 3;
-  uint64 transaction_count = 4;
-  uint64 size_in_bytes = 5;
-  bool external = 6;
-  string peer_id = 7;
+  bytes header = 1;                              // Block header
+  repeated bytes subtree_hashes = 2;             // Merkle tree hashes
+  bytes coinbase_tx = 3;                         // Coinbase transaction
+  uint64 transaction_count = 4;                  // Number of transactions
+  uint64 size_in_bytes = 5;                     // Block size
+  bool external = 6;                            // External block flag
+  string peer_id = 7;                           // Peer identifier
 }
 
-// swagger:model GetBlockRequest
+// GetBlockRequest represents a request to retrieve a block by its hash.
 message GetBlockRequest {
-  bytes hash = 1;
+  bytes hash = 1;    // Hash of the block to retrieve
 }
 
-// swagger:model GetBlocksRequest
+// GetBlocksRequest represents a request to retrieve multiple blocks.
 message GetBlocksRequest {
-  bytes hash = 1;
-  uint32 count = 2;
+  bytes hash = 1;    // Starting block hash
+  uint32 count = 2;  // Number of blocks to retrieve
 }
 
-// swagger:model GetBlocksResponse
+// GetBlocksResponse contains multiple serialized blocks.
 message GetBlocksResponse {
-  repeated bytes blocks = 1;
+  repeated bytes blocks = 1;  // List of serialized blocks
 }
 
-// swagger:model GetBlockByHeightRequest
+// GetBlockByHeightRequest represents a request to retrieve a block at a specific height.
 message GetBlockByHeightRequest {
-  uint32 height = 1;
+  uint32 height = 1;  // Block height to retrieve
 }
 
-// swagger:model GetBlockInChainByHeightHashRequest
+// GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
 message GetBlockInChainByHeightHashRequest {
-  uint32 height = 1;
-  bytes start_hash = 2;
+  uint32 height = 1;      // Target block height
+  bytes start_hash = 2;   // Starting block hash defining the chain
 }
 
-// swagger:model GetBlockResponse
+// GetBlockResponse contains detailed block information.
 message GetBlockResponse {
-  bytes header = 1;
-  uint32 height = 2;
-  bytes coinbase_tx = 3;
-  uint64 transaction_count = 4;
-  repeated bytes subtree_hashes = 5;
-  uint64 size_in_bytes = 6;
-  uint32 id = 7;
+  bytes header = 1;                    // Block header bytes
+  uint32 height = 2;                   // Block height
+  bytes coinbase_tx = 3;               // Coinbase transaction bytes
+  uint64 transaction_count = 4;        // Total number of transactions
+  repeated bytes subtree_hashes = 5;   // Merkle tree subtree hashes
+  uint64 size_in_bytes = 6;            // Total block size in bytes
+  uint32 id = 7;                       // Block identifier
 }
 
-// swagger:model GetBlockInChainByHeightHashResponse
+// GetFullBlockResponse contains a complete serialized block.
 message GetFullBlockResponse {
-  bytes full_block_bytes = 1;
+  bytes full_block_bytes = 1;  // Complete serialized block data
 }
 
-// swagger:model GetBlockGraphDataRequest
+// GetBlockGraphDataRequest specifies parameters for retrieving blockchain visualization data.
 message GetBlockGraphDataRequest {
-  uint64 period_millis = 1;
+  uint64 period_millis = 1;  // Time period in milliseconds
 }
 
-// swagger:model GetBlockResponse
+// GetBlockExistsResponse indicates whether a block exists.
 message GetBlockExistsResponse {
-  bool exists = 1;
+  bool exists = 1;  // True if the block exists
 }
 
-// swagger:model GetMedianTimeRequest
+// GetMedianTimeRequest requests median time calculation for a block.
 message GetMedianTimeRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Hash of the block
 }
 
-// swagger:model GetBlockHeadersRequest
+// GetBlockHeadersRequest requests multiple block headers.
 message GetBlockHeadersRequest {
-  bytes startHash = 1;
-  uint64 numberOfHeaders = 2;
+  bytes startHash = 1;           // Starting block hash
+  uint64 numberOfHeaders = 2;    // Number of headers to retrieve
 }
 
-// swagger:model GetBlockHeadersResponse
+// GetBlockHeadersResponse contains multiple block headers and their metadata.
 message GetBlockHeadersResponse {
-  repeated bytes blockHeaders = 1;
-  repeated bytes metas = 2;
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// swagger:model GetBlockHeadersFromTillRequest
+// GetBlockHeadersFromTillRequest requests headers between two blocks.
 message GetBlockHeadersFromTillRequest {
-  bytes startHash = 1;
-  bytes endHash = 2;
+  bytes startHash = 1;  // Starting block hash
+  bytes endHash = 2;    // Ending block hash
 }
 
-// swagger:model GetBlockHeadersFromHeightRequest
+// GetBlockHeadersFromHeightRequest requests headers starting from a height.
 message GetBlockHeadersFromHeightRequest {
-  uint32 startHeight = 1;
-  uint32 limit = 2;
+  uint32 startHeight = 1;  // Starting height
+  uint32 limit = 2;        // Maximum number of headers to retrieve
 }
 
-// swagger:model GetBlockHeadersFromHeightResponse
+// GetBlockHeadersFromHeightResponse contains headers and metadata from a height.
 message GetBlockHeadersFromHeightResponse {
-  repeated bytes blockHeaders = 1;
-  repeated bytes metas = 2;
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// swagger:model GetBlockHeadersByHeightRequest
+// GetBlockHeadersByHeightRequest requests headers between two heights.
 message GetBlockHeadersByHeightRequest {
-  uint32 startHeight = 1;
-  uint32 endHeight = 2;
+  uint32 startHeight = 1;  // Starting height
+  uint32 endHeight = 2;    // Ending height
 }
 
-// swagger:model GetBlockHeadersByHeightResponse
+// GetBlockHeadersByHeightResponse contains headers and metadata between heights.
 message GetBlockHeadersByHeightResponse {
-  repeated bytes blockHeaders = 1;
-  repeated bytes metas = 2;
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// swagger:model GetBlockHeaderIDsResponse
+// GetBlockHeaderIDsResponse contains block header identifiers.
 message GetBlockHeaderIDsResponse {
-  repeated uint32 ids = 1;
+  repeated uint32 ids = 1;  // List of block header IDs
 }
 
-// swagger:model GetMedianTimeResponse
+// GetMedianTimeResponse contains block timestamp information.
 message GetMedianTimeResponse {
-  repeated uint32 block_header_time = 1; // This will return the nTimes of the last 11 (+1) blocks
+  repeated uint32 block_header_time = 1;  // Timestamps of the last 11 (+1) blocks
 }
 
-// swagger:model GetBlockHeaderRequest
+// GetBlockHeaderRequest requests a specific block header.
 message GetBlockHeaderRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Hash of the block
 }
 
-// swagger:model CheckBlockIsCurrentChainRequest
+// CheckBlockIsCurrentChainRequest checks if blocks are in the main chain.
 message CheckBlockIsCurrentChainRequest {
-  repeated uint32 blockIDs = 1;
+  repeated uint32 blockIDs = 1;  // List of block IDs to check
 }
 
-// swagger:model InvalidateBlockRequest
+// InvalidateBlockRequest requests to invalidate a block.
 message InvalidateBlockRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Hash of the block to invalidate
 }
 
-// swagger:model RevalidateBlockRequest
+// RevalidateBlockRequest requests to revalidate a block.
 message RevalidateBlockRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Hash of the block to revalidate
 }
 
-// swagger:model GetBlockHeaderResponse
+// GetBlockHeaderResponse contains detailed block header information.
 message GetBlockHeaderResponse {
-  bytes blockHeader = 1;
-  uint32 height = 2;
-  uint64 tx_count = 3;
-  uint64 size_in_bytes = 4;
-  string miner = 5;
-  uint32 block_time = 6;
-  uint32 timestamp = 7;
-  bytes chain_work = 8;
+  bytes blockHeader = 1;      // Serialized block header
+  uint32 height = 2;          // Block height
+  uint64 tx_count = 3;        // Transaction count
+  uint64 size_in_bytes = 4;   // Block size
+  string miner = 5;           // Miner identifier
+  uint32 block_time = 6;      // Block timestamp
+  uint32 timestamp = 7;       // Processing timestamp
+  bytes chain_work = 8;       // Accumulated chain work
 }
 
-// swagger:model CheckBlockIsCurrentChainResponse
+// CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
 message CheckBlockIsCurrentChainResponse {
-  bool isPartOfCurrentChain = 1;
+  bool isPartOfCurrentChain = 1;  // True if blocks are in main chain
 }
 
-// swagger:model SubscribeRequest
+// SubscribeRequest initiates a subscription to blockchain events.
 message SubscribeRequest {
-  string source = 1;
+  string source = 1;  // Source identifier for the subscription
 }
 
-// swagger:model Notification
+// Notification represents a blockchain event notification.
 message Notification {
-  model.NotificationType type = 1;
-  bytes hash = 2;
-  string base_URL = 3;
-  NotificationMetadata metadata = 4;
+  model.NotificationType type = 1;  // Type of notification
+  bytes hash = 2;                   // Related block hash
+  string base_URL = 3;              // Base URL for additional data
+  NotificationMetadata metadata = 4; // Additional metadata
 }
 
-// swagger:model NotificationMetadata
+// NotificationMetadata contains additional notification information.
 message NotificationMetadata {
-  //define a map of string to string
-  map<string, string> metadata = 1;
+  map<string, string> metadata = 1;  // Key-value pairs of metadata
 }
 
-// swagger:model StateRequest
+// GetStateRequest requests state data by key.
 message GetStateRequest {
-  string key = 1;
+  string key = 1;  // State key to retrieve
 }
 
-// swagger:model StateResponse
+// StateResponse contains state data.
 message StateResponse {
-  bytes data = 1;
+  bytes data = 1;  // State data
 }
 
-// swagger:model SetStateRequest
+// SetStateRequest sets state data for a key.
 message SetStateRequest {
-  string key = 1;
-  bytes data = 2;
+  string key = 1;   // State key
+  bytes data = 2;   // State data to store
 }
 
-// swagger:model GetLastNBlocksRequest
+// GetLastNBlocksRequest requests the most recent blocks.
 message GetLastNBlocksRequest {
-  int64 numberOfBlocks = 1;
-  bool includeOrphans = 2;
-  uint32 fromHeight = 3;
+  int64 numberOfBlocks = 1;   // Number of blocks to retrieve
+  bool includeOrphans = 2;    // Whether to include orphaned blocks
+  uint32 fromHeight = 3;      // Starting height
 }
 
-// swagger:model GetLastNBlocksResponse
+// GetLastNBlocksResponse contains recent block information.
 message GetLastNBlocksResponse {
-  repeated model.BlockInfo blocks = 1;
+  repeated model.BlockInfo blocks = 1;  // List of block information
 }
 
-// swagger:model GetSuitableBlockRequest
+// GetSuitableBlockRequest requests a suitable block for mining.
 message GetSuitableBlockRequest {
-  bytes hash = 1;
+  bytes hash = 1;  // Reference block hash
 }
 
-// swagger:model GetSuitableBlockResponse
+// GetSuitableBlockResponse contains a suitable block for mining.
 message GetSuitableBlockResponse {
-  model.SuitableBlock block = 1;
+  model.SuitableBlock block = 1;  // Suitable block information
 }
 
-// swagger:model GetHashOfAncestorBlockRequest
+// GetHashOfAncestorBlockRequest requests an ancestor block hash.
 message GetHashOfAncestorBlockRequest {
-  bytes hash = 1;
-  uint32 depth =2;
+  bytes hash = 1;     // Starting block hash
+  uint32 depth = 2;   // Number of generations to go back
 }
 
-// swagger:model GetHashOfAncestorBlockResponse
+// GetHashOfAncestorBlockResponse contains an ancestor block hash.
 message GetHashOfAncestorBlockResponse {
-  bytes hash = 1;
+  bytes hash = 1;  // Ancestor block hash
 }
 
-// swagger:model GGetNextWorkRequiredRequest
+// GetNextWorkRequiredRequest requests difficulty calculation.
 message GetNextWorkRequiredRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Reference block hash
 }
 
-// swagger:model GGetNextWorkRequiredResponse
+// GetNextWorkRequiredResponse contains difficulty target.
 message GetNextWorkRequiredResponse {
-  bytes bits = 1;
+  bytes bits = 1;  // Difficulty bits
 }
 
-// swagger:model SetBlockMinedSetRequest
+// SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Hash of the mined block
 }
 
-// swagger:model GetBlocksMinedNotSetResponse
+// GetBlocksMinedNotSetResponse contains blocks not marked as mined.
 message GetBlocksMinedNotSetResponse {
-  repeated bytes blockBytes = 1;
+  repeated bytes blockBytes = 1;  // List of serialized blocks
 }
 
-// swagger:model SetBlockSubtreesSetRequest
+// SetBlockSubtreesSetRequest marks block subtrees as set.
 message SetBlockSubtreesSetRequest {
-  bytes blockHash = 1;
+  bytes blockHash = 1;  // Block hash
 }
 
-// swagger:model GetBlocksSubtreesNotSetResponse
+// GetBlocksSubtreesNotSetResponse contains blocks with unset subtrees.
 message GetBlocksSubtreesNotSetResponse {
-  repeated bytes blockBytes = 1;
+  repeated bytes blockBytes = 1;  // List of serialized blocks
 }
 
-// swagger:model GetFSMStateResponse
+// GetFSMStateResponse contains current FSM state.
 message GetFSMStateResponse {
-  FSMStateType state = 1;
+  FSMStateType state = 1;  // Current FSM state
 }
 
-// swagger:model WaitFSMToTransitionRequest
+// WaitFSMToTransitionRequest specifies target FSM state.
 message WaitFSMToTransitionRequest {
-  FSMStateType state = 1;
+  FSMStateType state = 1;  // Target FSM state
 }
 
-// swagger:model SendFSMEventRequest
+// SendFSMEventRequest triggers an FSM event.
 message SendFSMEventRequest {
-  FSMEventType event = 1;
+  FSMEventType event = 1;  // FSM event to trigger
 }
 
-// swagger:enum FSMEventType
+// FSMEventType defines possible events in the blockchain FSM.
 enum FSMEventType {
-  STOP = 0;
-  RUN = 1;
-  CATCHUPBLOCKS = 2;
-  LEGACYSYNC = 3;
+  STOP = 0;           // Stop the blockchain service
+  RUN = 1;            // Start normal operation
+  CATCHUPBLOCKS = 2;  // Start catching up missing blocks
+  LEGACYSYNC = 3;     // Start legacy sync mode
 }
 
-// swagger:enum FSMStateType
+// FSMStateType defines possible states of the blockchain FSM.
 enum FSMStateType {
-  IDLE = 0;
-  RUNNING = 1;
-  CATCHINGBLOCKS = 2;
-  LEGACYSYNCING =3;
+  IDLE = 0;           // Service is idle
+  RUNNING = 1;        // Service is running normally
+  CATCHINGBLOCKS = 2; // Service is catching up blocks
+  LEGACYSYNCING = 3;  // Service is in legacy sync mode
 }
 
+// GetBlockLocatorRequest requests a block locator.
 message GetBlockLocatorRequest {
-  bytes hash = 1;
-  uint32 height = 2;
+  bytes hash = 1;     // Reference block hash
+  uint32 height = 2;  // Reference block height
 }
 
+// GetBlockLocatorResponse contains block locator data.
 message GetBlockLocatorResponse {
-  repeated bytes locator = 1;
+  repeated bytes locator = 1;  // Block locator hashes
 }
 
+// LocateBlockHeadersRequest requests headers using a locator.
 message LocateBlockHeadersRequest {
-  repeated bytes locator = 1;
-  bytes hash_stop = 2;
-  uint32 max_hashes = 3;
+  repeated bytes locator = 1;  // Block locator
+  bytes hash_stop = 2;         // Stop hash
+  uint32 max_hashes = 3;       // Maximum number of hashes
 }
 
+// LocateBlockHeadersResponse contains located block headers.
 message LocateBlockHeadersResponse {
-  repeated bytes block_headers = 1;
+  repeated bytes block_headers = 1;  // List of block headers
 }
 
-// swagger:model GetBestHeightAndTimeResponse
+// GetBestHeightAndTimeResponse contains chain tip information.
 message GetBestHeightAndTimeResponse {
-  uint32 height = 1;
-  uint32 time = 2;
+  uint32 height = 1;  // Best block height
+  uint32 time = 2;    // Median time
 }
-

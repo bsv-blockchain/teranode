@@ -1,3 +1,4 @@
+// Package blockchain provides Prometheus metrics for blockchain operations.
 package blockchain
 
 import (
@@ -47,10 +48,14 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics.
+// This function is called once during package initialization.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the actual implementation of metrics initialization.
+// It's called by initPrometheusMetrics through sync.Once to ensure single initialization.
 func _initPrometheusMetrics() {
 	prometheusBlockchainHealth = promauto.NewCounter(
 		prometheus.CounterOpts{

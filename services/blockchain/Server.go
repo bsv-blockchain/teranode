@@ -1,3 +1,4 @@
+// Package blockchain provides functionality for managing the Bitcoin blockchain.
 package blockchain
 
 import (
@@ -30,36 +31,37 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// subscriber represents a subscription to blockchain notifications.
 type subscriber struct {
-	subscription blockchain_api.BlockchainAPI_SubscribeServer
-	source       string
-	done         chan struct{}
+	subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
+	source       string                                       // Source identifier of the subscription
+	done         chan struct{}                                // Channel to signal when subscription is done
 }
 
-// Blockchain type carries the logger within it
+// Blockchain represents the main blockchain service structure.
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan                  chan *blockchain_api.AddBlockRequest
-	store                         blockchain_store.Store
-	logger                        ulogger.Logger
-	settings                      *settings.Settings
-	newSubscriptions              chan subscriber
-	deadSubscriptions             chan subscriber
-	subscribers                   map[subscriber]bool
-	subscribersMu                 sync.RWMutex
-	notifications                 chan *blockchain_api.Notification
-	newBlock                      chan struct{}
-	difficulty                    *Difficulty
-	blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI
-	kafkaChan                     chan *kafka.Message
-	stats                         *gocore.Stat
-	finiteStateMachine            *fsm.FSM
-	stateChangeTimestamp          time.Time
-	AppCtx                        context.Context
-	localTestStartState           string
+	addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
+	store                         blockchain_store.Store               // Storage interface for blockchain data
+	logger                        ulogger.Logger                       // Logger instance
+	settings                      *settings.Settings                   // Configuration settings
+	newSubscriptions              chan subscriber                      // Channel for new subscriptions
+	deadSubscriptions             chan subscriber                      // Channel for ended subscriptions
+	subscribers                   map[subscriber]bool                  // Active subscribers map
+	subscribersMu                 sync.RWMutex                         // Mutex for subscribers map
+	notifications                 chan *blockchain_api.Notification    // Channel for notifications
+	newBlock                      chan struct{}                        // Channel signaling new block events
+	difficulty                    *Difficulty                          // Difficulty calculation instance
+	blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI            // Kafka producer for final blocks
+	kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
+	stats                         *gocore.Stat                         // Statistics tracking
+	finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
+	stateChangeTimestamp          time.Time                            // Timestamp of last state change
+	AppCtx                        context.Context                      // Application context
+	localTestStartState           string                               // Initial state for testing
 }
 
-// New will return a server instance with the logger stored within it
+// New creates a new Blockchain instance with the provided dependencies.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
@@ -98,16 +100,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return b, nil
 }
 
-// GetStoreFSMState call the GetFSMState of the store interface
+// GetStoreFSMState retrieves the current FSM state from the store.
 func (b *Blockchain) GetStoreFSMState(ctx context.Context) (string, error) {
 	return b.store.GetFSMState(ctx)
 }
 
-// ResetFSMS reset finiteStateMachine to nil. This method was aim to help the testing
+// ResetFSMS resets the finite state machine to nil (used for testing).
 func (b *Blockchain) ResetFSMS() {
 	b.finiteStateMachine = nil
 }
 
+// Health checks the health status of the blockchain service.
 func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -135,6 +138,7 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC provides health check information via gRPC.
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(b.stats),
@@ -152,6 +156,7 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the blockchain service.
 func (b *Blockchain) Init(ctx context.Context) error {
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
@@ -191,7 +196,7 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	return nil
 }
 
-// Start function
+// Start begins the blockchain service operations.
 func (b *Blockchain) Start(ctx context.Context) error {
 	b.startKafka()
 
@@ -211,6 +216,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	return nil
 }
 
+// startHTTP initializes and starts the HTTP server for the blockchain service.
 func (b *Blockchain) startHTTP() error {
 	httpAddress := b.settings.BlockChain.HTTPListenAddress
 	if httpAddress == "" {
@@ -240,6 +246,7 @@ func (b *Blockchain) startHTTP() error {
 	return nil
 }
 
+// invalidateHandler handles HTTP requests to invalidate a block.
 func (b *Blockchain) invalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
 
@@ -259,6 +266,7 @@ func (b *Blockchain) invalidateHandler(c echo.Context) error {
 	return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
 }
 
+// revalidateHandler handles HTTP requests to revalidate a block.
 func (b *Blockchain) revalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
 
@@ -278,6 +286,7 @@ func (b *Blockchain) revalidateHandler(c echo.Context) error {
 	return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
 }
 
+// startKafka initializes and starts the Kafka producer.
 func (b *Blockchain) startKafka() {
 	b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 	b.kafkaChan = make(chan *kafka.Message, 100)
@@ -285,6 +294,7 @@ func (b *Blockchain) startKafka() {
 	b.blocksFinalKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
 }
 
+// startSubscriptions manages blockchain subscriptions in a goroutine.
 /* Must be started as a go routine unless you are in a test */
 func (b *Blockchain) startSubscriptions() {
 	for {
@@ -331,10 +341,13 @@ func (b *Blockchain) startSubscriptions() {
 	}
 }
 
+// Stop gracefully stops the blockchain service.
 func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
+// AddBlock processes a request to add a new block to the blockchain.
+// It validates the block, stores it, and notifies subscribers.
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
@@ -409,6 +422,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	return &emptypb.Empty{}, nil
 }
 
+// GetBlock retrieves a block by its hash.
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),
@@ -448,6 +462,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+// GetBlocks retrieves multiple blocks starting from a specific hash.
 func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
@@ -482,6 +497,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	}, nil
 }
 
+// GetBlockByHeight retrieves a block at a specific height in the blockchain.
 func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
@@ -516,6 +532,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 	}, nil
 }
 
+// GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockStats",
 		tracing.WithParentStat(b.stats),
@@ -528,6 +545,7 @@ func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*mode
 	return resp, errors.WrapGRPC(err)
 }
 
+// GetBlockGraphData retrieves data points for blockchain visualization.
 func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockGraphData",
 		tracing.WithParentStat(b.stats),
@@ -540,6 +558,7 @@ func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.
 	return resp, errors.WrapGRPC(err)
 }
 
+// GetLastNBlocks retrieves the most recent N blocks from the blockchain.
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetLastNBlocks",
 		tracing.WithParentStat(b.stats),
@@ -557,6 +576,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 	}, nil
 }
 
+// GetSuitableBlock finds a suitable block for mining purposes.
 func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSuitableBlock",
 		tracing.WithParentStat(b.stats),
@@ -574,6 +594,7 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 	}, nil
 }
 
+// GetNextWorkRequired calculates the required proof of work for the next block.
 func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchain_api.GetNextWorkRequiredRequest) (*blockchain_api.GetNextWorkRequiredResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetNextWorkRequired",
 		tracing.WithParentStat(b.stats),
@@ -625,6 +646,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	}, nil
 }
 
+// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockchain_api.GetHashOfAncestorBlockRequest) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetHashOfAncestorBlock",
 		tracing.WithParentStat(b.stats),
@@ -642,6 +664,7 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 	}, nil
 }
 
+// GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockExists",
 		tracing.WithParentStat(b.stats),
@@ -664,6 +687,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 	}, nil
 }
 
+// GetBestBlockHeader retrieves the header of the current best block.
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
 		tracing.WithParentStat(b.stats),
@@ -688,6 +712,7 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}, nil
 }
 
+// CheckBlockIsInCurrentChain verifies if a block is part of the current main chain.
 func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockchain_api.CheckBlockIsCurrentChainRequest) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "CheckBlockIsInCurrentChain",
 		tracing.WithParentStat(b.stats),
@@ -705,6 +730,7 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 	}, nil
 }
 
+// GetBlockHeader retrieves the header of a specific block.
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
 		tracing.WithParentStat(b.stats),
@@ -733,6 +759,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 	}, nil
 }
 
+// GetBlockHeaders retrieves multiple block headers starting from a specific hash.
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaders",
 		tracing.WithParentStat(b.stats),
@@ -766,6 +793,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
+// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromTill",
 		tracing.WithParentStat(b.stats),
@@ -804,6 +832,7 @@ func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromHeight",
 		tracing.WithParentStat(b.stats),
@@ -832,6 +861,7 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 	}, nil
 }
 
+// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersByHeightRequest) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersByHeight",
 		tracing.WithParentStat(b.stats),
@@ -860,6 +890,9 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// Subscribe handles subscription requests to blockchain notifications.
+// It maintains the subscription until the context is cancelled or the client disconnects.
+// The source parameter identifies the subscriber for logging purposes.
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	ctx, _, deferFn := tracing.StartTracing(sub.Context(), "Subscribe",
 		tracing.WithParentStat(b.stats),
@@ -894,6 +927,8 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	}
 }
 
+// GetState retrieves a value from the blockchain state storage by its key.
+// It provides access to arbitrary state data stored in the blockchain.
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetState",
 		tracing.WithParentStat(b.stats),
@@ -911,6 +946,8 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 	}, nil
 }
 
+// SetState stores a value in the blockchain state storage with the specified key.
+// It allows storing arbitrary state data in the blockchain.
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SetState",
 		tracing.WithParentStat(b.stats),
@@ -926,6 +963,8 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 	return &emptypb.Empty{}, nil
 }
 
+// GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
+// It returns a list of block IDs for the requested number of headers.
 func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaderIDs",
 		tracing.WithParentStat(b.stats),
@@ -948,6 +987,7 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 	}, nil
 }
 
+// InvalidateBlock marks a block as invalid in the blockchain.
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -979,6 +1019,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	return &emptypb.Empty{}, nil
 }
 
+// RevalidateBlock restores a previously invalidated block.
 func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -1000,6 +1041,7 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	return &emptypb.Empty{}, nil
 }
 
+// SendNotification broadcasts a notification to all subscribers.
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -1012,6 +1054,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	return &emptypb.Empty{}, nil
 }
 
+// SetBlockMinedSet marks a block as mined in the blockchain.
 func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.SetBlockMinedSetRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockMinedSet",
 		tracing.WithParentStat(b.stats),
@@ -1029,6 +1072,7 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 	return &emptypb.Empty{}, nil
 }
 
+// GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksMinedNotSet",
 		tracing.WithParentStat(b.stats),
@@ -1054,6 +1098,7 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 	}, nil
 }
 
+// SetBlockSubtreesSet marks a block's subtrees as set in the blockchain.
 func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_api.SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockSubtreesSet",
 		tracing.WithParentStat(b.stats),
@@ -1076,6 +1121,7 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 	return &emptypb.Empty{}, nil
 }
 
+// GetBlocksSubtreesNotSet retrieves blocks whose subtrees haven't been set.
 func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksSubtreesNotSetResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksSubtreesNotSet",
 		tracing.WithParentStat(b.stats),
@@ -1103,6 +1149,7 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 
 // FSM related endpoints
 
+// GetFSMCurrentState retrieves the current state of the finite state machine.
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
 		tracing.WithParentStat(b.stats),
@@ -1131,6 +1178,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
 func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
 	for b.finiteStateMachine.Current() != targetState.String() {
 		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
@@ -1140,6 +1188,7 @@ func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targe
 	return nil
 }
 
+// SendFSMEvent sends an event to the finite state machine.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
@@ -1180,6 +1229,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	return resp, nil
 }
 
+// Run transitions the blockchain service to the running state.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// check whether the FSM is already in the RUNNING state
 	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_RUNNING.String()) {
@@ -1199,6 +1249,7 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 	return nil, nil
 }
 
+// CatchUpBlocks transitions the service to catch up missing blocks.
 func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// check whether the FSM is already in the CATCHINGBLOCKS state
 	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_CATCHINGBLOCKS.String()) {
@@ -1218,6 +1269,7 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 	return nil, nil
 }
 
+// LegacySync transitions the service to legacy sync mode.
 func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// check whether the FSM is already in the LEGACYSYNC state
 	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_LEGACYSYNCING.String()) {
@@ -1239,6 +1291,7 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 
 // Legacy endpoints
 
+// GetBlockLocator retrieves a block locator for synchronization purposes.
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockLocator",
 		tracing.WithParentStat(b.stats),
@@ -1266,6 +1319,7 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
 }
 
+// LocateBlockHeaders finds block headers using a locator.
 func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain_api.LocateBlockHeadersRequest) (*blockchain_api.LocateBlockHeadersResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "LocateBlockHeaders",
 		tracing.WithParentStat(b.stats),
@@ -1296,6 +1350,7 @@ func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain
 	}, nil
 }
 
+// GetBestHeightAndTime retrieves the current best block height and median time.
 func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBestHeightAndTimeResponse, error) {
 	blockHeader, meta, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -1325,6 +1380,7 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 	}, nil
 }
 
+// safeClose safely closes a channel without panicking if it's already closed.
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()
@@ -1333,6 +1389,7 @@ func safeClose[T any](ch chan T) {
 	close(ch)
 }
 
+// getBlockLocator creates a block locator for chain synchronization.
 func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
 	if blockHeaderHash == nil {

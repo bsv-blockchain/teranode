@@ -1,3 +1,4 @@
+// Package blockchain_test provides testing for the blockchain package.
 package blockchain
 
 import (
@@ -32,6 +33,7 @@ var (
 	hash1  = tx1.TxIDChainHash()
 )
 
+// Test_AddBlock verifies the block addition functionality.
 func Test_AddBlock(t *testing.T) {
 	ctx := setup(t)
 
@@ -77,6 +79,7 @@ func Test_AddBlock(t *testing.T) {
 	assert.Equal(t, mockBlk.SizeInBytes, addedBlock.SizeInBytes)
 }
 
+// Test_GetBlock verifies the block retrieval functionality.
 func Test_GetBlock(t *testing.T) {
 	ctx := setup(t)
 	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
@@ -114,6 +117,7 @@ func Test_GetBlock(t *testing.T) {
 	}
 }
 
+// Test_GetFSMCurrentState verifies the FSM state retrieval functionality.
 func Test_GetFSMCurrentState(t *testing.T) {
 	ctx := setup(t)
 	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
@@ -125,13 +129,16 @@ func Test_GetFSMCurrentState(t *testing.T) {
 	assert.Equal(t, blockchain_api.FSMStateType_IDLE, response.State, "Expected FSM state did not match")
 }
 
+// testContext holds the test environment components
 type testContext struct {
-	server       *Blockchain
-	subtreeStore blob.Store
-	utxoStore    utxo.Store
-	logger       ulogger.Logger
+	server       *Blockchain    // Blockchain server instance
+	subtreeStore blob.Store     // Store for subtrees
+	utxoStore    utxo.Store     // Store for UTXOs
+	logger       ulogger.Logger // Logger instance
 }
 
+// setup creates a new test environment with initialized components.
+// Returns a testContext with all necessary test dependencies.
 func setup(t *testing.T) *testContext {
 	logger := ulogger.New("blockchain")
 
@@ -158,6 +165,7 @@ func setup(t *testing.T) *testContext {
 	}
 }
 
+// Test_HealthLiveness verifies the health check liveness functionality.
 func Test_HealthLiveness(t *testing.T) {
 	ctx := setup(t)
 
@@ -177,6 +185,7 @@ func Test_HealthLiveness(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Test_HealthReadiness verifies the health check readiness functionality.
 func Test_HealthReadiness(t *testing.T) {
 	ctx := setup(t)
 
@@ -196,6 +205,7 @@ func Test_HealthReadiness(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Test_HealthGRPC verifies the gRPC health check functionality.
 func Test_HealthGRPC(t *testing.T) {
 	ctx := setup(t)
 
@@ -205,6 +215,7 @@ func Test_HealthGRPC(t *testing.T) {
 	require.True(t, response.Ok)
 }
 
+// mockBlock creates a mock block for testing purposes.
 func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	subtree, err := util.NewTreeByLeafCount(2)
 	require.NoError(t, err)
@@ -249,6 +260,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	return block
 }
 
+// Test_getBlockLocator verifies the block locator functionality.
 func Test_getBlockLocator(t *testing.T) {
 	ctx := context.Background()
 

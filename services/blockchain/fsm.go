@@ -1,3 +1,4 @@
+// Package blockchain provides functionality for managing the Bitcoin blockchain.
 package blockchain
 
 import (
@@ -94,6 +95,11 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	return finiteStateMachine
 }
 
+// CheckFSM creates a health check function for the blockchain FSM.
+// Returns a function that checks the current FSM state and returns appropriate
+// HTTP status codes:
+//   - StatusOK (200): For CATCHINGBLOCKS, LEGACYSYNCING, RUNNING states
+//   - StatusServiceUnavailable (503): For IDLE state
 func CheckFSM(blockchainClient ClientI) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		state, err := blockchainClient.GetFSMCurrentState(ctx)

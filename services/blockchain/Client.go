@@ -1,3 +1,4 @@
+// Package blockchain provides functionality for managing the Bitcoin blockchain.
 package blockchain
 
 import (
@@ -22,32 +23,38 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// clientSubscriber represents a subscriber to blockchain notifications.
 type clientSubscriber struct {
-	source string
-	ch     chan *blockchain_api.Notification
-	id     string
+	source string                            // Source identifier of the subscriber
+	ch     chan *blockchain_api.Notification // Channel for receiving notifications
+	id     string                            // Unique identifier for the subscriber
 }
 
+// Client represents a blockchain service client.
 type Client struct {
-	client        blockchain_api.BlockchainAPIClient
-	logger        ulogger.Logger
-	settings      *settings.Settings
-	running       *atomic.Bool
-	conn          *grpc.ClientConn
-	fmsState      atomic.Pointer[FSMStateType]
-	subscribers   []clientSubscriber
-	subscribersMu sync.Mutex
+	client        blockchain_api.BlockchainAPIClient // gRPC client for blockchain service
+	logger        ulogger.Logger                     // Logger instance
+	settings      *settings.Settings                 // Configuration settings
+	running       *atomic.Bool                       // Flag indicating if client is running
+	conn          *grpc.ClientConn                   // gRPC connection
+	fmsState      atomic.Pointer[FSMStateType]       // Current FSM state
+	subscribers   []clientSubscriber                 // List of subscribers
+	subscribersMu sync.Mutex                         // Mutex for subscribers list
 }
 
+// BestBlockHeader represents the best block header in the blockchain.
 type BestBlockHeader struct {
-	Header *model.BlockHeader
-	Height uint32
+	Header *model.BlockHeader // Block header
+	Height uint32             // Block height
 }
 
+// Notification is an alias for blockchain_api.Notification
 type Notification = blockchain_api.Notification
 
+// NotificationMetadata is an alias for blockchain_api.NotificationMetadata
 type NotificationMetadata = blockchain_api.NotificationMetadata
 
+// FSMStateType is an alias for blockchain_api.FSMStateType
 type FSMStateType = blockchain_api.FSMStateType
 
 const (
@@ -57,6 +64,7 @@ const (
 	FSMStateLEGACYSYNCING  = blockchain_api.FSMStateType_LEGACYSYNCING
 )
 
+// NewClient creates a new blockchain client with default address settings.
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (ClientI, error) {
 	logger = logger.New("blkcC")
 
@@ -68,6 +76,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return NewClientWithAddress(ctx, logger, tSettings, blockchainGrpcAddress, source)
 }
 
+// NewClientWithAddress creates a new blockchain client with a specified address.
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string, source string) (ClientI, error) {
 	var err error
 
@@ -166,6 +175,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	return c, nil
 }
 
+// Health checks the health status of the blockchain client.
 func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -192,6 +202,7 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, resp.Details, nil
 }
 
+// AddBlock sends a request to add a new block to the blockchain.
 func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
 	external := peerID != ""
 	req := &blockchain_api.AddBlockRequest{
@@ -215,6 +226,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 	return nil
 }
 
+// GetBlock retrieves a block by its hash.
 func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
 	resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
@@ -247,6 +259,7 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id, c.settings)
 }
 
+// GetBlocks retrieves multiple blocks starting from a specific hash.
 func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocks(ctx, &blockchain_api.GetBlocksRequest{
 		Hash:  blockHash[:],
@@ -270,6 +283,7 @@ func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numbe
 	return blocks, nil
 }
 
+// GetBlockByHeight retrieves a block at a specific height in the blockchain.
 func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	resp, err := c.client.GetBlockByHeight(ctx, &blockchain_api.GetBlockByHeightRequest{
 		Height: height,
@@ -302,6 +316,7 @@ func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Bl
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id, c.settings)
 }
 
+// GetBlockStats retrieves statistical information about the blockchain.
 func (c *Client) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	resp, err := c.client.GetBlockStats(ctx, &emptypb.Empty{})
 
@@ -313,6 +328,7 @@ func (c *Client) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return resp, unwrappedErr
 }
 
+// GetBlockGraphData retrieves data points for blockchain visualization.
 func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
 	resp, err := c.client.GetBlockGraphData(ctx, &blockchain_api.GetBlockGraphDataRequest{
 		PeriodMillis: periodMillis,
@@ -326,6 +342,7 @@ func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*m
 	return resp, unwrappedErr
 }
 
+// GetLastNBlocks retrieves the most recent N blocks from the blockchain.
 func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNBlocks(ctx, &blockchain_api.GetLastNBlocksRequest{
 		NumberOfBlocks: n,
@@ -339,6 +356,7 @@ func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans boo
 	return resp.Blocks, nil
 }
 
+// GetSuitableBlock finds a suitable block for mining purposes.
 func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	resp, err := c.client.GetSuitableBlock(ctx, &blockchain_api.GetSuitableBlockRequest{
 		Hash: blockHash[:],
@@ -350,6 +368,7 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 	return resp.Block, nil
 }
 
+// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
 		Hash: blockHash[:],
@@ -368,6 +387,7 @@ func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhas
 	return hash, nil
 }
 
+// GetNextWorkRequired calculates the required proof of work for the next block.
 func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
 	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
 		BlockHash: blockHash[:],
@@ -381,6 +401,7 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 	return bits, err
 }
 
+// GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (c *Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockExists(ctx, &blockchain_api.GetBlockRequest{
 		Hash: blockHash[:],
@@ -392,6 +413,7 @@ func (c *Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) 
 	return resp.Exists, nil
 }
 
+// GetBestBlockHeader retrieves the header of the current best block.
 func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -430,6 +452,7 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	return resp.GetIsPartOfCurrentChain(), nil
 }
 
+// GetBlockHeader retrieves the header of a specific block.
 func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
@@ -456,6 +479,7 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	return header, meta, nil
 }
 
+// GetBlockHeaders retrieves multiple block headers starting from a specific hash.
 func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
@@ -468,6 +492,7 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	return c.returnBlockHeaders(resp)
 }
 
+// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeadersFromTill(ctx, &blockchain_api.GetBlockHeadersFromTillRequest{
 		StartHash: blockHashFrom.CloneBytes(),
@@ -480,6 +505,7 @@ func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *cha
 	return c.returnBlockHeaders(resp)
 }
 
+// returnBlockHeaders is a helper function to process block header responses.
 func (c *Client) returnBlockHeaders(resp *blockchain_api.GetBlockHeadersResponse) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
 
@@ -506,6 +532,7 @@ func (c *Client) returnBlockHeaders(resp *blockchain_api.GetBlockHeadersResponse
 	return headers, metas, nil
 }
 
+// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeadersFromHeight(ctx, &blockchain_api.GetBlockHeadersFromHeightRequest{
 		StartHeight: height,
@@ -540,6 +567,7 @@ func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit ui
 	return headers, metas, nil
 }
 
+// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeadersByHeight(ctx, &blockchain_api.GetBlockHeadersByHeightRequest{
 		StartHeight: startHeight,
@@ -574,6 +602,7 @@ func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHe
 	return headers, metas, nil
 }
 
+// InvalidateBlock marks a block as invalid in the blockchain.
 func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),
@@ -587,6 +616,7 @@ func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash)
 	return unwrappedErr
 }
 
+// RevalidateBlock restores a previously invalidated block.
 func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),
@@ -600,6 +630,7 @@ func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash)
 	return unwrappedErr
 }
 
+// GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
 func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
@@ -612,6 +643,7 @@ func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Has
 	return resp.Ids, nil
 }
 
+// SendNotification sends a notification through the blockchain service.
 func (c *Client) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	_, err := c.client.SendNotification(ctx, notification)
 	if err != nil {
@@ -621,6 +653,8 @@ func (c *Client) SendNotification(ctx context.Context, notification *blockchain_
 	return nil
 }
 
+// Subscribe creates a new subscription to blockchain notifications.
+// Returns a channel that will receive notifications until the context is cancelled.
 func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	// create a new buffered channel for the subscriber
 	ch := make(chan *blockchain_api.Notification, 1_000)
@@ -658,6 +692,8 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	return ch, nil
 }
 
+// SubscribeToServer establishes a subscription to the blockchain server.
+// Manages reconnection attempts and notification forwarding.
 func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	ch := make(chan *blockchain_api.Notification)
 
@@ -717,6 +753,7 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	return ch, nil
 }
 
+// GetState retrieves a value from the blockchain state storage by its key.
 func (c *Client) GetState(ctx context.Context, key string) ([]byte, error) {
 	resp, err := c.client.GetState(ctx, &blockchain_api.GetStateRequest{
 		Key: key,
@@ -728,6 +765,7 @@ func (c *Client) GetState(ctx context.Context, key string) ([]byte, error) {
 	return resp.Data, nil
 }
 
+// SetState stores a value in the blockchain state storage with the specified key.
 func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 	_, err := c.client.SetState(ctx, &blockchain_api.SetStateRequest{
 		Key:  key,
@@ -740,6 +778,7 @@ func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 	return nil
 }
 
+// SetBlockMinedSet marks a block as mined in the blockchain.
 func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
 		BlockHash: blockHash[:],
@@ -751,6 +790,7 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 	return nil
 }
 
+// GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocksMinedNotSet(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -771,6 +811,7 @@ func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, erro
 	return blocks, nil
 }
 
+// SetBlockSubtreesSet marks a block's subtrees as set in the blockchain.
 func (c *Client) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.SetBlockSubtreesSet(ctx, &blockchain_api.SetBlockSubtreesSetRequest{
 		BlockHash: blockHash[:],
@@ -782,6 +823,7 @@ func (c *Client) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.H
 	return nil
 }
 
+// GetBlocksSubtreesNotSet retrieves blocks whose subtrees haven't been set.
 func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocksSubtreesNotSet(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -804,6 +846,7 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 
 // FSM related endpoints
 
+// GetFSMCurrentState retrieves the current state of the finite state machine.
 func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
@@ -818,6 +861,7 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 	return &state.State, nil
 }
 
+// IsFSMCurrentState checks if the current FSM state matches the provided state.
 func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
 	currentState, err := c.GetFSMCurrentState(ctx)
 	if err != nil {
@@ -827,6 +871,7 @@ func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (boo
 	return *currentState == state, nil
 }
 
+// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
 func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
 	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
 		State: targetState,
@@ -837,6 +882,7 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 	return nil
 }
 
+// GetFSMCurrentStateForE2ETestMode retrieves the current FSM state for end-to-end testing.
 func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	ctx := context.Background()
 
@@ -849,6 +895,7 @@ func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	return currentState.State
 }
 
+// SendFSMEvent sends an event to the finite state machine.
 func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
 	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
 
@@ -956,6 +1003,7 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	return locator, nil
 }
 
+// LocateBlockHeaders finds block headers using a locator.
 func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	locatorBytes := make([][]byte, 0, len(locator))
 	for _, hash := range locator {
@@ -987,6 +1035,7 @@ func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Ha
 	return blockHeaders, nil
 }
 
+// GetBestHeightAndTime retrieves the current best block height and median time.
 func (c *Client) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
 	resp, err := c.client.GetBestHeightAndTime(ctx, &emptypb.Empty{})
 	if err != nil {

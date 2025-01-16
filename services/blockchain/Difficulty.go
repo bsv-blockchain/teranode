@@ -1,3 +1,4 @@
+// Package blockchain provides functionality for managing the Bitcoin blockchain.
 package blockchain
 
 import (
@@ -15,6 +16,7 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// DifficultyAdjustmentWindow defines the number of blocks to consider for difficulty adjustment.
 const DifficultyAdjustmentWindow = 144
 
 var (
@@ -28,6 +30,7 @@ var (
 	_         = oneLsh256
 )
 
+// Difficulty handles the calculation and management of blockchain mining difficulty.
 type Difficulty struct {
 	powLimitnBits *model.NBit
 	// lastSlowBlockHash    *chainhash.Hash
@@ -38,6 +41,7 @@ type Difficulty struct {
 	lastComputednBits *model.NBit
 }
 
+// NewDifficulty creates a new Difficulty instance with the provided dependencies.
 func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSettings *settings.Settings) (*Difficulty, error) {
 	d := &Difficulty{}
 	d.settings = tSettings
@@ -52,6 +56,14 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 	return d, nil
 }
 
+// CalcNextWorkRequired calculates the required proof of work for the next block.
+// Parameters:
+//   - ctx: Context for the operation
+//   - bestBlockHeader: Current best block header
+//   - bestBlockHeight: Height of the best block
+//   - testnetArgs: Optional arguments for testnet difficulty calculation
+//
+// Returns the calculated NBit target difficulty.
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32, testnetArgs ...int64) (*model.NBit, error) {
 	// If regest or simnet we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
@@ -134,11 +146,16 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	return nBits, nil
 }
 
+// computeTarget calculates the target difficulty based on the first and last suitable blocks.
 // calcNextRequiredDifficulty calculates the required difficulty for the block
 // after the passed previous block node based on the difficulty retarget rules.
 // This function differs from the exported CalcNextRequiredDifficulty in that
 // the exported version uses the current best chain as the previous block node
 // while this function accepts any block node.
+// Parameters:
+//   - suitableFirstBlock: First block in the difficulty adjustment window
+//   - suitableLastBlock: Last block in the difficulty adjustment window
+//   - testnetArgs: Optional arguments for testnet difficulty calculation
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock, testnetArgs ...int64) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regest or simnet we don't adjust the difficulty
@@ -295,6 +312,7 @@ func BigToCompact(n *big.Int) uint32 {
 	return compact
 }
 
+// uint32ToBytes converts a uint32 to a little-endian byte slice.
 func uint32ToBytes(value uint32) []byte {
 	bytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytes, value)
@@ -381,6 +399,13 @@ func CompactToBig(compact uint32) *big.Int {
 
 	return bn
 }
+
+// ValidateBlockHeaderDifficulty validates that a block's difficulty matches the expected difficulty.
+// Parameters:
+//   - ctx: Context for the operation
+//   - newBlock: Block to validate
+//   - previousBlock: Parent block of the block being validated
+//   - testnetArgs: Optional arguments for testnet difficulty calculation
 func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block, testnetArgs ...int64) error {
 	// Calculate the expected difficulty for the new block
 	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height, testnetArgs...)

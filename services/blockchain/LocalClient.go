@@ -1,3 +1,4 @@
+// Package blockchain provides functionality for managing the Bitcoin blockchain.
 package blockchain
 
 import (
@@ -16,14 +17,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// LocalClient is an abstraction for a client that has a stored embedded directly
+// LocalClient implements a blockchain client with direct store access.
+// It is an abstraction for a client that has a stored embedded directly
 type LocalClient struct {
-	store        blockchain.Store
-	subtreeStore blob.Store
-	utxoStore    utxo.Store
-	logger       ulogger.Logger
+	store        blockchain.Store // Blockchain store
+	subtreeStore blob.Store       // Subtree store
+	utxoStore    utxo.Store       // UTXO store
+	logger       ulogger.Logger   // Logger instance
 }
 
+// NewLocalClient creates a new LocalClient instance with the provided dependencies.
 func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore blob.Store, utxoStore utxo.Store) (ClientI, error) {
 	return &LocalClient{
 		logger:       logger,

@@ -1,3 +1,4 @@
+// Package blockchain provides mocking functionality for testing.
 package blockchain
 
 import (
@@ -14,6 +15,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// newMockStore creates a new mock store instance with optional initial block.
 func newMockStore(block *model.Block) *mockStore {
 	return &mockStore{
 		block:            block,
@@ -22,10 +24,11 @@ func newMockStore(block *model.Block) *mockStore {
 	}
 }
 
+// mockStore implements a mock blockchain store for testing.
 type mockStore struct {
-	block            *model.Block
-	state            string
-	getBlockByHeight map[uint32]*model.Block
+	block            *model.Block            // Current block
+	state            string                  // Current state
+	getBlockByHeight map[uint32]*model.Block // Map of blocks by height
 }
 
 func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
