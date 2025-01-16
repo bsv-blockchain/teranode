@@ -723,6 +723,11 @@ func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]stri
 				case reflect.String:
 					field.SetString(v)
 				case reflect.Slice:
+					// only if the string is not empty
+					if v == "" {
+						continue
+					}
+
 					// split the string by the pipe character
 					slice := strings.Split(v, "|")
 					// create a new slice of the correct type
