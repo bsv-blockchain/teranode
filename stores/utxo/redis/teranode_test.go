@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	redis_db "github.com/redis/go-redis/v9"
