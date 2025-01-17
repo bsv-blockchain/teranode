@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	redis_db "github.com/redis/go-redis/v9"
@@ -15,6 +16,7 @@ import (
 
 type Store struct {
 	logger           ulogger.Logger
+	settings         *settings.Settings
 	ctx              context.Context // store the global context for things that run in the background
 	version          string
 	url              *url.URL
@@ -25,7 +27,7 @@ type Store struct {
 	medianBlockTime  atomic.Uint32
 }
 
-func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, redisURL *url.URL) (*Store, error) {
 	addr := fmt.Sprintf("%s:%s", redisURL.Hostname(), redisURL.Port())
 
 	// Add more robust connection options
@@ -90,6 +92,7 @@ func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store,
 		transactionStore: transactionStore,
 		expiration:       expiration,
 		logger:           logger,
+		settings:         tSettings,
 	}, nil
 }
 

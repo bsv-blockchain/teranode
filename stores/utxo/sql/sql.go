@@ -338,7 +338,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	var coinbaseSpendingHeight uint32
 
 	if isCoinbase {
-		coinbaseSpendingHeight = blockHeight + 100
+		coinbaseSpendingHeight = blockHeight + uint32(s.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec
 	}
 
 	for i, output := range tx.Outputs {

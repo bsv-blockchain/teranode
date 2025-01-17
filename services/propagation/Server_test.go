@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
@@ -20,13 +19,16 @@ import (
 
 func TestValidatorErrors(t *testing.T) {
 	tracing.SetGlobalMockTracer()
+
 	tx := bt.NewTx()
+
 	tSettings := test.CreateBaseTestSettings()
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)
 
-	_, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
+	// _, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight)
+	_, err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
 	assert.True(t, errors.Is(err, errors.ErrProcessing))

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	redis_db "github.com/redis/go-redis/v9"
@@ -68,10 +70,12 @@ func TestSpend(t *testing.T) {
 
 	ctx := context.Background()
 
+	tSettings := settings.NewSettings()
+
 	redisURL, err := url.Parse("redis://localhost:6379")
 	require.NoError(t, err)
 
-	store, err := New(ctx, ulogger.TestLogger{}, redisURL)
+	store, err := New(ctx, ulogger.TestLogger{}, tSettings, redisURL)
 	require.NoError(t, err)
 
 	version, deferFn, err := registerLuaForTesting(store.client)

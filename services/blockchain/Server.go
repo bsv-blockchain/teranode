@@ -623,6 +623,10 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 			return nil, errors.WrapGRPC(err)
 		}
 
+		if len(blockHeaders) == 0 {
+			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] could not GetBlockHeaders for hash %s", hash.String()))
+		}
+
 		var testnetArgs []int64
 
 		if b.settings.ChainCfgParams.ReduceMinDifficulty {

@@ -99,7 +99,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		// Bitcoin has a 100 block coinbase maturity period and the block in which the coinbase transaction is included is block 0.
 		// counts as the 1st confirmation, so we need to wait for 99 more blocks to be mined before the coinbase outputs can be spent.
 		// So, for instance an output from the coinbase transaction in block 9 can be spent in block 109.
-		fields["spendingHeight"] = blockHeight + 100
+		fields["spendingHeight"] = blockHeight + uint32(s.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec
 	}
 
 	utxoCount := 0

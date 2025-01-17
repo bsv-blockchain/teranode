@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	storeRedis "github.com/bitcoin-sv/teranode/stores/utxo/redis"
@@ -780,6 +781,8 @@ func TestSmokeTests(t *testing.T) {
 func initRedis(t *testing.T) (*storeRedis.Store, context.Context, func()) {
 	ctx := context.Background()
 
+	tSettings := settings.NewSettings()
+
 	container, err := redisTest.RunContainer(ctx)
 	require.NoError(t, err)
 
@@ -800,7 +803,7 @@ func initRedis(t *testing.T) (*storeRedis.Store, context.Context, func()) {
 
 	// teranode redisStore client
 	var redisStore *storeRedis.Store
-	redisStore, err = storeRedis.New(ctx, ulogger.TestLogger{}, redisURL)
+	redisStore, err = storeRedis.New(ctx, ulogger.TestLogger{}, tSettings, redisURL)
 	require.NoError(t, err)
 
 	return redisStore, ctx, func() {

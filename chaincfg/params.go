@@ -124,6 +124,8 @@ type Params struct {
 	BIP0034Height int32
 	BIP0065Height int32
 	BIP0066Height int32
+	// Block height at which CSV (BIP68, BIP112 and BIP113) becomes active
+	CSVHeight uint32
 
 	// The following are the heights at which the Bitcoin specific forks
 	// became active.
@@ -236,6 +238,7 @@ var MainNetParams = Params{
 	BIP0034Height: 227931, // 000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8
 	BIP0065Height: 388381, // 000000000000000004c2b624ed5d7756c508d90fd0da2c7c679febfa6c4735f0
 	BIP0066Height: 363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
+	CSVHeight:     419328, // 000000000000000004a1b34462cb8aeebd5799177f7a29cf28f2d1961716b5b5
 
 	UahfForkHeight:           478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
 	DaaForkHeight:            504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
@@ -342,9 +345,10 @@ var StnParams = Params{
 	BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
 	BIP0065Height:            1351,      // Used by regression tests
 	BIP0066Height:            1251,      // Used by regression tests
+	CSVHeight:                0,         // Always active on stn
 
-	UahfForkHeight:          0, // Always active on regtest
-	DaaForkHeight:           0, // Always active on regtest
+	UahfForkHeight:          0, // Always active on stn
+	DaaForkHeight:           0, // Always active on stn
 	GenesisActivationHeight: 100,
 
 	SubsidyReductionInterval: 210000,
@@ -416,10 +420,11 @@ var RegressionNetParams = Params{
 	BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
 	BIP0065Height:            1351,      // Used by regression tests
 	BIP0066Height:            1251,      // Used by regression tests
+	CSVHeight:                576,       // Used by regression tests
 
 	UahfForkHeight:          15,   // August 1, 2017 hard fork
 	DaaForkHeight:           2200, // must be > 2016 - see assert in pow.cpp:268
-	GenesisActivationHeight: 0,
+	GenesisActivationHeight: 10000,
 
 	SubsidyReductionInterval: 150,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
@@ -490,6 +495,7 @@ var TestNetParams = Params{
 	BIP0034Height: 21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
+	CSVHeight:     770112, // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
 
 	UahfForkHeight:           1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
 	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
@@ -524,94 +530,6 @@ var TestNetParams = Params{
 		{1400000, newHashFromStr("000000000000008f84faa5afa3e30bce81599108f932eabdf9ee3d39bb225e5b")},
 		{1500000, newHashFromStr("00000000000005a00d805e3555e53f18c6276cb5ddc90a3ceeaeaf03bb2fdbea")},
 		{1600000, newHashFromStr("000000000000133137efc60aab38163c0d032d651826ccbda90b169f3bcec6dd")},
-	},
-
-	// Consensus rule change deployments.
-	//
-	// The miner confirmation window is defined as:
-	//   target proof of work timespan / target proof of work spacing
-	RuleChangeActivationThreshold: 1512, // 75% of MinerConfirmationWindow
-	MinerConfirmationWindow:       2016,
-	Deployments: [DefinedDeployments]ConsensusDeployment{
-		DeploymentTestDummy: {
-			BitNumber:  28,
-			StartTime:  1199145601, // January 1, 2008 UTC
-			ExpireTime: 1230767999, // December 31, 2008 UTC
-		},
-		DeploymentCSV: {
-			BitNumber:  0,
-			StartTime:  1456790400, // March 1st, 2016
-			ExpireTime: 1493596800, // May 1st, 2017
-		},
-	},
-
-	// Mempool parameters
-	RelayNonStdTxs: true,
-
-	// The prefix for the cashaddress
-	CashAddressPrefix: "bsvtest", // always bsvtest for testnet
-
-	// Address encoding magics
-	LegacyPubKeyHashAddrID: 0x6f, // starts with m or n
-	LegacyScriptHashAddrID: 0xc4, // starts with 2
-	PrivateKeyID:           0xef, // starts with 9 (uncompressed) or c (compressed)
-
-	// BIP32 hierarchical deterministic extended key magics
-	HDPrivateKeyID: [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
-	HDPublicKeyID:  [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
-
-	// BIP44 coin type used in the hierarchical deterministic path for
-	// address generation.
-	HDCoinType: 1, // all coins use 1
-}
-
-var CustomTestNetParams = Params{
-	Name:        "custom",
-	Net:         wire.Custom,
-	DefaultPort: "18333",
-	DNSSeeds: []DNSSeed{
-		{"testnet-seed.bitcoinsv.io", true},
-	},
-
-	// Chain parameters
-	GenesisBlock: &testNetGenesisBlock,
-	GenesisHash:  &testNetGenesisHash,
-	PowLimit:     customPowLimit,
-	PowLimitBits: 0x2000ffff,
-	// PowLimitBits:  0x1d00ffff,
-	BIP0034Height: 21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
-	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
-	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
-
-	UahfForkHeight:           1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
-	GenesisActivationHeight:  1344302,
-	MaxCoinbaseScriptSigSize: 100,
-	CoinbaseMaturity:         100,
-
-	SubsidyReductionInterval: 210000,
-	// TODO: change this back to 10 mins
-	TargetTimePerBlock:       time.Minute * 1, // 10 minutes
-	RetargetAdjustmentFactor: 4,               // 25% less, 400% more
-	ReduceMinDifficulty:      true,
-	NoDifficultyAdjustment:   false,
-	// TODO: change this back to 20 mins
-	MinDiffReductionTime: time.Minute * 2, // TargetTimePerBlock * 2
-	GenerateSupported:    false,
-
-	// Checkpoints ordered from oldest to newest.
-	Checkpoints: []Checkpoint{
-		{546, newHashFromStr("000000002a936ca763904c3c35fce2f3556c559c0214345d31b1bcebf76acb70")},
-		{100000, newHashFromStr("00000000009e2958c15ff9290d571bf9459e93b19765c6801ddeccadbb160a1e")},
-		{200000, newHashFromStr("0000000000287bffd321963ef05feab753ebe274e1d78b2fd4e2bfe9ad3aa6f2")},
-		{300001, newHashFromStr("0000000000004829474748f3d1bc8fcf893c88be255e6d7f571c548aff57abf4")},
-		{400002, newHashFromStr("0000000005e2c73b8ecb82ae2dbc2e8274614ebad7172b53528aba7501f5a089")},
-		{500011, newHashFromStr("00000000000929f63977fbac92ff570a9bd9e7715401ee96f2848f7b07750b02")},
-		{600002, newHashFromStr("000000000001f471389afd6ee94dcace5ccc44adc18e8bff402443f034b07240")},
-		{700000, newHashFromStr("000000000000406178b12a4dea3b27e13b3c4fe4510994fd667d7c1e6a3f4dc1")},
-		{800010, newHashFromStr("000000000017ed35296433190b6829db01e657d80631d43f5983fa403bfdb4c1")},
-		{900000, newHashFromStr("0000000000356f8d8924556e765b7a94aaebc6b5c8685dcfa2b1ee8b41acd89b")},
-		{1000007, newHashFromStr("00000000001ccb893d8a1f25b70ad173ce955e5f50124261bbbc50379a612ddf")},
 	},
 
 	// Consensus rule change deployments.
@@ -758,8 +676,6 @@ func GetChainParams(network string) (*Params, error) {
 		return &RegressionNetParams, nil
 	case "stn":
 		return &StnParams, nil
-	case "custom":
-		return &CustomTestNetParams, nil
 	default:
 		return nil, errors.NewProcessingError("unknown network %s", network)
 	}
@@ -778,5 +694,4 @@ func init() {
 	mustRegister(&TestNetParams)
 	mustRegister(&RegressionNetParams)
 	mustRegister(&StnParams)
-	mustRegister(&CustomTestNetParams)
 }

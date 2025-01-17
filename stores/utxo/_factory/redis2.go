@@ -79,6 +79,6 @@ import (
 
 func init() {
 	availableDatabases["redis2"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
-		return redis2.New(ctx, logger, url)
+		return redis2.New(ctx, logger, tSettings, url)
 	}
 }

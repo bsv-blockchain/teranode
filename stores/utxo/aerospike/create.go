@@ -634,7 +634,7 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		// Bitcoin has a 100 block coinbase maturity period and the block in which the coinbase transaction is included is block 0.
 		// counts as the 1st confirmation, so we need to wait for 99 more blocks to be mined before the coinbase outputs can be spent.
 		// So, for instance an output from the coinbase transaction in block 9 can be spent in block 109.
-		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
+		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+uint32(s.settings.ChainCfgParams.CoinbaseMaturity)))))
 	}
 
 	if isConflicting {

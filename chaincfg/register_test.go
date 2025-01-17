@@ -27,14 +27,17 @@ func TestRegister(t *testing.T) {
 		params *Params
 		err    error
 	}
+
 	type magicTest struct {
 		magic byte
 		valid bool
 	}
+
 	type prefixTest struct {
 		prefix string
 		valid  bool
 	}
+
 	type hdTest struct {
 		priv []byte
 		want []byte
@@ -414,6 +417,7 @@ func TestRegister(t *testing.T) {
 					test.name, regTest.name, err, regTest.err)
 			}
 		}
+
 		for i, magTest := range test.p2pkhMagics {
 			valid := IsPubKeyHashAddrID(magTest.magic)
 			if valid != magTest.valid {
@@ -421,6 +425,7 @@ func TestRegister(t *testing.T) {
 					test.name, i, valid, magTest.valid)
 			}
 		}
+
 		for i, magTest := range test.p2shMagics {
 			valid := IsScriptHashAddrID(magTest.magic)
 			if valid != magTest.valid {
@@ -428,6 +433,7 @@ func TestRegister(t *testing.T) {
 					test.name, i, valid, magTest.valid)
 			}
 		}
+
 		for i, prxTest := range test.cashAddrPrefixes {
 			valid := IsCashAddressPrefix(prxTest.prefix)
 			if valid != prxTest.valid {
@@ -435,16 +441,18 @@ func TestRegister(t *testing.T) {
 					test.name, prxTest.prefix, i, valid, prxTest.valid)
 			}
 		}
+
 		for i, magTest := range test.hdMagics {
-			pubKey, err := HDPrivateKeyToPublicKeyID(magTest.priv[:])
+			pubKey, err := HDPrivateKeyToPublicKeyID(magTest.priv)
 			if !reflect.DeepEqual(err, magTest.err) {
 				t.Errorf("%s: HD magic %d mismatched error: got %v expected %v ",
 					test.name, i, err, magTest.err)
 				continue
 			}
-			if magTest.err == nil && !bytes.Equal(pubKey, magTest.want[:]) {
+
+			if magTest.err == nil && !bytes.Equal(pubKey, magTest.want) {
 				t.Errorf("%s: HD magic %d private and public mismatch: got %v expected %v ",
-					test.name, i, pubKey, magTest.want[:])
+					test.name, i, pubKey, magTest.want)
 			}
 		}
 	}

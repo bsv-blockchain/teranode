@@ -3,26 +3,7 @@ package util
 import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
 )
-
-var LockTimeBIP113 uint32
-
-func init() {
-	InitializeLockTimeBIP113()
-}
-
-func InitializeLockTimeBIP113() {
-	network, _ := gocore.Config().Get("network", "mainnet")
-	switch network {
-	case "testnet":
-		LockTimeBIP113 = 770112
-	case "regtest":
-		LockTimeBIP113 = 1
-	default:
-		LockTimeBIP113 = 419328
-	}
-}
 
 // ValidLockTime checks whether a lock time is valid in the context of a block height and median block time
 // the block height and median block time are the values of the block in which the transaction is mined

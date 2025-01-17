@@ -765,6 +765,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
+	// check the coinbase length
+	if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+		return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
+	}
+
 	if err = u.waitForParentToBeMined(ctx, block); err != nil {
 		// re-trigger the setMinedChan for the parent block
 		u.setMinedChan <- block.Header.HashPrevBlock

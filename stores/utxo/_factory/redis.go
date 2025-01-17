@@ -78,7 +78,7 @@ import (
 )
 
 func init() {
-	availableDatabases["redis"] = func(ctx context.Context, logger ulogger.Logger, _ *settings.Settings, url *url.URL) (utxo.Store, error) {
-		return redis.New(ctx, logger, url)
+	availableDatabases["redis"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
+		return redis.New(ctx, logger, tSettings, url)
 	}
 }

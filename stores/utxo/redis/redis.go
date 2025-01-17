@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	redis_db "github.com/redis/go-redis/v9"
@@ -17,6 +18,7 @@ import (
 
 type Store struct {
 	logger          ulogger.Logger
+	settings        *settings.Settings
 	ctx             context.Context // store the global context for things that run in the background
 	version         string
 	url             *url.URL
@@ -34,7 +36,7 @@ type TXRecord struct {
 	BlockIDs    string `redis:"blockIDs"`
 }
 
-func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, redisURL *url.URL) (*Store, error) {
 	addr := fmt.Sprintf("%s:%s", redisURL.Hostname(), redisURL.Port())
 
 	client := redis_db.NewClient(&redis_db.Options{
@@ -70,6 +72,7 @@ func New(ctx context.Context, logger ulogger.Logger, redisURL *url.URL) (*Store,
 		client:     client,
 		expiration: expiration,
 		logger:     logger,
+		settings:   tSettings,
 	}, nil
 }
 
