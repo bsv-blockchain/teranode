@@ -200,7 +200,7 @@ services:
     depends_on:
       - teranode1
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.difficulty}
     command: [ "/app/wait.sh", "teranode1", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "9292", "-rpcconnect", "teranode1" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -212,7 +212,7 @@ services:
     depends_on:
       - teranode2
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.difficulty}
     command: [ "/app/wait.sh", "teranode2", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/teranode2/", "-rpcport", "9292", "-rpcconnect", "teranode2" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -224,7 +224,7 @@ services:
     depends_on:
       - teranode3
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.difficulty}
     command: [ "/app/wait.sh", "teranode3", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/teranode3/", "-rpcport", "9292", "-rpcconnect", "teranode3" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
