@@ -1423,7 +1423,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("nonexistent-key")
+		key := []byte("nonexistent-key-1")
 
 		// Try to get TTL for non-existent key
 		_, err = f.GetTTL(context.Background(), key)
@@ -1442,7 +1442,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("nonexistent-key")
+		key := []byte("nonexistent-key-2")
 		newTTL := 1 * time.Hour
 
 		// Try to set TTL for non-existent key
@@ -1494,7 +1494,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 	})
 
 	t.Run("update TTL before expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update")
+		tempDir, err := os.MkdirTemp("", "test-ttl-update-1")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1504,7 +1504,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("updating-key")
+		key := []byte("updating-key-1")
 		content := []byte("test content")
 
 		// Set content with initial short TTL
@@ -1549,7 +1549,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.False(t, exists)
 	})
 	t.Run("set TTL, delete TTL file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update")
+		tempDir, err := os.MkdirTemp("", "test-ttl-update-2")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1559,7 +1559,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("updating-key")
+		key := []byte("updating-key-2")
 		content := []byte("test content")
 
 		// Set content with initial short TTL
@@ -1592,7 +1592,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.True(t, exists)
 	})
 	t.Run("set TTL, manually change ttl file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update")
+		tempDir, err := os.MkdirTemp("", "test-ttl-update-3")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1602,7 +1602,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("updating-key")
+		key := []byte("updating-key-3")
 		content := []byte("test content")
 
 		// Set content with initial short TTL
@@ -1894,7 +1894,7 @@ func TestFileGetNonExistent(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to get non-existent file
-		key := []byte("nonexistent-key")
+		key := []byte("nonexistent-key-1")
 		_, err = f.Get(context.Background(), key)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
@@ -1918,7 +1918,7 @@ func TestFileGetNonExistent(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to get reader for non-existent file
-		key := []byte("nonexistent-key")
+		key := []byte("nonexistent-key-2")
 		reader, err := f.GetIoReader(context.Background(), key)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
