@@ -137,6 +137,9 @@ const (
 
 	// LuaError indicates operation failed
 	LuaError LuaReturnValue = "ERROR"
+
+	// LuaCoinbaseImmature indicates coinbase is not spendable yet
+	LuaCoinbaseImmature LuaReturnValue = "COINBASE_IMMATURE"
 )
 
 // registerLuaIfNecessary ensures required Lua scripts are registered with Aerospike.

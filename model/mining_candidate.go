@@ -35,20 +35,9 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Setting
 		walletAddresses[i] = walletAddress.AddressString
 	}
 
-	a, b, err := GetCoinbaseParts(mc.Height, mc.CoinbaseValue, arbitraryText, walletAddresses)
+	coinbaseTx, err := CreateCoinbase(mc.Height, mc.CoinbaseValue, arbitraryText, walletAddresses)
 	if err != nil {
-		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
-	}
-
-	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
-	extranonce := make([]byte, 12)
-	_, _ = rand.Read(extranonce)
-	a = append(a, extranonce...)
-	a = append(a, b...)
-
-	coinbaseTx, err := bt.NewTxFromBytes(a)
-	if err != nil {
-		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
+		return nil, err
 	}
 
 	if len(p2pk) > 0 && p2pk[0] {
@@ -83,7 +72,16 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidateForAddress(tSettings *settin
 		return nil, errors.NewConfigurationError("address is required for ")
 	}
 
-	a, b, err := GetCoinbaseParts(mc.Height, mc.CoinbaseValue, arbitraryText, []string{*address})
+	coinbaseTx, err := CreateCoinbase(mc.Height, mc.CoinbaseValue, arbitraryText, []string{*address})
+	if err != nil {
+		return nil, err
+	}
+
+	return coinbaseTx, nil
+}
+
+func CreateCoinbase(height uint32, coinbaseValue uint64, arbitraryText string, addresses []string) (*bt.Tx, error) {
+	a, b, err := GetCoinbaseParts(height, coinbaseValue, arbitraryText, addresses)
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
 	}

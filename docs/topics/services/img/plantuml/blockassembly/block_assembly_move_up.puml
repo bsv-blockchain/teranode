@@ -11,10 +11,10 @@ activate BC
 BC --> BA: block / err
 deactivate BC
 
-BA -> STP: MoveUpBlock(block)
+BA -> STP: MoveForwardBlock(block)
 activate STP
 
-STP -> STP: moveUpBlockChan <- moveBlockRequest
+STP -> STP: moveForwardBlockChan <- moveBlockRequest
 STP -> STP: Process moveBlockRequest
 activate STP
 

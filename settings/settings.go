@@ -51,7 +51,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		UsePrometheusGRPCMetrics: getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
 		TracingCollectorURL:      getURL("tracing_collector_url", "", alternativeContext...),
 
-		ChainCfgParams:           params,
+		ChainCfgParams: params,
 		Policy: &PolicySettings{
 			ExcessiveBlockSize: getInt("excessiveblocksize", 4294967296, alternativeContext...), // 4GB
 			// TODO: change BlockMaxSize to uint64
@@ -170,7 +170,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			LocalTTLCache:                       getString("blockassembly_localTTLCache", "", alternativeContext...),
 			MaxBlockReorgCatchup:                getInt("blockassembly_maxBlockReorgCatchup", 100, alternativeContext...),
 			MaxBlockReorgRollback:               getInt("blockassembly_maxBlockReorgRollback", 100, alternativeContext...),
-			MoveDownBlockConcurrency:            getInt("blockassembly_moveDownBlockConcurrency", 375, alternativeContext...),
+			MoveBackBlockConcurrency:            getInt("blockassembly_moveBackBlockConcurrency", 375, alternativeContext...),
 			ProcessRemainderTxHashesConcurrency: getInt("blockassembly_processRemainderTxHashesConcurrency", 375, alternativeContext...),
 			SendBatchSize:                       getInt("blockassembly_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:                    getInt("blockassembly_sendBatchTimeout", 2, alternativeContext...),

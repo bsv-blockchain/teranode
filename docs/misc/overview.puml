@@ -42,7 +42,7 @@ Blockchain -[#blue]> BlockAssembler : grpc:SendNotification(block)
 BlockAssembler -[#blue]> Blockchain : grpc:GetBestBlockHeader()
 BlockAssembler -> BlockAssembler : (if-new-block)
 BlockAssembler -[#blue]> Blockchain : grpc:GetBlock(hash)
-BlockAssembler -[#blue]> SubtreeProcessor : grpc:MoveUpBlock(block)
+BlockAssembler -[#blue]> SubtreeProcessor : grpc:MoveForwardBlock(block)
 BlockAssembler -[#blue]> Blockchain : grpc:SetState(block)
 Blockchain -[#red]-> blockchainStore : SetState(block)
 

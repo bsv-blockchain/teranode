@@ -51,10 +51,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -145,8 +143,6 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	// Wait a moment for the transaction to be processed
 	time.Sleep(1 * time.Second)
 
-	utxoHash1, _ := util.UTXOHashFromOutput(faucetTx.TxIDChainHash(), faucetTx.Outputs[0], 0)
-
 	require.NoError(t, err, "First output should be in UTXO set")
 
 	invalidTx := bt.NewTx()
@@ -168,11 +164,6 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	err = invalidTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: wrongPrivateKey})
 	require.NoError(t, err)
 
-	err = node1.UtxoStore.Spend(ctx, []*utxo.Spend{{
-		TxID:         faucetTx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxoHash1,
-		SpendingTxID: invalidTx.TxIDChainHash(),
-	}}, 0)
+	_, err = node1.UtxoStore.Spend(ctx, invalidTx)
 	require.Error(t, err)
 }

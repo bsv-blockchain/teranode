@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -39,6 +40,8 @@ var (
 
 	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032dff0c2f71646c6e6b2f5e931c7f7b6199adf35e1300ffffffff01d15fa012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
 
+	spendCoinbaseTx = utxo2.GetSpendingTx(coinbaseTx, 0)
+
 	utxoHash0, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	utxoHash1, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
 	utxoHash2, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[2], 2)
@@ -47,26 +50,22 @@ var (
 
 	txWithOPReturn, _ = bt.NewTxFromString("010000000000000000ef01977da9cf1e56bc7447e6561aa7d404e06343c3fd6034d5934eedddb222a928cc010000006b483045022100f7cd34af663f7ff3ab447476c1078610b0a258e88241bc98f93bec1275c65ace02205945dc2be5e855846e428c58e3758413b3f531f59a53528a3e4a75dfa09e894b4121033188d07302a394cdefba66bf83adf52b0922f16251a8dfb448cca061617f8953fffffffff5262400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac0200000000000000008a6a22314c74794d45366235416e4d6f70517242504c6b3446474e3855427568784b71726e0101357b2274223a32312e36362c2268223a38332c2270223a313031332c2263223a31372c227773223a312e35372c227764223a3232357d22314361674478397973596b4b79667952524a524d78793737454256776a64344c52780a31353638343830323731a2252400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac00000000")
 
+	spendTx = utxo2.GetSpendingTx(tx, 0)
+
 	spend = &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID1,
+		SpendingTxID: spendTx.TxIDChainHash(),
 	}
 	spends = []*utxo.Spend{spend}
 
-	spends2 = []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID2,
-	}}
-	spends3 = []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxoHash0,
-		SpendingTxID: utxoHash3,
-	}}
+	spendTx2 = utxo2.GetSpendingTx(tx, 0)
+
+	spendTx3 = utxo2.GetSpendingTx(tx, 0)
+
+	spendTxAll = utxo2.GetSpendingTx(tx, 0, 1, 2, 3, 4)
+
 	spendsAll = []*utxo.Spend{{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
@@ -93,9 +92,11 @@ var (
 		UTXOHash:     utxoHash4,
 		SpendingTxID: spendingTxID2,
 	}}
+
+	spendTxRemaining = utxo2.GetSpendingTx(tx, 1, 2, 3, 4)
 )
 
-func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
+func initAerospike(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
 	teranode_aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
@@ -115,7 +116,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, 
 	require.NoError(t, err)
 
 	// raw client to be able to do gets and cleanup
-	client, aeroErr := aerospike.NewClient(host, port)
+	client, aeroErr := uaerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
 
 	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)
@@ -136,7 +137,7 @@ func initAerospike(t *testing.T) (*aerospike.Client, *teranode_aerospike.Store, 
 	}
 }
 
-func cleanDB(t *testing.T, client *aerospike.Client, key *aerospike.Key, txs ...*bt.Tx) {
+func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ...*bt.Tx) {
 	tSettings := test.CreateBaseTestSettings()
 
 	policy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
@@ -248,10 +249,10 @@ func printArray(name string, ifc interface{}) {
 	}
 }
 
-func setupStore(_ *testing.T, client *aerospike.Client) *teranode_aerospike.Store {
+func setupStore(_ *testing.T, client *uaerospike.Client) *teranode_aerospike.Store {
 	s := &teranode_aerospike.Store{}
 	s.SetUtxoBatchSize(100)
-	s.SetClient(&uaerospike.Client{Client: client})
+	s.SetClient(client)
 	s.SetExternalStore(memory.New())
 	s.SetNamespace(aerospikeNamespace)
 	s.SetName(aerospikeSet)

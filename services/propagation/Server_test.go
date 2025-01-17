@@ -71,11 +71,11 @@ func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend, block
 }
 
 func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
-	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
+	// fmt.Printf("MoveForwardBlock(%s)\n", hash.String())
 	return nil
 }
 
 func (ns *NullStore) Delete(ctx context.Context, tx *bt.Tx) error {
-	// fmt.Printf("MoveUpBlock(%s)\n", hash.String())
+	// fmt.Printf("MoveForwardBlock(%s)\n", hash.String())
 	return nil
 }

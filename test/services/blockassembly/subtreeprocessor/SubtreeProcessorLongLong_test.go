@@ -50,7 +50,7 @@ var (
 	}
 )
 
-func TestMoveUpBlockLarge(t *testing.T) {
+func TestMoveForwardBlockLarge(t *testing.T) {
 
 	n := 1049576
 	txIds := make([]string, n)
@@ -120,10 +120,10 @@ func TestMoveUpBlockLarge(t *testing.T) {
 
 	timeStart := time.Now()
 
-	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be moveUpBlock
+	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 65536 so there should be 8 subtrees in the chain
-	err := stp.MoveUpBlock(&model.Block{
+	err := stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.GetChainedSubtrees()[0].RootHash(),
@@ -133,7 +133,7 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	})
 
 	wg.Wait()
-	fmt.Printf("moveUpBlock took %s\n", time.Since(timeStart))
+	fmt.Printf("moveForwardBlock took %s\n", time.Since(timeStart))
 
 	time.Sleep(1 * time.Second)
 

@@ -297,18 +297,18 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		err = items.addBlock(blockHeader4Alt)
 		require.NoError(t, err)
 
-		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt, 4)
 		require.NoError(t, err)
 
-		assert.Len(t, moveDownBlockHeaders, 3)
-		assert.Equal(t, blockHeader4.Hash(), moveDownBlockHeaders[0].Hash())
-		assert.Equal(t, blockHeader3.Hash(), moveDownBlockHeaders[1].Hash())
-		assert.Equal(t, blockHeader2.Hash(), moveDownBlockHeaders[2].Hash())
+		assert.Len(t, moveBackBlockHeaders, 3)
+		assert.Equal(t, blockHeader4.Hash(), moveBackBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader3.Hash(), moveBackBlockHeaders[1].Hash())
+		assert.Equal(t, blockHeader2.Hash(), moveBackBlockHeaders[2].Hash())
 
-		assert.Len(t, moveUpBlockHeaders, 3)
-		assert.Equal(t, blockHeader2Alt.Hash(), moveUpBlockHeaders[0].Hash())
-		assert.Equal(t, blockHeader3Alt.Hash(), moveUpBlockHeaders[1].Hash())
-		assert.Equal(t, blockHeader4Alt.Hash(), moveUpBlockHeaders[2].Hash())
+		assert.Len(t, moveForwardBlockHeaders, 3)
+		assert.Equal(t, blockHeader2Alt.Hash(), moveForwardBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader3Alt.Hash(), moveForwardBlockHeaders[1].Hash())
+		assert.Equal(t, blockHeader4Alt.Hash(), moveForwardBlockHeaders[2].Hash())
 	})
 
 	t.Run("getReorgBlocks - missing block", func(t *testing.T) {
@@ -328,14 +328,14 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		err = items.addBlock(blockHeader4)
 		require.NoError(t, err)
 
-		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4, 4)
 		require.NoError(t, err)
 
-		assert.Len(t, moveDownBlockHeaders, 0)
+		assert.Len(t, moveBackBlockHeaders, 0)
 
-		assert.Len(t, moveUpBlockHeaders, 2)
-		assert.Equal(t, blockHeader3.Hash(), moveUpBlockHeaders[0].Hash())
-		assert.Equal(t, blockHeader4.Hash(), moveUpBlockHeaders[1].Hash())
+		assert.Len(t, moveForwardBlockHeaders, 2)
+		assert.Equal(t, blockHeader3.Hash(), moveForwardBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader4.Hash(), moveForwardBlockHeaders[1].Hash())
 	})
 }
 

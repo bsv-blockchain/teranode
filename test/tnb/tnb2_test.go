@@ -5,10 +5,8 @@ package tnb
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -118,16 +116,7 @@ func (suite *TNB2TestSuite) TestUTXOValidation() {
 	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	require.NoError(t, err)
 
-	utxoHash, _ := util.UTXOHashFromOutput(faucetTx.TxIDChainHash(), output, 0)
-
-	spend := &utxo.Spend{
-		TxID:         faucetTx.TxIDChainHash(),
-		Vout:         0,
-		SpendingTxID: tx.TxIDChainHash(),
-		UTXOHash:     utxoHash,
-	}
-
-	err = node1.UtxoStore.Spend(ctx, []*utxo.Spend{spend}, 0)
+	_, err = node1.UtxoStore.Spend(ctx, tx)
 	require.NoError(t, err)
 
 	// Create another transaction

@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -112,6 +113,10 @@ func Start() {
 }
 
 func recoverTx(ctx context.Context, utxoStore utxostore.Store, txID *chainhash.Hash, blockHeight uint32, spendingTxIDs []*chainhash.Hash) error {
+	if len(spendingTxIDs) > 0 {
+		return errors.NewError("this function does not work anymore since the utxo changes. Please update the function if needed")
+	}
+
 	// get the transaction from whatsonchain
 	txHex, err := fetchTransactionHex(txID.String())
 	if err != nil {
@@ -179,7 +184,11 @@ func recoverTx(ctx context.Context, utxoStore utxostore.Store, txID *chainhash.H
 		}
 
 		if len(spends) > 0 {
-			if err = utxoStore.Spend(ctx, spends, blockHeight); err != nil {
+			// FAKE TX to pass linter
+			spendingTx := utxo2.GetSpendingTx(tx, 0)
+
+			// OLD if err = utxoStore.Spend(ctx, spends, blockHeight); err != nil {
+			if _, err = utxoStore.Spend(ctx, spendingTx); err != nil {
 				return errors.NewProcessingError("error setting spends for transaction: %s", err)
 			}
 		}

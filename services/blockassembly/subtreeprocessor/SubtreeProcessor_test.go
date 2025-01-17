@@ -329,10 +329,10 @@ func assertMerkleProof(t *testing.T, stp *SubtreeProcessor) {
 
 /*
 *
-The moveUpBlock method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
+The moveForwardBlock method will also resize the current subtree and all the subtrees in the chain from the last one that was in the block.
 *
 */
-func TestMoveUpBlock(t *testing.T) {
+func TestMoveForwardBlock(t *testing.T) {
 	n := 18
 	txIds := make([]string, n)
 
@@ -396,13 +396,13 @@ func TestMoveUpBlock(t *testing.T) {
 	//nolint:gosec
 	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
-	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be moveUpBlock
+	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
 	wg.Add(5) // we are expecting 2 more subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
-	err := stp.MoveUpBlock(&model.Block{
+	err := stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -419,9 +419,9 @@ func TestMoveUpBlock(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 }
 
-// TestMoveUpBlock tests the moveUpBlock method
+// TestMoveForwardBlock tests the moveForwardBlock method
 // bug #1817
-func TestMoveUpBlock_LeftInQueue(t *testing.T) {
+func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	subtreeStore := blob_memory.New()
@@ -455,7 +455,7 @@ func TestMoveUpBlock_LeftInQueue(t *testing.T) {
 	block, err := model.NewBlockFromBytes(blockBytes, tSettings)
 	require.NoError(t, err)
 
-	err = subtreeProcessor.moveUpBlock(ctx, block, true)
+	err = subtreeProcessor.moveForwardBlock(ctx, block, true)
 	require.NoError(t, err)
 
 	assert.Len(t, subtreeProcessor.chainedSubtrees, 0)
@@ -463,7 +463,7 @@ func TestMoveUpBlock_LeftInQueue(t *testing.T) {
 	assert.Equal(t, *util.CoinbasePlaceholderHash, subtreeProcessor.currentSubtree.Nodes[0].Hash)
 }
 
-func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
+func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	n := 17
 	txIds := make([]string, n)
 
@@ -530,10 +530,10 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	wg.Add(5) // we are expecting 4 subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
-	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be moveUpBlock
+	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 2 so there should be 5 subtrees in the chain
-	err := stp.MoveUpBlock(&model.Block{
+	err := stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -549,7 +549,7 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 }
 
 // current subtree should have 1 tx which due to the new added coinbase placeholder
-func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
+func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	n := 16
 	txIds := make([]string, n)
 
@@ -614,10 +614,10 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	wg.Add(4) // we are expecting 4 subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
-	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
-	// this means half the subtrees will be moveUpBlock
+	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
+	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
-	err := stp.MoveUpBlock(&model.Block{
+	err := stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -914,7 +914,7 @@ func generateTxHash() (chainhash.Hash, error) {
 	return chainhash.Hash(b), nil
 }
 
-func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
+func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 	t.Run("small", func(t *testing.T) {
 		n := 18
 		txHashes := make([]chainhash.Hash, n)
@@ -986,7 +986,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		fmt.Println("stp len", len(stp.chainedSubtrees))
 		fmt.Println("current subtree len: ", stp.currentSubtree.Length())
 
-		err = stp.moveDownBlock(context.Background(), &model.Block{
+		err = stp.moveBackBlock(context.Background(), &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
 				subtree1.RootHash(),
@@ -1026,7 +1026,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 	})
 }
 
-func TestMoveDownBlocks(t *testing.T) {
+func TestMoveBackBlocks(t *testing.T) {
 	t.Run("multiple blocks", func(t *testing.T) {
 		n := 34 // Number of transactions
 		txHashes := make([]chainhash.Hash, n)
@@ -1105,7 +1105,7 @@ func TestMoveDownBlocks(t *testing.T) {
 
 		stp.SetCurrentBlockHeader(nextBlockHeader)
 
-		moveDownBlock1 := &model.Block{
+		moveBackBlock1 := &model.Block{
 			Header: blockHeader,
 			Subtrees: []*chainhash.Hash{
 				subtree1.RootHash(),
@@ -1113,7 +1113,7 @@ func TestMoveDownBlocks(t *testing.T) {
 			CoinbaseTx: coinbaseTx,
 		}
 
-		moveDownBlock2 := &model.Block{
+		moveBackBlock2 := &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
 				subtree2.RootHash(),
@@ -1121,7 +1121,7 @@ func TestMoveDownBlocks(t *testing.T) {
 			CoinbaseTx: coinbaseTx2,
 		}
 
-		moveDownBlock3 := &model.Block{
+		moveBackBlock3 := &model.Block{
 			Header: aBlockHeader,
 			Subtrees: []*chainhash.Hash{
 				subtree3.RootHash(),
@@ -1129,16 +1129,16 @@ func TestMoveDownBlocks(t *testing.T) {
 			CoinbaseTx: coinbaseTx3,
 		}
 
-		// err = stp.moveDownBlock(context.Background(), moveDownBlock1)
+		// err = stp.moveBackBlock(context.Background(), moveBackBlock1)
 		// require.NoError(t, err)
 
-		// err = stp.moveDownBlock(context.Background(), moveDownBlock2)
+		// err = stp.moveBackBlock(context.Background(), moveBackBlock2)
 		// require.NoError(t, err)
 
-		// err = stp.moveDownBlock(context.Background(), moveDownBlock3)
+		// err = stp.moveBackBlock(context.Background(), moveBackBlock3)
 		// require.NoError(t, err)
 
-		err = stp.moveDownBlocks(context.Background(), []*model.Block{moveDownBlock1, moveDownBlock2, moveDownBlock3})
+		err = stp.moveBackBlocks(context.Background(), []*model.Block{moveBackBlock1, moveBackBlock2, moveBackBlock3})
 		require.NoError(t, err)
 
 		assert.Equal(t, 11, len(stp.chainedSubtrees))

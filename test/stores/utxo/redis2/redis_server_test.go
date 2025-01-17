@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	storeRedis "github.com/bitcoin-sv/teranode/stores/utxo/redis2"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	redisTest "github.com/bitcoin-sv/testcontainers-redis-go"
@@ -30,68 +31,32 @@ var (
 	coinbaseKey *chainhash.Hash
 	tx, _       = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 
-	txHash           = tx.TxIDChainHash()
-	spendingTxID1, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
-	spendingTxID2, _ = chainhash.NewHashFromStr("663bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
+	txHash = tx.TxIDChainHash()
 
 	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032dff0c2f71646c6e6b2f5e931c7f7b6199adf35e1300ffffffff01d15fa012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
 
+	spendCoinbaseTx = utxo2.GetSpendingTx(coinbaseTx, 0)
+
 	utxoHash0, _ = util.UTXOHashFromOutput(txHash, tx.Outputs[0], 0)
-	utxoHash1, _ = util.UTXOHashFromOutput(txHash, tx.Outputs[1], 1)
-	utxoHash2, _ = util.UTXOHashFromOutput(txHash, tx.Outputs[2], 2)
-	utxoHash3, _ = util.UTXOHashFromOutput(txHash, tx.Outputs[3], 3)
-	utxoHash4, _ = util.UTXOHashFromOutput(txHash, tx.Outputs[4], 4)
 
 	txWithOPReturn, _ = bt.NewTxFromString("010000000000000000ef01977da9cf1e56bc7447e6561aa7d404e06343c3fd6034d5934eedddb222a928cc010000006b483045022100f7cd34af663f7ff3ab447476c1078610b0a258e88241bc98f93bec1275c65ace02205945dc2be5e855846e428c58e3758413b3f531f59a53528a3e4a75dfa09e894b4121033188d07302a394cdefba66bf83adf52b0922f16251a8dfb448cca061617f8953fffffffff5262400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac0200000000000000008a6a22314c74794d45366235416e4d6f70517242504c6b3446474e3855427568784b71726e0101357b2274223a32312e36362c2268223a38332c2270223a313031332c2263223a31372c227773223a312e35372c227764223a3232357d22314361674478397973596b4b79667952524a524d78793737454256776a64344c52780a31353638343830323731a2252400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac00000000")
+
+	spendTx = utxo2.GetSpendingTx(tx, 0)
 
 	spend = &utxo.Spend{
 		TxID:         txHash,
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID1,
+		SpendingTxID: spendTx.TxIDChainHash(),
 	}
-	spends = []*utxo.Spend{spend}
 
-	spends2 = []*utxo.Spend{{
-		TxID:         txHash,
-		Vout:         0,
-		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID2,
-	}}
+	spendTx2 = utxo2.GetSpendingTx(tx, 0)
 
-	spends3 = []*utxo.Spend{{
-		TxID:         txHash,
-		Vout:         0,
-		UTXOHash:     utxoHash0,
-		SpendingTxID: utxoHash3,
-	}}
+	spendTx3 = utxo2.GetSpendingTx(tx, 0)
 
-	spendsAll = []*utxo.Spend{{
-		TxID:         txHash,
-		Vout:         0,
-		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID2,
-	}, {
-		TxID:         txHash,
-		Vout:         1,
-		UTXOHash:     utxoHash1,
-		SpendingTxID: spendingTxID2,
-	}, {
-		TxID:         txHash,
-		Vout:         2,
-		UTXOHash:     utxoHash2,
-		SpendingTxID: spendingTxID2,
-	}, {
-		TxID:         txHash,
-		Vout:         3,
-		UTXOHash:     utxoHash3,
-		SpendingTxID: spendingTxID2,
-	}, {
-		TxID:         txHash,
-		Vout:         4,
-		UTXOHash:     utxoHash4,
-		SpendingTxID: spendingTxID2,
-	}}
+	spendTxRemaining = utxo2.GetSpendingTx(tx, 1, 2, 3, 4)
+
+	spendTxAll = utxo2.GetSpendingTx(tx, 0, 1, 2, 3, 4)
 )
 
 func TestRedis(t *testing.T) {
@@ -112,7 +77,7 @@ func TestRedis(t *testing.T) {
 	blockID2 := uint32(124)
 
 	t.Cleanup(func() {
-		redis.Del(ctx, spendingTxID1.String())
+		redis.Del(ctx, spendTx.TxIDChainHash().String())
 	})
 
 	t.Run("create", func(t *testing.T) {
@@ -252,13 +217,13 @@ func TestRedis(t *testing.T) {
 		assert.Equal(t, int(utxo.Status_OK), resp.Status)
 		assert.Nil(t, resp.SpendingTxID)
 
-		err = store.Spend(ctx, spends, 0)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		resp, err = store.GetSpend(ctx, spend)
 		require.NoError(t, err)
 		assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
-		assert.Equal(t, spendingTxID1, resp.SpendingTxID)
+		assert.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingTxID.String())
 	})
 
 	t.Run("redis store", func(t *testing.T) {
@@ -299,7 +264,7 @@ func TestRedis(t *testing.T) {
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxExists))
 
-		err = store.Spend(ctx, spends, 0)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		txMeta, err = store.Create(ctx, tx, 0)
@@ -314,7 +279,7 @@ func TestRedis(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = store.Spend(ctx, spends, 0)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		data, err := redis.HGetAll(ctx, txHash.String()).Result()
@@ -324,12 +289,17 @@ func TestRedis(t *testing.T) {
 		require.True(t, ok)
 		assert.Len(t, utxo, 128)
 
-		assert.Equal(t, spendingTxID1.String(), utxo[64:])
+		assert.Equal(t, spendTx.TxIDChainHash().String(), utxo[64:])
 
 		// try to spend with different txid
-		err = store.Spend(ctx, spends2, 0)
+		spends, err := store.Spend(ctx, spendTx2)
 		assert.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrSpent))
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.Equal(t, spendTx.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 	})
 
 	t.Run("redis 1 record spend 1 and not expire no blockIDs", func(t *testing.T) {
@@ -343,37 +313,14 @@ func TestRedis(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(-1), ttl)
 
-		err = store.Spend(ctx, spends, 0)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		ttl, err = redis.TTL(ctx, txHash.String()).Result()
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(-1), ttl)
 
-		// Now spend all the remaining utxos
-		spendsRemaining := []*utxo.Spend{{
-			TxID:         txHash,
-			Vout:         1,
-			UTXOHash:     utxoHash1,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         2,
-			UTXOHash:     utxoHash2,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         3,
-			UTXOHash:     utxoHash3,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         4,
-			UTXOHash:     utxoHash4,
-			SpendingTxID: spendingTxID2,
-		}}
-
-		err = store.Spend(ctx, spendsRemaining, 0)
+		_, err = store.Spend(ctx, spendTxRemaining)
 		require.NoError(t, err)
 
 		ttl, err = redis.TTL(ctx, txHash.String()).Result()
@@ -395,37 +342,14 @@ func TestRedis(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = store.Spend(ctx, spends, 0)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		ttl, err := redis.TTL(ctx, txHash.String()).Result()
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(-1), ttl) // Expiration is -1 because the tx still has UTXOs
 
-		// Now spend all the remaining utxos
-		spendsRemaining := []*utxo.Spend{{
-			TxID:         txHash,
-			Vout:         1,
-			UTXOHash:     utxoHash1,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         2,
-			UTXOHash:     utxoHash2,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         3,
-			UTXOHash:     utxoHash3,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         txHash,
-			Vout:         4,
-			UTXOHash:     utxoHash4,
-			SpendingTxID: spendingTxID2,
-		}}
-
-		err = store.Spend(ctx, spendsRemaining, 0)
+		_, err = store.Spend(ctx, spendTxRemaining)
 		require.NoError(t, err)
 
 		ttl, err = redis.TTL(ctx, txHash.String()).Result()
@@ -440,7 +364,7 @@ func TestRedis(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = store.Spend(ctx, spendsAll, 0)
+		_, err = store.Spend(ctx, spendTxAll)
 		require.NoError(t, err)
 
 		ttl, err := redis.TTL(ctx, txHash.String()).Result()
@@ -455,15 +379,25 @@ func TestRedis(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, ttl, int64(0)) // Now TTL should be set as all UTXOs are spent
 
-		// try to spend with different txid
-		err = store.Spend(ctx, spends3, 0)
-		require.Error(t, err)
-		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
+		var tErr *errors.Error
 
 		// try to spend with different txid
-		err = store.Spend(ctx, spends3, 0)
+		spends, err := store.Spend(ctx, spendTx3)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrSpent))
+
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.Equal(t, spendTxAll.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
+
+		// try to spend again with different txid
+		spends, err = store.Spend(ctx, spendTx3)
+		require.Error(t, err)
+
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.Equal(t, spendTxAll.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 	})
 
 	t.Run("redis reset", func(t *testing.T) {
@@ -476,15 +410,7 @@ func TestRedis(t *testing.T) {
 
 		_ = store.SetBlockHeight(101)
 
-		utxoHash0, _ := util.UTXOHashFromOutput(tx2.TxIDChainHash(), tx2.Outputs[0], 0)
-		spends := []*utxo.Spend{{
-			TxID:         tx2.TxIDChainHash(),
-			Vout:         0,
-			UTXOHash:     utxoHash0,
-			SpendingTxID: spendingTxID1,
-		}}
-
-		err = store.Spend(ctx, spends, 0)
+		spends, err := store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		value, err := redis.HGetAll(ctx, tx2.TxIDChainHash().String()).Result()
@@ -493,7 +419,7 @@ func TestRedis(t *testing.T) {
 		utxo, ok := value["utxo:0"]
 		require.True(t, ok)
 		require.Len(t, utxo, 128)
-		require.Equal(t, spendingTxID1.String(), utxo[64:])
+		require.Equal(t, spendTx.TxIDChainHash().String(), utxo[64:])
 
 		// try to reset the utxo
 		err = store.UnSpend(ctx, spends)
@@ -547,9 +473,13 @@ func TestRedis(t *testing.T) {
 		res := redis.HSet(ctx, txHash.String(), "frozen", 1)
 		require.NoError(t, res.Err())
 
-		err = store.Spend(ctx, spends, 0)
+		spends, err := store.Spend(ctx, spendTx)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "FROZEN:TX is frozen")
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
 
 	t.Run("FrozenUTXO", func(t *testing.T) {
@@ -562,19 +492,19 @@ func TestRedis(t *testing.T) {
 		frozenMarker, err := chainhash.NewHashFromStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
 		require.NoError(t, err)
 
-		err = store.Spend(ctx, []*utxo.Spend{
-			{
-				TxID:         txHash,
-				Vout:         0,
-				UTXOHash:     utxoHash0,
-				SpendingTxID: frozenMarker,
-			},
-		}, 0)
+		spendTxFrozen := utxo2.GetSpendingTx(tx, 0)
+		spendTxFrozen.SetTxHash(frozenMarker) // hard code the hash to be the frozen marker
+
+		_, err = store.Spend(ctx, spendTxFrozen)
 		require.NoError(t, err)
 
-		err = store.Spend(ctx, spends, 0)
+		spends, err := store.Spend(ctx, spendTx)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "FROZEN:UTXO is frozen")
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
 }
 
@@ -595,24 +525,19 @@ func TestCoinbase(t *testing.T) {
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
 
-	utxoHash, err := util.UTXOHashFromOutput(coinbaseTxHash, coinbaseTx.Outputs[0], 0)
-	require.NoError(t, err)
-
-	spend := &utxo.Spend{
-		TxID:         coinbaseTxHash,
-		Vout:         0,
-		UTXOHash:     utxoHash,
-		SpendingTxID: spendingTxID1,
-	}
-
-	err = store.Spend(ctx, []*utxo.Spend{spend}, 0)
+	spends, err := store.Spend(ctx, spendCoinbaseTx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Coinbase UTXO can only be spent after 100 blocks")
+
+	var tErr *errors.Error
+
+	require.ErrorAs(t, err, &tErr)
+	require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+	require.ErrorIs(t, spends[0].Err, errors.ErrTxCoinbaseImmature)
 
 	err = store.SetBlockHeight(5000)
 	require.NoError(t, err)
 
-	err = store.Spend(ctx, []*utxo.Spend{spend}, 0)
+	_, err = store.Spend(ctx, spendCoinbaseTx)
 	require.NoError(t, err)
 }
 
@@ -624,7 +549,7 @@ func TestStoreDecorate(t *testing.T) {
 	client := store.GetClient()
 
 	t.Run("redis BatchDecorate", func(t *testing.T) {
-		cleanDB(t, client, spendingTxID1, tx)
+		cleanDB(t, client, spendTx.TxIDChainHash(), tx)
 		txMeta, err := store.Create(ctx, tx, 0)
 
 		txID := txHash.String()
@@ -666,7 +591,7 @@ func TestStoreDecorate(t *testing.T) {
 	})
 
 	t.Run("redis PreviousOutputsDecorate", func(t *testing.T) {
-		cleanDB(t, client, spendingTxID1, tx)
+		cleanDB(t, client, spendTx.TxIDChainHash(), tx)
 		txMeta, err := store.Create(ctx, tx, 0)
 
 		txID := txHash.String()
@@ -794,7 +719,7 @@ func TestStoreDecorate(t *testing.T) {
 //	require.NoError(t, err)
 //	assert.NotNil(t, previousOutput.LockingScript)
 //	// t.Log(previousOutput)
-//}
+// }
 
 func TestSmokeTests(t *testing.T) {
 	store, ctx, deferFn := initRedis(t)
@@ -812,6 +737,13 @@ func TestSmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.Spend(t, store)
+	})
+
+	t.Run("redis conflicting", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Conflicting(t, store)
 	})
 
 	t.Run("redis reset", func(t *testing.T) {

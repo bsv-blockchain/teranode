@@ -7,19 +7,21 @@ import (
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // go test -v -tags test_aerospike ./test/...
-
-// Create a sample UTXO spend
-var txID, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
 
 func TestAlertSystem(t *testing.T) {
 	client, db, _, deferFn := initAerospike(t)
@@ -27,13 +29,11 @@ func TestAlertSystem(t *testing.T) {
 
 	t.Run("FreezeUTXOs", func(t *testing.T) {
 		spend := &utxo.Spend{
-			TxID:         txID,
+			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: txID,
+			SpendingTxID: tx.TxIDChainHash(),
 		}
-
-		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
 		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.GetUtxoBatchSize())) //nolint:gosec
@@ -50,7 +50,7 @@ func TestAlertSystem(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 
 		// Call FreezeUTXO
-		err := db.FreezeUTXOs(context.Background(), spends, tSettings)
+		err := db.FreezeUTXOs(context.Background(), []*utxo.Spend{spend}, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is frozen
@@ -69,22 +69,24 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:64])
 
 		// try to spend the UTXO
-		err = db.Spend(context.Background(), spends, 0)
+		spends, err := db.Spend(context.Background(), spendTx)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "UTXO is frozen")
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
 
 	t.Run("UnFreezeUTXOs", func(t *testing.T) {
 		var err error
 
 		spend := &utxo.Spend{
-			TxID:         txID,
+			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: txID,
+			SpendingTxID: tx.TxIDChainHash(),
 		}
-
-		spends := []*utxo.Spend{spend}
 
 		// Create a key for the UTXO
 		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(db.GetUtxoBatchSize())) //nolint:gosec
@@ -105,14 +107,17 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		// try to spend the UTXO
-		err = db.Spend(context.Background(), spends, 0)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "UTXO is frozen")
+		spends, err := db.Spend(context.Background(), spendTx)
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 
 		tSettings := test.CreateBaseTestSettings()
 
 		// Call UnFreezeUTXOs
-		err = db.UnFreezeUTXOs(context.Background(), spends, tSettings)
+		err = db.UnFreezeUTXOs(context.Background(), []*utxo.Spend{spend}, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is unfrozen
@@ -130,25 +135,46 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, utxoHash0[:], unfrozenUTXO)
 
 		// try to spend the UTXO
-		err = db.Spend(context.Background(), spends, 0)
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 	})
+
 	t.Run("ReAssignUTXO", func(t *testing.T) {
 		err := db.SetBlockHeight(101)
 		require.NoError(t, err)
 
+		utxoRecTx := utxo2.GetSpendingTx(tx, 0)
 		utxoRec := &utxo.Spend{
-			TxID:         txID,
+			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: txID,
+			SpendingTxID: utxoRecTx.TxIDChainHash(),
 		}
 
+		newUtxoRecTx := utxo2.GetSpendingTx(tx, 0)
+
+		privKey, err := bec.NewPrivateKey(bec.S256())
+		require.NoError(t, err)
+
+		newLockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privKey.PubKey().SerialiseCompressed())
+		require.NoError(t, err)
+
+		newOutput := &bt.Output{
+			Satoshis:      tx.Outputs[0].Satoshis,
+			LockingScript: newLockingScript,
+		}
+
+		// extend the tx
+		newUtxoRecTx.Inputs[0].PreviousTxSatoshis = newOutput.Satoshis
+		newUtxoRecTx.Inputs[0].PreviousTxScript = newOutput.LockingScript
+
+		newUtxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), newOutput, 0)
+
 		newUtxoRec := &utxo.Spend{
-			TxID:         txID,
+			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
-			UTXOHash:     utxoHash1,
-			SpendingTxID: txID,
+			UTXOHash:     newUtxoHash,
+			SpendingTxID: newUtxoRecTx.TxIDChainHash(),
 		}
 
 		// Create a key for the UTXO
@@ -210,7 +236,7 @@ func TestAlertSystem(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, utxoBytes, 32)
 		assert.NotEqual(t, utxoHash0[:], utxoBytes)
-		assert.Equal(t, utxoHash1[:], utxoBytes)
+		assert.Equal(t, newUtxoRec.UTXOHash[:], utxoBytes)
 
 		// check the reassignment list
 		reassignment, ok := rec.Bins["reassignments"].([]interface{})
@@ -224,7 +250,7 @@ func TestAlertSystem(t *testing.T) {
 		// check the reassignment record
 		assert.Equal(t, utxoHash0[:], reassignmentMap["utxoHash"])
 		assert.Equal(t, 0, reassignmentMap["offset"])
-		assert.Equal(t, utxoHash1[:], reassignmentMap["newUtxoHash"])
+		assert.Equal(t, newUtxoRec.UTXOHash[:], reassignmentMap["newUtxoHash"])
 		assert.Equal(t, 101, reassignmentMap["blockHeight"])
 
 		utxoSpendableIn, ok := rec.Bins["utxoSpendableIn"].(map[interface{}]interface{})
@@ -239,18 +265,18 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, 2, nrUtxos)
 
 		// try to spend the UTXO with the original hash - should fail
-		err = db.Spend(context.Background(), []*utxo.Spend{utxoRec}, 0)
+		_, err = db.Spend(context.Background(), utxoRecTx)
 		require.Error(t, err)
 
 		// try to spend the UTXO with the new hash - should fail, block height has not been reached
-		err = db.Spend(context.Background(), []*utxo.Spend{newUtxoRec}, 0)
+		_, err = db.Spend(context.Background(), newUtxoRecTx)
 		require.Error(t, err, "UTXO is not spendable yet")
 
 		err = db.SetBlockHeight(1101)
 		require.NoError(t, err)
 
 		// try to spend the UTXO with the new hash
-		err = db.Spend(context.Background(), []*utxo.Spend{newUtxoRec}, 0)
+		_, err = db.Spend(context.Background(), newUtxoRecTx)
 		require.NoError(t, err)
 	})
 }

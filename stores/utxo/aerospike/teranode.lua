@@ -26,7 +26,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     local coinbaseSpendingHeight = rec['spendingHeight']
     if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
-        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. coinbaseSpendingHeight .. " or greater. The current block height is " .. currentBlockHeight 
+        return "COINBASE_IMMATURE:Coinbase UTXO can only be spent after 100 blocks, in block " .. coinbaseSpendingHeight .. " or greater. The current block height is " .. currentBlockHeight
     end
 
     -- Get the utxos list from the record
@@ -43,7 +43,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     local utxoSpendableIn = rec['utxoSpendableIn']
     if utxoSpendableIn and utxoSpendableIn[offset] and utxoSpendableIn[offset] < currentBlockHeight then
-        return "ERROR:UTXO is not spendable until block " .. utxoSpendableIn[offset]
+        return "FROZEN:UTXO is not spendable until block " .. utxoSpendableIn[offset]
     end
 
     -- The first 32 bytes are the utxoHash
@@ -104,7 +104,7 @@ function spendMulti(rec, spends, currentBlockHeight, ttl)
 
     local coinbaseSpendingHeight = rec['spendingHeight']
     if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
-        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. coinbaseSpendingHeight .. " or greater. The current block height is " .. currentBlockHeight
+        return "COINBASE_IMMATURE:Coinbase UTXO can only be spent after 100 blocks, in block " .. coinbaseSpendingHeight .. " or greater. The current block height is " .. currentBlockHeight
     end
 
     -- Get the utxos list from the record
@@ -127,7 +127,7 @@ function spendMulti(rec, spends, currentBlockHeight, ttl)
 
         if rec['utxoSpendableIn'] then
             if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
-                return "ERROR:UTXO is not spendable until block " .. rec['utxoSpendableIn'][offset]
+                return "FROZEN:UTXO is not spendable until block " .. rec['utxoSpendableIn'][offset]
             end
         end
 

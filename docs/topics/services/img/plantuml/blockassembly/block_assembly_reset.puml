@@ -14,7 +14,7 @@ BlockchainClient --> Assembler : bestBlockchainBlockHeader, meta, err
 deactivate BlockchainClient
 
 Assembler -> Assembler : getReorgBlocks(ctx, bestBlockchainBlockHeader)
-Assembler -> Processor : Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks)
+Assembler -> Processor : Reset(b.bestBlockHeader.Load(), moveBackBlocks, moveForwardBlocks)
 activate Processor
 Processor --> Assembler : ResetResponse
 deactivate Processor

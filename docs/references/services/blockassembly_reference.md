@@ -60,7 +60,7 @@ type SubtreeProcessor struct {
     settings                 *settings.Settings
     txChan                    chan *[]TxIDAndFee
     getSubtreesChan           chan chan []*util.Subtree
-    moveUpBlockChan           chan moveBlockRequest
+    moveForwardBlockChan      chan moveBlockRequest
     reorgBlockChan            chan reorgBlocksRequest
     deDuplicateTransactionsCh chan struct{}
     resetCh                   chan *resetBlocks
@@ -291,10 +291,10 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 
 Retrieves completed subtrees for mining candidate generation.
 
-#### MoveUpBlock
+#### MoveForwardBlock
 
 ```go
-func (stp *SubtreeProcessor) MoveUpBlock(block *model.Block) error
+func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error
 ```
 
 Moves the subtree processor state up to a new block.
@@ -302,7 +302,7 @@ Moves the subtree processor state up to a new block.
 #### Reorg
 
 ```go
-func (stp *SubtreeProcessor) Reorg(moveDownBlocks []*model.Block, modeUpBlocks []*model.Block) error
+func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error
 ```
 
 Handles chain reorganization in the subtree processor.

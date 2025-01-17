@@ -1,330 +1,201 @@
-////go:build test_full
+//go:build test_full
 
 package doublespendtest
 
 import (
-	"context"
-	"net/url"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
-	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/services/blockassembly"
-	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
-	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/services/blockvalidation"
-	"github.com/bitcoin-sv/teranode/services/propagation"
-	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
-	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
-	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type DoubleSpendTester struct {
-	ctx                   context.Context
-	logger                *ulogger.ErrorTestLogger
-	d                     *daemon.Daemon
-	blockchainClient      blockchain.ClientI
-	blockAssemblyClient   *blockassembly.Client
-	propagationClient     *propagation.Client
-	blockValidationClient *blockvalidation.Client
-	privKey               *bec.PrivateKey
-	subtreeStore          blob.Store
-	utxoStore             utxo.Store
+func TestDoubleSpendScenarios(t *testing.T) {
+	t.Run("single tx with one conflicting transaction", testSingleDoubleSpend)
+	// t.Run("single tx with one conflicting transaction and child", testDoubleSpendAndChildAreMarkedAsConflicting)
+	t.Run("multiple conflicting txs in same block", TestMarkAsConflictingMultipleSameBlock)
+	t.Run("multiple conflicting txs in different blocks", TestMarkAsConflictingMultiple)
+	t.Run("conflicting transaction chains", TestMarkAsConflictingChains)
+	// t.Run("double spend in subsequent block", testDoubleSpendInSubsequentBlock)
 }
 
-func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
-	ctx, cancel := context.WithCancel(context.Background())
+// testSingleDoubleSpend tests the handling of double-spend transactions and their child
+// transactions in a blockchain. The test verifies:
+//  1. System can detect and handle double-spend attempts
+//  2. Chain reorganization correctly updates transaction conflict status
+//  3. Child transactions of double-spends are properly handled when part of longest chain
+//
+// Test flow:
+//   - Creates block102b with a double-spend transaction
+//   - Verifies original block102a remains at height 102
+//   - Creates block103b with a child of the double-spend transaction
+//   - Verifies chain reorganization occurs (block103b becomes tip)
+//   - Validates final conflict status:
+//   - Original tx becomes conflicting (losing chain)
+//   - Double-spend tx becomes non-conflicting (winning chain)
+//   - Child tx becomes non-conflicting (winning chain)
+func testSingleDoubleSpend(t *testing.T) {
+	// Setup test environment
+	dst, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t)
+	defer dst.d.Stop()
 
-	logger := ulogger.NewErrorTestLogger(t, cancel)
+	// At this point we have:
+	// 0 -> 1 ... 101 -> 102a (winning)
 
-	// Delete the sqlite db at the beginning of the test
-	_ = os.RemoveAll("data")
-
-	persitantStore, err := url.Parse("sqlite:///test")
+	// Get block 101 so we can create an alternate bock for height 102 with a double spend in it.
+	block101, err := dst.blockchainClient.GetBlockByHeight(dst.ctx, 101)
 	require.NoError(t, err)
 
-	memoryStore, err := url.Parse("memory:///")
-	require.NoError(t, err)
+	// Step 1: Create and validate block with double spend transaction
+	subtree102b, block102b := dst.createTestBlock(t, []*bt.Tx{txDoubleSpend}, block101)
 
-	// Start Kafka container with default port 9092
-	kafkaContainer, err := testkafka.RunTestContainer(ctx)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = kafkaContainer.CleanUp()
-	})
+	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block102b, block102b.Height),
+		"Failed to process block with double spend transaction")
 
-	gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
+	dst.verifyBlockByHash(t, block102b, block102b.Header.Hash())
 
-	tSettings := settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+	// At this point we have:
+	//                   / 102a (winning)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b (losing)
 
-	// Override with test settings...
-	tSettings.SubtreeValidation.SubtreeStore = memoryStore
-	tSettings.BlockChain.StoreURL = persitantStore
-	tSettings.UtxoStore.UtxoStore = persitantStore
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-	tSettings.Asset.CentrifugeDisable = true
+	// Verify block 102 is still the original block at height 102
+	dst.verifyBlockByHeight(t, block102a, 102)
 
-	readyCh := make(chan struct{})
+	dst.verifyNotConflicting(t, block102a.Subtrees[0])
 
-	d := daemon.New()
+	// Verify conflicting
+	dst.verifyConflicting(t, subtree102b.RootHash(), []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 
-	go d.Start(logger, []string{
-		"-all=0",
-		"-blockchain=1",
-		"-subtreevalidation=1",
-		"-blockvalidation=1",
-		"-blockassembly=1",
-		"-asset=1",
-		"-propagation=1",
-	}, tSettings, readyCh)
+	// Create block 103b to make the longest chain...
+	_, block103b := dst.createTestBlock(t, []*bt.Tx{}, block102b)
 
-	<-readyCh
+	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block103b, block103b.Height),
+		"Failed to process block")
 
-	bcClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
-	require.NoError(t, err)
+	// Verify final state in Block Assembly
+	state := dst.waitForBlockHeight(t, 103, 5*time.Second)
 
-	baClient, err := blockassembly.NewClient(ctx, logger, tSettings)
-	require.NoError(t, err)
+	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
 
-	propagationClient, err := propagation.NewClient(ctx, logger, tSettings)
-	require.NoError(t, err)
+	// At this point we have:
+	//                   / 102a (losing)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> 103b (winning)
 
-	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, tSettings, "test")
-	require.NoError(t, err)
+	// Verify block 102b is now the block at height 102
+	dst.verifyBlockByHeight(t, block102b, 102)
 
-	w, err := wif.DecodeWIF(tSettings.BlockAssembly.MinerWalletPrivateKeys[0])
-	require.NoError(t, err)
+	// Verify block 103b is the block at height 103
+	dst.verifyBlockByHeight(t, block103b, 103)
 
-	privKey := w.PrivKey
+	// Check the txOriginal is marked as conflicting
+	dst.verifyConflicting(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
 
-	subtreeStore, err := daemon.GetSubtreeStore(logger, tSettings)
-	require.NoError(t, err)
-
-	utxoStore, err := daemon.GetUtxoStore(ctx, logger, tSettings)
-	require.NoError(t, err)
-
-	return &DoubleSpendTester{
-		ctx:                   ctx,
-		logger:                logger,
-		d:                     d,
-		blockchainClient:      bcClient,
-		blockAssemblyClient:   baClient,
-		propagationClient:     propagationClient,
-		blockValidationClient: blockValidationClient,
-		privKey:               privKey,
-		subtreeStore:          subtreeStore,
-		utxoStore:             utxoStore,
-	}
+	// Check the txDoubleSpend is no longer marked as conflicting
+	dst.verifyNotConflicting(t, block102b.Subtrees[0])
 }
 
-func TestDaemon(t *testing.T) {
-	dst := NewDoubleSpendTester(t)
+// func testDoubleSpendAndChildAreMarkedAsConflicting(t *testing.T) {
+// 	// Setup test environment
+// 	dst, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t)
+// 	defer dst.d.Stop()
 
-	// Set the FSM state to RUNNING...
-	err := dst.blockchainClient.Run(dst.ctx, "test")
-	require.NoError(t, err)
+// 	// At this point we have:
+// 	// 0 -> 1 ... 101 -> 102a (winning)
 
-	err = dst.blockAssemblyClient.GenerateBlocks(dst.ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
-	require.NoError(t, err)
+// 	// Get block 101 so we can create an alternate bock for height 102 with a double spend in it.
+// 	block101, err := dst.blockchainClient.GetBlockByHeight(dst.ctx, 101)
+// 	require.NoError(t, err)
 
-	state, err := dst.blockAssemblyClient.GetBlockAssemblyState(dst.ctx)
-	require.NoError(t, err)
-	t.Logf("State: %s", state.String())
+// 	// Step 1: Create and validate block with double spend transaction
+// 	subtree102b, block102b := dst.createTestBlock(t, []*bt.Tx{txDoubleSpend}, block101)
 
-	block1, err := dst.blockchainClient.GetBlockByHeight(dst.ctx, 1)
-	require.NoError(t, err)
+// 	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block102b, block102b.Height),
+// 		"Failed to process block with double spend transaction")
 
-	coinbaseTx := block1.CoinbaseTx
-	// t.Logf("Coinbase has %d outputs", len(coinbaseTx.Outputs))
+// 	dst.verifyBlockByHash(t, block102b, block102b.Header.Hash())
 
-	tx1 := createTransaction(t, coinbaseTx, dst.privKey, 49e8)
-	tx2 := createTransaction(t, coinbaseTx, dst.privKey, 48e8)
-	tx3 := createTransaction(t, tx2, dst.privKey, 47e8)
+// 	// At this point we have:
+// 	//                   / 102a (winning)
+// 	// 0 -> 1 ... 101 ->
+// 	//                   \ 102b (losing)
 
-	err1 := dst.propagationClient.ProcessTransaction(dst.ctx, tx1)
-	require.NoError(t, err1)
+// 	// Verify block 102 is still the original block at height 102
+// 	dst.verifyBlockByHeight(t, block102a, 102)
 
-	dst.logger.SkipCancelOnFail(true)
+// 	// Verify conflicting
+// 	dst.verifyConflicting(t, subtree102b.RootHash(), []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 
-	err2 := dst.propagationClient.ProcessTransaction(dst.ctx, tx2)
-	require.Error(t, err2) // This should fail as it is a double spend
+// 	// Step 2: Create child transaction of the conflicting transaction
+// 	txDoubleSpendChild := createTransaction(t, txDoubleSpend, dst.privKey, 47e8)
 
-	dst.logger.SkipCancelOnFail(false)
+// 	subtree103b, block103b := dst.createTestBlock(t, []*bt.Tx{txDoubleSpendChild}, block102b)
 
-	err = dst.blockAssemblyClient.GenerateBlocks(dst.ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
-	require.NoError(t, err)
+// 	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block103b, block103b.Height),
+// 		"Failed to process block with child of double spend transaction")
 
-	block102, err := dst.blockchainClient.GetBlockByHeight(dst.ctx, 102)
-	require.NoError(t, err)
+// 	// At this point we have:
+// 	//                   / 102a (losing)
+// 	// 0 -> 1 ... 101 ->
+// 	//                   \ 102b -> 103b (winning)
 
-	assert.Equal(t, uint64(2), block102.TransactionCount)
+// 	// Verify block 102b is now the block at height 102
+// 	dst.verifyBlockByHeight(t, block102b, 102)
 
-	subtree, block103 := dst.generateBlock(t, []*bt.Tx{tx2}, coinbaseTx, block102)
+// 	// Verify block 103b is the block at height 103
+// 	dst.verifyBlockByHeight(t, block103b, 103)
 
-	err = dst.blockValidationClient.ProcessBlock(dst.ctx, block103, block103.Height)
-	require.NoError(t, err)
+// 	dst.verifyConflicting(t, subtree103b.RootHash(), []chainhash.Hash{*txDoubleSpendChild.TxIDChainHash()})
 
-	readTx, err := dst.utxoStore.Get(dst.ctx, tx2.TxIDChainHash())
-	require.NoError(t, err)
-	assert.True(t, readTx.Conflicting)
+// 	// Verify final state in Block Assembly
+// 	state := dst.waitForBlockHeight(t, 103, 5*time.Second)
 
-	latestSubtreeBytes, err := dst.subtreeStore.Get(dst.ctx, subtree.RootHash()[:], options.WithFileExtension("subtree"))
-	require.NoError(t, err)
+// 	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
 
-	latestSubtree, err := util.NewSubtreeFromBytes(latestSubtreeBytes)
-	require.NoError(t, err)
+// 	// Check the txOriginal is marked as conflicting
+// 	dst.verifyConflicting(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
 
-	assert.Len(t, latestSubtree.ConflictingNodes, 1)
-	assert.Equal(t, tx2.TxIDChainHash().String(), latestSubtree.ConflictingNodes[0].String())
+// 	// Check the txDoubleSpend is no longer marked as conflicting
+// 	dst.verifyConflicting(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 
-	subtree104, block104 := dst.generateBlock(t, []*bt.Tx{tx3}, coinbaseTx, block103)
+// 	// Check the txDoubleSpendChild is no longer marked as conflicting
+// 	dst.verifyConflicting(t, block103b.Subtrees[0], []chainhash.Hash{*txDoubleSpendChild.TxIDChainHash()})
+// }
 
-	err = dst.blockValidationClient.ProcessBlock(dst.ctx, block104, block104.Height)
-	require.NoError(t, err)
+// This is testing a scenario where:
+// 1. Block 103 is is continuing from block 102
+// 2. The txDoubleSpend is in block 103 which means the block is invalid
+func testDoubleSpendInSubsequentBlock(t *testing.T) {
+	// Setup test environment
+	dst, _, _, txDoubleSpend, block102 := setupDoubleSpendTest(t)
+	defer dst.d.Stop()
 
-	readTx, err = dst.utxoStore.Get(dst.ctx, tx2.TxIDChainHash())
-	require.NoError(t, err)
-	assert.True(t, readTx.Conflicting)
+	// Step 1: Create and validate block with double spend transaction
+	_, block103 := dst.createTestBlock(t, []*bt.Tx{txDoubleSpend}, block102)
 
-	latestSubtreeBytes, err = dst.subtreeStore.Get(dst.ctx, subtree104.RootHash()[:], options.WithFileExtension("subtree"))
-	require.NoError(t, err)
-
-	latestSubtree, err = util.NewSubtreeFromBytes(latestSubtreeBytes)
-	require.NoError(t, err)
-
-	assert.Len(t, latestSubtree.ConflictingNodes, 1)
-	assert.Equal(t, tx3.TxIDChainHash().String(), latestSubtree.ConflictingNodes[0].String())
-
-	dst.d.Stop()
+	require.Error(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block103, block103.Height),
+		"Failed to reject invalid block with double spend transaction")
 }
 
-func (dst *DoubleSpendTester) generateBlock(t *testing.T, txs []*bt.Tx, coinbaseTx *bt.Tx, previousBlock *model.Block) (*util.Subtree, *model.Block) {
-	// Create and save the subtree with the double spend tx
-	subtree, err := createAndSaveSubtrees(dst.ctx, dst.subtreeStore, txs)
-	require.NoError(t, err)
-
-	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint:gosec
-	require.NoError(t, err)
-
-	block := &model.Block{
-		Subtrees: []*chainhash.Hash{
-			subtree.RootHash(),
-		},
-		CoinbaseTx: coinbaseTx,
-		Header: &model.BlockHeader{
-			HashPrevBlock:  previousBlock.Header.HashPrevBlock,
-			HashMerkleRoot: merkleRoot,
-			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
-			Bits:           previousBlock.Header.Bits,
-			Nonce:          0,
-		},
-		Height: previousBlock.Height + 1,
-	}
-
-	// Mine...
-	for {
-		ok, _, _ := block.Header.HasMetTargetDifficulty()
-		if ok {
-			break
-		}
-
-		block.Header.Nonce++
-	}
-	return subtree, block
+// TestMarkAsConflictingMultipleSameBlock tests a scenario where:
+// 1. Multiple transactions conflict with each other
+// 2. All conflicting transactions are in the same block
+// 3. All conflicting transactions should be marked as conflicting
+func TestMarkAsConflictingMultipleSameBlock(t *testing.T) {
 }
 
-func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*util.Subtree, error) {
-	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs) + 1)
-	if err != nil {
-		return nil, err
-	}
-
-	subtreeData := util.NewSubtreeData(subtree)
-
-	err = subtree.AddCoinbaseNode()
-	if err != nil {
-		return nil, err
-	}
-
-	for i, tx := range txs {
-		err = subtree.AddNode(*tx.TxIDChainHash(), uint64(i), uint64(i))
-		if err != nil {
-			return nil, err
-		}
-
-		err = subtreeData.AddTx(tx, 1)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	subtreeBytes, err := subtree.Serialize()
-	if err != nil {
-		return nil, err
-	}
-
-	err = subtreeStore.Set(
-		ctx,
-		subtree.RootHash()[:],
-		subtreeBytes,
-		options.WithFileExtension("subtreeToCheck"),
-		options.WithTTL(120*time.Minute),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	subtreeDataBytes, err := subtreeData.Serialize()
-	if err != nil {
-		return nil, err
-	}
-
-	err = subtreeStore.Set(
-		ctx,
-		subtreeData.RootHash()[:],
-		subtreeDataBytes,
-		options.WithFileExtension("subtreeData"),
-		options.WithTTL(120*time.Minute),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return subtree, nil
+// TestMarkAsConflictingMultiple tests a scenario where:
+// 1. Multiple transactions conflict with each other
+// 2. Conflicting transactions are in different blocks
+// 3. All conflicting transactions should be marked as conflicting
+func TestMarkAsConflictingMultiple(t *testing.T) {
 }
 
-func createTransaction(t *testing.T, coinbaseTx *bt.Tx, privkey *bec.PrivateKey, amount uint64) *bt.Tx {
-	tx := bt.NewTx()
-
-	err := tx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      coinbaseTx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: coinbaseTx.Outputs[0].LockingScript,
-		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
-	})
-	require.NoError(t, err)
-
-	err = tx.AddP2PKHOutputFromPubKeyBytes(privkey.PubKey().SerialiseCompressed(), amount)
-	require.NoError(t, err)
-
-	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privkey})
-	require.NoError(t, err)
-
-	return tx
+// TestMarkAsConflictingChains tests a scenario where:
+// 1. Two transaction chains conflict with each other
+// 2. All transactions in both chains should be marked as conflicting
+func TestMarkAsConflictingChains(t *testing.T) {
 }

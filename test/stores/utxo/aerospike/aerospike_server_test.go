@@ -16,6 +16,7 @@ import (
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -184,13 +185,14 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, int(utxo.Status_OK), resp.Status)
 		assert.Nil(t, resp.SpendingTxID)
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		resp, err = db.GetSpend(context.Background(), spend)
 		require.NoError(t, err)
 		assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
-		assert.Equal(t, spendingTxID1, resp.SpendingTxID)
+		assert.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingTxID.String())
 	})
 
 	t.Run("aerospike store", func(t *testing.T) {
@@ -212,8 +214,8 @@ func TestAerospike(t *testing.T) {
 		require.True(t, ok)
 
 		for i := 0; i < len(tx.Outputs); i++ {
-			utxo := utxos[i]
-			assert.Len(t, utxo, 32)
+			utxoI := utxos[i]
+			assert.Len(t, utxoI, 32)
 		}
 
 		parentTxHashes, ok := value.Bins["inputs"].([]interface{})
@@ -230,7 +232,8 @@ func TestAerospike(t *testing.T) {
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxExists))
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		txMeta, err = db.Create(context.Background(), tx, 0)
@@ -244,7 +247,8 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -256,15 +260,15 @@ func TestAerospike(t *testing.T) {
 		utxoSpendTxID := utxos[spends[0].Vout]
 		spendingTxID, ok := utxoSpendTxID.([]byte)
 		require.True(t, ok)
-		require.Equal(t, spendingTxID1[:], spendingTxID[32:])
+		require.Equal(t, spendTx.TxIDChainHash()[:], spendingTxID[32:])
 
-		hash, err := chainhash.NewHash(spendingTxID[32:])
+		spendingTxHash, err := chainhash.NewHash(spendingTxID[32:])
 		require.NoError(t, err)
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends2, 0)
+		_, err = db.Spend(context.Background(), spendTx2)
 		assert.Error(t, err)
-		assert.Equal(t, spendingTxID1.String(), hash.String())
+		assert.Equal(t, spendTx.TxIDChainHash().String(), spendingTxHash.String())
 	})
 
 	t.Run("aerospike spend lua", func(t *testing.T) {
@@ -293,7 +297,8 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, aErr)
 		assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -304,10 +309,10 @@ func TestAerospike(t *testing.T) {
 		utxoBytes, ok := utxos[spends[0].Vout].([]byte)
 		require.True(t, ok)
 		require.Equal(t, 64, len(utxoBytes))
-		require.Equal(t, spendingTxID1[:], utxoBytes[32:])
+		require.Equal(t, spendTx.TxIDChainHash()[:], utxoBytes[32:])
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends2, 0)
+		_, err = db.Spend(context.Background(), spendTx2)
 		require.Error(t, err)
 	})
 
@@ -367,7 +372,8 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -376,29 +382,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
 
 		// Now spend all the remaining utxos
-		spendsRemaining := []*utxo.Spend{{
-			TxID:         tx.TxIDChainHash(),
-			Vout:         1,
-			UTXOHash:     utxoHash1,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         2,
-			UTXOHash:     utxoHash2,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         3,
-			UTXOHash:     utxoHash3,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         4,
-			UTXOHash:     utxoHash4,
-			SpendingTxID: spendingTxID2,
-		}}
-
-		err = db.Spend(context.Background(), spendsRemaining, 0)
+		_, err = db.Spend(context.Background(), spendTxRemaining)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -413,7 +397,8 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -422,29 +407,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
 
 		// Now spend all the remaining utxos
-		spendsRemaining := []*utxo.Spend{{
-			TxID:         tx.TxIDChainHash(),
-			Vout:         1,
-			UTXOHash:     utxoHash1,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         2,
-			UTXOHash:     utxoHash2,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         3,
-			UTXOHash:     utxoHash3,
-			SpendingTxID: spendingTxID2,
-		}, {
-			TxID:         tx.TxIDChainHash(),
-			Vout:         4,
-			UTXOHash:     utxoHash4,
-			SpendingTxID: spendingTxID2,
-		}}
-
-		err = db.Spend(context.Background(), spendsRemaining, 0)
+		_, err = db.Spend(context.Background(), spendTxRemaining)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -459,7 +422,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spendsAll, 0)
+		_, err = db.Spend(context.Background(), spendTxAll)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -472,7 +435,7 @@ func TestAerospike(t *testing.T) {
 			utxoBytes, ok := utxos[spendsAll[i].Vout].([]byte)
 			require.True(t, ok)
 			require.Equal(t, 64, len(utxoBytes))
-			require.Equal(t, spendingTxID2[:], utxoBytes[32:])
+			require.Equal(t, spendTxAll.TxIDChainHash()[:], utxoBytes[32:])
 		}
 
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not yet been mined
@@ -487,9 +450,14 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends3, 0)
+		spends, err := db.Spend(context.Background(), spendTx3)
 		require.Error(t, err)
-		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.Equal(t, spendTxAll.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 
 		// an error was observed were the utxos map got nilled out when trying to double spend
 		// interestingly, this only happened in normal mode, not in batched mode :-S
@@ -501,11 +469,11 @@ func TestAerospike(t *testing.T) {
 			utxoBytes, ok := utxos[spendsAll[i].Vout].([]byte)
 			require.True(t, ok)
 			require.Equal(t, 64, len(utxoBytes))
-			require.Equal(t, spendingTxID2[:], utxoBytes[32:])
+			require.Equal(t, spendTxAll.TxIDChainHash()[:], utxoBytes[32:])
 		}
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends3, 0)
+		_, err = db.Spend(context.Background(), spendTx3)
 		require.Error(t, err)
 		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
@@ -533,7 +501,8 @@ func TestAerospike(t *testing.T) {
 			SpendingTxID: spendingTxID1,
 		}}
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
@@ -544,7 +513,7 @@ func TestAerospike(t *testing.T) {
 		utxoBytes, ok := utxos[spends[0].Vout].([]byte)
 		require.True(t, ok)
 		require.Equal(t, 64, len(utxoBytes))
-		require.Equal(t, spendingTxID1[:], utxoBytes[32:])
+		require.Equal(t, spendTx.TxIDChainHash()[:], utxoBytes[32:])
 
 		// utxoSpendTxID := utxos[spends[0].Vout]
 		// require.Equal(t, spendingTxID1.String(), utxoSpendTxID)
@@ -586,7 +555,8 @@ func TestAerospike(t *testing.T) {
 		require.Len(t, utxo, 32)
 		assert.Equal(t, utxo, utxoHash0[:])
 
-		err = db.Spend(context.Background(), spends, 0)
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		_, err = db.Spend(context.Background(), spendTx)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
@@ -681,9 +651,13 @@ func TestAerospike(t *testing.T) {
 		err = client.PutBins(nil, txKey, frozenBin)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "FROZEN:TX is frozen")
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		spends, err := db.Spend(context.Background(), spendTx)
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
 
 	t.Run("FrozenUTXO", func(t *testing.T) {
@@ -696,19 +670,19 @@ func TestAerospike(t *testing.T) {
 		frozenMarker, err := chainhash.NewHashFromStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), []*utxo.Spend{
-			{
-				TxID:         tx.TxIDChainHash(),
-				Vout:         0,
-				UTXOHash:     utxoHash0,
-				SpendingTxID: frozenMarker,
-			},
-		}, 0)
+		spendTxFrozen := utxo2.GetSpendingTx(tx, 0)
+		spendTxFrozen.SetTxHash(frozenMarker) // hard code the hash to be the frozen marker
+
+		_, err = db.Spend(context.Background(), spendTxFrozen)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "FROZEN:UTXO is frozen")
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		spends, err := db.Spend(context.Background(), spendTx)
+
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
 }
 
@@ -728,24 +702,17 @@ func TestCoinbase(t *testing.T) {
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
 
-	utxoHash, err := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), coinbaseTx.Outputs[0], 0)
-	require.NoError(t, err)
+	var tErr *errors.Error
 
-	spend := &utxo.Spend{
-		TxID:         coinbaseTx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxoHash,
-		SpendingTxID: spendingTxID1,
-	}
-
-	err = db.Spend(context.Background(), []*utxo.Spend{spend}, 0)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Coinbase UTXO can only be spent after 100 blocks")
+	spends, err := db.Spend(context.Background(), spendCoinbaseTx)
+	require.ErrorAs(t, err, &tErr)
+	require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+	require.ErrorIs(t, spends[0].Err, errors.ErrTxCoinbaseImmature)
 
 	err = db.SetBlockHeight(5000)
 	require.NoError(t, err)
 
-	err = db.Spend(context.Background(), []*utxo.Spend{spend}, 0)
+	_, err = db.Spend(context.Background(), spendCoinbaseTx)
 	require.NoError(t, err)
 }
 
@@ -1207,33 +1174,19 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err := client.Get(nil, key)
 	require.NoError(t, err)
 
-	// printResponse(response)
-
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 0, response.Bins["spentUtxos"])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
 
-	// Spend the output 1
-	spendingTxID, err := chainhash.NewHashFromStr("11000000000000000000000000000000000000000000000000000000000000ff")
-	require.NoError(t, err)
+	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
 
-	utxoHash1, err := chainhash.NewHashFromStr("fcb92ec6a3641a65300a6cd56d010d311553d0332c1f21a65e1bcfbba9de9990")
-	require.NoError(t, err)
-
-	err = s.Spend(ctx, []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         1,
-		SpendingTxID: spendingTxID,
-		UTXOHash:     utxoHash1,
-	}}, 0)
+	_, err = s.Spend(ctx, spendingTx1)
 	require.NoError(t, err)
 
 	// Check the tx was updated to 1 spent utxo...
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
-
-	// printResponse(response)
 
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
@@ -1247,30 +1200,19 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
 
-	// printResponse(response)
-
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 1, response.Bins["spentUtxos"])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
 
 	// Spend the output 0
-	utxoHash0, err := chainhash.NewHashFromStr("947817a6c55bfdbbbe689fb96f9054985b056b6dd63acb77f9b98154df29b639")
-	require.NoError(t, err)
-
-	err = s.Spend(ctx, []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         0,
-		SpendingTxID: spendingTxID,
-		UTXOHash:     utxoHash0,
-	}}, 0)
+	spendingTx0 := utxo2.GetSpendingTx(tx, 0)
+	_, err = s.Spend(ctx, spendingTx0)
 	require.NoError(t, err)
 
 	// Check the tx was updated to 2 spent utxos...
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
-
-	// printResponse(response)
 
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])

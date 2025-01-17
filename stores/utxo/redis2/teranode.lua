@@ -25,7 +25,8 @@ local function spend____VERSION___(keys, args)
         'spendableIn:' .. offset,
         'spentUtxos',
         'nrUtxos',
-        'blockIDs'
+        'blockIDs',
+        'conflicting'
     )
     if #tx == 0 then
         return "ERROR:TX not found"
@@ -42,6 +43,7 @@ local function spend____VERSION___(keys, args)
     local spentUtxos = tonumber(tx[5]) or 0
     local nrUtxos = tonumber(tx[6])
     local blockIDs = tx[7] or ""
+    local conflicting = tx[8]
 
     -- redis.log(redis.LOG_WARNING, "spend____VERSION___ 2:", frozen, spendingHeight, utxo, spendableIn, spentUtxos, nrUtxos, blockIDs)
 
@@ -50,14 +52,19 @@ local function spend____VERSION___(keys, args)
         return "FROZEN:TX is frozen"
     end
 
+    -- Check if conflicting
+    if conflicting == "1" then
+        return "CONFLICTING:TX is conflicting"
+    end
+
     -- Check coinbase spending rules
     if spendingHeight and spendingHeight > 0 and spendingHeight > currentBlockHeight then
-        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. spendingHeight
+        return "COINBASE_IMMATURE:Coinbase UTXO can only be spent after 100 blocks, in block " .. spendingHeight
     end
 
     -- Check spendable height
     if spendableIn and spendableIn > currentBlockHeight then
-        return "ERROR:UTXO is not spendable until block " .. spendableIn
+        return "FROZEN:UTXO is not spendable until block " .. spendableIn
     end
 
     -- Verify UTXO hash

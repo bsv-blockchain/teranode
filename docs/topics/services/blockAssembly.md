@@ -201,16 +201,16 @@ The service needs to "move up" the block. By this, we mean the process to identi
    - `b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash())` fetches the block corresponding to the best blockchain block header.
 
 3. **Processing the Block in SubtreeProcessor**:
-   - `b.subtreeProcessor.MoveUpBlock(block)` is called, which initiates the process of updating the subtree processor with the new block.
+   - `b.subtreeProcessor.MoveForwardBlock(block)` is called, which initiates the process of updating the subtree processor with the new block.
 
 4. **SubtreeProcessor Handling**:
-   - In `MoveUpBlock`, a channel for error handling is set up and a `moveBlockRequest` is sent to `moveUpBlockChan`.
-   - This triggers the `case moveUpReq := <-stp.moveUpBlockChan` in `SubtreeProcessor`, which handles the request to move up a block.
-   - `stp.moveUpBlock(ctx, moveUpReq.block, false)` is called, which is where the main logic of handling the new block is executed.
+   - In `MoveForwardBlock`, a channel for error handling is set up and a `moveBlockRequest` is sent to `moveForwardBlockChan`.
+   - This triggers the `case moveForwardReq := <-stp.moveForwardBlockChan` in `SubtreeProcessor`, which handles the request to move up a block.
+   - `stp.moveForwardBlock(ctx, moveForwardReq.block, false)` is called, which is where the main logic of handling the new block is executed.
 
-5. **MoveUpBlock Functionality**:
+5. **MoveForwardBlock Functionality**:
    - This function cleans out transactions from the current subtrees that are also in the new block (to avoid duplication and maintain chain integrity).
-   - When `moveUpBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
+   - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
    - The function handles the coinbase transaction (the first transaction in a block, used to reward miners). It processes the unspent transaction outputs (UTXOs) associated with the coinbase transaction.
    - The function then compares the list of transactions that are pending to be mined, as maintained by the Block Assembly, with the transactions included in the newly received block. It identifies transactions from the pending list that were not included in the new block.
    - A list of these remaining transactions is then created. These are the transactions that still require mining.
@@ -237,12 +237,12 @@ In this context, `BlockAssembler` is tasked with ensuring that the local version
    - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
    - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
    - **Getting Reorg Blocks**:
-     - `moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)`:
+     - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
         - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network’s consensus chain.
         - `header` is the new block header that triggered the reorg.
         - This involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
    - **Performing Reorg in Subtree Processor**:
-     - `b.subtreeProcessor.Reorg(moveDownBlocks, moveUpBlocks)`:
+     - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
         - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
         - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
         - It involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
@@ -367,7 +367,7 @@ The Block Assembly service uses the following configuration options:
 14. **`tx_chan_buffer_size`**: Buffer size for transaction channel. Default: 0 (unlimited).
 15. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for subtree processor. Default: 1000.
 16. **`double_spend_window_millis`**: Window for detecting double spends in milliseconds. Default: 2000.
-17. **`blockassembly_moveDownBlockConcurrency`**: Concurrency for moving down block operations. Default: 64.
+17. **`blockassembly_moveBackBlockConcurrency`**: Concurrency for moving down block operations. Default: 64.
 18. **`blockassembly_processRemainderTxHashesConcurrency`**: Concurrency for processing remainder transaction hashes. Default: 64.
 19. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent reads for subtree processor. Default: 4.
 

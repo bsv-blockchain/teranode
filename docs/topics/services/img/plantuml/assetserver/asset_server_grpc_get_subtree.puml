@@ -9,7 +9,7 @@ database "Blob Subtree Store" as BlobStore
 BlockAssemblyServer -> SubtreeProcessor : reorgBlocks()
 activate SubtreeProcessor
 
-SubtreeProcessor -> SubtreeProcessor : moveDownBlock(ctx, block)
+SubtreeProcessor -> SubtreeProcessor : moveBackBlock(ctx, block)
 activate SubtreeProcessor
 
 loop For Each Subtree in Block
