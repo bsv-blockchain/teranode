@@ -508,7 +508,7 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 		syncCandidate:   isSyncCandidate,
 		requestQueue:    util.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second), // allow the node 60 seconds to respond to the block request
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
 
 	// Start syncing by choosing the best candidate if needed.
