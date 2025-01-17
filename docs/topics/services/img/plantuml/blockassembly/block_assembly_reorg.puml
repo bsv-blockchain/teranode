@@ -11,32 +11,32 @@ activate BC
 BC --> BA : newChain, _, err
 deactivate BC
 
-BA -> BA : Calculate moveUpBlockHeaders and moveDownBlockHeaders
+BA -> BA : Calculate moveForwardBlockHeaders and moveBackBlockHeaders
 
-loop For Each BlockHeader in moveUpBlockHeaders
+loop For Each BlockHeader in moveForwardBlockHeaders
     BA -> BC : GetBlock(ctx, blockHeader.Hash())
     activate BC
     BC --> BA : block
     deactivate BC
 end
 
-loop For Each BlockHeader in moveDownBlockHeaders
+loop For Each BlockHeader in moveBackBlockHeaders
     BA -> BC : GetBlock(ctx, blockHeader.Hash())
     activate BC
     BC --> BA : block
     deactivate BC
 end
 
-BA -> STP : Reorg(moveDownBlocks, moveUpBlocks)
+BA -> STP : Reorg(moveBackBlocks, moveForwardBlocks)
 activate STP
 
-loop For Each Block in moveDownBlocks
-    STP -> STP : moveDownBlock(ctx, block)
+loop For Each Block in moveBackBlocks
+    STP -> STP : moveBackBlock(ctx, block)
     STP -> UTXOStore : Delete coinbase UTXO
 end
 
-loop For Each Block in moveUpBlocks
-    STP -> STP : moveUpBlock(ctx, block, true)
+loop For Each Block in moveForwardBlocks
+    STP -> STP : moveForwardBlock(ctx, block, true)
     STP -> UTXOStore : Process coinbase UTXOs
 end
 

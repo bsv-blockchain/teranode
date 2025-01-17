@@ -165,7 +165,7 @@ type BlockAssemblySettings struct {
 	LocalTTLCache                       string
 	MaxBlockReorgCatchup                int
 	MaxBlockReorgRollback               int
-	MoveDownBlockConcurrency            int
+	MoveBackBlockConcurrency            int
 	ProcessRemainderTxHashesConcurrency int
 	SendBatchSize                       int
 	SendBatchTimeout                    int
