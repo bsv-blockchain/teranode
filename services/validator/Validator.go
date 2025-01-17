@@ -445,38 +445,14 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	}()
 
 	var (
-		err  error
-		hash *chainhash.Hash
+		err error
 	)
 
-	// check the utxos
-	txIDChainHash := tx.TxIDChainHash()
-
-	spends := make([]*utxo.Spend, 0, len(tx.Inputs))
-
-	for _, input := range tx.Inputs {
-		if input.PreviousTxSatoshis == 0 {
-			continue // There are some old transactions (e.g. d5a13dcb1ad24dbffab91c3c2ffe7aea38d5e84b444c0014eb6c7c31fe8e23fc) that have 0 satoshis
-		}
-
-		hash, err = util.UTXOHashFromInput(input)
-		if err != nil {
-			utxoSpan.RecordError(err)
-			return nil, errors.NewProcessingError("error getting input utxo hash", err)
-		}
-
-		// v.logger.Debugf("spending utxo %s:%d -> %s", input.PreviousTxIDChainHash().String(), input.PreviousTxOutIndex, hash.String())
-		spends = append(spends, &utxo.Spend{
-			TxID:         input.PreviousTxIDChainHash(),
-			Vout:         input.PreviousTxOutIndex,
-			UTXOHash:     hash,
-			SpendingTxID: txIDChainHash,
-		})
-	}
-
-	err = v.utxoStore.Spend(ctx, spends, blockHeight)
+	spends, err := v.utxoStore.Spend(ctx, tx)
 	if err != nil {
 		traceSpan.RecordError(err)
+
+		// TODO check the specific errors of each spend and return a more specific error
 
 		return nil, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
 	}

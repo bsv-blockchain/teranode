@@ -40,14 +40,16 @@ type luaReturnMessage struct {
 }
 
 const (
-	LuaOk          luaReturnValue = "OK"
-	LuaTTLSet      luaReturnValue = "TTLSET"
-	LuaSpent       luaReturnValue = "SPENT"
-	LuaAllSpent    luaReturnValue = "ALLSPENT"
-	LuaNotAllSpent luaReturnValue = "NOTALLSPENT"
-	LuaFrozen      luaReturnValue = "FROZEN"
-	LuaTxNotFound  luaReturnValue = "TX not found"
-	LuaError       luaReturnValue = "ERROR"
+	LuaOk               luaReturnValue = "OK"
+	LuaTTLSet           luaReturnValue = "TTLSET"
+	LuaSpent            luaReturnValue = "SPENT"
+	LuaAllSpent         luaReturnValue = "ALLSPENT"
+	LuaNotAllSpent      luaReturnValue = "NOTALLSPENT"
+	LuaFrozen           luaReturnValue = "FROZEN"
+	LuaConflicting      luaReturnValue = "CONFLICTING"
+	LuaTxNotFound       luaReturnValue = "TX not found"
+	LuaError            luaReturnValue = "ERROR"
+	LuaCoinbaseImmature luaReturnValue = "COINBASE_IMMATURE"
 )
 
 func registerLuaIfNecessary(ctx context.Context, logger ulogger.Logger, rdb *redis_db.Client, version ...string) error {

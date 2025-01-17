@@ -72,8 +72,8 @@ func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, o
 	return &meta.Data{}, nil
 }
 
-func (m *NullStore) Spend(_ context.Context, spend []*utxostore.Spend, blockHeight uint32) error {
-	return nil
+func (s *NullStore) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+	return nil, nil
 }
 
 func (m *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {

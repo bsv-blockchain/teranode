@@ -151,8 +151,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
-	err := s.store.Spend(ctx, spends, blockHeight)
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+	spends, err := s.store.Spend(ctx, tx)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {
@@ -160,9 +160,9 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 	}
 
 	s.logger.Debugf("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
-		strings.Join(spendDetails, ", "), blockHeight, err, caller())
+		strings.Join(spendDetails, ", "), s.store.GetBlockHeight(), err, caller())
 
-	return err
+	return spends, err
 }
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {

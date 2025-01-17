@@ -794,6 +794,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
+				// TODO add all the parentTxHashes + idxs to a map to check that they are unique (not duplicates)
+
 				// check whether the transaction has recently been mined in a block on our chain
 				// for all transactions, we go over all bloom filters, we collect the transactions that are in the bloom filter
 				// collected transactions will be checked in the txMetaStore, as they can be false positives.

@@ -59,6 +59,7 @@ package aerospike
 import (
 	"time"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -74,6 +75,16 @@ func (s *Store) GetClient() *uaerospike.Client {
 // SetClient was implemented to facilitate testing
 func (s *Store) SetClient(c *uaerospike.Client) {
 	s.client = c
+}
+
+// GetSettings was implemented to facilitate testing
+func (s *Store) GetSettings() *settings.Settings {
+	return s.settings
+}
+
+// SetSettings was implemented to facilitate testing
+func (s *Store) SetSettings(v *settings.Settings) {
+	s.settings = v
 }
 
 // GetNamespace was implemented to facilitate testing
@@ -130,8 +141,8 @@ func (s *Store) SetExternalTxCache(c *util.ExpiringConcurrentCache[chainhash.Has
 	s.externalTxCache = c
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////////////////////
 
 // NewBatchStoreItem was implemented to facilitate testing
 func NewBatchStoreItem(

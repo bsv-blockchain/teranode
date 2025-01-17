@@ -50,6 +50,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -187,35 +188,21 @@ func TestSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
+	spendTx := utxo2.GetSpendingTx(tx, 0)
+
+	spendTx2 := utxo2.GetSpendingTx(tx, 0)
+
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
-	require.NoError(t, err)
-
-	spendingTxID1 := chainhash.HashH([]byte("test1"))
-
-	spend := &utxo.Spend{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxohash,
-		SpendingTxID: &spendingTxID1,
-	}
-
-	var blockHeight uint32
-
-	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
+	_, err = store.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
 	// Spend again with the same spendingTxID
-	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
+	_, err = store.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
-	// Spend again with a different spendingTxID
-	spendingTxID2 := chainhash.HashH([]byte("test2"))
-	spend.SpendingTxID = &spendingTxID2
-
-	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
+	_, err = store.Spend(ctx, spendTx2)
 	require.Error(t, err)
 }
 
@@ -225,6 +212,8 @@ func TestUnSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
+	spendTx := utxo2.GetSpendingTx(tx, 0)
+
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
@@ -240,9 +229,7 @@ func TestUnSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	var blockHeight uint32
-
-	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
+	_, err = store.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
 	// Unspend the utxo
@@ -253,7 +240,7 @@ func TestUnSpend(t *testing.T) {
 	spendingTxID2 := chainhash.HashH([]byte("test2"))
 	spend.SpendingTxID = &spendingTxID2
 
-	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
+	_, err = store.Spend(ctx, spendTx)
 	require.NoError(t, err)
 }
 
@@ -383,34 +370,12 @@ func TestTombstoneAfterSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
+	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
+
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
-	require.NoError(t, err)
-
-	utxohash1, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
-	require.NoError(t, err)
-
-	spendingTxID0 := chainhash.HashH([]byte("test1"))
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
-
-	spend0 := &utxo.Spend{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     utxohash0,
-		SpendingTxID: &spendingTxID0,
-	}
-
-	spend1 := &utxo.Spend{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         1,
-		UTXOHash:     utxohash1,
-		SpendingTxID: &spendingTxID1,
-	}
-
-	var blockHeight uint32
-	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1}, blockHeight)
+	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
 	time.Sleep(1100 * time.Millisecond)
@@ -429,34 +394,22 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
-	require.NoError(t, err)
+	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
 
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
-
-	utxohash1, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
-	require.NoError(t, err)
-
-	spendingTxID0 := chainhash.HashH([]byte("test1"))
-	spendingTxID1 := chainhash.HashH([]byte("test2"))
 
 	spend0 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxohash0,
-		SpendingTxID: &spendingTxID0,
+		SpendingTxID: spendTx01.TxIDChainHash(),
 	}
 
-	spend1 := &utxo.Spend{
-		TxID:         tx.TxIDChainHash(),
-		Vout:         1,
-		UTXOHash:     utxohash1,
-		SpendingTxID: &spendingTxID1,
-	}
+	_, err = store.Create(ctx, tx, 0)
+	require.NoError(t, err)
 
-	var blockHeight uint32
-	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1}, blockHeight)
+	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
 	err = store.UnSpend(ctx, []*utxo.Spend{spend0})

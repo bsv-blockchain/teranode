@@ -32,11 +32,16 @@ local function spend____VERSION___(keys, args)
         return "FROZEN:TX is frozen"
     end
 
+    -- Check if conflicting
+    if tx_data['conflicting'] == "1" then
+        return "CONFLICTING:TX is conflicting"
+    end
+
     -- Check coinbase spending rules
     local spendingHeight = tonumber(tx_data['spendingHeight'])
 
     if spendingHeight and spendingHeight > 0 and spendingHeight > currentBlockHeight then
-        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. spendingHeight
+        return "COINBASE_IMMATURE:Coinbase UTXO can only be spent after 100 blocks, in block " .. spendingHeight
     end
 
     -- Get UTXO data
@@ -50,7 +55,7 @@ local function spend____VERSION___(keys, args)
     local spendableIn = tonumber(tx_data['spendableIn:' .. offset])
 
     if spendableIn and spendableIn > currentBlockHeight then
-        return "ERROR:UTXO is not spendable until block " .. spendableIn
+        return "FROZEN:UTXO is not spendable until block " .. spendableIn
     end
 
     -- Verify UTXO hash

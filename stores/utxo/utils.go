@@ -143,3 +143,29 @@ func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uin
 
 	return !(opReturn || opFalseOpReturn)
 }
+
+func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
+	var (
+		txIDChainHash = tx.TxIDChainHash()
+		hash          *chainhash.Hash
+	)
+
+	spends = make([]*Spend, 0, len(tx.Inputs))
+
+	for _, input := range tx.Inputs {
+		hash, err = util.UTXOHashFromInput(input)
+		if err != nil {
+			return nil, errors.NewProcessingError("error getting input utxo hash", err)
+		}
+
+		// v.logger.Debugf("spending utxo %s:%d -> %s", input.PreviousTxIDChainHash().String(), input.PreviousTxOutIndex, hash.String())
+		spends = append(spends, &Spend{
+			TxID:         input.PreviousTxIDChainHash(),
+			Vout:         input.PreviousTxOutIndex,
+			UTXOHash:     hash,
+			SpendingTxID: txIDChainHash,
+		})
+	}
+
+	return spends, nil
+}

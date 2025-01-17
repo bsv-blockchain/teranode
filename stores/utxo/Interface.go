@@ -64,6 +64,12 @@ type Spend struct {
 	// SpendingTxID is the transaction ID that spends this UTXO
 	// This will be nil if the UTXO is unspent
 	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+
+	// ConflictingTxID is the transaction ID that conflicts with this UTXO
+	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
+
+	// error is the error that occurred during the spend operation
+	Err error `json:"err,omitempty"`
 }
 
 var (
@@ -166,9 +172,8 @@ type Store interface {
 
 	// Blockchain specific functions
 
-	// Spend marks multiple UTXOs as spent in a given block.
-	// The blockHeight parameter is used for locktime validation.
-	Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error
+	// Spend marks all the UTXOs of the transaction as spent.
+	Spend(ctx context.Context, tx *bt.Tx) ([]*Spend, error)
 
 	// UnSpend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
@@ -253,8 +258,8 @@ func (mu *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*me
 	return nil, nil
 }
 
-func (mu *MockUtxostore) Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error {
-	return nil
+func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx) ([]*Spend, error) {
+	return nil, nil
 
 }
 func (mu *MockUtxostore) UnSpend(ctx context.Context, spends []*Spend) error {

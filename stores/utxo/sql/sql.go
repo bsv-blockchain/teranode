@@ -574,7 +574,7 @@ func contains(slice []string, item string) bool {
 //
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -585,13 +585,20 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		}
 	}()
 
-	if blockHeight == 0 {
-		blockHeight = s.GetBlockHeight()
+	blockHeight := s.GetBlockHeight()
+
+	spends, err := utxo.GetSpends(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(spends) == 0 {
+		return nil, errors.NewProcessingError("No spends provided", nil)
 	}
 
 	txn, err := s.db.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	defer func() {
@@ -633,10 +640,12 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		)
 	`
 
+	var errorFound bool
+
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 
 		default:
 			if spend == nil {
@@ -655,56 +664,87 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &conflicting, &spendableIn)
 			if err != nil {
+				errorFound = true
 				if errors.Is(err, sql.ErrNoRows) {
-					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					spend.Err = errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
 
-				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d", spend.TxID, spend.Vout, err)
+				spend.Err = errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d", spend.TxID, spend.Vout, err)
+
+				continue
 			}
 
 			// If the utxo is frozen, it cannot be spent
 			if frozen {
-				return errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+				errorFound = true
+				spend.Err = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+
+				continue
 			}
 
 			// If the tx is marked as conflicting, it cannot be spent
 			if conflicting {
-				return errors.NewTxConflictingError("[Spend] utxo is conflicting for %s:%d", spend.TxID, spend.Vout)
+				errorFound = true
+				spend.Err = errors.NewTxConflictingError("[Spend] utxo is conflicting for %s:%d", spend.TxID, spend.Vout)
+
+				continue
 			}
 
 			if spendableIn != nil {
 				if *spendableIn > 0 && blockHeight < *spendableIn {
-					return errors.NewStorageError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
+					errorFound = true
+					spend.Err = errors.NewStorageError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
+
+					continue
 				}
 			}
 
 			// Check if the utxo is already spent
 			if len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
-				return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
+				errorFound = true
+				spend.Err = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
+				spend.ConflictingTxID, _ = chainhash.NewHash(spendingTransactionID)
+
+				continue
 			}
 
 			// Check the utxo hash is correct
 			if !bytes.Equal(utxoHash, spend.UTXOHash[:]) {
-				return errors.NewStorageError("[Spend] utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
+				errorFound = true
+				spend.Err = errors.NewStorageError("[Spend] utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
+
+				continue
 			}
 
 			// If this utxo has a coinbase spending height, check it is time to spend it
 			if coinbaseSpendingHeight > 0 && blockHeight < coinbaseSpendingHeight {
-				return errors.NewStorageError("[Spend]coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
+				errorFound = true
+				spend.Err = errors.NewStorageError("[Spend]coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
+
+				continue
 			}
 
-			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout)
+			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout, err)
 			if err != nil {
-				return errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d", spend.TxID, spend.Vout, err)
+				errorFound = true
+				spend.Err = errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d", spend.TxID, spend.Vout, err)
+
+				continue
 			}
 
 			affected, err := result.RowsAffected()
 			if err != nil {
-				return err
+				errorFound = true
+				spend.Err = errors.NewStorageError("[Spend] failed getting affected rows: utxo not spent for %s:%d", spend.TxID, spend.Vout, err)
+
+				continue
 			}
 
 			if affected == 0 {
-				return errors.NewStorageError("[Spend] utxo not spent for %s:%d", spend.TxID, spend.Vout)
+				errorFound = true
+				spend.Err = errors.NewStorageError("[Spend] utxo not spent for %s:%d", spend.TxID, spend.Vout)
+
+				continue
 			}
 
 			if s.expirationMillis > 0 {
@@ -712,7 +752,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6 //nolint:gosec
 
 				if _, err := txn.ExecContext(ctx, q3, transactionID, tombstoneTime); err != nil {
-					return errors.NewStorageError("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout)
+					errorFound = true
+					spend.Err = errors.NewStorageError("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout, err)
+
+					continue
 				}
 			}
 
@@ -720,11 +763,15 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		}
 	}
 
-	if err = txn.Commit(); err != nil {
-		return err
+	if errorFound {
+		return spends, errors.NewTxInvalidError("One or more UTXOs could not be spent")
+	} else {
+		if err = txn.Commit(); err != nil {
+			return nil, errors.NewStorageError("[Spend] failed to commit transaction", err)
+		}
 	}
 
-	return nil
+	return spends, nil
 }
 
 // UnSpend reverses a previous spend operation, marking UTXOs as unspent.

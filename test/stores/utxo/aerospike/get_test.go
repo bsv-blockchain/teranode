@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/magiconair/properties/assert"
@@ -31,7 +30,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 	t.Run("TestStore_GetTxFromExternalStore", func(t *testing.T) {
 		s := &teranode_aerospike.Store{}
 		s.SetExternalStore(memory.New())
-		s.SetClient(&uaerospike.Client{Client: client})
+		s.SetClient(client)
 		s.SetNamespace(aerospikeNamespace)
 		s.SetName(aerospikeSet)
 		s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
@@ -64,7 +63,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 	t.Run("TestStore_GetTxFromExternalStore concurrent", func(t *testing.T) {
 		s := &teranode_aerospike.Store{}
 		s.SetExternalStore(memory.New())
-		s.SetClient(&uaerospike.Client{Client: client})
+		s.SetClient(client)
 		s.SetNamespace(aerospikeNamespace)
 		s.SetName(aerospikeSet)
 		s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))

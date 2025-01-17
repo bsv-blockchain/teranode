@@ -122,6 +122,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		s := setupStore(t, client)
 
 		tSettings := test.CreateBaseTestSettings()
+		s.SetSettings(tSettings)
 
 		teranode_aerospike.InitPrometheusMetrics()
 
@@ -160,6 +161,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		teranode_aerospike.InitPrometheusMetrics()
 
 		tSettings := test.CreateBaseTestSettings()
+		s.SetSettings(tSettings)
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		tx.Outputs = []*bt.Output{}
@@ -203,6 +205,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		s := setupStore(t, client)
 
 		tSettings := test.CreateBaseTestSettings()
+		s.SetSettings(tSettings)
 
 		teranode_aerospike.InitPrometheusMetrics()
 

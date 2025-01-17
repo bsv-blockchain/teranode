@@ -9,7 +9,6 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -33,22 +32,22 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// spend the tx
-		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID1}}, 102)
+		_, err = db.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		// spend again, should not return an error
-		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID1}}, 102)
+		_, err = db.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		// try to spend the tx with a different tx, check the spending tx ID
-		err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0, SpendingTxID: spendingTxID2}}, 102)
+		spends, err := db.Spend(ctx, spendTx2)
 		require.Error(t, err)
 
-		var uErr errors.Interface
-		ok := errors.As(err, &uErr)
-		require.True(t, ok)
-
-		assert.Contains(t, uErr.Error(), spendingTxID1.String())
+		var tErr *errors.Error
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.Equal(t, spendTx.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
@@ -110,36 +109,33 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		mainRecordKey, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
 		require.NoError(t, err)
 
-		// spend the utxos, one by one, checking the return values from the lua script
-		nrRecords := 5
+		// spend 1,2,3,4
+		_, err = db.Spend(ctx, spendTxRemaining)
+		require.NoError(t, err)
 
-		for i := 4; i >= 0; i-- {
-			//nolint:gosec
-			err = db.Spend(ctx, []*utxostore.Spend{{TxID: tx.TxIDChainHash(), Vout: uint32(i), UTXOHash: utxoHashes[i], SpendingTxID: txID}}, 102)
-			require.NoError(t, err)
+		// give the db time to update the main record
+		time.Sleep(100 * time.Millisecond)
 
-			// give the db time to update the main record
-			time.Sleep(100 * time.Millisecond)
+		// get nrRecords from main record
+		resp, err := client.Get(nil, mainRecordKey)
+		require.NoError(t, err)
 
-			// get nrRecords from main record
-			resp, err := client.Get(nil, mainRecordKey)
-			require.NoError(t, err)
+		// assert that the record is not yet marked for TTL
+		assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has been set
+		assert.Equal(t, 1, resp.Bins["nrRecords"])
 
-			nrRecords--
-			if nrRecords == 0 {
-				// main record check
-				assert.Greater(t, resp.Expiration, uint32(0)) // expiration has been set
-				assert.Equal(t, 1, resp.Bins["nrRecords"])
+		// spend 0
+		_, err = db.Spend(ctx, spendTx)
+		require.NoError(t, err)
 
-				// check the external file ttl has been set
-				ttl, err := db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
-				require.NoError(t, err)
-				assert.Greater(t, ttl, time.Duration(0))
-			} else {
-				assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has been set
-				assert.Equal(t, nrRecords, resp.Bins["nrRecords"])
-			}
-		}
+		// main record check
+		assert.Greater(t, resp.Expiration, uint32(0)) // expiration has been set
+		assert.Equal(t, 1, resp.Bins["nrRecords"])
+
+		// check the external file ttl has been set
+		ttl, err = db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		require.NoError(t, err)
+		assert.Greater(t, ttl, time.Duration(0))
 	})
 }
 

@@ -77,6 +77,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		"nrOutput":     len(tx.Outputs),
 	}
 
+	if createOptions.Conflicting {
+		fields["conflicting"] = true
+	}
+
 	if len(createOptions.BlockIDs) > 0 {
 		// Convert the blockIDs to a comma separated string
 		var blockIDs strings.Builder
