@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	bc "github.com/bitcoin-sv/teranode/services/blockchain"
@@ -33,6 +34,7 @@ type TeranodeTestEnv struct {
 	Nodes   []TeranodeTestClient
 	Logger  ulogger.Logger
 	Cancel  context.CancelFunc
+	Daemon  daemon.Daemon
 }
 
 type TeranodeTestClient struct {

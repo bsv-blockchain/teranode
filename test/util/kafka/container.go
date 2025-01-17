@@ -108,7 +108,6 @@ func RunTestContainer(ctx context.Context) (*GenericTestContainerWrapper, error)
 		Name:  randomName,
 		Image: fmt.Sprintf("%s:%s", TestContainerRedpandaImage, TestContainerRedpandaVersion),
 		ExposedPorts: []string{
-			// fmt.Sprintf("%d:%d/tcp", kafkaAdminPort, kafkaAdminPort),
 			fmt.Sprintf("%d:%d/tcp", kafkaPort, kafkaPort),
 			fmt.Sprintf("%d:%d/tcp", kafkaProxyPort, kafkaProxyPort),
 		},

@@ -205,31 +205,9 @@ reset-data:
 
 .PHONY: smoketests
 
-# Default target
 smoketests:
-ifdef no-build
-	@echo "Skipping build step."
-else
-	docker compose -f docker-compose.e2etest.yml build
-endif
-ifdef no-reset
-	@echo "Skipping reset step."
-else
-	rm -rf data
-	unzip data.zip
-	chmod -R +x data
-endif
-ifdef kill-docker
-	docker compose -f docker-compose.yml down
-endif
-ifdef test
-	cd test/$(firstword $(subst ., ,$(test))) && \
-	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -run $(word 2,$(subst ., ,$(test))) -v -tags $(test_tags)
-else
 	cd test/smoke && \
-	go test -v -tags test_functional
-endif
-
+		go test -v -count 1 -tags test_smoke_rpc ./...
 
 .PHONY: gen
 gen:
