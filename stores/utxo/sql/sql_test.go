@@ -19,7 +19,7 @@
 //	    Host:   "localhost:5432",
 //	    User:   "user",
 //	    Path:   "dbname",
-//	    RawQuery: "expiration=3600",
+//	    RawQuery: "expiration=1h",
 //	})
 //
 // # Database Schema
@@ -71,9 +71,9 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a187000000008c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c9331586c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac0200e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c2f6b52de3d7c88ac00000000")
 	require.NoError(t, err)
 
-	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode?expiration=1")
-	// storeUrl, err := url.Parse("sqlite:///test?expiration=1")
-	storeURL, err := url.Parse("sqlitememory:///test?expiration=1")
+	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode?expiration=1s")
+	// storeUrl, err := url.Parse("sqlite:///test?expiration=1s")
+	storeURL, err := url.Parse("sqlitememory:///test?expiration=1s")
 
 	require.NoError(t, err)
 

@@ -19,7 +19,7 @@
 //	    Host:   "localhost:5432",
 //	    User:   "user",
 //	    Path:   "dbname",
-//	    RawQuery: "expiration=3600",
+//	    RawQuery: "expiration=1h",
 //	})
 //
 // # Database Schema

@@ -19,7 +19,7 @@
 //	    Host:   "localhost:5432",
 //	    User:   "user",
 //	    Path:   "dbname",
-//	    RawQuery: "expiration=3600",
+//	    RawQuery: "expiration=1h",
 //	})
 //
 // # Database Schema
@@ -47,7 +47,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -68,13 +67,13 @@ import (
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
-	logger           ulogger.Logger
-	settings         *settings.Settings
-	db               *usql.DB
-	engine           string
-	blockHeight      atomic.Uint32
-	medianBlockTime  atomic.Uint32
-	expirationMillis uint64
+	logger          ulogger.Logger
+	settings        *settings.Settings
+	db              *usql.DB
+	engine          string
+	blockHeight     atomic.Uint32
+	medianBlockTime atomic.Uint32
+	expiration      time.Duration
 }
 
 // New creates a new SQL-based UTXO store.
@@ -86,14 +85,14 @@ type Store struct {
 //   - sqlitememory:///: In-memory SQLite database
 //
 // URL parameters:
-//   - expiration: Time in seconds after which spent UTXOs are cleaned up
+//   - expiration: Duration after which spent UTXOs are cleaned up
 //   - logging: Enable SQL query logging
 //
 // Example URLs:
 //
-//	postgres://user:pass@localhost:5432/dbname?expiration=3600
-//	sqlite:///path/to/db.sqlite?expiration=3600
-//	sqlitememory:///test?expiration=3600
+//	postgres://user:pass@localhost:5432/dbname?expiration=1h
+//	sqlite:///path/to/db.sqlite?expiration=1h
+//	sqlitememory:///test?expiration=1h
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
@@ -128,12 +127,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	expirationValue := storeURL.Query().Get("expiration") // This is specified in seconds
 	if expirationValue != "" {
-		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		e, err := time.ParseDuration(expirationValue)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
 
-		s.expirationMillis = expiration64 * 1000
+		s.expiration = e
 
 		// // Create a goroutine to remove transactions that are marked with a tombstone time
 		// db2, err := util.InitSQLDB(logger, storeUrl)
@@ -747,9 +746,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 				continue
 			}
 
-			if s.expirationMillis > 0 {
+			if s.expiration > 0 {
 				// Now mark the transaction as tombstoned if there are no more unspent outputs
-				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6 //nolint:gosec
+				tombstoneTime := time.Now().Add(s.expiration).UnixNano() / 1e6 //nolint:gosec
 
 				if _, err := txn.ExecContext(ctx, q3, transactionID, tombstoneTime); err != nil {
 					errorFound = true
@@ -827,7 +826,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 				return err
 			}
 
-			if s.expirationMillis > 0 {
+			if s.expiration > 0 {
 				if _, err := txn.ExecContext(ctx, q2, transactionId); err != nil {
 					return errors.NewStorageError("[UnSpend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
 				}
