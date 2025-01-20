@@ -177,7 +177,7 @@ ifeq ($(USE_JSON_REPORTER),true)
 	# pipefail is needed so proper exit code is passed on in CI
 	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -tags=test_full -count=1 -p 1 -coverprofile=coverage.out $$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_full"' \; -print | xargs -n1 dirname | sort -u) | go-ctrf-json-reporter -output ctrf-report.json'
 else
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags=test_full -count=1 go tre -v $$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_full"' \; -print | xargs -n1 dirname | sort -u)
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags=test_full -count=1 -p 1 -coverprofile=coverage.out -v $$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_full"' \; -print | xargs -n1 dirname | sort -u)
 endif
 
 .PHONY: racetest

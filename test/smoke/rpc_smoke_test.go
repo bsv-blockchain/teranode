@@ -24,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/propagation"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -122,8 +121,10 @@ func NewRPCDaemonTester(t *testing.T) *RPCDaemonTester {
 
 	rpcURL := fmt.Sprintf("http://localhost%s", tSettings.RPC.RPCListenerURL)
 
-	// Create stores
-	subtreeStore, err := blob.NewStore(logger, tSettings.Block.BlockStore)
+	subtreeStore, err := daemon.GetSubtreeStore(logger, tSettings)
+	require.NoError(t, err)
+
+	utxoStore, err := daemon.GetUtxoStore(ctx, logger, tSettings)
 	require.NoError(t, err)
 
 	// set run state
@@ -147,6 +148,7 @@ func NewRPCDaemonTester(t *testing.T) *RPCDaemonTester {
 		distributorClient:     distributorClient,
 		rpcURL:               rpcURL,
 		settings:              tSettings,
+		utxoStore:             utxoStore,
 	}
 }
 
@@ -221,7 +223,6 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	defer func() {
 		tester.d.Stop()
 		tester.kafkaContainer.CleanUp()
-		_ = os.RemoveAll("data")
 	}()
 
 	assert.NotNil(t, tester.blockchainClient)
@@ -304,14 +305,17 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	block102, err := tester.blockchainClient.GetBlockByHeight(ctx, 102)
 	require.NoError(t, err)
 
-	subtreeStore, err := blob.NewStore(logger, tSettings.SubtreeValidation.SubtreeStore, options.WithHashPrefix(2))
+	err = block102.GetAndValidateSubtrees(ctx, tester.logger, tester.subtreeStore, nil)
+	require.NoError(t, err)
+
+	err = block102.CheckMerkleRoot(ctx)
 	require.NoError(t, err)
 
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return block102.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	subtree, err := block102.GetSubtrees(ctx, logger, subtreeStore, fallbackGetFunc)
+	subtree, err := block102.GetSubtrees(ctx, logger, tester.subtreeStore, fallbackGetFunc)
 	require.NoError(t, err)
 
 	blFound := false

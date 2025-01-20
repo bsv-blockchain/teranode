@@ -1198,7 +1198,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store
 
 func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	if len(b.Subtrees) != len(b.SubtreeSlices) {
-		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices", b.Hash().String())
+		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices, have you called block.GetAndValidateSubtrees()?", b.Hash().String())
 	}
 
 	_, _, deferFn := tracing.StartTracing(ctx, "Block:CheckMerkleRoot",
