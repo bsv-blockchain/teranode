@@ -111,31 +111,12 @@ func WithCreateConflicting(create bool) Option {
 
 // TxValidatorOptions defines configuration options specific to transaction validation
 type TxValidatorOptions struct {
-	// scriptInterpreter specifies which script interpreter implementation to use
-	scriptInterpreter TxInterpreter
-	skipPolicyChecks  bool
+	skipPolicyChecks bool
 }
 
 // TxValidatorOption defines a function type for setting transaction validator options
 // This follows the functional options pattern for flexible configuration
 type TxValidatorOption func(*TxValidatorOptions)
-
-// WithTxValidatorInterpreter creates an option to specify the script interpreter
-// Parameters:
-//   - interpreter: The script interpreter implementation to use
-//
-// Returns:
-//   - TxValidatorOption: Function that sets the script interpreter option
-//
-// Usage:
-//
-//	validator := NewTxValidator(logger, policy, params,
-//	                          WithTxValidatorInterpreter(TxInterpreterGoBT))
-func WithTxValidatorInterpreter(interpreter TxInterpreter) TxValidatorOption {
-	return func(o *TxValidatorOptions) {
-		o.scriptInterpreter = interpreter
-	}
-}
 
 func WithTxValidatorSkipPolicyChecks(skip bool) TxValidatorOption {
 	return func(o *TxValidatorOptions) {

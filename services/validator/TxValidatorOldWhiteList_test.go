@@ -23,18 +23,14 @@ type WhiteListData struct {
 func TestTxValidatorOldWhiteList(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
-	interpreterList := []string{"GoBT", "GoSDK", "GoBDK"}
 
-	for _, interLIB := range interpreterList {
-		tSettings.Validator.ScriptVerificationLibrary = interLIB
-		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-		for _, testData := range oldWhiteListData {
-			tx, _ := bt.NewTxFromString(testData.ExtendedHex)
-			err := txValidator.ValidateTransaction(tx, testData.BlockHeight, &Options{})
+	for _, testData := range oldWhiteListData {
+		tx, _ := bt.NewTxFromString(testData.ExtendedHex)
+		err := txValidator.ValidateTransaction(tx, testData.BlockHeight, &Options{})
 
-			require.NoError(t, err, fmt.Sprintf("Failed : %v with txID %v.\n\nError\n\n%v", interLIB, testData.TxID, err))
-		}
+		require.NoError(t, err, fmt.Sprintf("Failed : %v with txID %v.\n\nError\n\n%v", "GoBDK", testData.TxID, err))
 	}
 }
 

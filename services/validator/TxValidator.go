@@ -31,9 +31,6 @@ const (
 
 	// TxInterpreterGoBDK specifies the Go-BDK library interpreter
 	TxInterpreterGoBDK TxInterpreter = "GoBDK"
-
-	// defaultTxVerifier specifies the default interpreter to use
-	defaultTxVerifier = TxInterpreterGoBT
 )
 
 // TxValidatorI defines the interface for transaction validation operations
@@ -97,28 +94,11 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 		opt(options)
 	}
 
-	var scriptInterpreter TxInterpreter
-
-	if options.scriptInterpreter != "" {
-		scriptInterpreter = options.scriptInterpreter
-	} else {
-		// Get the type of verifier from config
-		scriptValidatorStr := tSettings.Validator.ScriptVerificationLibrary
-		if scriptValidatorStr != "" {
-			scriptInterpreter = TxInterpreter(scriptValidatorStr)
-		} else {
-			scriptInterpreter = defaultTxVerifier
-		}
-	}
-
 	var txScriptInterpreter TxScriptInterpreter
 
 	// If a creator was not registered to the factory, then return nil
-	if createTxScriptInterpreter, ok := TxScriptInterpreterFactory[scriptInterpreter]; ok {
+	if createTxScriptInterpreter, ok := TxScriptInterpreterFactory[TxInterpreterGoBDK]; ok {
 		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
-	} else {
-		// default to GoSDK
-		txScriptInterpreter = TxScriptInterpreterFactory[defaultTxVerifier](logger, tSettings.Policy, tSettings.ChainCfgParams)
 	}
 
 	return &TxValidator{

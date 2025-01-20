@@ -387,50 +387,6 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	return nil
 }
 
-// validateBlock()
-func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) error {
-	startTime := time.Now()
-
-	u.logger.Infof("[BlockValidation:start][%s] validate block", blockHash.String())
-
-	defer func() {
-		u.logger.Infof("[BlockValidation:start][%s] validate block DONE in %s", blockHash.String(), time.Since(startTime))
-	}()
-
-	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
-	if err != nil {
-		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block", blockHash.String(), err)
-	}
-
-	// get all 100 previous block headers on the main chain
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
-	if err != nil {
-		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block headers", block.String(), err)
-	}
-
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
-	if err != nil {
-		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block header ids", block.String(), err)
-	}
-
-	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
-	u.recentBlocksBloomFiltersMu.Lock()
-	bloomFilters := make([]*model.BlockBloomFilter, 0)
-	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
-	u.recentBlocksBloomFiltersMu.Unlock()
-
-	oldBlockIDsMap := &sync.Map{}
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
-		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
-			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
-		}
-
-		return errors.NewServiceError("[BlockValidation:start][%s] InvalidateBlock block is not valid", block.String(), err)
-	}
-
-	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, block.String())
-}
-
 // SetBlockExists marks a block as existing in the validation system.
 // This updates the internal cache to track validated blocks.
 //

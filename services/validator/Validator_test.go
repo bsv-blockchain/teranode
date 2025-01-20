@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/settings"
 	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -105,20 +106,21 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	utxoStore, _ := nullstore.NewNullStore()
-	_ = utxoStore.SetBlockHeight(123)
+	_ = utxoStore.SetBlockHeight(257727)
 	//nolint:gosec
 	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	initPrometheusMetrics()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
 		settings:                      tSettings,
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings, WithTxValidatorInterpreter(TxInterpreterGoBT)),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                BlockAssemblyStore{},
 		saveInParallel:                true,
@@ -127,7 +129,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	_, err = v.Validate(context.Background(), tx, 100)
+	_, err = v.Validate(context.Background(), tx, 257727)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should have 1 message")
@@ -197,7 +199,6 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 		txValidator: NewTxValidator(
 			ulogger.TestLogger{},
 			tSettings,
-			WithTxValidatorInterpreter(TxInterpreterGoBT),
 		),
 	}
 

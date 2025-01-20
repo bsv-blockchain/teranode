@@ -122,7 +122,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	//prometheusBlockValidationSetTxMetaQueueChWaitDuration = promauto.NewHistogram(
+	// prometheusBlockValidationSetTxMetaQueueChWaitDuration = promauto.NewHistogram(
 	//	prometheus.HistogramOpts{
 	//		Namespace: "blockvalidation",
 	//		Name:      "set_tx_meta_queue_ch_wait_duration_millis",
@@ -131,7 +131,7 @@ func _initPrometheusMetrics() {
 	//	},
 	//)
 	//
-	//prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
+	// prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
 	//	prometheus.HistogramOpts{
 	//		Namespace: "blockvalidation",
 	//		Name:      "set_tx_meta_queue_duration_millis",
@@ -188,7 +188,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	//prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
+	// prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
 	//	prometheus.CounterOpts{
 	//		Namespace: "blockvalidation",
 	//		Name:      "set_tx_mined_local",

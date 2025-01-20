@@ -123,6 +123,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	eTxBytes := tx.ExtendedBytes()
+
 	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1)
 	if err != nil {
 		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)

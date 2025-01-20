@@ -238,7 +238,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCAddress:               getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
 			GRPCListenAddress:         getString("validator_grpcListenAddress", ":8081", alternativeContext...),
 			KafkaWorkers:              getInt("validator_kafkaWorkers", 0, alternativeContext...),
-			ScriptVerificationLibrary: getString("validator_scriptVerificationLibrary", "libscript.so", alternativeContext...),
 			SendBatchSize:             getInt("validator_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:          getInt("validator_sendBatchTimeout", 2, alternativeContext...),
 			SendBatchWorkers:          getInt("validator_sendBatchWorkers", 10, alternativeContext...),

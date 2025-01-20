@@ -223,7 +223,6 @@ type ValidatorSettings struct {
 	GRPCAddress               string
 	GRPCListenAddress         string
 	KafkaWorkers              int
-	ScriptVerificationLibrary string
 	SendBatchSize             int
 	SendBatchTimeout          int
 	SendBatchWorkers          int
