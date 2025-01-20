@@ -32,9 +32,6 @@ func TestPeerTestSuite(t *testing.T) {
 	suite.Run(t, &PeerTestSuite{})
 }
 
-func (suite *PeerTestSuite) TearDownTest() {
-}
-
 func (suite *PeerTestSuite) TestBanPeerList() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv

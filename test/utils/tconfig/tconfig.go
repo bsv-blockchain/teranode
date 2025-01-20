@@ -110,6 +110,8 @@ func (c *TConfig) Set(k string, v any) {
 func (c *TConfig) initViper() {
 	if c.viper == nil {
 		configFile := flag.String("config-file", "", "Path to the configuration file")
+		skipSetup := flag.Bool("skip-setup", false, "Skip Setting up local system")
+		skipTeardown := flag.Bool("skip-teardown", false, "Skip Tearing down local system")
 		helpOnly := flag.Bool("help", false, "Print Help message")
 		flag.Parse()
 
@@ -143,6 +145,16 @@ func (c *TConfig) initViper() {
 					c.Suite.TConfigFile = *configFile
 				}
 			}
+		}
+
+		if skipSetup != nil && *skipSetup {
+			// Force the skip setup as the same level of key/value setting
+			c.Set(KeyLocalSystemSkipSetup, *skipSetup)
+		}
+
+		if skipTeardown != nil && *skipTeardown {
+			// Force the skip teardown as the same level of key/value setting
+			c.Set(KeyLocalSystemSkipTeardown, *skipTeardown)
 		}
 	}
 }

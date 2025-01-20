@@ -218,20 +218,6 @@ func (suite *RPCTestSuite) SetupTest() {
 	}
 }
 
-func (suite *RPCTestSuite) TearDownTest() {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "ERROR")
-	log := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
-	// First stop TERANODE
-	// stopTeranode(log)
-
-	// Wait for TERANODE to fully stop before stopping Kafka
-	time.Sleep(2 * time.Second)
-
-	// Then stop Kafka
-	stopKafka(log)
-
-}
-
 const (
 	teranode1RPCEndpoint string = "http://localhost:9292"
 	nullStr              string = "null"

@@ -1,11 +1,15 @@
 suite:
     testid: ValueFromYAMLFILE
     name: ValueFromYAMLFILE
+    loglevel: ValueFromYAMLFILE
+    tconfigfile: ValueFromYAMLFILE
+localsystem:
     composes:
         - Value1FromYAMLFILE
         - Value2FromYAMLFILE
-    loglevel: ValueFromYAMLFILE
-    tconfigfile: ValueFromYAMLFILE
+    datadir: ValueFromYAMLFILE
+    skipsetup: true
+    skipteardown: true
 teranode:
     contexts:
         - Value3FromYAMLFILE

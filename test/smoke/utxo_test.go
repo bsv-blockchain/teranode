@@ -46,9 +46,6 @@ func TestUtxoTestSuite(t *testing.T) {
 	suite.Run(t, &UtxoTestSuite{})
 }
 
-func (suite *UtxoTestSuite) TearDownTest() {
-}
-
 /* TestShouldAllowToSpendUtxos tests that a UTXO can be spent */
 // Request funds from the coinbase wallet
 // Create a new transaction from the first output of the faucet transaction

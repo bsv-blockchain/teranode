@@ -35,9 +35,6 @@ func TestFsmTestSuite(t *testing.T) {
 	suite.Run(t, &FsmTestSuite{})
 }
 
-func (suite *FsmTestSuite) TearDownTest() {
-}
-
 /* Description */
 // This test suite is used to test the FSM states of the blockchain node.
 // Start the chain of 3 nodes

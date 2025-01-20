@@ -68,8 +68,6 @@ func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
 
 	fmt.Println("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
 
-	suite.SetupTestEnv(false)
-
 	blockchainHealth, _, err := testenv.Nodes[1].BlockchainClient.Health(ctx, true)
 	if err != nil {
 		t.Fatalf("Failed to start blockchain: %v", err)

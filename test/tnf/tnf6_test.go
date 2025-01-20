@@ -38,10 +38,6 @@ func TestTNFTestSuite(t *testing.T) {
 	)
 }
 
-func (suite *TNFTestSuite) TearDownTest() {
-	// suite.BitcoinTestSuite.TearDownTest()
-}
-
 const (
 	NodeURL1 = "http://localhost:10090"
 	NodeURL2 = "http://localhost:12090"

@@ -4,12 +4,23 @@ package tconfig
 // to deploy and manage the local system to be tested.
 type ConfigLocalSystem struct {
 	// Composes hold the list of docker-compose files to be up when initiate suites locally
-	// If empty, then the test suites skip initialize the docker-compose
+	// If not empty, then the test engine will know to setup and teardown the local system
+	// accordingly to the compose files
 	Composes []string `mapstructure:"composes" json:"composes" yaml:"composes"`
 
 	// DataDir configure the base path to store/share test data on local system.
 	// This is considered as the 'master' directory, all test data path are to be customize inside it
 	DataDir string `mapstructure:"datadir" json:"datadir" yaml:"datadir"`
+
+	// SkipSetup is used to force the test engine to skip setting up the local system
+	// even the list of compose files is not empty
+	// It is useful when tester want to rerun the same tests without reinitializing the system
+	SkipSetup bool `mapstructure:"skipsetup" json:"skipsetup" yaml:"skipsetup"`
+
+	// SkipTeardown is used to force the test engine to skip tearing down the local system
+	// even the list of compose files is not empty
+	// It is useful when tester wish to not shutting down the system after the test finishes
+	SkipTeardown bool `mapstructure:"skipteardown" json:"skipteardown" yaml:"skipteardown"`
 }
 
 // LoadConfigLocalSystem return the loader to load the ConfigLocalSystem
@@ -17,6 +28,12 @@ func LoadConfigLocalSystem() TConfigLoader {
 	return func(s *TConfig) error {
 		s.viper.SetDefault(KeyLocalSystemComposes, []string{"../../docker-compose.e2etest.yml"})
 		s.LocalSystem.Composes = s.viper.GetStringSlice(KeyLocalSystemComposes)
+
+		s.viper.SetDefault(KeyLocalSystemSkipSetup, false)
+		s.LocalSystem.SkipSetup = s.viper.GetBool(KeyLocalSystemSkipSetup)
+
+		s.viper.SetDefault(KeyLocalSystemSkipTeardown, false)
+		s.LocalSystem.SkipTeardown = s.viper.GetBool(KeyLocalSystemSkipTeardown)
 
 		s.viper.SetDefault(KeyLocalSystemDataDir, "../../data/test")
 		s.LocalSystem.DataDir = s.viper.GetString(KeyLocalSystemDataDir)

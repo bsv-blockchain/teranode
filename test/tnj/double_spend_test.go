@@ -24,9 +24,6 @@ func TestTNJDoubleSpendTestSuite(t *testing.T) {
 	suite.Run(t, &TNJDoubleSpendTestSuite{})
 }
 
-func (suite *TNJDoubleSpendTestSuite) TearDownTest() {
-}
-
 func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv

@@ -38,29 +38,26 @@ func (suite *TeranodeTestSuite) SetupTest() {
 		suite.TConfig = tconfig.LoadTConfig(nil)
 	}
 
-	suite.SetupTestEnv(false)
+	if len(suite.TConfig.LocalSystem.Composes) > 0 && !suite.TConfig.LocalSystem.SkipSetup {
+		suite.setupLocalTestEnv()
+	}
 }
 
 func (suite *TeranodeTestSuite) TearDownTest() {
-	if err := TearDownTeranodeTestEnv(suite.TeranodeTestEnv); err != nil {
+	if len(suite.TConfig.LocalSystem.Composes) > 0 && !suite.TConfig.LocalSystem.SkipTeardown {
+		if err := teardownLocalTeranodeTestEnv(suite.TeranodeTestEnv); err != nil {
+			if suite.T() != nil && suite.TeranodeTestEnv != nil {
+				suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+			}
+		}
+
 		if suite.T() != nil && suite.TeranodeTestEnv != nil {
 			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
 		}
 	}
-
-	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	// err := removeDataDirectory("../../data", isGitHubActions)
-
-	// if err != nil {
-	// 	suite.T().Fatal(err)
-	// }
-
-	if suite.T() != nil && suite.TeranodeTestEnv != nil {
-		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
-	}
 }
 
-func (suite *TeranodeTestSuite) SetupTestEnv(skipSetUpTestClient bool) {
+func (suite *TeranodeTestSuite) setupLocalTestEnv() {
 	var err error
 
 	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
@@ -81,7 +78,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(skipSetUpTestClient bool) {
 
 	suite.T().Log("Setting up TeranodeTestEnv")
 
-	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.TConfig)
+	suite.TeranodeTestEnv, err = setupLocalTeranodeTestEnv(suite.TConfig)
 	if err != nil {
 		if suite.T() != nil && suite.TeranodeTestEnv != nil {
 			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
@@ -90,91 +87,87 @@ func (suite *TeranodeTestSuite) SetupTestEnv(skipSetUpTestClient bool) {
 		suite.T().Fatalf("Failed to set up TeranodeTestEnv: %v", err)
 	}
 
-	if !skipSetUpTestClient {
-		var err error
+	time.Sleep(10 * time.Second)
 
-		time.Sleep(10 * time.Second)
+	err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
+	if err != nil {
+		suite.T().Fatal(err)
+	}
 
-		err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
+	// wait for all blockchain nodes to be ready
+	for index, node := range suite.TeranodeTestEnv.Nodes {
+		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+
+		err = SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	// get mapped ports for 8000, 8000, 8000
+	port, ok := gocore.Config().GetInt("health_check_port", 8000)
+	if !ok {
+		suite.T().Fatalf("health_check_port not set in config")
+	}
+
+	ports := []int{port, port, port}
+
+	for index, port := range ports {
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		// wait for all blockchain nodes to be ready
-		for index, node := range suite.TeranodeTestEnv.Nodes {
-			suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+		suite.T().Logf("Waiting for node %d to be ready", index)
 
-			err = SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
-		}
-
-		// get mapped ports for 8000, 8000, 8000
-		port, ok := gocore.Config().GetInt("health_check_port", 8000)
-		if !ok {
-			suite.T().Fatalf("health_check_port not set in config")
-		}
-
-		ports := []int{port, port, port}
-
-		for index, port := range ports {
-			mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
-			if err != nil {
-				suite.T().Fatal(err)
-			}
-
-			suite.T().Logf("Waiting for node %d to be ready", index)
-
-			err = WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
-			if err != nil {
-				suite.T().Fatal(err)
-			}
-		}
-
-		suite.T().Log("All nodes ready")
-
-		height := uint32(101)
-		teranode1RPCEndpoint := suite.TeranodeTestEnv.Nodes[0].RPCURL
-		teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
-
-		// Generate blocks
-		_, err = retry.Retry(
-			context.Background(),
-			suite.TeranodeTestEnv.Logger,
-			func() (string, error) {
-				return CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
-			},
-		)
-		if err != nil {
-			// we sometimes set an error saying the job was not found but strangely the test works even with this error
-			// suite.T().Fatal(err)
-			suite.T().Logf("Error generating blocks: %v", err)
-		}
-
-		NodeURL1 := suite.TeranodeTestEnv.Nodes[0].AssetURL
-		NodeURL2 := suite.TeranodeTestEnv.Nodes[1].AssetURL
-		NodeURL3 := suite.TeranodeTestEnv.Nodes[2].AssetURL
-
-		// Add http to the url
-		NodeURL1 = "http://" + NodeURL1
-		NodeURL2 = "http://" + NodeURL2
-		NodeURL3 = "http://" + NodeURL3
-
-		err = WaitForBlockHeight(NodeURL1, height, 30)
+		err = WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
+	}
 
-		err = WaitForBlockHeight(NodeURL2, height, 30)
-		if err != nil {
-			suite.T().Fatal(err)
-		}
+	suite.T().Log("All nodes ready")
 
-		err = WaitForBlockHeight(NodeURL3, height, 30)
-		if err != nil {
-			suite.T().Fatal(err)
-		}
+	height := uint32(101)
+	teranode1RPCEndpoint := suite.TeranodeTestEnv.Nodes[0].RPCURL
+	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+
+	// Generate blocks
+	_, err = retry.Retry(
+		context.Background(),
+		suite.TeranodeTestEnv.Logger,
+		func() (string, error) {
+			return CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
+		},
+	)
+	if err != nil {
+		// we sometimes set an error saying the job was not found but strangely the test works even with this error
+		// suite.T().Fatal(err)
+		suite.T().Logf("Error generating blocks: %v", err)
+	}
+
+	NodeURL1 := suite.TeranodeTestEnv.Nodes[0].AssetURL
+	NodeURL2 := suite.TeranodeTestEnv.Nodes[1].AssetURL
+	NodeURL3 := suite.TeranodeTestEnv.Nodes[2].AssetURL
+
+	// Add http to the url
+	NodeURL1 = "http://" + NodeURL1
+	NodeURL2 = "http://" + NodeURL2
+	NodeURL3 = "http://" + NodeURL3
+
+	err = WaitForBlockHeight(NodeURL1, height, 30)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = WaitForBlockHeight(NodeURL2, height, 30)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = WaitForBlockHeight(NodeURL3, height, 30)
+	if err != nil {
+		suite.T().Fatal(err)
 	}
 
 	suite.T().Log("TeranodeTestEnv setup completed")
@@ -231,7 +224,7 @@ func cleanUpE2EContainers(isGitHubActions bool) (err error) {
 	return nil
 }
 
-func SetupTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error) {
+func setupLocalTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error) {
 	testEnv := NewTeraNodeTestEnv(cfg)
 	if err := testEnv.SetupDockerNodes(); err != nil {
 		return nil, errors.NewConfigurationError("Error setting up nodes", err)
@@ -240,7 +233,7 @@ func SetupTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error) {
 	return testEnv, nil
 }
 
-func TearDownTeranodeTestEnv(testEnv *TeranodeTestEnv) error {
+func teardownLocalTeranodeTestEnv(testEnv *TeranodeTestEnv) error {
 	if err := testEnv.StopDockerNodes(); err != nil {
 		return errors.NewConfigurationError("Error stopping nodes", err)
 	}

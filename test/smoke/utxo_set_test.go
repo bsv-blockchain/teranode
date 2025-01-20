@@ -42,9 +42,6 @@ func TestUTXOVerificationTestSuite(t *testing.T) {
 	suite.Run(t, &UTXOVerificationTestSuite{})
 }
 
-func (suite *UTXOVerificationTestSuite) TearDownTest() {
-}
-
 // TestVerifyUTXOSetConsistency verifies that the UTXO set is consistent across nodes
 // and that the block persister correctly stores UTXO sets and diffs.
 //

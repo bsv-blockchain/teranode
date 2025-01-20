@@ -28,9 +28,6 @@ func TestTND1_1TestSuite(t *testing.T) {
 	suite.Run(t, &TND1_1TestSuite{})
 }
 
-func (suite *TND1_1TestSuite) TearDownTest() {
-}
-
 // TestBlockPropagation verifies that blocks are correctly propagated between nodes
 // in the network after being mined. This test:
 // 1. Gets initial block height
