@@ -71,6 +71,11 @@ const (
 	// stalling.  The deadlines are adjusted for callback running times and
 	// only checked on each stall tick interval.
 	stallResponseTimeout = 30 * time.Second
+
+	// stallResponseTimeoutBlocks is the maximum amount of time a peer will
+	// wait for a block message to be received after sending a getdata
+	// message.
+	stallResponseTimeoutBlocks = 5 * time.Minute
 )
 
 var (
@@ -1184,6 +1189,7 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 	// such as is typical in the case of initial block download, the
 	// response won't be received in time.
 	deadline := time.Now().Add(stallResponseTimeout)
+	blockDeadline := time.Now().Add(stallResponseTimeoutBlocks)
 	switch msgCmd {
 	case wire.CmdVersion:
 		// Expects a verack message.
@@ -1195,14 +1201,15 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 
 	case wire.CmdGetBlocks:
 		// Expects an inv message.
-		pendingResponses[wire.CmdInv] = deadline
+		// with a special block deadline for the stall handler
+		pendingResponses[wire.CmdInv] = blockDeadline
 
 	case wire.CmdGetData:
 		// Expects a block, merkleblock, tx, or notfound message.
-		pendingResponses[wire.CmdBlock] = deadline
-		pendingResponses[wire.CmdMerkleBlock] = deadline
-		pendingResponses[wire.CmdTx] = deadline
-		pendingResponses[wire.CmdNotFound] = deadline
+		pendingResponses[wire.CmdBlock] = blockDeadline
+		pendingResponses[wire.CmdMerkleBlock] = blockDeadline
+		pendingResponses[wire.CmdTx] = blockDeadline
+		pendingResponses[wire.CmdNotFound] = blockDeadline
 
 	case wire.CmdGetHeaders:
 		// Expects a headers message.  Use a longer deadline since it
