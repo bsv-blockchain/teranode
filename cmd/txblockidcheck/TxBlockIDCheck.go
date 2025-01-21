@@ -2,7 +2,6 @@ package txblockidcheck
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,7 +20,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func Start() {
+// TxBlockIDCheck handles the transaction block ID check command logic
+func TxBlockIDCheck(utxoStoreURL, blockchainStoreURL, subtreeStoreURL, txHashString string) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	tSettings := settings.NewSettings()
@@ -34,25 +34,19 @@ func Start() {
 		}
 	}
 
-	utxoStoreFlag := flag.String("utxostore", "", "utxo store URL")
-	blockchainStoreFlag := flag.String("blockchainstore", "", "blockchain store URL")
-	subtreeStoreFlag := flag.String("subtreestore", "", "subtree store URL")
-	txHashString := flag.String("txhash", "", "transaction hash")
-	flag.Parse()
-
-	if *utxoStoreFlag != "" {
-		tSettings.UtxoStore.UtxoStore = parseURL(*utxoStoreFlag)
+	if utxoStoreURL != "" {
+		tSettings.UtxoStore.UtxoStore = parseURL(utxoStoreURL)
 	}
 
-	if *blockchainStoreFlag != "" {
-		tSettings.BlockChain.StoreURL = parseURL(*blockchainStoreFlag)
+	if blockchainStoreURL != "" {
+		tSettings.BlockChain.StoreURL = parseURL(blockchainStoreURL)
 	}
 
-	if *subtreeStoreFlag != "" {
-		tSettings.SubtreeValidation.SubtreeStore = parseURL(*subtreeStoreFlag)
+	if subtreeStoreURL != "" {
+		tSettings.SubtreeValidation.SubtreeStore = parseURL(subtreeStoreURL)
 	}
 
-	if *txHashString == "" {
+	if txHashString == "" {
 		usage("transaction hash required")
 	}
 
@@ -76,7 +70,7 @@ func Start() {
 		usage(err.Error())
 	}
 
-	txHash, err := chainhash.NewHashFromStr(*txHashString)
+	txHash, err := chainhash.NewHashFromStr(txHashString)
 	if err != nil {
 		usage(err.Error())
 	}

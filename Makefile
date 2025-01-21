@@ -105,6 +105,10 @@ build-chainintegrity: set_debug_flags set_race_flag
 build-tx-blaster: set_debug_flags set_race_flag
 	go build $(RACE_FLAG) --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
+.PHONY: build-teranode-cli
+build-teranode-cli:
+	go build -o teranode-cli ./cmd/teranodecli
+
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/

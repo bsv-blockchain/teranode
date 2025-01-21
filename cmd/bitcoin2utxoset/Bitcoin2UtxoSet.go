@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -48,33 +47,11 @@ type BlockHeader struct {
 	PreviousBlockHash string `json:"previousblockhash"`
 }
 
-func Start() {
+func Bitcoin2Utxoset(blockchainDir string, outputDir string, skipHeaders bool, skipUTXOs bool,
+	blockHashStr string, previousBlockHashStr string, blockHeightUint uint, dumpRecords int) {
 	logger := ulogger.NewGoCoreLogger("b2utxo")
 
-	// Command Line Options (Flags)
-	blockchainDir := flag.String("bitcoinDir", "", "Location of bitcoin data")          // chainstate folder
-	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.")         // output directory
-	skipHeaders := flag.Bool("skipHeaders", false, "Skip processing headers")           // skip headers
-	skipUTXOs := flag.Bool("skipUTXOs", false, "Skip processing UTXOs")                 // skip UTXOs
-	blockHashStr := flag.String("blockHash", "", "Block hash to start from")            // block hash
-	previousBlockHashStr := flag.String("previousBlockHash", "", "Previous block hash") // previous block hash
-	blockHeightUint := flag.Uint("blockHeight", 0, "Block height to start from")        // block height
-	dumpRecords := flag.Int("dumpRecords", 0, "Dump records from index")                // dump records
-
-	flag.Parse()
-
-	if *blockchainDir == "" {
-		logger.Errorf("The 'bitcoinDir' flag is mandatory.")
-		os.Exit(1)
-	}
-
-	// Check the bitcoinDir exists
-	if _, err := os.Stat(*blockchainDir); os.IsNotExist(err) {
-		logger.Errorf("Couldn't find", *blockchainDir)
-		os.Exit(1)
-	}
-
-	chainstate := filepath.Join(*blockchainDir, "chainstate")
+	chainstate := filepath.Join(blockchainDir, "chainstate")
 
 	// Check chainstate LevelDB folder exists
 	if _, err := os.Stat(chainstate); os.IsNotExist(err) {
@@ -82,16 +59,11 @@ func Start() {
 		os.Exit(1)
 	}
 
-	index := filepath.Join(*blockchainDir, "blocks/index")
+	index := filepath.Join(blockchainDir, "blocks/index")
 
 	// Check index LevelDB folder exists
 	if _, err := os.Stat(index); os.IsNotExist(err) {
 		logger.Errorf("Couldn't find %s: %v", index, err)
-		os.Exit(1)
-	}
-
-	if *outputDir == "" {
-		logger.Errorf("The 'outputDir' flag is mandatory.")
 		os.Exit(1)
 	}
 
@@ -118,26 +90,26 @@ func Start() {
 		err               error
 	)
 
-	if *skipHeaders {
-		if *blockHashStr == "" || *previousBlockHashStr == "" || *blockHeightUint == 0 {
+	if skipHeaders {
+		if blockHashStr == "" || previousBlockHashStr == "" || blockHeightUint == 0 {
 			logger.Errorf("The 'blockHash', 'previousBlockHash', and 'blockHeight' flags are mandatory when skipping headers.")
 			return
 		}
 
-		blockHash, err = chainhash.NewHashFromStr(*blockHashStr)
+		blockHash, err = chainhash.NewHashFromStr(blockHashStr)
 		if err != nil {
 			logger.Errorf("Could not parse block hash: %v", err)
 			return
 		}
 
-		previousBlockHash, err = chainhash.NewHashFromStr(*previousBlockHashStr)
+		previousBlockHash, err = chainhash.NewHashFromStr(previousBlockHashStr)
 		if err != nil {
 			logger.Errorf("Could not parse previous block hash: %v", err)
 			return
 		}
 
 		// nolint:gosec
-		blockHeight = uint32(*blockHeightUint)
+		blockHeight = uint32(blockHeightUint)
 	} else {
 		indexDB, err := bitcoin.NewIndexDB(index)
 		if err != nil {
@@ -147,8 +119,8 @@ func Start() {
 
 		defer indexDB.Close()
 
-		if *dumpRecords > 0 {
-			indexDB.DumpRecords(*dumpRecords)
+		if dumpRecords > 0 {
+			indexDB.DumpRecords(dumpRecords)
 			return
 		}
 
@@ -158,7 +130,7 @@ func Start() {
 			return
 		}
 
-		bestBlock, err := indexDB.WriteHeadersToFile(*outputDir, height)
+		bestBlock, err := indexDB.WriteHeadersToFile(outputDir, height)
 		if err != nil {
 			logger.Errorf("Could not write headers: %v", err)
 			return
@@ -173,8 +145,8 @@ func Start() {
 		blockHeight = bestBlock.Height
 	}
 
-	if !*skipUTXOs {
-		outFile := filepath.Join(*outputDir, blockHash.String()+".utxo-set")
+	if !skipUTXOs {
+		outFile := filepath.Join(outputDir, blockHash.String()+".utxo-set")
 
 		if _, err := os.Stat(outFile); err == nil {
 			logger.Errorf("Output file %s already exists. Please delete and try again", outFile)

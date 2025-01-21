@@ -5,7 +5,7 @@ import (
 	"flag"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/cmd/filereader/filereader"
+	"github.com/bitcoin-sv/teranode/cmd/filereader"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"

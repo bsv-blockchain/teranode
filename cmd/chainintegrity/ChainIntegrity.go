@@ -2,7 +2,6 @@ package chainintegrity
 
 import (
 	"context"
-	"flag"
 	"os"
 	"strings"
 
@@ -29,8 +28,10 @@ type BlockSubtree struct {
 	Index   int
 }
 
+// ChainIntegrity handles the chain integrity command logic
+//
 //nolint:gocognit // cognitive complexity too high
-func Start() {
+func ChainIntegrity(checkInterval int, alertThreshold int, debug bool, logfile string) {
 	// turn off all batching in aerospike, in this case it will only slow us down, since we are reading in 1 thread
 	tSettings := settings.NewSettings()
 	tSettings.UtxoStore.GetBatcherSize = 1
@@ -47,16 +48,12 @@ func Start() {
 		}
 	}
 
-	debug := flag.Bool("debug", false, "enable debug logging")
-	logfile := flag.String("logfile", "chainintegrity.log", "path to logfile")
-	flag.Parse()
-
 	debugLevel := "INFO"
-	if *debug {
+	if debug {
 		debugLevel = "DEBUG"
 	}
 
-	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(*logfile))
+	var logger = ulogger.New("chainintegrity", ulogger.WithLevel(debugLevel), ulogger.WithLoggerType("file"), ulogger.WithFilePath(logfile))
 
 	blockchainDB, err := blockchain_store.NewStore(logger, tSettings.BlockChain.StoreURL, tSettings)
 	if err != nil {

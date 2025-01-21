@@ -3,13 +3,11 @@ package recovertx
 import (
 	"context"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,28 +26,14 @@ import (
 
 var simulate *bool
 
-func Start() {
-	simulate = flag.Bool("simulate", false, "simulate the recovery without actually updating the utxo store")
-
-	flag.Parse()
-
-	args := flag.Args()
-	fmt.Println(args)
-
-	// read command line arguments
-	if len(args) < 2 {
-		fmt.Println("Usage: recover_tx <txID> <blockHeight> [comma separated list of spending tx ids]")
-		os.Exit(1)
-	}
-
+func RecoverTransaction(txIDHex string, blockHeight64 uint64, simulateFlag bool, spendingTxIDsStr ...string) {
 	ctx := context.Background()
 	logger := ulogger.New("recover_tx")
 	tSettings := settings.NewSettings()
-	blockHeightStr := args[1]
 
-	blockHeight64, err := strconv.ParseUint(blockHeightStr, 10, 32)
+	txID, err := chainhash.NewHashFromStr(txIDHex)
 	if err != nil {
-		fmt.Println("Error: invalid block height: ", err.Error())
+		fmt.Println("Error: invalid txID: ", err.Error())
 		os.Exit(1)
 	}
 
@@ -60,28 +44,20 @@ func Start() {
 
 	blockHeight := uint32(blockHeight64)
 
-	// read hex data from command line, or file from os if in the format @filename.hex
-	txIDHex := args[0]
-
-	txID, err := chainhash.NewHashFromStr(txIDHex)
-	if err != nil {
-		fmt.Println("Error: invalid txID: ", err.Error())
-		os.Exit(1)
-	}
+	// if simulateFlag is true, set simulate to true
+	simulate := simulateFlag
 
 	var spendingTxIDs []*chainhash.Hash
 
-	if len(args) > 2 {
-		spendingTxHexStr := args[2]
-
+	if len(spendingTxIDsStr) > 0 {
 		// split the comma separated list of spending tx ids
-		spendingTxHexs := strings.Split(spendingTxHexStr, ",")
+		spendingTxHexs := strings.Split(spendingTxIDsStr[0], ",")
 
 		spendingTxIDs = make([]*chainhash.Hash, len(spendingTxHexs))
 
 		for i, spendingTxHex := range spendingTxHexs {
 			if len(spendingTxHex) == 0 {
-				spendingTxIDs[i] = nil
+				spendingTxIDs = append(spendingTxIDs, nil)
 				continue
 			}
 
@@ -104,7 +80,7 @@ func Start() {
 	if err = recoverTx(ctx, utxoStore, txID, blockHeight, spendingTxIDs); err != nil {
 		fmt.Println("error recovering transaction: ", err.Error())
 		return
-	} else if simulate != nil && *simulate {
+	} else if simulate {
 		fmt.Println("Transaction recovery simulation done")
 		return
 	}
@@ -144,10 +120,8 @@ func recoverTx(ctx context.Context, utxoStore utxostore.Store, txID *chainhash.H
 	// check for existence of the transaction in the utxo store
 	// if it exists, return an error
 	exists, err := utxoStore.Get(ctx, tx.TxIDChainHash())
-	if err != nil {
-		if !errors.Is(err, errors.ErrTxNotFound) {
-			return errors.NewProcessingError("error checking for existing transaction: %s", err)
-		}
+	if err != nil && !errors.Is(err, errors.ErrTxNotFound) {
+		return errors.NewProcessingError("error checking for existing transaction: %s", err)
 	}
 
 	if exists != nil {

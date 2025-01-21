@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -55,25 +54,11 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func Start() {
+func FileReader(verbose bool, checkHeights bool, useStore bool, path string) {
 	logger := ulogger.TestLogger{}
 	ctx := context.Background()
 
 	fmt.Println()
-
-	// Define command line arguments
-	flag.BoolVar(&verbose, "verbose", false, "verbose output")
-	flag.BoolVar(&checkHeights, "checkHeights", false, "check heights in utxo headers")
-	flag.BoolVar(&useStore, "useStore", false, "use store")
-
-	flag.Usage = func() { usage("") }
-
-	flag.Parse()
-
-	var path string // If no path is provided, read from stdin
-	if len(flag.Args()) == 1 {
-		path = flag.Arg(0)
-	}
 
 	// Wrap the reader with a buffered reader
 	// read the transaction count

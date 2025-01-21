@@ -3,7 +3,6 @@ package s3inventoryintegrity
 import (
 	"context"
 	"encoding/csv"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -29,8 +28,7 @@ type s3bucket struct {
 }
 
 // Function to process each row
-func Start() {
-
+func S3InventoryIntegrity(verbose bool, quick bool, blockchainStoreURLString string, filename string) {
 	path, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -42,31 +40,17 @@ func Start() {
 		}
 	}
 
-	verbose := flag.Bool("verbose", false, "enable verbose logging")
-	quick := flag.Bool("quick", false, "skip checking file exists in S3 storage (very slow)")
-	blockchainStoreURLString := flag.String("d", "", "blockchain store URL")
-	filename := flag.String("f", "", "CSV filename")
-	flag.Parse()
-
-	if *blockchainStoreURLString == "" {
-		usage("blockchain store URL required")
-	}
-
-	if *filename == "" {
-		usage("filename required")
-	}
-
-	fmt.Printf("%s\n", *filename)
+	fmt.Printf("%s\n", filename)
 
 	var verboseLogger ulogger.Logger
-	if *verbose {
+	if verbose {
 		verboseLogger = VerboseLogger{}
 	} else {
 		// output nothing
 		verboseLogger = ulogger.TestLogger{}
 	}
 
-	blockchainStoreURL, err := url.ParseRequestURI(*blockchainStoreURLString)
+	blockchainStoreURL, err := url.ParseRequestURI(blockchainStoreURLString)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -82,7 +66,7 @@ func Start() {
 
 	s3buckets := []s3bucket{}
 
-	if !*quick {
+	if !quick {
 		for i := 1; i <= 6; i++ {
 			url, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockstore_m%d", i))
 			if err != nil {
@@ -105,7 +89,7 @@ func Start() {
 		panic(err)
 	}
 
-	filenames := loadFilenames(*filename)
+	filenames := loadFilenames(filename)
 	fmt.Printf("%d filenames in CSV\n", len(filenames))
 
 	if blockHeaders, _, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000); err != nil {

@@ -2,7 +2,6 @@ package blockchainstatus
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,24 +21,20 @@ var logger ulogger.Logger
 
 const progname = "blockchain-status"
 
-// // Version & commit strings injected at build with -ldflags -X...
+// Version & commit strings injected at build with -ldflags -X...
 var version string
 var commit string
 
 func Init() {
 	gocore.SetInfo(progname, version, commit)
-
 	logger = ulogger.TestLogger{}
 }
 
-func Start() {
+// BlockchainStatus handles the blockchain status command logic
+func BlockchainStatus(clients string, refresh int) {
 	_ = os.Chdir("../../")
 
-	clients := flag.String("miners", "", "blockchain miners to watch")
-	refresh := flag.Int("refresh", 5, "refresh rate in seconds")
-	flag.Parse()
-
-	if *clients == "" {
+	if clients == "" {
 		logger.Fatalf("no miners specified")
 	}
 
@@ -47,7 +42,7 @@ func Start() {
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 
-	minerList := strings.Split(*clients, ",")
+	minerList := strings.Split(clients, ",")
 
 	tSettings := settings.NewSettings()
 
@@ -98,7 +93,7 @@ func Start() {
 				}
 
 				table.Render()
-				time.Sleep(time.Duration(*refresh) * time.Second)
+				time.Sleep(time.Duration(refresh) * time.Second)
 			}
 		}
 	}()

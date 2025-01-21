@@ -3,7 +3,6 @@ package s3_blaster
 import (
 	"context"
 	"crypto/rand"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,14 +25,13 @@ var (
 	usePrefix   bool
 	txStoreUrl  *url.URL
 )
+
 var separator = []byte("/")
 
 func Init() {
-
 	httpAddr, ok := gocore.Config().Get("profilerAddr")
 	if !ok {
 		log.Printf("Profiler address not set, defaulting to localhost:6060")
-
 		httpAddr = "localhost:6060"
 	}
 
@@ -57,12 +55,12 @@ func Init() {
 	}()
 }
 
-func Start() {
-	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.BoolVar(&usePrefix, "usePrefix", false, "Use a prefix for the S3 key")
-	flag.Parse()
-
+// Blast handles the s3_blaster command logic
+func Blast(workers int, usePrefixInput bool) {
 	logger := ulogger.New("s3_blaster")
+
+	workerCount = workers
+	usePrefix = usePrefixInput
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
@@ -150,6 +148,7 @@ func FormatFloat(f float64) string {
 		digit := intPart % 10
 
 		sb.WriteString(fmt.Sprintf("%d", digit))
+
 		intPart /= 10
 		count++
 	}

@@ -13,25 +13,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func Start() {
+// AerospikeReader handles the aerospike reader command logic
+func AerospikeReader(txidStr string) {
 	logger := ulogger.NewGoCoreLogger("aerospike_reader", ulogger.WithLevel("WARN"))
 	tSettings := settings.NewSettings()
 
 	fmt.Println()
 
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s <txid>\n", os.Args[0])
-		os.Exit(1)
-	}
-
-	if len(os.Args[1]) != 64 {
-		fmt.Printf("Invalid txid: %s\n", os.Args[1])
-		os.Exit(1)
-	}
-
-	hash, err := chainhash.NewHashFromStr(os.Args[1])
+	hash, err := chainhash.NewHashFromStr(txidStr)
 	if err != nil {
-		fmt.Printf("Invalid txid: %s\n", os.Args[1])
+		fmt.Printf("Invalid txid: %s\n", txidStr)
 		os.Exit(1)
 	}
 

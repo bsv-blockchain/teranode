@@ -16,7 +16,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func Start() {
+func UtxoPersister() {
 	ctx, _, deferFn := tracing.StartTracing(
 		context.Background(),
 		"utxopersister",

@@ -3,7 +3,6 @@ package blockassembly_blaster
 import (
 	"context"
 	"crypto/rand"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -99,12 +98,8 @@ func Init(teranodeSettings *settings.Settings) {
 	}
 }
 
-func Start() {
-	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to blockassembly server using (disabled|grpc|frpc|http)")
-	flag.IntVar(&batchSize, "batch_size", 0, "Batch size [0 for no batching]")
-	flag.Parse()
-
+// AssemblyBlaster handles the block assembly blaster command logic
+func AssemblyBlaster(workerCount int, broadcastProtocol string, batchSize int) {
 	logger := ulogger.New("block_assembly_blaster")
 
 	tSettings := settings.NewSettings()

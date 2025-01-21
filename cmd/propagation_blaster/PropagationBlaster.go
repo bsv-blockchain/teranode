@@ -3,7 +3,6 @@ package propagation_blaster
 import (
 	"bytes"
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -110,13 +109,11 @@ func Init() {
 	}
 }
 
-func Start() {
-	flag.IntVar(&workerCount, "workers", 1, "Set worker count")
-	flag.StringVar(&broadcastProtocol, "broadcast", "grpc", "Broadcast to propagation server using (disabled|grpc|stream|http)")
-	flag.IntVar(&bufferSize, "buffer_size", 0, "Buffer size")
-	flag.Parse()
-
+func Blast(workers int, target string) {
 	logger := ulogger.New("propagation_blaster")
+
+	workerCount = workers
+	broadcastProtocol = target
 
 	tSettings := settings.NewSettings()
 

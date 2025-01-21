@@ -3,7 +3,6 @@ package seeder
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,24 +52,7 @@ func usage(msg string) {
 }
 
 // nolint: gocognit
-func Start() {
-	flag.StringVar(&inputDir, "inputDir", "", "Input directory for UTXO set and headers.")
-	flag.StringVar(&hash, "hash", "", "Hash of the UTXO set / headers to process.")
-	flag.BoolVar(&skipHeaders, "skipHeaders", false, "Skip processing headers.")
-	flag.BoolVar(&skipUTXOs, "skipUTXOs", false, "Skip processing UTXOs.")
-
-	flag.Usage = func() { usage("") }
-
-	flag.Parse()
-
-	if inputDir == "" {
-		usage("Please provide an inputDir")
-	}
-
-	if hash == "" {
-		usage("Please provide a hash")
-	}
-
+func Seeder(inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
 	var (
 		headerFile string
 		utxoFile   string

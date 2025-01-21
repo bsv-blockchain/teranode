@@ -15,7 +15,7 @@ import (
 var txCounter atomic.Uint64
 var byteCounter atomic.Uint64
 
-func Start() {
+func Bare() {
 	e := echo.New()
 
 	// Middleware

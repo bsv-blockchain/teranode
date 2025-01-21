@@ -14,25 +14,20 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func Start() {
+// Unspend handles the unspend command logic
+func Unspend(txid string) {
 	logger := ulogger.New("unspend")
 	ctx := context.Background()
 	tSettings := settings.NewSettings()
-	fmt.Println()
 
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s <txid>\n", os.Args[0])
+	if len(txid) != 64 {
+		fmt.Println("Invalid txid, --txid must be 64 characters long, got:", len(txid))
 		os.Exit(1)
 	}
 
-	if len(os.Args[1]) != 64 {
-		fmt.Printf("Invalid txid: %s\n", os.Args[1])
-		os.Exit(1)
-	}
-
-	txHash, err := chainhash.NewHashFromStr(os.Args[1])
+	txHash, err := chainhash.NewHashFromStr(txid)
 	if err != nil {
-		fmt.Printf("Invalid txid: %s\n", os.Args[1])
+		fmt.Printf("Invalid txid: %s\n", txid)
 		os.Exit(1)
 	}
 
