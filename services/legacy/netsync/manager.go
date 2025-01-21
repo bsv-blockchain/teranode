@@ -1340,71 +1340,20 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
 	for i, iv := range invVects {
-		// process all the inv vectors in parallel
+		if iv.Type == wire.InvTypeBlock {
+			// process blocks in serial
+			sm.processInvMsg(i, iv, processInvs, peer, exists, state, lastBlock)
+			continue
+		}
+
+		// process all remaining inv vectors in parallel
 		wg.Add(1)
 
 		go func(i int, iv *wire.InvVect) {
 			defer wg.Done()
 
 			// Ignore unsupported inventory types.
-			switch iv.Type {
-			case wire.InvTypeBlock:
-			case wire.InvTypeTx:
-				if !processInvs {
-					// If we are not in running state, we are not interested in new transaction or block messages
-					sm.logger.Debugf("[handleInvMsg] Ignoring inv message from %s, not in running state", peer)
-					return
-				}
-			default:
-				return
-			}
-
-			// Add the inventory to the cache of known inventory
-			// for the peer.
-			peer.AddKnownInventory(iv)
-
-			// Ignore inventory when we're in headers-first mode.
-			if sm.headersFirstMode {
-				return
-			}
-
-			// Request the inventory if we don't already have it.
-			haveInv, err := sm.haveInventory(iv)
-			if err != nil {
-				sm.logger.Warnf("[handleInvMsg] Unexpected failure when checking for "+
-					"existing inventory during inv message "+
-					"processing: %v", err)
-
-				return
-			}
-
-			if !haveInv {
-				if iv.Type == wire.InvTypeTx {
-					// Skip the transaction if it has already been rejected.
-					if _, exists = sm.rejectedTxns.Get(iv.Hash); exists {
-						return
-					}
-				}
-
-				// Add it to the request queue.
-				state.requestQueue.Append(iv)
-
-				return
-			}
-
-			if iv.Type == wire.InvTypeBlock {
-				// We already have the final block advertised by this inventory message, so force a request for more.  This
-				// should only happen if we're on a really long side chain.
-				if i == lastBlock {
-					// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
-					locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, &iv.Hash, 0)
-					if err != nil {
-						sm.logger.Errorf("[handleInvMsg] Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
-					} else {
-						_ = peer.PushGetBlocksMsg(locator, &zeroHash)
-					}
-				}
-			}
+			sm.processInvMsg(i, iv, processInvs, peer, exists, state, lastBlock)
 		}(i, iv)
 	}
 
@@ -1453,6 +1402,67 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if len(gdmsg.InvList) > 0 {
 		sm.logger.Debugf("[handleInvMsg] Requesting %d items from %s", len(gdmsg.InvList), peer)
 		peer.QueueMessage(gdmsg, nil)
+	}
+}
+
+func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, peer *peerpkg.Peer, exists bool, state *peerSyncState, lastBlock int) {
+	switch iv.Type {
+	case wire.InvTypeBlock:
+	case wire.InvTypeTx:
+		if !processInvs {
+			// If we are not in running state, we are not interested in new transaction or block messages
+			sm.logger.Debugf("[handleInvMsg] Ignoring inv message from %s, not in running state", peer)
+			return
+		}
+	default:
+		return
+	}
+
+	// Add the inventory to the cache of known inventory
+	// for the peer.
+	peer.AddKnownInventory(iv)
+
+	// Ignore inventory when we're in headers-first mode.
+	if sm.headersFirstMode {
+		return
+	}
+
+	// Request the inventory if we don't already have it.
+	haveInv, err := sm.haveInventory(iv)
+	if err != nil {
+		sm.logger.Warnf("[handleInvMsg] Unexpected failure when checking for "+
+			"existing inventory during inv message "+
+			"processing: %v", err)
+
+		return
+	}
+
+	if !haveInv {
+		if iv.Type == wire.InvTypeTx {
+			// Skip the transaction if it has already been rejected.
+			if _, exists = sm.rejectedTxns.Get(iv.Hash); exists {
+				return
+			}
+		}
+
+		// Add it to the request queue.
+		state.requestQueue.Append(iv)
+
+		return
+	}
+
+	if iv.Type == wire.InvTypeBlock {
+		// We already have the final block advertised by this inventory message, so force a request for more.  This
+		// should only happen if we're on a really long side chain.
+		if i == lastBlock {
+			// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
+			locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, &iv.Hash, 0)
+			if err != nil {
+				sm.logger.Errorf("[handleInvMsg] Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
+			} else {
+				_ = peer.PushGetBlocksMsg(locator, &zeroHash)
+			}
+		}
 	}
 }
 
