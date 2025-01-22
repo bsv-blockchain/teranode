@@ -17,7 +17,6 @@ package tna
 
 import (
 	"testing"
-	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
@@ -57,8 +56,16 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 			t.Fatalf("Failed to create and send transaction: %v", err)
 		}
 
-		// Wait for transaction propagation
-		time.Sleep(2 * time.Second)
+		// Check if the tx is into the UTXOStore
+		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHash)
+
+		if txRes == nil {
+			t.Fatalf("Tx not found: %v", txRes)
+		}
+
+		if errTxRes != nil {
+			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
+		}
 
 		// Verify transaction exists in block assembly on all nodes
 		for i, node := range testEnv.Nodes {
@@ -73,12 +80,21 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 		// Send multiple transactions
 		numTxs := 5
 		txHashes, err := helper.CreateAndSendTxsToASliceOfNodes(ctx, testEnv.Nodes, numTxs)
+
 		if err != nil {
 			t.Fatalf("Failed to create and send multiple transactions: %v", err)
 		}
 
-		// Wait for transaction propagation
-		time.Sleep(2 * time.Second)
+		// Check if 1 tx is into the UTXOStore
+		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHashes[0])
+
+		if txRes == nil {
+			t.Fatalf("Tx not found: %v", txRes)
+		}
+
+		if errTxRes != nil {
+			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
+		}
 
 		// Verify all transactions exist in block assembly on all nodes
 		for _, txHash := range txHashes {
@@ -99,8 +115,16 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 			t.Fatalf("Failed to create and send concurrent transactions: %v", err)
 		}
 
-		// Wait for transaction propagation
-		time.Sleep(3 * time.Second)
+		// Check if 1 tx is into the UTXOStore
+		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHashes[0])
+
+		if txRes == nil {
+			t.Fatalf("Tx not found: %v", txRes)
+		}
+
+		if errTxRes != nil {
+			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
+		}
 
 		// Verify all transactions exist in block assembly on all nodes
 		for _, txHash := range txHashes {

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -90,8 +89,6 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	}
 
 	t.Logf("Hashes in created block: %v", hashesTx)
-
-	time.Sleep(30 * time.Second)
 
 	if len(hashes) > 0 {
 		t.Logf("First element of hashes: %v", hashes[0])
