@@ -4,13 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
-
+	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,10 +87,19 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 				},
 			},
 		}
+		tSettings := &settings.Settings{
+			ChainCfgParams: &chaincfg.RegressionNetParams,
+			UtxoStore: settings.UtxoStoreSettings{
+				UpdateTxMinedStatus: true,
+				MaxMinedBatchSize:   1024,
+				MaxMinedRoutines:    128,
+			},
+		}
 
 		err = UpdateTxMinedStatus(
 			context.Background(),
 			ulogger.TestLogger{},
+			tSettings,
 			txMetaStore,
 			block,
 			1,
@@ -133,5 +143,6 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 func newTx(lockTime uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = lockTime
+
 	return tx
 }

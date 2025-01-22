@@ -16,6 +16,7 @@ type Settings struct {
 	ServerKeyFile            string
 	Logger                   string
 	LogLevel                 string
+	PrettyLogs               bool
 	ProfilerAddr             string
 	StatsPrefix              string
 	PrometheusEndpoint       string
@@ -267,6 +268,9 @@ type UtxoStoreSettings struct {
 	PostgresMaxIdleConns           int
 	PostgresMaxOpenConns           int
 	VerboseDebug                   bool
+	UpdateTxMinedStatus            bool
+	MaxMinedRoutines               int
+	MaxMinedBatchSize              int
 }
 
 type P2PSettings struct {

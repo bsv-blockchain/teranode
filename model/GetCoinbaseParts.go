@@ -55,6 +55,7 @@ func BuildCoinbase(c1 []byte, c2 []byte, extraNonce1 string, extraNonce2 string)
 	a = append(a, e1...)
 	a = append(a, e2...)
 	a = append(a, c2...)
+
 	return a
 }
 
@@ -145,7 +146,7 @@ func makeCoinbaseOutputTransactions(coinbaseValue uint64, walletAddresses []stri
 	buf := make([]byte, 0)
 
 	// Add the number of outputs
-	buf = append(buf, VarInt(uint64(numberOfOutputs))...)
+	buf = append(buf, VarInt(numberOfOutputs)...)
 
 	for i, walletAddress := range walletAddresses {
 		lockingScript, err := AddressToScript(walletAddress)
@@ -175,14 +176,14 @@ func makeCoinbase1(height uint32, coinbaseText string) []byte {
 	spaceForExtraNonce := 12
 
 	blockHeightBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(blockHeightBytes, uint32(height)) // Block height
+	binary.LittleEndian.PutUint32(blockHeightBytes, height) // Block height
 
 	arbitraryData := []byte{}
 	arbitraryData = append(arbitraryData, 0x03)
 	arbitraryData = append(arbitraryData, blockHeightBytes[:3]...)
 	arbitraryData = append(arbitraryData, []byte(coinbaseText)...)
 
-	//Arbitrary data should leave enough space for the extra nonce
+	// Arbitrary data should leave enough space for the extra nonce
 	if len(arbitraryData) > (100 - spaceForExtraNonce) {
 		arbitraryData = arbitraryData[:100-spaceForExtraNonce] // Slice the arbitrary text so everything fits in 100 bytes
 	}
@@ -221,13 +222,15 @@ func VarInt(i uint64) []byte {
 
 	if i < 0x10000 {
 		b[0] = 0xfd
-		binary.LittleEndian.PutUint16(b[1:3], uint16(i))
+		binary.LittleEndian.PutUint16(b[1:3], uint16(i)) //nolint:gosec
+
 		return b[:3]
 	}
 
 	if i < 0x100000000 {
 		b[0] = 0xfe
-		binary.LittleEndian.PutUint32(b[1:5], uint32(i))
+		binary.LittleEndian.PutUint32(b[1:5], uint32(i)) //nolint:gosec
+
 		return b[:5]
 	}
 

@@ -36,6 +36,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		ServerKeyFile:            getString("server_keyFile", "", alternativeContext...),
 		Logger:                   getString("logger", "", alternativeContext...),
 		LogLevel:                 getString("logLevel", "INFO", alternativeContext...),
+		PrettyLogs:               getBool("prettyLogs", true, alternativeContext...),
 		ProfilerAddr:             getString("profilerAddr", "", alternativeContext...),
 		StatsPrefix:              getString("stats_prefix", "gocore", alternativeContext...),
 		PrometheusEndpoint:       getString("prometheusEndpoint", "", alternativeContext...),
@@ -278,6 +279,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PostgresMaxIdleConns:           getInt("utxostore_utxo_postgresMaxIdleConns", 10, alternativeContext...),
 			PostgresMaxOpenConns:           getInt("utxostore_utxo_postgresMaxOpenConns", 80, alternativeContext...),
 			VerboseDebug:                   getBool("utxostore_verbose_debug", false, alternativeContext...),
+			UpdateTxMinedStatus:            getBool("utxostore_updateTxMinedStatus", true, alternativeContext...),
+			MaxMinedRoutines:               getInt("utxostore_maxMinedRoutines", 128, alternativeContext...),
+			MaxMinedBatchSize:              getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:     getString("p2p_bestblock_topic", "", alternativeContext...),

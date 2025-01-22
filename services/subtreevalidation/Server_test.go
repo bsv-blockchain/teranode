@@ -150,6 +150,7 @@ func TestTwoTransactions(t *testing.T) {
 
 func TestMerkleRoot(t *testing.T) {
 	var err error
+
 	subtrees := make([]*util.Subtree, 2)
 
 	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1

@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 )
@@ -38,7 +38,7 @@ var (
 	prometheusUpdateTxMinedDuration prometheus.Histogram
 )
 
-func initWorker() {
+func initWorker(tSettings *settings.Settings) {
 	prometheusUpdateTxMinedCh = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "teranode",
 		Subsystem: "model",
@@ -64,6 +64,7 @@ func initWorker() {
 			if err := updateTxMinedStatus(
 				msg.ctx,
 				msg.logger,
+				tSettings,
 				msg.txMetaStore,
 				msg.block,
 				msg.blockID,
@@ -78,10 +79,9 @@ func initWorker() {
 	}()
 }
 
-func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
-
+func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
 	// start the worker, if not already started
-	txMinedOnce.Do(initWorker)
+	txMinedOnce.Do(func() { initWorker(tSettings) })
 
 	startTime := time.Now()
 	defer func() {
@@ -104,23 +104,21 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	return <-done
 }
 
-func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
+func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "UpdateTxMinedStatus",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithDebugLogMessage(logger, "[UpdateTxMinedStatus] [%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees)),
 	)
 	defer deferFn()
 
-	updateTxMinedStatusEnabled := gocore.Config().GetBool("utxostore_updateTxMinedStatus", true)
-	if !updateTxMinedStatusEnabled {
+	if !tSettings.UtxoStore.UpdateTxMinedStatus {
 		return nil
 	}
 
-	maxMinedRoutines, _ := gocore.Config().GetInt("utxostore_maxMinedRoutines", 128)
-	maxMinedBatchSize, _ := gocore.Config().GetInt("utxostore_maxMinedBatchSize", 1024)
+	maxMinedBatchSize := tSettings.UtxoStore.MaxMinedBatchSize
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(maxMinedRoutines)
+	g.SetLimit(tSettings.UtxoStore.MaxMinedRoutines)
 
 	maxRetries := 10
 
@@ -144,6 +142,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, block.Subtrees[subtreeIdx].String(), blockID)
+
 					retries := 0
 
 					for {
@@ -158,6 +157,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 						} else {
 							break
 						}
+
 						retries++
 					}
 
@@ -170,6 +170,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 				for {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
+
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
 						if retries >= maxRetries {
 							return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx", block.Hash().String(), err)
@@ -178,6 +179,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 							logger.Warnf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
 							time.Sleep(backoff)
 						}
+
 						retries++
 					} else {
 						break

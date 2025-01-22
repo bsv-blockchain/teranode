@@ -266,6 +266,35 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	require.NoError(t, err)
 }
 
+func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604_high_fee(t *testing.T) {
+	initPrometheusMetrics()
+
+	// height 229369] tx 956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604 failed validation: arc error 462: transaction input total satoshis cannot be zero
+	txid := "956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604"
+	tx, err := bt.NewTxFromString("010000000000000000ef015400c3490d91f3f742e73e81bc37dfca4f24f9a73a17c90ccab3012ddbc795bb000000008a473044022006a960f73ea637af867f69ed69edd291bee1d6daec241649caf909fb864dcd3b022011c82189c4a3379aba85fdb907d341db8067e426d7660fbba05c12fa370fa8aa0141048e69627b4807fe4ab00002a01c4a26a50d558cce969708e75dc5bfb345bbe92f06082757c85cbcac4ff0bbb91e221c59d3f9e675125da07e8110fd7d9b0ab6eeffffffff00000000000000001976a9146f9e896bb7cd9d27ca5b18c3ec9587ff0be7895188ac0100000000000000001976a9144477154cba7f0474a578fe734e00bd60513fbab588ac00000000")
+	require.NoError(t, err)
+	assert.Equal(t, txid, tx.TxID())
+
+	var height uint32 = 229369
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+	tSettings.Policy.MinMiningTxFee = 1000 // high fee
+
+	v := &Validator{
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
+	}
+
+	ctx := context.Background()
+
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
+
+	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transaction fee is too low")
+}
+
 // func TestValidateTxdad5ecab132387e8e9b4e0330910c71930e637d840a5818eb92928668e52bbe5(t *testing.T) {
 // 	initPrometheusMetrics()
 

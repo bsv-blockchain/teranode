@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
@@ -52,6 +53,7 @@ func startKafka(logFile string) error {
 
 	kafkaCmd.Stdout = kafkaLog
 	kafkaCmd.Stderr = kafkaLog
+
 	return kafkaCmd.Start()
 }
 
@@ -77,6 +79,7 @@ func startApp(logFile string) error {
 	appCmd.Stderr = appLog
 
 	log.Println("Starting app in the background...")
+
 	if err := appCmd.Start(); err != nil {
 		return err
 	}
@@ -93,6 +96,7 @@ func startApp(logFile string) error {
 func stopKafka() {
 	log.Println("Stopping Kafka...")
 	cmd := exec.Command("docker", "stop", "kafka-server")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop Kafka: %v\n", err)
 	} else {
@@ -104,6 +108,7 @@ func stopKafka() {
 func stopTeranode() {
 	log.Println("Stopping TERANODE...")
 	cmd := exec.Command("pkill", "-f", "teranode")
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("Failed to stop TERANODE: %v\n", err)
 	} else {
@@ -143,6 +148,7 @@ func TestMain(m *testing.M) {
 func TestHealth(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -168,6 +174,7 @@ func TestHealth(t *testing.T) {
 func TestCoinbaseSubsidyHeight(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -206,14 +213,17 @@ func TestCoinbaseSubsidyHeight(t *testing.T) {
 	assert.NotNil(t, mc, "Mining candidate should not be nil")
 	assert.NotNil(t, st, "Subtree should not be nil")
 	t.Logf("Coinbase: %v", mc.CoinbaseValue)
-	//TODO: Add an assertion for height
 }
+
+// TODO: Add an assertion for height
 
 // TestDifficultyAdjustment verifies the difficulty adjustment mechanism.
 func TestDifficultyAdjustment(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
+
 	t.Skip("Skipping difficulty adjustment test")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -254,10 +264,12 @@ func TestDifficultyAdjustment(t *testing.T) {
 			t.Logf("Error getting block header: %v", err)
 			continue
 		}
+
 		if m.Height > lastHeight {
 			t.Logf("New block at height %d, time since start: %v", m.Height, time.Since(startTime))
 			lastHeight = m.Height
 		}
+
 		time.Sleep(5 * time.Second)
 	}
 
@@ -280,6 +292,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 func TestShouldFollowLongerChain(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -315,7 +328,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Create chain B (lower difficulty)
@@ -326,7 +339,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Store blocks from both chains
@@ -371,6 +384,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
 	defer cancel()
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -406,7 +420,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Create chain B (lower difficulty) with multiple blocks
@@ -417,7 +431,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	chainBHeader2 := &model.BlockHeader{
@@ -426,7 +440,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          3,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	chainBHeader3 := &model.BlockHeader{
@@ -435,7 +449,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          4,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Store blocks from both chains
@@ -525,13 +539,14 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	go func() {
 		defer close(done)
+
 		err = baService.Start(ctx)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
 		}
 	}()
 
-	//wait for the block assembler to start
+	// wait for the block assembler to start
 	time.Sleep(5 * time.Second)
 	ba := baService.blockAssembler
 
@@ -559,7 +574,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000") // Dummy coinbase
@@ -579,7 +594,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	blockA := &model.Block{
@@ -618,7 +633,9 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	// Get mining candidate with timeout context
 	t.Log("Getting mining candidate...")
+
 	var miningCandidate *model.MiningCandidate
+
 	var s []*util.Subtree
 	miningCandidate, s, mcErr := ba.getMiningCandidate()
 	require.NoError(t, mcErr)
@@ -632,6 +649,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	// Verify transactions were carried over
 	var foundTxs int
+
 	for _, subtree := range s {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
@@ -639,6 +657,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 			}
 		}
 	}
+
 	t.Logf("Found %d transactions in subtrees", foundTxs)
 	assert.Equal(t, 3, foundTxs, "All transactions should be included in the mining candidate")
 }
@@ -654,7 +673,6 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 //   - string: RPC response
 //   - error: Any error encountered during the call
 func CallRPC(url string, method string, params []interface{}) (string, error) {
-
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"method": method,
@@ -676,6 +694,7 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	// Perform the request
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", errors.NewProcessingError("failed to perform request", err)
@@ -722,6 +741,7 @@ func TestShouldHandleReorg(t *testing.T) {
 	// Start the service
 	go func() {
 		defer close(done)
+
 		err = baService.Start(ctx)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
@@ -755,7 +775,7 @@ func TestShouldHandleReorg(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Create chain B (competing chain) with higher difficulty
@@ -767,7 +787,7 @@ func TestShouldHandleReorg(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          3,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Add transactions
@@ -804,7 +824,7 @@ func TestShouldHandleReorg(t *testing.T) {
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
 
-	//check the previous hash of the mining candidate
+	// check the previous hash of the mining candidate
 	prevHash := chainhash.Hash(mc1.PreviousHash)
 	t.Logf("Mining candidate built on block with previous hash: %s", prevHash)
 	assert.Equal(t, chainAHeader1.Hash().String(), prevHash.String(), "Mining candidate should be built on Chain A")
@@ -827,13 +847,14 @@ func TestShouldHandleReorg(t *testing.T) {
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
 
-	//check the previous hash of the mining candidate
+	// check the previous hash of the mining candidate
 	prevHash = chainhash.Hash(mc2.PreviousHash)
 	t.Logf("Mining candidate built on block with previous hash: %s", prevHash)
 	assert.Equal(t, chainBHeader1.Hash().String(), prevHash.String(), "Mining candidate should be built on Chain B")
 
 	// Verify transaction count is maintained
 	var foundTxsAfterReorg int
+
 	for _, subtree := range subtrees2 {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
@@ -841,6 +862,7 @@ func TestShouldHandleReorg(t *testing.T) {
 			}
 		}
 	}
+
 	t.Logf("Found %d transactions after reorg", foundTxsAfterReorg)
 	assert.Equal(t, 3, foundTxsAfterReorg, "All transactions should be preserved after reorg")
 
@@ -875,6 +897,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	// Start the service
 	go func() {
 		defer close(done)
+
 		err = baService.Start(ctx)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
@@ -910,7 +933,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	chainAHeader2 := &model.BlockHeader{
@@ -919,7 +942,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	chainAHeader3 := &model.BlockHeader{
@@ -928,7 +951,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          3,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	chainAHeader4 := &model.BlockHeader{
@@ -937,7 +960,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          4,
 		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Create chain B (competing chain) with higher difficulty
@@ -949,7 +972,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          10,
 		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
 	}
 
 	// Add transactions
@@ -1042,6 +1065,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Verify transaction count is maintained
 	var foundTxsAfterReorg int
+
 	for _, subtree := range subtrees2 {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
@@ -1049,6 +1073,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 			}
 		}
 	}
+
 	t.Logf("Found %d transactions after reorg", foundTxsAfterReorg)
 	assert.Equal(t, 3, foundTxsAfterReorg, "All transactions should be preserved after reorg")
 
@@ -1061,4 +1086,39 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	t.Logf("Chain A length: 4 blocks, Chain B length: 1 block")
 	t.Logf("Chain A difficulty: %s", chainABits.String())
 	t.Logf("Chain B difficulty: %s", chainBBits.String())
+}
+
+// TestShouldFailCoinbaseArbitraryTextTooLong verifies max coinbase size policy.
+func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Coinbase.ArbitraryText = "too long"
+	tSettings.ChainCfgParams.MaxCoinbaseScriptSigSize = 5
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	memStore := memory.New()
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
+	require.NoError(t, err)
+
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, ba)
+
+	err = ba.Init(ctx)
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	go func() {
+		err = ba.Start(ctx)
+		require.NoError(t, err)
+	}()
+	time.Sleep(1 * time.Second)
+
+	_, err = ba.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
+	require.Error(t, err, "Should return error for bad coinbase length")
+	require.Contains(t, err.Error(), "bad coinbase length")
 }

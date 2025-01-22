@@ -82,9 +82,15 @@ type Validator struct {
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
 	initPrometheusMetrics()
 
-	ba, err := blockassembly.NewClient(ctx, logger, tSettings)
-	if err != nil {
-		return nil, errors.NewServiceError("failed to create block assembly client", err)
+	var ba blockassembly.Store
+
+	var err error
+
+	if !tSettings.BlockAssembly.Disabled {
+		ba, err = blockassembly.NewClient(ctx, logger, tSettings)
+		if err != nil {
+			return nil, errors.NewServiceError("failed to create block assembly client", err)
+		}
 	}
 
 	v := &Validator{

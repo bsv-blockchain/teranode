@@ -531,6 +531,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	if err = model.UpdateTxMinedStatus(
 		ctx,
 		u.logger,
+		u.settings,
 		u.utxoStore,
 		block,
 		blockID,

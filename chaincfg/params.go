@@ -133,9 +133,6 @@ type Params struct {
 	DaaForkHeight           uint32 // November 13, 2017 hard fork
 	GenesisActivationHeight uint32 // Genesis activation height
 
-	// Planned hardforks
-	GreatWallActivationTime uint64 // May 15, 2019 hard fork
-
 	// CoinbaseMaturity is the number of blocks required before newly mined
 	// coins (coinbase transactions) can be spent.
 	CoinbaseMaturity uint16
@@ -240,7 +237,9 @@ var MainNetParams = Params{
 	BIP0066Height: 363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
 	CSVHeight:     419328, // 000000000000000004a1b34462cb8aeebd5799177f7a29cf28f2d1961716b5b5
 
-	UahfForkHeight:           478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
+	// August 1, 2017 hard fork
+	UahfForkHeight: 478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
+	// November 13, 2017 hard fork
 	DaaForkHeight:            504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
 	GenesisActivationHeight:  620538,
 	MaxCoinbaseScriptSigSize: 100,
@@ -347,8 +346,11 @@ var StnParams = Params{
 	BIP0066Height:            1251,      // Used by regression tests
 	CSVHeight:                0,         // Always active on stn
 
-	UahfForkHeight:          0, // Always active on stn
-	DaaForkHeight:           0, // Always active on stn
+	// August 1, 2017 hard fork
+	UahfForkHeight: 15,
+	// November 13, 2017 hard fork
+	DaaForkHeight: 2200, // must be > 2016
+
 	GenesisActivationHeight: 100,
 
 	SubsidyReductionInterval: 210000,
@@ -422,8 +424,11 @@ var RegressionNetParams = Params{
 	BIP0066Height:            1251,      // Used by regression tests
 	CSVHeight:                576,       // Used by regression tests
 
-	UahfForkHeight:          15,   // August 1, 2017 hard fork
-	DaaForkHeight:           2200, // must be > 2016 - see assert in pow.cpp:268
+	// UAHF is always enabled on regtest.
+	UahfForkHeight: 0, // August 1, 2017 hard fork
+	// November 13, 2017 hard fork is always on on regtest.
+	DaaForkHeight: 0,
+
 	GenesisActivationHeight: 10000,
 
 	SubsidyReductionInterval: 150,
@@ -497,7 +502,9 @@ var TestNetParams = Params{
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 	CSVHeight:     770112, // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
 
-	UahfForkHeight:           1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	// August 1, 2017 hard fork
+	UahfForkHeight: 1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	// November 13, 2017 hard fork
 	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
 	GenesisActivationHeight:  1344302,
 	MaxCoinbaseScriptSigSize: 100,

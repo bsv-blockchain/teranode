@@ -20,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +31,6 @@ func TestServer_Performance(t *testing.T) {
 	// because there are only 1 possible port for ba server
 	// We accumulated measurement for each test case and run them sequentially
 
-	gocore.Config().Set("initial_merkle_items_per_subtree", "32768")
 	ba, err := initMockedServer(t)
 	require.NoError(t, err)
 
@@ -174,8 +172,6 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	gocore.Config().Set("tx_chan_buffer_size", "1000000")
 
 	ctx := context.Background()
 	ba := blockassembly.New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)

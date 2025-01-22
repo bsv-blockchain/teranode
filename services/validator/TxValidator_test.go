@@ -182,7 +182,21 @@ func TestMaxTxSizePolicy(t *testing.T) {
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
 	err := txValidator.ValidateTransaction(largeTx, 10000000, &Options{})
-	if assert.Error(t, err) {
-		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
-	}
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
 }
+
+// TODO: this test needs changing when the script validation is fixed (#1981)
+func TestMaxOpsPerScriptPolicy(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.MaxOpsPerScriptPolicy = 1       // insanely low
+	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
+	tSettings.ChainCfgParams.GenesisActivationHeight = 100
+
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+
+	err := txValidator.ValidateTransaction(largeTx, 620539, &Options{})
+	assert.NoError(t, err)
+}
+
+// assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script size in bytes is greater than 2"))
