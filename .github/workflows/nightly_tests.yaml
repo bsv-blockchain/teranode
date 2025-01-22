@@ -10,7 +10,30 @@ env:
   SETTINGS_CONTEXT_DEFAULT: "default_context"
 
 jobs:
+  build-image:
+    runs-on: teranode-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        run: docker compose -f docker-compose.e2etest.yml build
+
   run-tests:
+    needs: build-image
     runs-on: teranode-runner
     strategy:
       matrix:
@@ -168,9 +191,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -186,17 +206,11 @@ jobs:
           go-version: "1.21.0"
           cache: "false"
 
-      - name: Build Docker Image
-        run: docker compose -f docker-compose.e2etest.yml build
-
       - name: Run Test
         run: |
-          # make install-tools
           go clean -testcache
           cd ${{ matrix.test_config.test_dir }} && \
           go test -v -run "^${{ matrix.test_config.test_suite }}$/${{ matrix.test_config.test_func }}$" -tags ${{ matrix.test_config.test_tags }}
-          # -json | \
-          # go-ctrf-json-reporter -output ../../${{ matrix.test_config.report_name }} --verbose
         env:
           test_dir: ${{ matrix.test_config.test_dir }}
           test_tags: ${{ matrix.test_config.test_tags }}
