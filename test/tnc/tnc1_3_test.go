@@ -10,13 +10,21 @@
 package tnc
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/wif"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -82,10 +90,90 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 		}
 	}()
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 10000)
-	if errTXs != nil {
-		t.Errorf("Failed to send txs with distributor: %v", errTXs)
+	//Create tx
+	block1, err := node0.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	t.Logf(("Block 1: %v"), block1.Header.Hash().String())
+
+
+	coinbaseTx := block1.CoinbaseTx
+
+	coinbasePrivKey1 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey1, err := wif.DecodeWIF(coinbasePrivKey1)
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey1.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+	t.Log("Address 0:", address.AddressString)
+
+	coinbasePrivKey2 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[1]
+	coinbasePrivateKey2, err := wif.DecodeWIF(coinbasePrivKey2)
+	require.NoError(t, err)
+	address, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey2.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+	t.Log("Address 1:", address.AddressString)
+
+	coinbasePrivKey3 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[2]
+	coinbasePrivateKey3, err := wif.DecodeWIF(coinbasePrivKey3)
+	require.NoError(t, err)
+	address, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey3.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+	t.Log("Address 2:", address.AddressString)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	address, err = bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	output := coinbaseTx.Outputs[0]
+
+	utxoHash, _ := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), output, uint32(0))
+	//check the tx is in the utxostore
+	testSpend0 := &utxo.Spend{
+		TxID:      coinbaseTx.TxIDChainHash(),
+		Vout:      uint32(0),
+		UTXOHash:  utxoHash,
 	}
+	resp, err := node0.UtxoStore.GetSpend(ctx, testSpend0)
+	require.NoError(t, err)
+	t.Logf("UTXO: %v", resp)
+
+	addrs, err := output.LockingScript.Addresses()
+	require.NoError(t, err)
+	t.Logf("Output script: %v", addrs)
+	t.Logf(("Output Satoshis: %d"), output.Satoshis)
+
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	splits := uint64(100)
+
+	// Split the utxo into 100 outputs satoshis
+	sats := utxo.Satoshis / splits
+	remainder := utxo.Satoshis % splits
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// err = newTx.AddP2PKHOutputFromAddress("1Jp7AZdMQ3hyfMfk3kJe31TDj8oppZLYdK", coinbaseTx.TotalInputSatoshis())
+	// require.NoError(t, err)
+
+	err = newTx.PayToAddress(address.AddressString, sats + remainder)
+	require.NoError(t, err)
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey1.PrivKey})
+	require.NoError(t, err)
+
+	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+	_, err = helper.CallRPC("http://"+node0.RPCURL, "sendrawtransaction", []interface{}{txBytes})
+	require.NoError(t, err)
 
 	mc0, err0 := helper.GetMiningCandidate(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
 	mc1, err1 := helper.GetMiningCandidate(ctx, testEnv.Nodes[1].BlockassemblyClient, logger)
@@ -94,10 +182,9 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	mp1 := utils.ReverseAndHexEncodeSlice(mc1.GetMerkleProof()[0])
 	mp2 := utils.ReverseAndHexEncodeSlice(mc2.GetMerkleProof()[0])
 
-	fmt.Println("Merkleproofs:")
-	fmt.Println(mp0)
-	fmt.Println(mp1)
-	fmt.Println(mp2)
+	t.Log("Merkleproof 0:", mp0)
+	t.Log("Merkleproof 1:", mp1)
+	t.Log("Merkleproof 2:", mp2)
 
 	if len(hashes) > 0 {
 		fmt.Println("First element of hashes:", hashes[0])
@@ -105,7 +192,7 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 		t.Errorf("No subtrees detected: cannot calculate Merkleproofs")
 	}
 
-	fmt.Println("num of subtrees:", len(hashes))
+	t.Log("num of subtrees:", len(hashes))
 
 	if mp0 != mp1 || mp1 != mp2 {
 		t.Errorf("Merkle proofs are different")

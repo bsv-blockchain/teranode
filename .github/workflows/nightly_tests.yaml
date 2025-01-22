@@ -15,27 +15,148 @@ jobs:
     strategy:
       matrix:
         test_config:
+          # TNC Tests
           - test_dir: "test/tnc"
             test_tags: "test_tnc"
-            report_name: "test-tnc-report.json"
+            test_suite: "TestTNC1_1TestSuite"
+            test_func: "TestVerifyMerkleRootCalculation"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1_2TestSuite"
+            test_func: "TestCheckPrevBlockHash"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1_2TestSuite"
+            test_func: "TestPrevBlockHashAfterReorg"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1TestSuite"
+            test_func: "TestCandidateContainsAllTxs"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1TestSuite"
+            test_func: "TestCheckHashPrevBlockCandidate"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1TestSuite"
+            test_func: "TestCoinbaseTXAmount"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC1TestSuite"
+            test_func: "TestCoinbaseTXAmount2"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC2_1TestSuite"
+            test_func: "TestUniqueCandidateIdentifiers"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC2_1TestSuite"
+            test_func: "TestConcurrentCandidateIdentifiers"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC2_2TestSuite"
+            test_func: "TestCandidateBlockStorage"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC2_2TestSuite"
+            test_func: "TestCandidateBlockRetention"
+          - test_dir: "test/tnc"
+            test_tags: "test_tnc"
+            test_suite: "TestTNC2_2TestSuite"
+            test_func: "TestConcurrentCandidateStorage"
+
+          # TNB Tests
           - test_dir: "test/tnb"
             test_tags: "test_tnb"
-            report_name: "test-tnb-report.json"
-          - test_dir: "test/tnf"
-            test_tags: "test_tnf"
-            report_name: "test-tnf-report.json"
+            test_suite: "TestTNB1TestSuite"
+            test_func: "TestSendTxsInBatch"
+          - test_dir: "test/tnb"
+            test_tags: "test_tnb"
+            test_suite: "TestTNB1TestSuite"
+            test_func: "TestReceiveExtendedFormatTx"
+          - test_dir: "test/tnb"
+            test_tags: "test_tnb"
+            test_suite: "TestTNB1TestSuite"
+            test_func: "TestNoReformattingRequired"
+          - test_dir: "test/tnb"
+            test_tags: "test_tnb"
+            test_suite: "TestTNB2TestSuite"
+            test_func: "TestUTXOValidation"
+          - test_dir: "test/tnb"
+            test_tags: "test_tnb"
+            test_suite: "TestTNB2TestSuite"
+            test_func: "TestScriptValidation"
+          - test_dir: "test/tnb"
+            test_tags: "test_tnb"
+            test_suite: "TestTNB6TestSuite"
+            test_func: "TestUTXOSetManagement"
+
+          # TNJ Tests
           - test_dir: "test/tnj"
             test_tags: "test_tnj"
-            report_name: "test-tnj-report.json"
+            test_suite: "TestTNJLockTimeTestSuite"
+            test_func: "TestLocktimeScenarios"
+          - test_dir: "test/tnj"
+            test_tags: "test_tnj"
+            test_suite: "TestTNJ4TestSuite"
+            test_func: "TestBlockSubsidy"
+          - test_dir: "test/tnj"
+            test_tags: "test_tnj"
+            test_suite: "TestTNJDoubleSpendTestSuite"
+            test_func: "TestRejectLongerChainWithDoubleSpend"
+          - test_dir: "test/tnj"
+            test_tags: "test_tnj"
+            test_suite: "TestTNJDoubleSpendTestSuite"
+            test_func: "TestDoubleSpendMultipleUtxos"
+
+          # TNF Tests
+          - test_dir: "test/tnf"
+            test_tags: "test_tnf"
+            test_suite: "TestTNFTestSuite"
+            test_func: "TestInvalidateBlock"
+
+          # TND Tests
+          - test_dir: "test/tnd"
+            test_tags: "test_tnd"
+            test_suite: "TestTND1_1TestSuite"
+            test_func: "TestBlockPropagation"
+          - test_dir: "test/tnd"
+            test_tags: "test_tnd"
+            test_suite: "TestTND1_1TestSuite"
+            test_func: "TestBlockPropagationWithNotifications"
+
+          # TNE Tests
+          - test_dir: "test/tne"
+            test_tags: "test_tne"
+            test_suite: "TestTNE1_1TestSuite"
+            test_func: "TestNode_DoNotVerifyTransactionsIfAlreadyVerified"
+
+          # TNA Tests
           - test_dir: "test/tna"
             test_tags: "test_tna"
-            report_name: "test-tna-report.json"
+            test_suite: "TestTNA4TestSuite"
+            test_func: "TestBlockBroadcast"
+
+          # FSM Tests
           - test_dir: "test/fsm"
             test_tags: "test_fsm"
-            report_name: "test-fsm-report.json"
-          - test_dir: "test/tec"
-            test_tags: "test_tec"
-            report_name: "test-tec-report.json"
+            test_suite: "TestFsmTestSuite"
+            test_func: "TestNodeCatchUpState_WithStartAndStopNodes"
+          - test_dir: "test/fsm"
+            test_tags: "test_fsm"
+            test_suite: "TestFsmTestSuite"
+            test_func: "TestNodeCatchUpStateSingleNode_WithP2PSwitch"
+          - test_dir: "test/fsm"
+            test_tags: "test_fsm"
+            test_suite: "TestFsmTestSuite"
+            test_func: "TestNodeCatchUpStateMultipleNodes_WithP2PSwitch"
+          - test_dir: "test/fsm"
+            test_tags: "test_fsm"
+            test_suite: "TestFsmTestSuite"
+            test_func: "TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes"
+
+      max-parallel: 1
+      fail-fast: false
 
     steps:
       - name: Checkout code
@@ -62,12 +183,14 @@ jobs:
       - name: Build Docker Image
         run: docker compose -f docker-compose.e2etest.yml build
 
-      - name: Run Tests
+      - name: Run Test
         run: |
-          make install-tools
+          # make install-tools
+          go clean -testcache
           cd ${{ matrix.test_config.test_dir }} && \
-          go test -v -tags ${{ matrix.test_config.test_tags }} -json | \
-          go-ctrf-json-reporter -output ../../${{ matrix.test_config.report_name }} --verbose
+          go test -v -run "^${{ matrix.test_config.test_suite }}$/${{ matrix.test_config.test_func }}$" -tags ${{ matrix.test_config.test_tags }}
+          # -json | \
+          # go-ctrf-json-reporter -output ../../${{ matrix.test_config.report_name }} --verbose
         env:
           test_dir: ${{ matrix.test_config.test_dir }}
           test_tags: ${{ matrix.test_config.test_tags }}
@@ -76,5 +199,5 @@ jobs:
           GITHUB_ACTIONS: true
         continue-on-error: false
 
-      - name: Publish Test Summary Results
-        run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
+      # - name: Publish Test Summary Results
+      #   run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}

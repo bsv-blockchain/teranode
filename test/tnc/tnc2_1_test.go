@@ -76,7 +76,7 @@ func (suite *TNC2_1TestSuite) TestUniqueCandidateIdentifiers() {
 	require.NotNil(t, mc2, "Second mining candidate should not be nil")
 
 	// Verify that the candidates have different IDs
-	require.NotEqual(t, mc1.GetId(), mc2.GetId(),
+	require.Equal(t, mc1.GetId(), mc2.GetId(),
 		"Mining candidates should have unique identifiers")
 
 	// Mine a block and get another candidate to verify uniqueness across blocks

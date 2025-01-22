@@ -3,7 +3,7 @@
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
+// $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags test_functional
 
 package smoke
 

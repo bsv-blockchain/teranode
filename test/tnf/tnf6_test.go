@@ -2,8 +2,7 @@
 
 // How to run this test:
 // $ cd test/tnf/
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" --tags tnftests
-
+// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" --tags test_tnf
 package tnf
 
 import (

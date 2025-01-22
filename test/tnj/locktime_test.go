@@ -3,7 +3,7 @@
 // How to run this test manually:
 //
 // $ cd test/tnj
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^$TNJLockTimeTestSuite/TestLocktimeScenarios$" --tags tnjtests
+// $ go test -v -run "^$TNJLockTimeTestSuite/TestLocktimeScenarios$" --tags test_tnj
 package tnj
 
 import (
@@ -91,7 +91,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
-	url := "http://localhost:18090"
+	url := "http://" + testEnv.Nodes[0].AssetURL
 
 	logger := testEnv.Logger
 
@@ -161,6 +161,9 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	bl := false
 	targetHeight := height + 1
 
+	_, err = helper.GenerateBlocks(ctx, testEnv.Nodes[0], 100, testEnv.Logger)
+	require.NoError(t, err)
+
 	for i := 0; i < 30; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		require.NoError(t, err)
@@ -176,7 +179,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		}
 
 		targetHeight++
-		_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
+		_, err = helper.GenerateBlocks(ctx, testEnv.Nodes[0], 100, testEnv.Logger)
 		require.NoError(t, err)
 	}
 

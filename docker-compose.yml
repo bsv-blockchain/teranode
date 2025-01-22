@@ -1,4 +1,3 @@
-# Define a common base configuration for teranode nodes
 x-teranode-base: &teranode-base
   image: teranode:latest
   depends_on:
@@ -7,47 +6,35 @@ x-teranode-base: &teranode-base
   networks:
     - teranode-network
   volumes:
-    - ./data:/app/data
-  expose:
-    - 8081-8093
+    - ./data/test/${TEST_ID:-default}:/app/data
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-7.2.0.3_1
+  networks:
+    - teranode-network
+  command: --config-file /etc/aerospike.conf
 
 networks:
   teranode-network:
-    name: my-teranode-network
+    name: teranode-network-test-${TEST_ID:-default}
+
 services:
   teranode-builder:
     image: teranode:latest
     build:
       context: .
-      dockerfile: local.Dockerfile
+      dockerfile: ci.Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-db1a6f0
     networks:
       - teranode-network
     entrypoint: [ "pwd" ]
-
-  jaeger:
-    image: jaegertracing/all-in-one:1.59
-    container_name: jaeger
-    ports:
-      - "6831:6831/udp"
-      - "6832:6832/udp"
-      - "5778:5778"
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
-      - "14250:14250"
-      - "14268:14268"
-      - "14269:14269"
-      - "9411:9411"
-    environment:
-      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
-    networks:
-      - teranode-network
+    expose:
+      - "8000"
 
   postgres:
-    container_name: postgres
+    container_name: postgres-test-${TEST_ID:-default}
     image: postgres:latest
     networks:
       - teranode-network
@@ -56,12 +43,12 @@ services:
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     ports:
-      - 5432:5432
+      - "15432:5432"
     expose:
-      - 5432
+      - "5432"
     volumes:
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -70,7 +57,7 @@ services:
       retries: 5
 
   kafka-shared:
-    container_name: kafka-shared
+    container_name: kafka-shared-test-${TEST_ID:-default}
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
@@ -84,13 +71,15 @@ services:
       - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
       - --pandaproxy-addr 0.0.0.0:9093
       - --advertise-pandaproxy-addr localhost:9093
-    ports:
-      - 18181:8081
-      - 19092:9092
-      - 19093:9093
+    expose:
+      - "8081"
+      - "9092"
+      - "9093"
+    volumes:
+      - ./data/test/${TEST_ID:-default}/kafka:/var/lib/kafka
 
   kafka-console-shared:
-    container_name: kafka-console-shared
+    container_name: kafka-console-shared-test-${TEST_ID:-default}
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
       - teranode-network
@@ -110,203 +99,137 @@ services:
     depends_on:
       - kafka-shared
 
+  aerospike-1:
+    <<: *aerospike-base
+    container_name: aerospike-1-test-${TEST_ID:-default}
+    ports:
+      - "13100"
+    expose:
+      - "13100"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
+
+  aerospike-2:
+    <<: *aerospike-base
+    container_name: aerospike-2-test-${TEST_ID:-default}
+    ports:
+      - "13200"
+    expose:
+      - "13200"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
+
+  aerospike-3:
+    <<: *aerospike-base
+    container_name: aerospike-3-test-${TEST_ID:-default}
+    ports:
+      - "13300"
+    expose:
+      - "13300"
+    volumes:
+      - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
+
   teranode1:
     <<: *teranode-base
-    container_name: teranode1
+    container_name: teranode1-test-${TEST_ID:-default}
+    image: teranode:latest
     depends_on:
-      - kafka-shared
+      - aerospike-1
       - postgres
-      - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner1:miner1@postgres:5432/teranode1
-      # coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      JAEGER_SERVICE_NAME: teranode1
-      JAEGER_AGENT_HOST: jaeger
-      JAEGER_AGENT_PORT: 6831
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode1/txstore:/app/data/txstore
-      - ./data/teranode1/subtreestore:/app/data/subtreestore
-      - ./data/teranode1/blockstore:/app/data/blockstore
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
+      - "18000:8000"
+      - "18081-18097:8081-8097"
+      - "18099:8099"
       - "19091:9091"
       - "19905:9905"
       - "19292:9292"
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode1/external:/app/data/teranode1/external
 
   teranode2:
     <<: *teranode-base
-    container_name: teranode2
+    container_name: teranode2-test-${TEST_ID:-default}
+    image: teranode:latest
     depends_on:
-      - kafka-shared
+      - aerospike-2
       - postgres
-      - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner2:miner2@postgres:5432/teranode2
-      # coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      JAEGER_SERVICE_NAME: teranode2
-      JAEGER_AGENT_HOST: jaeger
-      JAEGER_AGENT_PORT: 6831
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode2/txstore:/app/data/txstore
-      - ./data/teranode2/subtreestore:/app/data/subtreestore
-      - ./data/teranode2/blockstore:/app/data/blockstore
     ports:
-      - "28081-28089:8081-8089"
-      - "28090-28093:8090-8093"
+      - "28000:8000"
+      - "28081-28097:8081-8097"
+      - "28099:8099"
       - "29091:9091"
       - "29905:9905"
       - "29292:9292"
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode2/external:/app/data/teranode2/external
 
   teranode3:
     <<: *teranode-base
-    container_name: teranode3
+    container_name: teranode3-test-${TEST_ID:-default}
+    image: teranode:latest
     depends_on:
-      - kafka-shared
+      - aerospike-3
       - postgres
-      - jaeger
-    entrypoint: [ "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
+      - kafka-shared
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test}
       logLevel: "DEBUG"
-      # blockchain_store: postgres://miner3:miner3@postgres:5432/teranode3
-      # coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      JAEGER_SERVICE_NAME: teranode3
+      JAEGER_SERVICE_NAME: teranode-3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode3/txstore:/app/data/txstore
-      - ./data/teranode3/subtreestore:/app/data/subtreestore
-      - ./data/teranode3/blockstore:/app/data/blockstore
     ports:
-      - "38081-38089:8081-8089"
-      - "38090-38093:8090-8093"
+      - "38000:8000"
+      - "38081-38097:8081-8097"
+      - "38099:8099"
       - "39091:9091"
       - "39905:9905"
       - "39292:9292"
-
-  miner1:
-    <<: *teranode-base
-    container_name: miner1
-    depends_on:
-      - teranode1
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.difficulty}
-    command: [ "/app/wait.sh", "teranode1", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "9292", "-rpcconnect", "teranode1" ]
+    expose:
+      - "8000"
+      - "8081-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner1:/app/data
-
-  miner2:
-    <<: *teranode-base
-    container_name: miner2
-    depends_on:
-      - teranode2
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.difficulty}
-    command: [ "/app/wait.sh", "teranode2", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/teranode2/", "-rpcport", "9292", "-rpcconnect", "teranode2" ]
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner2:/app/data
-
-  miner3:
-    <<: *teranode-base
-    container_name: miner3
-    depends_on:
-      - teranode3
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.difficulty}
-    command: [ "/app/wait.sh", "teranode3", "9292", "2", "--", "/app/miner.run", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/teranode3/", "-rpcport", "9292", "-rpcconnect", "teranode3" ]
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner3:/app/data
-
-  txblaster1:
-    <<: *teranode-base
-    container_name: txblaster1
-    depends_on:
-      - teranode1
-      - teranode2
-      - teranode3
-    environment:
-      SETTINGS_CONTEXT: "docker.teranode1"
-      tx_blaster_profilerAddr: ":9092"
-      BLASTER_ARGS: "-workers=2"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
-      propagation_quicAddresses: https://teranode1:8384 | https://teranode2:8384 | https://teranode3:8384
-    command: [ "/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false" ]
-    networks:
-      - teranode-network
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/txblaster1:/app/data
-
-  prometheus1:
-    container_name: prometheus1
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "19090:9090"
-    networks:
-      - teranode-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
-
-  prometheus2:
-    container_name: prometheus2
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "29090:9090"
-    networks:
-      - teranode-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
-
-  prometheus3:
-    container_name: prometheus3
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "39090:9090"
-    networks:
-      - teranode-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
-
-  grafana:
-    container_name: grafana
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    networks:
-      - teranode-network
-    volumes:
-      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
-      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
-    depends_on:
-      - prometheus1
-      - prometheus2
-      - prometheus3
-
-  grpc-client:
-    build:
-      context: .
-      dockerfile: Dockerfile.grpc-client
-    depends_on:
-      - teranode1
-      - teranode2
-      - teranode3
-    networks:
-      - teranode-network
+      - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external

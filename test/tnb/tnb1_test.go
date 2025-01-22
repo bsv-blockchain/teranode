@@ -181,18 +181,26 @@ func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
 	time.Sleep(5 * time.Second)
 
 	// Verify transaction exists in block
-	block, err := helper.GetBestBlockV2(ctx, node)
+	block102, err := node.BlockchainClient.GetBlockByHeight(ctx, 102)
 	require.NoError(t, err)
-	require.NotNil(t, block)
+	require.NotNil(t, block102)
+
+	// Generate 100 blocks
+	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{100})
+	require.NoError(t, err)
+
+	url := "http://" + node.AssetURL
+	err = helper.WaitForBlockHeight(url, 102, 60)
+	require.NoError(t, err)
 
 	// Get and validate subtrees
-	err = block.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	err = block102.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
 	require.NoError(t, err)
 
 	// Check if transaction exists in the block's subtrees
 	found := false
 
-	for _, subtree := range block.SubtreeSlices {
+	for _, subtree := range block102.SubtreeSlices {
 		for _, txHash := range subtree.Nodes {
 			if txHash.Hash.String() == tx.String() {
 				found = true

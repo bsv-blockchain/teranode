@@ -2,6 +2,23 @@
 
 package tnj
 
+// How to run these tests:
+// 1. Run all TNJ tests:
+//    go test -tags=test_tnj ./test/tnj/... -v
+//
+// 2. Run this specific test:
+//    go test -tags=test_tnj ./test/tnj/tnj_4_test.go -v
+//
+// 3. Run a specific test function:
+//    go test -tags=test_tnj ./test/tnj/tnj_4_test.go -v -run TestTNJ4TestSuite/TestBlockSubsidy
+//
+// 4. If you're inside the test/tnj directory:
+//    go test -tags=test_tnj -v                           # Run all tests in current directory
+//    go test -tags=test_tnj -v tnj_4_test.go            # Run this specific test
+//    go test -tags=test_tnj -v -run TestTNJ4TestSuite/TestBlockSubsidy tnj_4_test.go  # Run specific test function
+//
+// Note: These tests require Docker to be running as they use containerized Teranode instances
+
 import (
 	"fmt"
 	"testing"
@@ -80,10 +97,9 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	fmt.Printf("Transaction sent: %s \n", newTx)
 	time.Sleep(10 * time.Second)
 
-	_, err := helper.MineBlockWithRPC(testEnv.Context, testEnv.Nodes[0], logger)
-
+	_, err := helper.GenerateBlocks(ctx, testEnv.Nodes[0], 100, logger)
 	if err != nil {
-		t.Errorf("Failed to mine block: %v", err)
+		t.Errorf("Failed to generate blocks: %v", err)
 	}
 
 	blockStore := testEnv.Nodes[0].Blockstore

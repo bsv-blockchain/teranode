@@ -232,7 +232,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 				"Unexpected block height for block %d on Node%d", i+1, nodeIndex)
 
 			if i > 0 {
-				require.Equal(t, headers[i-1].Hash().CloneBytes(), header.HashPrevBlock,
+				require.Equal(t, headers[i-1].Hash().String(), header.HashPrevBlock.String(),
 					"Block %d does not reference previous block on Node%d", i+1, nodeIndex)
 			}
 		}
