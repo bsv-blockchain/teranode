@@ -64,7 +64,7 @@ func (suite *TNE1_1TestSuite) TestNode_DoNotVerifyTransactionsIfAlreadyVerified(
 	var err error
 
 	err = framework.InitializeTeranodeTestClients()
-	t.Errorf("Failed to initialize Teranode test clients: %v", err)
+	require.NoError(t, err)
 
 	// wait for all blockchain nodes to be ready
 	for index, node := range framework.Nodes {

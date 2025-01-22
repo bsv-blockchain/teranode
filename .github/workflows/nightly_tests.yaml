@@ -109,12 +109,6 @@ jobs:
             test_suite: "TestTNJDoubleSpendTestSuite"
             test_func: "TestDoubleSpendMultipleUtxos"
 
-          # TNF Tests
-          - test_dir: "test/tnf"
-            test_tags: "test_tnf"
-            test_suite: "TestTNFTestSuite"
-            test_func: "TestInvalidateBlock"
-
           # TND Tests
           - test_dir: "test/tnd"
             test_tags: "test_tnd"
@@ -134,8 +128,20 @@ jobs:
           # TNA Tests
           - test_dir: "test/tna"
             test_tags: "test_tna"
+            test_suite: "TNA1TestSuite"
+            test_func: "TestBroadcastNewTxAllNodes"
+          - test_dir: "test/tna"
+            test_tags: "test_tna"
+            test_suite: "TNA2TestSuite"
+            test_func: "TestTxsReceivedAllNodes"
+          - test_dir: "test/tna"
+            test_tags: "test_tna"
             test_suite: "TestTNA4TestSuite"
             test_func: "TestBlockBroadcast"
+          - test_dir: "test/tna"
+            test_tags: "test_tna"
+            test_suite: "TestTNA6TestSuite"
+            test_func: "TestAcceptanceNextBlock"
 
           # FSM Tests
           - test_dir: "test/fsm"

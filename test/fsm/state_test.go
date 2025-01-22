@@ -2,10 +2,10 @@
 
 // How to run this test:
 // $ cd test/fsm/
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags test_functional
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpStateSingleNode_WithP2PSwitch$" -tags test_functional
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpStateMultipleNodes_WithP2PSwitch$" -tags test_functional
-// $ go test -v -run "^TestFsmTestSuite$/TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes$" -tags test_functional
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags test_fsm
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpStateSingleNode_WithP2PSwitch$" -tags test_fsm
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpStateMultipleNodes_WithP2PSwitch$" -tags test_fsm
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes$" -tags test_fsm
 
 package test
 
