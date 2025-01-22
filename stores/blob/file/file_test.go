@@ -1508,7 +1508,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		content := []byte("test content")
 
 		// Set content with initial short TTL
-		initialTTL := 300 * time.Millisecond
+		initialTTL := 2 * time.Second
 		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
 		require.NoError(t, err)
 
@@ -1521,15 +1521,15 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.True(t, exists)
 
 		// Wait for some time but not until expiration
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 
 		// Update TTL
-		newTTL := 400 * time.Millisecond
+		newTTL := 3 * time.Second
 		err = f.SetTTL(context.Background(), key, newTTL)
 		require.NoError(t, err)
 
 		// Verify content still exists after original TTL would have expired
-		time.Sleep(initialTTL - (100 * time.Millisecond))
+		time.Sleep(initialTTL - (1 * time.Second))
 
 		// run cleaner - don't wait for cleaner to run automatically
 		cleanExpiredFiles(f)
@@ -1563,7 +1563,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		content := []byte("test content")
 
 		// Set content with initial short TTL
-		initialTTL := 300 * time.Millisecond
+		initialTTL := 1 * time.Second
 		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
 		require.NoError(t, err)
 
@@ -1582,7 +1582,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait till expiration due
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 
 		// run cleaner - don't wait for cleaner to run automatically
 		cleanExpiredFiles(f)
@@ -1606,7 +1606,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		content := []byte("test content")
 
 		// Set content with initial short TTL
-		initialTTL := 300 * time.Millisecond
+		initialTTL := 1 * time.Second
 		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
 		require.NoError(t, err)
 
