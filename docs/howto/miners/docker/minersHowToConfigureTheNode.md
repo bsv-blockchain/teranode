@@ -1,6 +1,6 @@
 # Configuring Docker Compose Teranode
 
-Last modified: 13-December-2024
+Last modified: 22-January-2025
 
 ## Index
 
@@ -23,7 +23,7 @@ As an alternative to configuring settings in `settings_local.conf`, you can also
 
 ## Optional vs Required services
 
-While most services are required for the proper functioning of Teranode, some services are optional and can be disabled if not needed. The following table provides an overview of the services and their status:
+While most services are required for the proper functioning of Teranode, some services are optional and are disabled in Docker Compose. The following table provides an overview of the services and their status:
 
 | Required          | Optional          |
 |-------------------|-------------------|

@@ -1,5 +1,7 @@
 # Security Best Practices
 
+Last modified: 22-January-2025
+
 ## Firewall Configuration
 
 
@@ -11,7 +13,7 @@ While Docker Compose creates an isolated network for the Teranode services, some
 Review the ports exposed in the Docker Compose configuration file(s) and ensure your firewall is configured to handle these appropriately:
 - `9292`: RPC Server. Open to receive RPC API requests.
 
-- `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
+- `8090`: Asset Server. Open for incoming HTTP asset requests.
 
 - `9905,9906`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
 

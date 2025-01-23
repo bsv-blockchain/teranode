@@ -1,6 +1,6 @@
 # How to Troubleshoot Teranode (Docker Compose)
 
-Last modified: 13-December-2024
+Last modified: 22-January-2025
 
 ## Index
 
@@ -45,48 +45,17 @@ This command lists all services defined in your docker-compose.yml file, along w
 ```bash
 docker inspect --format='{{json .State.Health}}' container_name
 ```
-Replace `container_name` with the name of your specific Teranode service container.
 
-
-
-##### Configuring Health Checks
-
-
-
-
-In your docker-compose.yml file:
-
-```yaml
-services:
-  teranode-blockchain:
-    ...
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-```
-
-
-
-
-#### Viewing Health Check Logs
-
-
-
+Replace `container_name` with the name of your specific Teranode service container. For example:
 
 
 ```bash
-docker inspect --format='{{json .State.Health}}' container_name | jq
+docker inspect --format='{{json .State.Health}}' asset
 ```
 
 
 
 #### Monitoring System Resources
-
-
-
 
 
 * Use `docker stats` to monitor CPU, memory, and I/O usage of containers:
@@ -151,34 +120,29 @@ docker-compose logs [service_name]
 
 ##### Checking Logs for Specific Teranode Microservices
 
-
+```bash
+docker-compose logs [service_name]
+```
 
 For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
 
 * Propagation Service (service name: `propagation`)
 * Blockchain Service (service name: `blockchain`)
 * Asset Service (service name: `asset`)
-* Block Validation Service (service name: `block-validator`)
+* Block Validation Service (service name: `blockvalidation`)
 * P2P Service (service name: `p2p`)
-* Block Assembly Service (service name: `block-assembly`)
-* Subtree Validation Service (service name: `subtree-validator`)
-* Miner Service (service name: `miner`)
+* Block Assembly Service (service name: `blockassembly`)
+* Subtree Validation Service (service name: `subtreevalidation`)
 * RPC Service (service name: `rpc`)
-* Block Persister Service (service name: `block-persister`)
-* UTXO Persister Service (service name: `utxo-persister`)
-* Postgres Database    [*Only in Docker*]
-* Aerospike Database  [*Only in Docker*]
-* Kafka                            [*Only in Docker*]
-* Kafka Console            [*Only in Docker*]
-* Prometheus               [*Only in Docker*]
-* Grafana                       [*Only in Docker*]
-
+* Postgres Database (service name: `postgres`)          [*Only in Docker*]
+* Aerospike Database (service name: `aerospike`)        [*Only in Docker*]
+* Kafka   (service name: `kafka-shared`)                [*Only in Docker*]
+* Kafka Console (service name: `kafka-console-shared`)  [*Only in Docker*]
+* Prometheus (service name: `prometheus`)               [*Only in Docker*]
+* Grafana  (service name: `grafana`)                    [*Only in Docker*]
 
 
 ##### Redirecting Logs to a File
-
-
-
 
 
 ```bash

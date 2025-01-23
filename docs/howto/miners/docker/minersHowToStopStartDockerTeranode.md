@@ -1,5 +1,6 @@
 # Docker Compose - Starting and Stopping Teranode
 
+Last modified: 22-January-2025
 
 ## Index
 
@@ -8,21 +9,27 @@
 
 ## Starting the Node
 
-Starting your Teranode instance involves initializing all the necessary services in the correct order. The `docker compose` configuration file handles this complexity for us. Follow these steps to **start** your node:
+Starting your Teranode instance involves initializing all the necessary services in the correct order. The Docker Compose configuration file handles this complexity for us.
 
-1. **Pre-start Checklist:**
+This guide assumes you have previously followed the [installation guide](../../../../docs/howto/miners/docker/minersHowToInstallation.md) and have a working Teranode setup.
 
-- Ensure all required directories are in place (data, config, etc.).
-- Verify that `settings_local.conf` is properly configured.
-- Check that Docker and Docker Compose are installed and up to date.
+Follow these steps to **start** your node:
 
-2. **Navigate to the Teranode Directory:**
+1. **Navigate to the Teranode Directory:**
 
+Go to either the testnet Docker compose folder:
+
+```bash
+cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
 ```
-cd /path/to/teranode
+
+Or to the mainnet Docker compose folder:
+
+```bash
+cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
 ```
 
-3. **Pull Latest Images **(optional, but recommended before each start)**:**
+2. **Pull Latest Images **(optional, but recommended before each start)**:**
 
 ```
 docker-compose pull
@@ -33,13 +40,15 @@ docker-compose pull
 ```
 docker-compose up -d
 ```
-This command starts all services defined in the docker-compose.yml file in detached mode.
+
+This command starts all services defined in the `docker-compose.yml` file in detached mode.
 
 5. **Verify Service Startup:**
 
 ```
 docker-compose ps
 ```
+
 Ensure all services show a status of "Up" or "Healthy".
 
 6. **Monitor Startup Logs:**
@@ -47,28 +56,44 @@ Ensure all services show a status of "Up" or "Healthy".
 ```
 docker-compose logs -f
 ```
-This allows you to watch the startup process in real-time. Use Ctrl+C to exit the log view.
+
+This allows you to watch the startup process in real-time.
 
 7. **Check Individual Service Logs:**
-If a specific service isn't starting correctly, check its logs:
 
+If a specific service isn't starting correctly, check its logs. Example:
+
+```bash
+docker-compose logs -f legacy
+docker-compose logs -f blockchain
+docker-compose logs -f asset
 ```
-docker-compose logs [service-name]
-```
-Replace [service-name] with services like teranode-blockchain, teranode-asset, etc.
 
 8. **Verify Network Connections:**
-Once all services are up, ensure the node is connecting to the BSV network:
+Once all services are up, ensure the node is responsive:
 
+```bash
+curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "version", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
 ```
-docker-compose exec teranode-p2p /app/teranode.run -p2p=1 getpeerinfo
+
+
+```bash
+curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getinfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
 ```
+
+And that it is connected to its peers:
+
+
+```bash
+curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getpeerinfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
+```
+
 
 9. **Check Synchronization Status:**
 Monitor the blockchain synchronization process:
 
-```
-docker-compose exec teranode-blockchain /app/teranode.run -blockchain=1 getblockchaininfo
+```bash
+curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockchaininfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
 ```
 
 10. **Access Monitoring Tools:**
@@ -84,10 +109,6 @@ docker-compose exec teranode-blockchain /app/teranode.run -blockchain=1 getblock
 
 12. **Post-start Checks:**
 
-- Verify that the node is accepting incoming connections (if configured as such).
-- Check that the miner service is operational if you're running a mining node.
-- Ensure all microservices are communicating properly with each other.
-
 Remember, the initial startup may take some time, especially if this is the first time starting the node or if there's a lot of blockchain data to sync. Be patient and monitor the logs for any issues.
 
 For subsequent starts after the initial setup, you typically only need to run the `docker-compose up -d` command, unless you've made configuration changes or updates to the system.
@@ -99,12 +120,21 @@ Properly stopping your Teranode instance is crucial to maintain data integrity a
 
 1. **Navigate to the Teranode Directory:**
 
+Go to either the testnet Docker compose folder:
+
+```bash
+cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
 ```
-cd /path/to/teranode
+
+Or to the mainnet Docker compose folder:
+
+```bash
+cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
 ```
 
 2. **Graceful Shutdown:**
-To stop all services defined in your docker-compose.yml file:
+
+To stop all services defined in your `docker-compose.yml` file:
 
 ```
 docker-compose down
