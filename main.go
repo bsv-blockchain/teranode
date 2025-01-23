@@ -45,7 +45,7 @@ func main() {
 	case "miner.run":
 		miner.Start()
 		return
-	case "teranodecli":
+	case "teranode-cli":
 		teranodecli.Start(os.Args[1:], version, commit)
 		return
 	}

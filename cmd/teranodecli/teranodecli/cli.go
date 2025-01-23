@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/bitcoin-sv/teranode/cmd/aerospike_reader"
@@ -76,8 +77,16 @@ func printUsage() {
 	fmt.Println("Usage: teranode-cli <command> [options]")
 	fmt.Println("\nAvailable Commands:")
 
-	for cmd, desc := range commandHelp {
-		fmt.Printf("  %-12s %s\n", cmd, desc)
+	commands := make([]string, 0, len(commandHelp))
+	for cmd := range commandHelp {
+		commands = append(commands, cmd)
+	}
+
+	// Sort the help guide alphabetically
+	sort.Strings(commands)
+
+	for _, cmd := range commands {
+		fmt.Printf("  %-20s %s\n", cmd, commandHelp[cmd])
 	}
 
 	fmt.Println("\nUse 'teranode-cli <command> --help' for more information about a command")

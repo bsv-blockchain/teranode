@@ -54,24 +54,9 @@ COPY --from=0 /app/settings_local.conf .
 # COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
 
-RUN ln -s teranode.run chainintegrity.run
 RUN ln -s teranode.run blaster.run
-RUN ln -s teranode.run propagationblaster.run
-RUN ln -s teranode.run blockassemblyblaster.run
-RUN ln -s teranode.run utxostoreblaster.run
-RUN ln -s teranode.run aerospiketest.run
-RUN ln -s teranode.run s3blaster.run
-RUN ln -s teranode.run filereader.run
-RUN ln -s teranode.run s3inventoryintegrity.run
-RUN ln -s teranode.run txblockidcheck.run
-RUN ln -s teranode.run aerospike_reader.run
-RUN ln -s teranode.run utxopersister.run
-RUN ln -s teranode.run seeder.run
-RUN ln -s teranode.run bitcoin2utxoset.run
-RUN ln -s teranode.run settings.run
-RUN ln -s teranode.run unspend.run
-RUN ln -s teranode.run recovertx.run
 RUN ln -s teranode.run miner.run
+RUN ln -s teranode.run teranode-cli
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV PATH=/app:$PATH
