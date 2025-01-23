@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	generate "github.com/bitcoin-sv/teranode/cmd/testUtil/compose/generator"
-	"github.com/bitcoin-sv/teranode/cmd/testUtil/compose/runner"
+	generate "github.com/bitcoin-sv/teranode/test/testUtil/compose/generator"
+	"github.com/bitcoin-sv/teranode/test/testUtil/compose/runner"
 	"github.com/spf13/cobra"
 )
 
