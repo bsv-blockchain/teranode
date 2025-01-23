@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/teranode/cmd/aerospike_reader"
-	"github.com/bitcoin-sv/teranode/cmd/bare"
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset"
 	"github.com/bitcoin-sv/teranode/cmd/blockassembly_blaster"
 	"github.com/bitcoin-sv/teranode/cmd/blockchainstatus"
@@ -36,7 +35,6 @@ var commandHelp = map[string]string{
 	"txblockidcheck":       "Transaction Block ID Check",
 	"blockchainstatus":     "Blockchain Status",
 	"assemblyblaster":      "Assembly Blaster",
-	"bare":                 "Bare",
 	"filereader":           "File Reader",
 	"s3inventoryintegrity": "S3 Inventory Integrity",
 	"aerospikereader":      "Aerospike Reader",
@@ -232,11 +230,6 @@ func Start(args []string, version, commit string) {
 			blockassembly_blaster.Init(tSettings)
 			blockassembly_blaster.AssemblyBlaster(*workers, *broadcast, *batchSize)
 
-			return nil
-		}
-	case "bare":
-		cmd.Execute = func(args []string) error {
-			bare.Bare()
 			return nil
 		}
 	case "filereader":
