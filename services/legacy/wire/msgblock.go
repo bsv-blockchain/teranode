@@ -84,12 +84,15 @@ func (msg *MsgBlock) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) er
 	}
 
 	msg.Transactions = make([]*MsgTx, 0, txCount)
+
 	for i := uint64(0); i < txCount; i++ {
 		tx := MsgTx{}
+
 		err := tx.Bsvdecode(r, pver, enc)
 		if err != nil {
 			return err
 		}
+
 		msg.Transactions = append(msg.Transactions, &tx)
 	}
 
@@ -144,14 +147,17 @@ func (msg *MsgBlock) DeserializeTxLoc(r *bytes.Buffer) ([]TxLoc, error) {
 	// Deserialize each transaction while keeping track of its location
 	// within the byte stream.
 	msg.Transactions = make([]*MsgTx, 0, txCount)
+
 	txLocs := make([]TxLoc, txCount)
 	for i := uint64(0); i < txCount; i++ {
 		txLocs[i].TxStart = fullLen - r.Len()
 		tx := MsgTx{}
+
 		err := tx.Deserialize(r)
 		if err != nil {
 			return nil, err
 		}
+
 		msg.Transactions = append(msg.Transactions, &tx)
 		txLocs[i].TxLen = (fullLen - r.Len()) - txLocs[i].TxStart
 	}
@@ -240,6 +246,7 @@ func (msg *MsgBlock) TxHashes() ([]chainhash.Hash, error) {
 	for _, tx := range msg.Transactions {
 		hashList = append(hashList, tx.TxHash())
 	}
+
 	return hashList, nil
 }
 

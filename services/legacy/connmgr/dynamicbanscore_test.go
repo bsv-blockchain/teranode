@@ -14,6 +14,7 @@ import (
 // DynamicBanScore.
 func TestDynamicBanScoreDecay(t *testing.T) {
 	var bs DynamicBanScore
+
 	base := time.Now()
 
 	r := bs.increase(100, 50, base)
@@ -36,13 +37,16 @@ func TestDynamicBanScoreDecay(t *testing.T) {
 // once the maximum age is reached.
 func TestDynamicBanScoreLifetime(t *testing.T) {
 	var bs DynamicBanScore
+
 	base := time.Now()
 
 	bs.increase(0, math.MaxUint32, base)
+
 	r := bs.int(base.Add(Lifetime * time.Second))
 	if r != 3 { // 3, not 4 due to precision loss and truncating 3.999...
 		t.Errorf("Pre max age check with MaxUint32 failed - %d", r)
 	}
+
 	r = bs.int(base.Add((Lifetime + 1) * time.Second))
 	if r != 0 {
 		t.Errorf("Zero after max age check failed - %d instead of 0", r)
@@ -56,12 +60,16 @@ func TestDynamicBanScoreReset(t *testing.T) {
 	if bs.Int() != 0 {
 		t.Errorf("Initial state is not zero.")
 	}
+
 	bs.Increase(100, 0)
+
 	r := bs.Int()
 	if r != 100 {
 		t.Errorf("Unexpected result %d after ban score increase.", r)
 	}
+
 	bs.Reset()
+
 	if bs.Int() != 0 {
 		t.Errorf("Failed to reset ban score.")
 	}

@@ -40,6 +40,7 @@ func (msg *MsgInv) AddInvVect(iv *InvVect) error {
 	}
 
 	msg.InvList = append(msg.InvList, iv)
+
 	return nil
 }
 
@@ -61,12 +62,15 @@ func (msg *MsgInv) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) erro
 	// order to reduce the number of allocations.
 	invList := make([]InvVect, count)
 	msg.InvList = make([]*InvVect, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		iv := &invList[i]
+
 		err := readInvVect(r, pver, iv)
 		if err != nil {
 			return err
 		}
+
 		msg.AddInvVect(iv)
 	}
 

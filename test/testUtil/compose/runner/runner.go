@@ -36,6 +36,7 @@ func AddRunCommand(rootCmd *cobra.Command) {
 			}
 		},
 	}
+
 	runCmd.Flags().BoolVarP(&buildFlag, "build", "b", false, "Build all services")
 	runCmd.Flags().BoolVarP(&upFlag, "up", "u", false, "Start all services")
 	runCmd.Flags().BoolVarP(&cleanFlag, "clean", "c", false, "Clean up and tear down services")
@@ -43,7 +44,6 @@ func AddRunCommand(rootCmd *cobra.Command) {
 }
 
 func Run() error {
-
 	// Execute based on flags
 	if upFlag {
 		startServices()
@@ -51,10 +51,8 @@ func Run() error {
 		cleanup()
 	} else if buildFlag {
 		// Build the Docker services
-
 		// this raises lint error G204: Subprocess launched with a potential tainted input or cmd arguments (gosec)
 		// exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
-
 		// alternative to above line
 		cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "build")
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -63,6 +61,7 @@ func Run() error {
 	} else {
 		return errors.NewProcessingError("no valid command provided. Use --up to start services or --clean for cleanup")
 	}
+
 	return nil
 }
 
@@ -79,6 +78,7 @@ func startServices() {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
+
 	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, teranodeServices))
 	time.Sleep(10 * time.Second)
 
@@ -91,6 +91,7 @@ func startServices() {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
+
 	startService(fmt.Sprintf("docker-compose -f %s up -d %s", composeFilePath, txBlasterServices))
 }
 
@@ -124,21 +125,25 @@ func cleanup() {
 
 func startService(command string) {
 	cmd := exec.Command("bash", "-c", command)
+
 	err := cmd.Start()
 	if err != nil {
 		fmt.Printf("Error starting service: %s\n", err)
 		return
 	}
+
 	fmt.Printf("Started service: %s\n", command)
 }
 
 func checkBlocks(url string, desiredHeight int) {
 	for {
 		fmt.Printf("Checking block height at %s\n", url)
+
 		height, err := getBlockHeight(url)
 		if err != nil {
 			fmt.Printf("Error getting block height: %s\n", err)
 			time.Sleep(5 * time.Second)
+
 			continue
 		}
 
@@ -157,7 +162,9 @@ func getBlockHeight(url string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return 0, errors.NewProcessingError("unexpected status code: %d", resp.StatusCode)
 	}
@@ -165,6 +172,7 @@ func getBlockHeight(url string) (int, error) {
 	var blocks []struct {
 		Height int `json:"height"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&blocks); err != nil {
 		return 0, err
 	}
@@ -180,6 +188,7 @@ func execCommand(name string, args ...string) error {
 	cmd := exec.Command("bash", "-c", name)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	err := cmd.Start()
 	if err != nil {
 		return errors.NewProcessingError("error executing command", err)
@@ -189,16 +198,18 @@ func execCommand(name string, args ...string) error {
 }
 
 func getServices(prefix string) (string, error) {
-
 	// cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath)) // cause golint error
 	cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "config", "--services")
+
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+
 	var servicesList []string
+
 	for _, line := range lines {
 		if strings.HasPrefix(line, prefix) {
 			servicesList = append(servicesList, line)

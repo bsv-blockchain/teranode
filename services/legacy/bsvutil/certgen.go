@@ -43,6 +43,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 	}
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate serial number: %s", err)
@@ -54,6 +55,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 	}
 
 	ipAddresses := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+
 	dnsNames := []string{host}
 	if host != "localhost" {
 		dnsNames = append(dnsNames, "localhost")
@@ -65,6 +67,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 				return
 			}
 		}
+
 		ipAddresses = append(ipAddresses, ipAddr)
 	}
 	addHost := func(host string) {
@@ -73,6 +76,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 				return
 			}
 		}
+
 		dnsNames = append(dnsNames, host)
 	}
 
@@ -80,6 +84,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 	if err != nil {
 		return nil, nil, err
 	}
+
 	for _, a := range addrs {
 		ipAddr, _, err := net.ParseCIDR(a.String())
 		if err == nil {
@@ -92,6 +97,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 		if err != nil {
 			host = hostStr
 		}
+
 		if ip := net.ParseIP(host); ip != nil {
 			addIP(ip)
 		} else {
@@ -125,6 +131,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 	}
 
 	certBuf := &bytes.Buffer{}
+
 	err = pem.Encode(certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to encode certificate: %v", err)
@@ -136,6 +143,7 @@ func NewTLSCertPair(organization string, validUntil time.Time, extraHosts []stri
 	}
 
 	keyBuf := &bytes.Buffer{}
+
 	err = pem.Encode(keyBuf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keybytes})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to encode private key: %v", err)

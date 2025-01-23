@@ -216,12 +216,14 @@ func createGRPCError(code ERR, msg string) *Error {
 		Code:    code,
 		Message: msg,
 	}
+
 	anyDetail, err := anypb.New(detail)
 	if err != nil {
 		panic("failed to create anypb.Any from TERANODEError")
 	}
 
 	st := status.New(grpcCode, "error with details")
+
 	st, err = st.WithDetails(anyDetail)
 	if err != nil {
 		panic("failed to add details to status")

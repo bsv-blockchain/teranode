@@ -341,6 +341,7 @@ func TestSignatures(t *testing.T) {
 		} else {
 			_, err = ParseSignature(test.sig, S256())
 		}
+
 		if err != nil {
 			if test.isValid {
 				t.Errorf("%s signature failed when shouldn't %v",
@@ -350,6 +351,7 @@ func TestSignatures(t *testing.T) {
 			} */
 			continue
 		}
+
 		if !test.isValid {
 			t.Errorf("%s counted as valid when it should fail",
 				test.name)
@@ -468,6 +470,7 @@ func testSignCompact(t *testing.T, tag string, curve *KoblitzCurve,
 	priv := (*PrivateKey)(tmp)
 
 	hashed := []byte("testing")
+
 	sig, err := SignCompact(curve, priv, hashed, isCompressed)
 	if err != nil {
 		t.Errorf("%s: error signing: %s", tag, err)
@@ -479,11 +482,13 @@ func testSignCompact(t *testing.T, tag string, curve *KoblitzCurve,
 		t.Errorf("%s: error recovering: %s", tag, err)
 		return
 	}
+
 	if pk.X.Cmp(priv.X) != 0 || pk.Y.Cmp(priv.Y) != 0 {
 		t.Errorf("%s: recovered pubkey doesn't match original "+
 			"(%v,%v) vs (%v,%v) ", tag, pk.X, pk.Y, priv.X, priv.Y)
 		return
 	}
+
 	if wasCompressed != isCompressed {
 		t.Errorf("%s: recovered pubkey doesn't match compressed state "+
 			"(%v vs %v)", tag, isCompressed, wasCompressed)
@@ -503,15 +508,18 @@ func testSignCompact(t *testing.T, tag string, curve *KoblitzCurve,
 		t.Errorf("%s: error recovering (2): %s", tag, err)
 		return
 	}
+
 	if pk.X.Cmp(priv.X) != 0 || pk.Y.Cmp(priv.Y) != 0 {
 		t.Errorf("%s: recovered pubkey (2) doesn't match original "+
 			"(%v,%v) vs (%v,%v) ", tag, pk.X, pk.Y, priv.X, priv.Y)
 		return
 	}
+
 	if wasCompressed == isCompressed {
 		t.Errorf("%s: recovered pubkey doesn't match reversed "+
 			"compressed state (%v vs %v)", tag, isCompressed,
 			wasCompressed)
+
 		return
 	}
 }
@@ -520,11 +528,13 @@ func TestSignCompact(t *testing.T) {
 	for i := 0; i < 256; i++ {
 		name := fmt.Sprintf("test %d", i)
 		data := make([]byte, 32)
+
 		_, err := rand.Read(data)
 		if err != nil {
 			t.Errorf("failed to read random data for %s", name)
 			continue
 		}
+
 		compressed := i%2 != 0
 		testSignCompact(t, name, S256(), data, compressed)
 	}
@@ -573,6 +583,7 @@ func TestRecoverCompact(t *testing.T) {
 			t.Errorf("unexpected error returned from pubkey "+
 				"recovery #%d: wanted %v, got %v",
 				i, test.err, err)
+
 			continue
 		}
 
@@ -648,10 +659,12 @@ func TestRFC6979(t *testing.T) {
 		// Ensure deterministically generated nonce is the expected value.
 		gotNonce := nonceRFC6979(privKey.D, hash[:]).Bytes()
 		wantNonce := decodeHex(test.nonce)
+
 		if !bytes.Equal(gotNonce, wantNonce) {
 			t.Errorf("NonceRFC6979 #%d (%s): Nonce is incorrect: "+
 				"%x (expected %x)", i, test.msg, gotNonce,
 				wantNonce)
+
 			continue
 		}
 
@@ -662,12 +675,15 @@ func TestRFC6979(t *testing.T) {
 				test.msg, err)
 			continue
 		}
+
 		gotSigBytes := gotSig.Serialize()
 		wantSigBytes := decodeHex(test.signature)
+
 		if !bytes.Equal(gotSigBytes, wantSigBytes) {
 			t.Errorf("Sign #%d (%s): mismatched signature: %x "+
 				"(expected %x)", i, test.msg, gotSigBytes,
 				wantSigBytes)
+
 			continue
 		}
 	}

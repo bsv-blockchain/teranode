@@ -109,6 +109,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 
 	t.Run("block 1 bytes", func(t *testing.T) {
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			t.Error(err)
@@ -120,6 +121,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 
 	t.Run("block hash", func(t *testing.T) {
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			t.Error(err)

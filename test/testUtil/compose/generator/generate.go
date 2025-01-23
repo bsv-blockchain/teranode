@@ -147,6 +147,7 @@ func AddGenerateCommand(rootCmd *cobra.Command) {
 			}
 		},
 	}
+
 	generateCmd.Flags().IntVarP(&numNodes, "numNodes", "n", 3, "Number of nodes")
 	rootCmd.AddCommand(generateCmd)
 }
@@ -175,12 +176,14 @@ func Generate() error {
 
 	// Initialize service configurations for each service type
 	var teranodeNodes []ServiceConfig
+
 	var txBlasterNodes []TxBlasterConfig
 
 	// Generate configurations for each service type
 	for i := 0; i < numNodes; i++ {
 		teranodeNodes = append(teranodeNodes, generateTERANODEConfig(i+1, slicedPrivateKeys, allPropagationAddresses))
 	}
+
 	for i := 0; i < numNodes; i++ {
 		txBlasterNodes = append(txBlasterNodes, generateTxBlasterConfig(i+1, numNodes, allPropagationAddresses))
 	}
@@ -196,6 +199,7 @@ func Generate() error {
 		fmt.Println("Error generating compose file:", err)
 		return err
 	}
+
 	return nil
 }
 
@@ -235,6 +239,7 @@ func generateTxBlasterConfig(index int, numNodes int, propagationAddress string)
 	for n := 1; n <= numNodes; n++ {
 		dependsOn = append(dependsOn, fmt.Sprintf("teranode-%d", n))
 	}
+
 	return TxBlasterConfig{
 		ServiceName:              fmt.Sprintf("tx-blaster-%d", index),
 		Index:                    index,
@@ -281,6 +286,7 @@ func generateServices(serviceConfigs ServiceConfigs) string {
 			if err != nil {
 				return err.Error()
 			}
+
 			if err := teranodeConfigTemplate.ExecuteTemplate(&sb, "teranodeService", config); err != nil {
 				fmt.Println("Error executing teranode template:", err)
 				continue
@@ -295,12 +301,14 @@ func generateServices(serviceConfigs ServiceConfigs) string {
 			if err != nil {
 				return err.Error()
 			}
+
 			if err := txBlasterConfigTemplate.ExecuteTemplate(&sb, "txBlasterService", config); err != nil {
 				fmt.Println("Error executing txBlaster template:", err)
 				continue
 			}
 		}
 	}
+
 	return sb.String()
 }
 
@@ -309,15 +317,18 @@ func generatePropagationGRPCAddresses(numNodes int) string {
 	for i := 1; i <= numNodes; i++ {
 		addresses = append(addresses, fmt.Sprintf("teranode-%d:8084", i))
 	}
+
 	return strings.Join(addresses, " | ")
 }
 
 func writeInitSQLFile(numNodes int) error {
 	initSQLFile := "./generator/scripts/postgres/init.sql"
+
 	file, err := os.OpenFile(initSQLFile, os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
+
 	defer file.Close()
 
 	for i := 1; i <= numNodes; i++ {

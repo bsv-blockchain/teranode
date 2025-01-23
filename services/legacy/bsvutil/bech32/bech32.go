@@ -34,6 +34,7 @@ func Decode(bech string) (string, []byte, error) {
 	// The characters must be either all lowercase or all uppercase.
 	lower := strings.ToLower(bech)
 	upper := strings.ToUpper(bech)
+
 	if bech != lower && bech != upper {
 		return "", nil, fmt.Errorf("string not all lowercase or all " +
 			"uppercase")
@@ -123,6 +124,7 @@ func toBytes(chars string) ([]byte, error) {
 // encodes the index of a character in 'charset'.
 func toChars(data []byte) (string, error) {
 	result := make([]byte, 0, len(data))
+
 	for _, b := range data {
 		if int(b) >= len(charset) {
 			return "", fmt.Errorf("invalid data byte: %v", b)
@@ -150,7 +152,6 @@ func ConvertBits(data []byte, fromBits, toBits uint8, pad bool) ([]byte, error) 
 	filledBits := uint8(0)
 
 	for _, b := range data {
-
 		// Discard unused bits.
 		b <<= (8 - fromBits)
 
@@ -211,6 +212,7 @@ func bech32Checksum(hrp string, data []byte) []byte {
 	for i, b := range data {
 		integers[i] = int(b)
 	}
+
 	values := append(bech32HrpExpand(hrp), integers...)
 	values = append(values, []int{0, 0, 0, 0, 0, 0}...)
 	polymod := bech32Polymod(values) ^ 1
@@ -230,6 +232,7 @@ func bech32Polymod(values []int) int {
 	for _, v := range values {
 		b := chk >> 25
 		chk = (chk&0x1ffffff)<<5 ^ v
+
 		for i := 0; i < 5; i++ {
 			if (b>>uint(i))&1 == 1 {
 				chk ^= gen[i]

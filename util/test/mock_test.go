@@ -65,6 +65,7 @@ func TestGenerateBlock(t *testing.T) {
 		}
 		currentChainIDs[i] = uint32(i) // nolint:gosec
 	}
+
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction

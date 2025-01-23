@@ -73,6 +73,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							missed.Add(1)
 							continue
 						}
+
 						txMetaSlice[data.Idx] = data.Data
 					}
 
@@ -86,16 +87,13 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		return int(missed.Load()), nil
-
 	} else {
-
 		for i := 0; i < len(txHashes); i += batchSize {
 			i := i
 
 			g.Go(func() error {
 				// cycle through the batch size, making sure not to go over the length of the txHashes
 				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						return gCtx.Err() // Return the error that caused the cancellation

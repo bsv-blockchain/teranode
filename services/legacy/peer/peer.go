@@ -298,6 +298,7 @@ func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -310,6 +311,7 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 		ip := tcpAddr.IP
 		port := uint16(tcpAddr.Port)
 		na := wire.NewNetAddressIPPort(ip, port, services)
+
 		return na, nil
 	}
 
@@ -319,8 +321,10 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 		if ip == nil {
 			ip = net.ParseIP("0.0.0.0")
 		}
+
 		port := uint16(proxiedAddr.Port)
 		na := wire.NewNetAddressIPPort(ip, port, services)
+
 		return na, nil
 	}
 
@@ -331,12 +335,16 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 	if err != nil {
 		return nil, err
 	}
+
 	ip := net.ParseIP(host)
+
 	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, err
 	}
+
 	na := wire.NewNetAddressIPPort(ip, uint16(port), services)
+
 	return na, nil
 }
 
@@ -581,6 +589,7 @@ func (p *Peer) StatsSnapshot() *StatsSnap {
 	}
 
 	p.statsMtx.RUnlock()
+
 	return statsSnap
 }
 
@@ -777,6 +786,7 @@ func (p *Peer) LocalAddr() net.Addr {
 	if atomic.LoadInt32(&p.connected) != 0 {
 		localAddr = p.conn.LocalAddr()
 	}
+
 	return localAddr
 }
 
@@ -876,6 +886,7 @@ func (p *Peer) PushAddrMsg(addresses []*wire.NetAddress) ([]*wire.NetAddress, er
 	}
 
 	p.QueueMessage(msg, nil)
+
 	return msg.AddrList, nil
 }
 
@@ -914,6 +925,7 @@ func (p *Peer) PushGetBlocksMsg(locator blockchain.BlockLocator, stopHash *chain
 			return err
 		}
 	}
+
 	p.QueueMessage(msg, nil)
 
 	// Update the previous getblocks request information for filtering
@@ -955,12 +967,14 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 	// Construct the getheaders request and queue it to be sent.
 	msg := wire.NewMsgGetHeaders()
 	msg.HashStop = *stopHash
+
 	for _, hash := range locator {
 		err := msg.AddBlockLocatorHash(hash)
 		if err != nil {
 			return err
 		}
 	}
+
 	p.QueueMessage(msg, nil)
 
 	// Update the previous getheaders request information for filtering
@@ -969,6 +983,7 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 	p.prevGetHdrsBegin = beginHash
 	p.prevGetHdrsStop = stopHash
 	p.prevGetHdrsMtx.Unlock()
+
 	return nil
 }
 
@@ -986,13 +1001,16 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 	}
 
 	msg := wire.NewMsgReject(command, code, reason)
+
 	if command == wire.CmdTx || command == wire.CmdBlock {
 		if hash == nil {
 			p.logger.Warnf("Sending a reject message for command "+
 				"type %v which should have specified a hash "+
 				"but does not", command)
+
 			hash = &zeroHash
 		}
+
 		msg.Hash = *hash
 	}
 
@@ -1052,9 +1070,11 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 	n, msg, buf, err := wire.ReadMessageWithEncodingN(p.conn,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
+
 	if p.cfg.Listeners.OnRead != nil {
 		p.cfg.Listeners.OnRead(p, n, msg, err)
 	}
+
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1067,6 +1087,7 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 		if len(summary) > 0 {
 			summary = " (" + summary + ")"
 		}
+
 		return fmt.Sprintf("Received %v%s from %s",
 			msg.Command(), summary, p)
 	}))
@@ -1098,6 +1119,7 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 		if len(summary) > 0 {
 			summary = " (" + summary + ")"
 		}
+
 		return fmt.Sprintf("Sending %v%s to %s", msg.Command(),
 			summary, p)
 	}))
@@ -1122,9 +1144,11 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	// Write the message to the peer.
 	n, err := wire.WriteMessageWithEncodingN(p.conn, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
 	atomic.AddUint64(&p.bytesSent, uint64(n))
+
 	if p.cfg.Listeners.OnWrite != nil {
 		p.cfg.Listeners.OnWrite(p, n, msg, err)
 	}
+
 	return err
 }
 
@@ -1172,6 +1196,7 @@ func (p *Peer) shouldHandleReadError(err error) bool {
 	if err == io.EOF {
 		return false
 	}
+
 	if opErr, ok := err.(*net.OpError); ok && !opErr.Temporary() {
 		return false
 	}
@@ -1190,6 +1215,7 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 	// response won't be received in time.
 	deadline := time.Now().Add(stallResponseTimeout)
 	blockDeadline := time.Now().Add(stallResponseTimeoutBlocks)
+
 	switch msgCmd {
 	case wire.CmdVersion:
 		// Expects a verack message.
@@ -1230,7 +1256,9 @@ func (p *Peer) stallHandler() {
 	// (which includes callbacks), so the deadline for receiving a response
 	// for a given message must account for the processing time as well.
 	var handlerActive bool
+
 	var handlersStartTime time.Time
+
 	var deadlineOffset time.Duration
 
 	// pendingResponses tracks the expected response deadline times.
@@ -1560,6 +1588,7 @@ func (p *Peer) queueHandler() {
 	pendingMsgs := list.New()
 	invSendQueue := list.New()
 	useTrickleQueue := p.cfg.TrickleInterval > 0
+
 	var trickleTicker *time.Ticker
 
 	// If the trickle interval is 0 we create an unstarted Ticker. This allows
@@ -1692,6 +1721,7 @@ out:
 	// waiting for us.
 	for e := pendingMsgs.Front(); e != nil; e = pendingMsgs.Front() {
 		val := pendingMsgs.Remove(e)
+
 		msg := val.(outMsg)
 		if msg.doneChan != nil {
 			msg.doneChan <- struct{}{}
@@ -1728,6 +1758,7 @@ func (p *Peer) shouldLogWriteError(err error) bool {
 	if err == io.EOF {
 		return false
 	}
+
 	if opErr, ok := err.(*net.OpError); ok && !opErr.Temporary() {
 		return false
 	}
@@ -1845,7 +1876,6 @@ func (p *Peer) QueueMessage(msg wire.Message, doneChan chan<- struct{}) {
 // This function is safe for concurrent access.
 func (p *Peer) QueueMessageWithEncoding(msg wire.Message, doneChan chan<- struct{},
 	encoding wire.MessageEncoding) {
-
 	p.logger.Debugf("Queueing %v message for %s", msg.Command(), p)
 
 	// Avoid risk of deadlock if goroutine already exited.  The goroutine
@@ -1857,6 +1887,7 @@ func (p *Peer) QueueMessageWithEncoding(msg wire.Message, doneChan chan<- struct
 				doneChan <- struct{}{}
 			}()
 		}
+
 		return
 	}
 	p.outputQueue <- outMsg{msg: msg, encoding: encoding, doneChan: doneChan}
@@ -1903,9 +1934,11 @@ func (p *Peer) Disconnect() {
 	}
 
 	p.logger.Debugf("Disconnecting %s", p)
+
 	if atomic.LoadInt32(&p.connected) != 0 {
 		p.conn.Close()
 	}
+
 	close(p.quit)
 }
 
@@ -1927,6 +1960,7 @@ func (p *Peer) readRemoteVersionMsg() error {
 		rejectMsg := wire.NewMsgReject(msg.Command(), wire.RejectMalformed,
 			reason)
 		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
+
 		return errors.New(reason)
 	}
 
@@ -1986,8 +2020,10 @@ func (p *Peer) readRemoteVersionMsg() error {
 		rejectMsg := wire.NewMsgReject(msg.Command(), wire.RejectObsolete,
 			reason)
 		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
+
 		return errors.New(reason)
 	}
+
 	return nil
 }
 
@@ -1995,8 +2031,10 @@ func (p *Peer) readRemoteVersionMsg() error {
 // remote peer.
 func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	var blockNum int32
+
 	if p.cfg.NewestBlock != nil {
 		var err error
+
 		_, blockNum, err = p.cfg.NewestBlock()
 		if err != nil {
 			return nil, err
@@ -2097,6 +2135,7 @@ func (p *Peer) start() error {
 	p.logger.Debugf("Starting peer %s", p)
 
 	negotiateErr := make(chan error, 1)
+
 	go func() {
 		if p.inbound {
 			negotiateErr <- p.negotiateInboundProtocol()
@@ -2158,6 +2197,7 @@ func (p *Peer) AssociateConnection(conn net.Conn) {
 		if err != nil {
 			p.logger.Errorf("Cannot create remote net address: %v", err)
 			p.Disconnect()
+
 			return
 		}
 
@@ -2223,6 +2263,7 @@ func newPeerBase(logger ulogger.Logger, tSettings *settings.Settings, origCfg *C
 		logger:          logger,
 		settings:        tSettings,
 	}
+
 	return &p
 }
 
@@ -2252,6 +2293,7 @@ func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *C
 		if err != nil {
 			return nil, err
 		}
+
 		p.na = na
 	} else {
 		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), uint16(port), 0)

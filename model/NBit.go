@@ -16,6 +16,7 @@ func NewNBitFromSlice(nBits []byte) (*NBit, error) {
 	}
 
 	var nBit NBit
+
 	copy(nBit[:], nBits)
 
 	return &nBit, nil

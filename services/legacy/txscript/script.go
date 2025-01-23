@@ -81,7 +81,6 @@ func isPushOnly(pops []parsedOpcode) bool {
 	// NOTE: This function does NOT verify opcodes directly since it is
 	// internal and is only called with parsed opcodes for scripts that did
 	// not have any parse errors.  Thus, consensus is properly maintained.
-
 	for _, pop := range pops {
 		// All opcodes up to OP_16 are data push instructions.
 		// NOTE: This does consider OP_RESERVED to be a data push
@@ -112,6 +111,7 @@ func IsPushOnlyScript(script []byte) bool {
 // the list of parsed opcodes up to the point of failure along with the error.
 func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, error) {
 	retScript := make([]parsedOpcode, 0, len(script))
+
 	for i := 0; i < len(script); {
 		instr := script[i]
 		op := &opcodes[instr]
@@ -131,6 +131,7 @@ func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, e
 				str := fmt.Sprintf("opcode %s requires %d "+
 					"bytes, but script only has %d remaining",
 					op.name, op.length, len(script[i:]))
+
 				return retScript, scriptError(ErrMalformedPush,
 					str)
 			}
@@ -142,12 +143,14 @@ func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, e
 		// Data pushes with parsed lengths -- OP_PUSHDATAP{1,2,4}.
 		case op.length < 0:
 			var l uint
+
 			off := i + 1
 
 			if len(script[off:]) < -op.length {
 				str := fmt.Sprintf("opcode %s requires %d "+
 					"bytes, but script only has %d remaining",
 					op.name, -op.length, len(script[off:]))
+
 				return retScript, scriptError(ErrMalformedPush,
 					str)
 			}
@@ -167,6 +170,7 @@ func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, e
 			default:
 				str := fmt.Sprintf("invalid opcode length %d",
 					op.length)
+
 				return retScript, scriptError(ErrMalformedPush,
 					str)
 			}
@@ -180,6 +184,7 @@ func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, e
 				str := fmt.Sprintf("opcode %s pushes %d bytes, "+
 					"but script only has %d remaining",
 					op.name, int(l), len(script[off:]))
+
 				return retScript, scriptError(ErrMalformedPush,
 					str)
 			}
@@ -204,11 +209,13 @@ func ParseScript(script []byte) ([]parsedOpcode, error) {
 // parsedOpcodes as a list of bytes
 func UnparseScript(pops []parsedOpcode) ([]byte, error) {
 	script := make([]byte, 0, len(pops))
+
 	for _, pop := range pops {
 		b, err := pop.bytes()
 		if err != nil {
 			return nil, err
 		}
+
 		script = append(script, b...)
 	}
 
@@ -244,6 +251,7 @@ func DisasmString(buf []byte) (string, error) {
 // stream in pkscript
 func removeOpcode(pkscript []parsedOpcode, opcode byte) []parsedOpcode {
 	retScript := make([]parsedOpcode, 0, len(pkscript))
+
 	for _, pop := range pkscript {
 		if pop.opcode.value != opcode {
 			retScript = append(retScript, pop)
@@ -288,6 +296,7 @@ func CanonicalPush(pop parsedOpcode) bool {
 // the passed data to the stack.
 func removeOpcodeByData(pkscript []parsedOpcode, data []byte) []parsedOpcode {
 	retScript := make([]parsedOpcode, 0, len(pkscript))
+
 	for _, pop := range pkscript {
 		if !CanonicalPush(pop) || !bytes.Contains(pop.data, data) {
 			retScript = append(retScript, pop)
@@ -313,6 +322,7 @@ func calcHashPrevOuts(tx *wire.MsgTx) chainhash.Hash {
 		// Next, we'll encode the index of the referenced output as a
 		// little endian integer.
 		var buf [4]byte
+
 		binary.LittleEndian.PutUint32(buf[:], in.PreviousOutPoint.Index)
 		b.Write(buf[:])
 	}
@@ -328,8 +338,10 @@ func calcHashPrevOuts(tx *wire.MsgTx) chainhash.Hash {
 // from O(N^2) to O(N).
 func calcHashSequence(tx *wire.MsgTx) chainhash.Hash {
 	var b bytes.Buffer
+
 	for _, in := range tx.TxIn {
 		var buf [4]byte
+
 		binary.LittleEndian.PutUint32(buf[:], in.Sequence)
 		b.Write(buf[:])
 	}
@@ -357,7 +369,6 @@ func calcHashOutputs(tx *wire.MsgTx) chainhash.Hash {
 // to specify which algorithm to use.
 func CalcSignatureHash(script []byte, sigHashes *TxSigHashes, hType SigHashType,
 	tx *wire.MsgTx, idx int, amt int64, useBip143SigHashAlgo bool) ([]byte, error) {
-
 	parsedScript, err := ParseScript(script)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse output script: %v", err)
@@ -393,16 +404,19 @@ func shallowCopyTx(tx *wire.MsgTx) wire.MsgTx {
 		TxOut:    make([]*wire.TxOut, len(tx.TxOut)),
 		LockTime: tx.LockTime,
 	}
+
 	txIns := make([]wire.TxIn, len(tx.TxIn))
 	for i, oldTxIn := range tx.TxIn {
 		txIns[i] = *oldTxIn
 		txCopy.TxIn[i] = &txIns[i]
 	}
+
 	txOuts := make([]wire.TxOut, len(tx.TxOut))
 	for i, oldTxOut := range tx.TxOut {
 		txOuts[i] = *oldTxOut
 		txCopy.TxOut[i] = &txOuts[i]
 	}
+
 	return txCopy
 }
 
@@ -439,6 +453,7 @@ func calcLegacySignatureHash(script []parsedOpcode, hashType SigHashType, tx *wi
 	if hashType&sigHashMask == SigHashSingle && idx >= len(tx.TxOut) {
 		var hash chainhash.Hash
 		hash[0] = 0x01
+
 		return hash[:], nil
 	}
 
@@ -522,7 +537,6 @@ func calcLegacySignatureHash(script []parsedOpcode, hashType SigHashType, tx *wi
 // the produced signature to be invalid.
 func calcBip143SignatureHash(subScript []parsedOpcode, sigHashes *TxSigHashes,
 	hashType SigHashType, tx *wire.MsgTx, idx int, amt int64) ([]byte, error) {
-
 	// As a sanity check, ensure the passed input index for the transaction
 	// is valid.
 	if idx > len(tx.TxIn)-1 {
@@ -535,6 +549,7 @@ func calcBip143SignatureHash(subScript []parsedOpcode, sigHashes *TxSigHashes,
 
 	// First write out, then encode the transaction's version number.
 	var bVersion [4]byte
+
 	binary.LittleEndian.PutUint32(bVersion[:], uint32(tx.Version))
 	sigHash.Write(bVersion[:])
 
@@ -564,7 +579,9 @@ func calcBip143SignatureHash(subScript []parsedOpcode, sigHashes *TxSigHashes,
 
 	// Next, write the outpoint being spent.
 	sigHash.Write(tx.TxIn[idx].PreviousOutPoint.Hash[:])
+
 	var bIndex [4]byte
+
 	binary.LittleEndian.PutUint32(bIndex[:], tx.TxIn[idx].PreviousOutPoint.Index)
 	sigHash.Write(bIndex[:])
 
@@ -575,9 +592,12 @@ func calcBip143SignatureHash(subScript []parsedOpcode, sigHashes *TxSigHashes,
 	// Next, add the input amount, and sequence number of the input being
 	// signed.
 	var bAmount [8]byte
+
 	binary.LittleEndian.PutUint64(bAmount[:], uint64(amt))
 	sigHash.Write(bAmount[:])
+
 	var bSequence [4]byte
+
 	binary.LittleEndian.PutUint32(bSequence[:], tx.TxIn[idx].Sequence)
 	sigHash.Write(bSequence[:])
 
@@ -599,9 +619,12 @@ func calcBip143SignatureHash(subScript []parsedOpcode, sigHashes *TxSigHashes,
 	// Finally, write out the transaction's locktime, and the sig hash
 	// type.
 	var bLockTime [4]byte
+
 	binary.LittleEndian.PutUint32(bLockTime[:], tx.LockTime)
 	sigHash.Write(bLockTime[:])
+
 	var bHashType [4]byte
+
 	binary.LittleEndian.PutUint32(bHashType[:], uint32(hashType))
 	sigHash.Write(bHashType[:])
 
@@ -624,6 +647,7 @@ func asSmallInt(op *opcode) int {
 // op. Otherwise we use the maximum.
 func getSigOpCount(pops []parsedOpcode, precise bool, scriptFlags ScriptFlags) int {
 	nSigs := 0
+
 	for i, pop := range pops {
 		switch pop.opcode.value {
 		case OP_CHECKSIG:
@@ -706,6 +730,7 @@ func GetPreciseSigOpCount(scriptSig, scriptPubKey []byte, scriptFlags ScriptFlag
 	// dictate signature operations are counted up to the first parse
 	// failure.
 	shPops, _ := ParseScript(shScript)
+
 	return getSigOpCount(shPops, true, scriptFlags)
 }
 

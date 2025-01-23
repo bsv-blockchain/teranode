@@ -24,11 +24,11 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 		t.Fatal("Expected EB UserAgentComment")
 	}
 
-	//uac := cfg.UserAgentComments[0]
-	//uacExpected := "EB32.0"
-	//if uac != uacExpected {
+	// uac := cfg.UserAgentComments[0]
+	// uacExpected := "EB32.0"
+	// if uac != uacExpected {
 	//	t.Fatalf("Expected UserAgentComments to contain %s but got %s", uacExpected, uac)
-	//}
+	// }
 
 	// Custom excessive block size.
 	os.Args = []string{"bsvd", "--excessiveblocksize=64000000"}
@@ -41,13 +41,13 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	if len(cfg.UserAgentComments) != 1 {
 		t.Fatal("Expected EB UserAgentComment")
 	}
-
-	//uac = cfg.UserAgentComments[0]
-	//uacExpected = "EB64.0"
+	// uac = cfg.UserAgentComments[0]
+	// uacExpected = "EB64.0"
 	// we do not support the command line options an
-	//if uac != uacExpected {
-	//	t.Fatalf("Expected UserAgentComments to contain %s but got %s", uacExpected, uac)
-	//}
+	//
+	//	if uac != uacExpected {
+	//		t.Fatalf("Expected UserAgentComments to contain %s but got %s", uacExpected, uac)
+	//	}
 }
 
 func TestCreateDefaultConfigFile(t *testing.T) {
@@ -56,6 +56,7 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed creating a temporary directory: %v", err)
 	}
+
 	testpath := filepath.Join(tmpDir, "test.conf")
 
 	// Clean-up
@@ -63,17 +64,17 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 		os.Remove(testpath)
 		os.Remove(tmpDir)
 	}()
-
-	//err = createDefaultConfigFile(testpath)
+	// err = createDefaultConfigFile(testpath)
 	//
-	//if err != nil {
-	//	t.Fatalf("Failed to create a default config file: %v", err)
-	//}
-
-	//content, err := ioutil.ReadFile(testpath)
-	//if err != nil {
-	//	t.Fatalf("Failed to read generated default config file: %v", err)
-	//}
+	//	if err != nil {
+	//		t.Fatalf("Failed to create a default config file: %v", err)
+	//	}
+	//
+	// content, err := ioutil.ReadFile(testpath)
+	//
+	//	if err != nil {
+	//		t.Fatalf("Failed to read generated default config file: %v", err)
+	//	}
 }
 
 func Test_setConfigValuesFromSettings(t *testing.T) {

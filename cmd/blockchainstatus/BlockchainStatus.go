@@ -27,6 +27,7 @@ var commit string
 
 func Init() {
 	gocore.SetInfo(progname, version, commit)
+
 	logger = ulogger.TestLogger{}
 }
 

@@ -68,6 +68,7 @@ func (sig *Signature) Serialize() []byte {
 	b[offset] = 0x02
 	b[offset+1] = byte(len(sb))
 	copy(b[offset+2:], sb)
+
 	return b
 }
 
@@ -100,7 +101,6 @@ func parseSig(sigStr []byte, curve elliptic.Curve, der bool) (*Signature, error)
 	// understand the format which is this:
 	// 0x30 <length of whole message> <0x02> <length of R> <R> 0x2
 	// <length of S> <S>.
-
 	signature := &Signature{}
 
 	if len(sigStr) < minSigLen {
@@ -111,6 +111,7 @@ func parseSig(sigStr []byte, curve elliptic.Curve, der bool) (*Signature, error)
 	if sigStr[index] != 0x30 {
 		return nil, errors.New("malformed signature: no header magic")
 	}
+
 	index++
 	// length of remaining message
 	siglen := sigStr[index]
@@ -129,6 +130,7 @@ func parseSig(sigStr []byte, curve elliptic.Curve, der bool) (*Signature, error)
 		return nil,
 			errors.New("malformed signature: no 1st int marker")
 	}
+
 	index++
 
 	// Length of signature R.
@@ -151,12 +153,14 @@ func parseSig(sigStr []byte, curve elliptic.Curve, der bool) (*Signature, error)
 			return nil, errors.New("signature R is excessively padded")
 		}
 	}
+
 	signature.R = new(big.Int).SetBytes(rBytes)
 	index += rLen
 	// 0x02. length already checked in previous if.
 	if sigStr[index] != 0x02 {
 		return nil, errors.New("malformed signature: no 2nd int marker")
 	}
+
 	index++
 
 	// Length of signature S.
@@ -195,12 +199,15 @@ func parseSig(sigStr []byte, curve elliptic.Curve, der bool) (*Signature, error)
 	if signature.R.Sign() != 1 {
 		return nil, errors.New("signature R isn't 1 or more")
 	}
+
 	if signature.S.Sign() != 1 {
 		return nil, errors.New("signature S isn't 1 or more")
 	}
+
 	if signature.R.Cmp(curve.Params().N) >= 0 {
 		return nil, errors.New("signature R is >= curve.N")
 	}
+
 	if signature.S.Cmp(curve.Params().N) >= 0 {
 		return nil, errors.New("signature S is >= curve.N")
 	}
@@ -233,11 +240,13 @@ func canonicalizeInt(val *big.Int) []byte {
 	if len(b) == 0 {
 		b = []byte{0x00}
 	}
+
 	if b[0]&0x80 != 0 {
 		paddedBytes := make([]byte, len(b)+1)
 		copy(paddedBytes[1:], b)
 		b = paddedBytes
 	}
+
 	return b
 }
 
@@ -265,6 +274,7 @@ func canonicalPadding(b []byte) error {
 // This is borrowed from crypto/ecdsa.
 func hashToInt(hash []byte, c elliptic.Curve) *big.Int {
 	orderBits := c.Params().N.BitLen()
+
 	orderBytes := (orderBits + 7) / 8
 	if len(hash) > orderBytes {
 		hash = hash[:orderBytes]
@@ -272,9 +282,11 @@ func hashToInt(hash []byte, c elliptic.Curve) *big.Int {
 
 	ret := new(big.Int).SetBytes(hash)
 	excess := len(hash)*8 - orderBits
+
 	if excess > 0 {
 		ret.Rsh(ret, uint(excess))
 	}
+
 	return ret
 }
 
@@ -291,6 +303,7 @@ func recoverKeyFromSignature(curve *KoblitzCurve, sig *Signature, msg []byte,
 	Rx := new(big.Int).Mul(curve.Params().N,
 		new(big.Int).SetInt64(int64(iter/2)))
 	Rx.Add(Rx, sig.R)
+
 	if Rx.Cmp(curve.Params().P) != -1 {
 		return nil, errors.New("calculated Rx is larger than curve P")
 	}
@@ -366,6 +379,7 @@ func SignCompact(curve *KoblitzCurve, key *PrivateKey,
 		if err == nil && pk.X.Cmp(key.X) == 0 && pk.Y.Cmp(key.Y) == 0 {
 			result := make([]byte, 1, 2*curve.byteSize+1)
 			result[0] = 27 + byte(i)
+
 			if isCompressedKey {
 				result[0] += 4
 			}
@@ -378,6 +392,7 @@ func SignCompact(curve *KoblitzCurve, key *PrivateKey,
 				result = append(result,
 					make([]byte, curvelen-bytelen)...)
 			}
+
 			result = append(result, sig.R.Bytes()...)
 
 			bytelen = (sig.S.BitLen() + 7) / 8
@@ -385,6 +400,7 @@ func SignCompact(curve *KoblitzCurve, key *PrivateKey,
 				result = append(result,
 					make([]byte, curvelen-bytelen)...)
 			}
+
 			result = append(result, sig.S.Bytes()...)
 
 			return result, nil
@@ -423,7 +439,6 @@ func RecoverCompact(curve *KoblitzCurve, signature,
 
 // signRFC6979 generates a deterministic ECDSA signature according to RFC 6979 and BIP 62.
 func signRFC6979(privateKey *PrivateKey, hash []byte) (*Signature, error) {
-
 	privkey := privateKey.ToECDSA()
 	N := S256().N
 	halfOrder := S256().halfOrder
@@ -445,16 +460,17 @@ func signRFC6979(privateKey *PrivateKey, hash []byte) (*Signature, error) {
 	if s.Cmp(halfOrder) == 1 {
 		s.Sub(N, s)
 	}
+
 	if s.Sign() == 0 {
 		return nil, errors.New("calculated S is zero")
 	}
+
 	return &Signature{R: r, S: s}, nil
 }
 
 // nonceRFC6979 generates an ECDSA nonce (`k`) deterministically according to RFC 6979.
 // It takes a 32-byte hash as an input and returns 32-byte nonce to be used in ECDSA algorithm.
 func nonceRFC6979(privkey *big.Int, hash []byte) *big.Int {
-
 	curve := S256()
 	q := curve.Params().N
 	x := privkey
@@ -499,6 +515,7 @@ func nonceRFC6979(privkey *big.Int, hash []byte) *big.Int {
 		if secret.Cmp(one) >= 0 && secret.Cmp(q) < 0 {
 			return secret
 		}
+
 		k = mac(alg, k, append(v, 0x00))
 		v = mac(alg, k, v)
 	}
@@ -508,6 +525,7 @@ func nonceRFC6979(privkey *big.Int, hash []byte) *big.Int {
 func mac(alg func() hash.Hash, k, m []byte) []byte {
 	h := hmac.New(alg, k)
 	h.Write(m)
+
 	return h.Sum(nil)
 }
 
@@ -519,6 +537,7 @@ func int2octets(v *big.Int, rolen int) []byte {
 	if len(out) < rolen {
 		out2 := make([]byte, rolen)
 		copy(out2[rolen-len(out):], out)
+
 		return out2
 	}
 
@@ -526,6 +545,7 @@ func int2octets(v *big.Int, rolen int) []byte {
 	if len(out) > rolen {
 		out2 := make([]byte, rolen)
 		copy(out2, out[len(out)-rolen:])
+
 		return out2
 	}
 
@@ -536,8 +556,10 @@ func int2octets(v *big.Int, rolen int) []byte {
 func bits2octets(in []byte, curve elliptic.Curve, rolen int) []byte {
 	z1 := hashToInt(in, curve)
 	z2 := new(big.Int).Sub(z1, curve.Params().N)
+
 	if z2.Sign() < 0 {
 		return int2octets(z1, rolen)
 	}
+
 	return int2octets(z2, rolen)
 }

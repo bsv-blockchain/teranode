@@ -30,6 +30,7 @@ func TestBlock(t *testing.T) {
 	// Ensure block height set and get work properly.
 	wantHeight := int32(100000)
 	b.SetHeight(wantHeight)
+
 	if gotHeight := b.Height(); gotHeight != wantHeight {
 		t.Errorf("Height: mismatched height - got %v, want %v",
 			gotHeight, wantHeight)
@@ -37,6 +38,7 @@ func TestBlock(t *testing.T) {
 
 	// Hash for block 100,000.
 	wantHashStr := "3ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506"
+
 	wantHash, err := chainhash.NewHashFromStr(wantHashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -100,6 +102,7 @@ func TestBlock(t *testing.T) {
 			t.Errorf("Transactions #%d mismatched number of "+
 				"transactions - got %d, want %d", i,
 				len(transactions), len(wantTxHashes))
+
 			continue
 		}
 
@@ -121,10 +124,12 @@ func TestBlock(t *testing.T) {
 
 	// Serialize the test block.
 	var block100000Buf bytes.Buffer
+
 	err = Block100000.Serialize(&block100000Buf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	block100000Bytes := block100000Buf.Bytes()
 
 	// Request serialized bytes multiple times to test generation and
@@ -135,10 +140,12 @@ func TestBlock(t *testing.T) {
 			t.Errorf("Bytes: %v", err)
 			continue
 		}
+
 		if !bytes.Equal(serializedBytes, block100000Bytes) {
 			t.Errorf("Bytes #%d wrong bytes - got %v, want %v", i,
 				spew.Sdump(serializedBytes),
 				spew.Sdump(block100000Bytes))
+
 			continue
 		}
 	}
@@ -157,6 +164,7 @@ func TestBlock(t *testing.T) {
 		t.Errorf("TxLoc: %v", err)
 		return
 	}
+
 	if !reflect.DeepEqual(txLocs, wantTxLocs) {
 		t.Errorf("TxLoc: mismatched transaction location information "+
 			"- got %v, want %v", spew.Sdump(txLocs),
@@ -168,10 +176,12 @@ func TestBlock(t *testing.T) {
 func TestNewBlockFromBytes(t *testing.T) {
 	// Serialize the test block.
 	var block100000Buf bytes.Buffer
+
 	err := Block100000.Serialize(&block100000Buf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	block100000Bytes := block100000Buf.Bytes()
 
 	// Create a new block from the serialized bytes.
@@ -187,6 +197,7 @@ func TestNewBlockFromBytes(t *testing.T) {
 		t.Errorf("Bytes: %v", err)
 		return
 	}
+
 	if !bytes.Equal(serializedBytes, block100000Bytes) {
 		t.Errorf("Bytes: wrong bytes - got %v, want %v",
 			spew.Sdump(serializedBytes),
@@ -205,10 +216,12 @@ func TestNewBlockFromBytes(t *testing.T) {
 func TestNewBlockFromBlockAndBytes(t *testing.T) {
 	// Serialize the test block.
 	var block100000Buf bytes.Buffer
+
 	err := Block100000.Serialize(&block100000Buf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	block100000Bytes := block100000Buf.Bytes()
 
 	// Create a new block from the serialized bytes.
@@ -220,11 +233,13 @@ func TestNewBlockFromBlockAndBytes(t *testing.T) {
 		t.Errorf("Bytes: %v", err)
 		return
 	}
+
 	if !bytes.Equal(serializedBytes, block100000Bytes) {
 		t.Errorf("Bytes: wrong bytes - got %v, want %v",
 			spew.Sdump(serializedBytes),
 			spew.Sdump(block100000Bytes))
 	}
+
 	if msgBlock := b.MsgBlock(); !reflect.DeepEqual(msgBlock, &Block100000) {
 		t.Errorf("MsgBlock: mismatched MsgBlock - got %v, want %v",
 			spew.Sdump(msgBlock), spew.Sdump(&Block100000))
@@ -236,6 +251,7 @@ func TestBlockErrors(t *testing.T) {
 	// Ensure out of range errors are as expected.
 	wantErr := "transaction index -1 is out of range - max 3"
 	testErr := bsvutil.OutOfRangeError(wantErr)
+
 	if testErr.Error() != wantErr {
 		t.Errorf("OutOfRangeError: wrong error - got %v, want %v",
 			testErr.Error(), wantErr)
@@ -243,6 +259,7 @@ func TestBlockErrors(t *testing.T) {
 
 	// Serialize the test block.
 	var block100000Buf bytes.Buffer
+
 	err := Block100000.Serialize(&block100000Buf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
@@ -259,6 +276,7 @@ func TestBlockErrors(t *testing.T) {
 
 	// Truncate the block byte buffer to force errors.
 	shortBytes := block100000Bytes[:80]
+
 	_, err = bsvutil.NewBlockFromBytes(shortBytes)
 	if err != io.EOF {
 		t.Errorf("NewBlockFromBytes: did not get expected error - "+
@@ -271,6 +289,7 @@ func TestBlockErrors(t *testing.T) {
 		t.Errorf("TxHash: wrong error - got: %v <%T>, "+
 			"want: <%T>", err, err, bsvutil.OutOfRangeError(""))
 	}
+
 	_, err = b.TxHash(len(Block100000.Transactions) + 1)
 	if _, ok := err.(bsvutil.OutOfRangeError); !ok {
 		t.Errorf("TxHash: wrong error - got: %v <%T>, "+
@@ -283,6 +302,7 @@ func TestBlockErrors(t *testing.T) {
 		t.Errorf("Tx: wrong error - got: %v <%T>, "+
 			"want: <%T>", err, err, bsvutil.OutOfRangeError(""))
 	}
+
 	_, err = b.Tx(len(Block100000.Transactions) + 1)
 	if _, ok := err.(bsvutil.OutOfRangeError); !ok {
 		t.Errorf("Tx: wrong error - got: %v <%T>, "+
@@ -293,6 +313,7 @@ func TestBlockErrors(t *testing.T) {
 	// This makes use of the test package only function, SetBlockBytes, to
 	// inject a short byte buffer.
 	b.SetBlockBytes(shortBytes)
+
 	_, err = b.TxLoc()
 	if err != io.EOF {
 		t.Errorf("TxLoc: did not get expected error - "+

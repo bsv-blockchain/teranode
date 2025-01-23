@@ -45,6 +45,7 @@ func (t *Tx) Hash() *chainhash.Hash {
 	// Cache the hash and return it.
 	hash := t.msgTx.TxHash()
 	t.txHash = &hash
+
 	return &hash
 }
 
@@ -80,6 +81,7 @@ func NewTxFromBytes(serializedTx []byte) (*Tx, error) {
 func NewTxFromReader(r io.Reader) (*Tx, error) {
 	// Deserialize the bytes into a MsgTx.
 	var msgTx wire.MsgTx
+
 	err := msgTx.Deserialize(r)
 	if err != nil {
 		return nil, err
@@ -89,5 +91,6 @@ func NewTxFromReader(r io.Reader) (*Tx, error) {
 		msgTx:   &msgTx,
 		txIndex: TxIndexUnknown,
 	}
+
 	return &t, nil
 }

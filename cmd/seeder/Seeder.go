@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	// nolint:gci,gosec
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
-
-	// nolint:gci,gosec
-	_ "net/http/pprof"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"

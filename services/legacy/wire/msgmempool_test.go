@@ -16,6 +16,7 @@ func TestMemPool(t *testing.T) {
 	// Ensure the command is expected value.
 	wantCmd := "mempool"
 	msg := NewMsgMemPool()
+
 	if cmd := msg.Command(); cmd != wantCmd {
 		t.Errorf("NewMsgMemPool: wrong command - got %v want %v",
 			cmd, wantCmd)
@@ -24,6 +25,7 @@ func TestMemPool(t *testing.T) {
 	// Ensure max payload is expected value.
 	wantPayload := uint64(0)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -32,6 +34,7 @@ func TestMemPool(t *testing.T) {
 
 	// Test encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("encode of MsgMemPool failed %v err <%v>", msg, err)
@@ -40,6 +43,7 @@ func TestMemPool(t *testing.T) {
 	// Older protocol versions should fail encode since message didn't
 	// exist yet.
 	oldPver := BIP0035Version - 1
+
 	err = msg.BsvEncode(&buf, oldPver, enc)
 	if err == nil {
 		s := "encode of MsgMemPool passed for old protocol version %v err <%v>"
@@ -48,6 +52,7 @@ func TestMemPool(t *testing.T) {
 
 	// Test decode with latest protocol version.
 	readmsg := NewMsgMemPool()
+
 	err = readmsg.Bsvdecode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("decode of MsgMemPool failed [%v] err <%v>", buf, err)

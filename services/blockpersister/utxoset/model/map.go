@@ -97,13 +97,13 @@ func (ssm *splitMap[K, V]) Length() int {
 type ValueCompareFn[V any] func(V, V) bool
 
 func (ssm *splitMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string) {
-
 	if ssm.Length() != other.Length() {
 		return false, fmt.Sprintf("Lengths are different: %d vs %d", ssm.Length(), other.Length())
 	}
 
 	// compare contents of ssm with other
 	different := false
+
 	var difference string
 
 	ssm.Iter(func(k K, v V) bool {

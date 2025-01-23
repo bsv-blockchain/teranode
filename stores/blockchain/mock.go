@@ -34,27 +34,27 @@ func (m MockStore) GetDB() *usql.DB {
 }
 
 func (m MockStore) GetDBEngine() util.SQLEngine {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -63,27 +63,27 @@ func (m MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint3
 }
 
 func (m MockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -98,7 +98,7 @@ func (m MockStore) GetBlockExists(_ context.Context, blockHash *chainhash.Hash) 
 }
 
 func (m MockStore) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -109,12 +109,12 @@ func (m MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID st
 }
 
 func (m MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -127,27 +127,27 @@ func (m MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *c
 }
 
 func (m MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -156,17 +156,17 @@ func (m MockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.H
 }
 
 func (m MockStore) GetState(ctx context.Context, key string) ([]byte, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) SetState(ctx context.Context, key string, data []byte) error {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -202,10 +202,10 @@ func (m MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []ui
 	panic("implement me")
 }
 
-func (s MockStore) SetFSMState(ctx context.Context, fsmState string) error {
+func (m MockStore) SetFSMState(ctx context.Context, fsmState string) error {
 	panic("implement me")
 }
 
-func (s MockStore) GetFSMState(ctx context.Context) (string, error) {
+func (m MockStore) GetFSMState(ctx context.Context) (string, error) {
 	panic("implement me")
 }

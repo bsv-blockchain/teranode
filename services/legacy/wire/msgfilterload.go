@@ -59,6 +59,7 @@ func (msg *MsgFilterLoad) Bsvdecode(r io.Reader, pver uint32, enc MessageEncodin
 	}
 
 	var err error
+
 	msg.Filter, err = ReadVarBytes(r, pver, MaxFilterLoadFilterSize,
 		"filterload filter size")
 	if err != nil {

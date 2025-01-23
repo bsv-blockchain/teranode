@@ -32,6 +32,7 @@ func (msg *MsgAuthresp) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding)
 	if err != nil {
 		return err
 	}
+
 	msg.PublicKeyLength = uint32(len(msg.PublicKey))
 
 	// Read stop hash
@@ -44,6 +45,7 @@ func (msg *MsgAuthresp) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding)
 	if err != nil {
 		return err
 	}
+
 	msg.SignatureLength = uint32(len(msg.Signature))
 
 	return nil
@@ -70,6 +72,7 @@ func (msg *MsgAuthresp) MaxPayloadLength(pver uint32) uint64 {
 // NewMsgAuthresp returns a new auth challenge message
 func NewMsgAuthresp(publickKey, signature []byte) *MsgAuthresp {
 	nonce, _ := RandomUint64()
+
 	return &MsgAuthresp{
 		PublicKeyLength: uint32(len(publickKey)),
 		PublicKey:       publickKey,

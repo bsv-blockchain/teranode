@@ -103,21 +103,25 @@ func (msg *MsgVersion) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) 
 			return err
 		}
 	}
+
 	if buf.Len() > 0 {
 		err = readElement(buf, &msg.Nonce)
 		if err != nil {
 			return err
 		}
 	}
+
 	if buf.Len() > 0 {
 		userAgent, err := ReadVarString(buf, pver)
 		if err != nil {
 			return err
 		}
+
 		err = validateUserAgent(userAgent)
 		if err != nil {
 			return err
 		}
+
 		msg.UserAgent = userAgent
 	}
 
@@ -140,6 +144,7 @@ func (msg *MsgVersion) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) 
 		// field is true when transactions should be relayed, so reverse
 		// it for the DisableRelayTx field.
 		var relayTx bool
+
 		readElement(r, &relayTx)
 		msg.DisableRelayTx = !relayTx
 	}
@@ -195,6 +200,7 @@ func (msg *MsgVersion) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding) 
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -208,7 +214,6 @@ func (msg *MsgVersion) Command() string {
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint64 {
 	// XXX: <= 106 different
-
 	// Protocol version 4 bytes + services 8 bytes + timestamp 8 bytes +
 	// remote and local net addresses + nonce 8 bytes + length of user
 	// agent (varInt) + max allowed useragent length + last block 4 bytes +
@@ -222,7 +227,6 @@ func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint64 {
 // fields.
 func NewMsgVersion(me *NetAddress, you *NetAddress, nonce uint64,
 	lastBlock int32) *MsgVersion {
-
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.
 	return &MsgVersion{
@@ -245,6 +249,7 @@ func validateUserAgent(userAgent string) error {
 			len(userAgent), MaxUserAgentLen)
 		return messageError("MsgVersion", str)
 	}
+
 	return nil
 }
 
@@ -253,17 +258,20 @@ func validateUserAgent(userAgent string) error {
 // it is recommended to use the form "major.minor.revision" e.g. "2.6.41".
 func (msg *MsgVersion) AddUserAgent(name string, version string,
 	comments ...string) error {
-
 	newUserAgent := fmt.Sprintf("%s:%s", name, version)
 	if len(comments) != 0 {
 		newUserAgent = fmt.Sprintf("%s(%s)", newUserAgent,
 			strings.Join(comments, "; "))
 	}
+
 	newUserAgent = fmt.Sprintf("%s/", newUserAgent)
+
 	err := validateUserAgent(newUserAgent)
 	if err != nil {
 		return err
 	}
+
 	msg.UserAgent = newUserAgent
+
 	return nil
 }

@@ -97,8 +97,10 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
 		responseBytesMu := sync.Mutex{}
+
 		for {
 			var hash chainhash.Hash
+
 			_, err := io.ReadFull(body, hash[:])
 			if err != nil {
 				if errors.Is(err, io.EOF) {

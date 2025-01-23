@@ -141,9 +141,7 @@ func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger,
 }
 
 func NewQuicDistributor(logger ulogger.Logger, tSettings *settings.Settings, opts ...Option) (*Distributor, error) {
-	var quicAddresses []string
-
-	quicAddresses = tSettings.Propagation.QuicAddresses
+	var quicAddresses = tSettings.Propagation.QuicAddresses
 	if len(quicAddresses) == 0 {
 		return nil, errors.NewConfigurationError("propagation_quicAddresses not set in config")
 	}

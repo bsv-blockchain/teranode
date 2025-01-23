@@ -8,7 +8,6 @@ import (
 )
 
 func TestCalcFourMedianTimes(t *testing.T) {
-
 	timestamps := []int64{
 		1231470988,
 		1231470173,
@@ -66,5 +65,4 @@ func TestTwelveMedianTime(t *testing.T) {
 
 	_, err := CalcPastMedianTime(timestamps)
 	require.Error(t, err, "too many timestamps for median time calculation")
-
 }

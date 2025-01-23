@@ -21,6 +21,7 @@ func verifyHeadersChain(headers []*wire.BlockHeader, lastHash *chainhash.Hash) e
 
 		// Serialize the header and double hash it to get the proof-of-work hash
 		var buf bytes.Buffer
+
 		err := header.Serialize(&buf)
 		if err != nil {
 			return fmt.Errorf("failed to serialize header: %v", err)
@@ -42,6 +43,7 @@ func verifyHeadersChain(headers []*wire.BlockHeader, lastHash *chainhash.Hash) e
 func checkProofOfWork(header *wire.BlockHeader) bool {
 	// Serialize the header
 	var buf bytes.Buffer
+
 	err := header.Serialize(&buf)
 	if err != nil {
 		return false

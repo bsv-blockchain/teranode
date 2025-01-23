@@ -85,6 +85,7 @@ func (msg *MsgReject) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) e
 	if err != nil {
 		return err
 	}
+
 	msg.Cmd = cmd
 
 	// Code indicating why the command was rejected.
@@ -99,6 +100,7 @@ func (msg *MsgReject) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) e
 	if err != nil {
 		return err
 	}
+
 	msg.Reason = reason
 
 	// CmdBlock and CmdTx messages have an additional hash field that

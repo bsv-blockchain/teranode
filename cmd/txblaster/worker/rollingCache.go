@@ -44,5 +44,6 @@ func (c *RollingCache) Contains(txID string) bool {
 	defer c.mu.Unlock()
 
 	_, exists := c.items[txID]
+
 	return exists
 }

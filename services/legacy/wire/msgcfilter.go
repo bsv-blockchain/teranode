@@ -52,6 +52,7 @@ func (msg *MsgCFilter) Bsvdecode(r io.Reader, pver uint32, _ MessageEncoding) er
 	// Read filter data
 	msg.Data, err = ReadVarBytes(r, pver, MaxCFilterDataSize,
 		"cfilter data")
+
 	return err
 }
 

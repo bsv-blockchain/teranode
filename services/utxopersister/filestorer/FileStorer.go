@@ -33,7 +33,6 @@ type FileStorer struct {
 }
 
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
-
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)

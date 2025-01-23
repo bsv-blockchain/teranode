@@ -217,6 +217,7 @@ func TestServer_prepareTxsPerLevel(t *testing.T) {
 
 			maxLevel, blockTXsPerLevel := s.prepareTxsPerLevel(context.Background(), transactions)
 			assert.Equal(t, tc.expectedLevels, maxLevel)
+
 			allParents := 0
 
 			for i := range blockTXsPerLevel {

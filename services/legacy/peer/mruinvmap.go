@@ -36,6 +36,7 @@ func (m *mruInventoryMap) String() string {
 
 	for iv := range m.invMap {
 		buf.WriteString(fmt.Sprintf("%v", iv))
+
 		if curEntry < lastEntryNum {
 			buf.WriteString(", ")
 		}
@@ -101,6 +102,7 @@ func (m *mruInventoryMap) Add(iv *wire.InvVect) {
 		node.Value = iv
 		m.invList.MoveToFront(node)
 		m.invMap[*iv] = node
+
 		return
 	}
 
@@ -115,6 +117,7 @@ func (m *mruInventoryMap) Add(iv *wire.InvVect) {
 func (m *mruInventoryMap) Delete(iv *wire.InvVect) {
 	m.invMtx.Lock()
 	defer m.invMtx.Unlock()
+
 	if node, exists := m.invMap[*iv]; exists {
 		m.invList.Remove(node)
 		delete(m.invMap, *iv)
@@ -131,5 +134,6 @@ func newMruInventoryMap(limit uint) *mruInventoryMap {
 		invList: list.New(),
 		limit:   limit,
 	}
+
 	return &m
 }

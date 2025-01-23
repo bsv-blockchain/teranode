@@ -45,6 +45,7 @@ func IsTransactionFinal(tx *bt.Tx, blockHeight uint32, blockTime uint32) error {
 	for _, input := range tx.Inputs {
 		allSequenceNumbersFinal = allSequenceNumbersFinal && input.SequenceNumber == bt.DefaultSequenceNumber
 	}
+
 	if allSequenceNumbersFinal {
 		return nil
 	}

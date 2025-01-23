@@ -12,9 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // mainNetGenesisHash is the hash of the first block in the block chain for the
@@ -147,6 +146,7 @@ func TestElementWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Write to wire format.
 		var buf bytes.Buffer
@@ -233,6 +233,7 @@ func TestElementWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
@@ -299,6 +300,7 @@ func TestVarIntWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
@@ -356,6 +358,7 @@ func TestVarIntWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
@@ -418,6 +421,7 @@ func TestVarIntNonCanonical(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Decode from wire format.
 		rbuf := bytes.NewReader(test.in)
@@ -462,6 +466,7 @@ func TestVarIntSerializeSize(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		serializedSize := VarIntSerializeSize(test.val)
 		if serializedSize != test.size {
@@ -495,6 +500,7 @@ func TestVarStringWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
@@ -554,9 +560,11 @@ func TestVarStringWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := WriteVarString(w, test.pver, test.in)
 		if err != test.writeErr {
 			t.Errorf("WriteVarString #%d wrong error got: %v, want: %v",
@@ -595,9 +603,11 @@ func TestVarStringOverflowErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Decode from wire format.
 		rbuf := bytes.NewReader(test.buf)
+
 		_, err := ReadVarString(rbuf, test.pver)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("ReadVarString #%d wrong error got: %v, "+
@@ -629,6 +639,7 @@ func TestVarBytesWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
@@ -689,6 +700,7 @@ func TestVarBytesWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
@@ -732,6 +744,7 @@ func TestVarBytesOverflowErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Decode from wire format.
 		rbuf := bytes.NewReader(test.buf)
@@ -761,6 +774,7 @@ func TestRandomUint64(t *testing.T) {
 		"when only %d was expected"
 
 	numHits := 0
+
 	for i := 0; i < tries; i++ {
 		nonce, err := RandomUint64()
 

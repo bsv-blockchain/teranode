@@ -113,6 +113,7 @@ func CalculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		for _, hash := range hashes {
 			err := st.AddNode(*hash, 1, 0)
 			if err != nil {
@@ -121,6 +122,7 @@ func CalculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		}
 
 		calculatedMerkleRoot := st.RootHash()
+
 		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
 			return nil, err

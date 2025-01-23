@@ -51,7 +51,6 @@ func TstAddressScriptHash(hash [ripemd160.Size]byte,
 // unexported fields with the parameters hash and netID.
 func TstLegacyAddressPubKeyHash(hash [ripemd160.Size]byte,
 	netID byte) *LegacyAddressPubKeyHash {
-
 	return &LegacyAddressPubKeyHash{
 		hash:  hash,
 		netID: netID,
@@ -62,7 +61,6 @@ func TstLegacyAddressPubKeyHash(hash [ripemd160.Size]byte,
 // unexported fields with the parameters hash and netID.
 func TstLegacyAddressScriptHash(hash [ripemd160.Size]byte,
 	netID byte) *LegacyAddressScriptHash {
-
 	return &LegacyAddressScriptHash{
 		hash:  hash,
 		netID: netID,
@@ -73,8 +71,8 @@ func TstLegacyAddressScriptHash(hash [ripemd160.Size]byte,
 // the parameters.
 func TstAddressPubKey(serializedPubKey []byte, pubKeyFormat PubKeyFormat,
 	netID byte) *AddressPubKey {
-
 	pubKey, _ := bsvec.ParsePubKey(serializedPubKey, bsvec.S256())
+
 	return &AddressPubKey{
 		pubKeyFormat: pubKeyFormat,
 		pubKey:       (*bsvec.PublicKey)(pubKey),
@@ -96,6 +94,8 @@ func TstAddressSAddr(addr string, params *chaincfg.Params) []byte {
 	if !strings.HasPrefix(addr, prefix) {
 		addr = prefix + ":" + addr
 	}
+
 	decoded, _, _, _ := checkDecodeCashAddress(addr)
+
 	return decoded[:ripemd160.Size]
 }

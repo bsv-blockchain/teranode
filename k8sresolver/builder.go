@@ -37,6 +37,7 @@ type k8sBuilder struct {
 
 func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
 	logger.Debugf("[k8s] Build called with target: %v", target)
+
 	host, port, err := parseTarget(target.Endpoint(), defaultPort)
 	if err != nil {
 		return nil, err

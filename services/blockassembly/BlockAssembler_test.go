@@ -462,6 +462,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 
 		wg.Wait()
+
 		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
@@ -553,6 +554,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444, SizeInBytes: 444})
 
 		wg.Wait()
+
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
@@ -664,6 +666,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		}
 
 		wg.Wait()
+
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
@@ -768,6 +771,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		}
 
 		wg.Wait()
+
 		_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.Error(t, err)
 		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())

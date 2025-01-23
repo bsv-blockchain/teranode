@@ -34,6 +34,7 @@ func (m *mruNonceMap) String() string {
 
 	for nonce := range m.nonceMap {
 		buf.WriteString(fmt.Sprintf("%d", nonce))
+
 		if curEntry < lastEntryNum {
 			buf.WriteString(", ")
 		}
@@ -94,6 +95,7 @@ func (m *mruNonceMap) Add(nonce uint64) {
 		node.Value = nonce
 		m.nonceList.MoveToFront(node)
 		m.nonceMap[nonce] = node
+
 		return
 	}
 
@@ -124,5 +126,6 @@ func newMruNonceMap(limit uint) *mruNonceMap {
 		nonceList: list.New(),
 		limit:     limit,
 	}
+
 	return &m
 }

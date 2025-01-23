@@ -12,6 +12,7 @@ func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
+
 	fmt.Printf("Usage: verifyblock <filename>\n\n")
 	os.Exit(1)
 }

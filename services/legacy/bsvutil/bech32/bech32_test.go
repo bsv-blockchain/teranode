@@ -37,12 +37,14 @@ func TestBech32(t *testing.T) {
 
 	for _, test := range tests {
 		str := test.str
+
 		hrp, decoded, err := bech32.Decode(str)
 		if !test.valid {
 			// Invalid string decoding should result in error.
 			if err == nil {
 				t.Errorf("expected decoding to fail for invalid string %v", test.str)
 			}
+
 			continue
 		}
 
@@ -65,6 +67,7 @@ func TestBech32(t *testing.T) {
 		// Flip a bit in the string an make sure it is caught.
 		pos := strings.LastIndexAny(str, "1")
 		flipped := str[:pos+1] + string((str[pos+1] ^ 1)) + str[pos+2:]
+
 		_, _, err = bech32.Decode(flipped)
 		if err == nil {
 			t.Error("expected decoding to fail")

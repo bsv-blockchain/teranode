@@ -298,6 +298,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			if err != nil {
 				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
+
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 
@@ -305,6 +306,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			if err != nil {
 				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
+
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
 				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
@@ -320,6 +322,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			if err != nil {
 				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
+
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 
@@ -341,6 +344,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			if err != nil {
 				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
+
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 

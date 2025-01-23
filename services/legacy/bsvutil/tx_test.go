@@ -28,7 +28,9 @@ func TestTx(t *testing.T) {
 
 	// Ensure transaction index set and get work properly.
 	wantIndex := 0
+
 	tx.SetIndex(0)
+
 	if gotIndex := tx.Index(); gotIndex != wantIndex {
 		t.Errorf("Index: mismatched index - got %v, want %v",
 			gotIndex, wantIndex)
@@ -36,6 +38,7 @@ func TestTx(t *testing.T) {
 
 	// Hash for block 100,000 transaction 0.
 	wantHashStr := "8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"
+
 	wantHash, err := chainhash.NewHashFromStr(wantHashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -55,11 +58,14 @@ func TestTx(t *testing.T) {
 func TestNewTxFromBytes(t *testing.T) {
 	// Serialize the test transaction.
 	testTx := Block100000.Transactions[0]
+
 	var testTxBuf bytes.Buffer
+
 	err := testTx.Serialize(&testTxBuf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	testTxBytes := testTxBuf.Bytes()
 
 	// Create a new transaction from the serialized bytes.
@@ -80,15 +86,19 @@ func TestNewTxFromBytes(t *testing.T) {
 func TestTxErrors(t *testing.T) {
 	// Serialize the test transaction.
 	testTx := Block100000.Transactions[0]
+
 	var testTxBuf bytes.Buffer
+
 	err := testTx.Serialize(&testTxBuf)
 	if err != nil {
 		t.Errorf("Serialize: %v", err)
 	}
+
 	testTxBytes := testTxBuf.Bytes()
 
 	// Truncate the transaction byte buffer to force errors.
 	shortBytes := testTxBytes[:4]
+
 	_, err = bsvutil.NewTxFromBytes(shortBytes)
 	if err != io.EOF {
 		t.Errorf("NewTxFromBytes: did not get expected error - "+

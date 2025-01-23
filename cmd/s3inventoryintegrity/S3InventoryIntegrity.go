@@ -109,18 +109,22 @@ func S3InventoryIntegrity(verbose bool, quick bool, blockchainStoreURLString str
 	}
 
 	fmt.Printf("=================================================================\n")
+
 	if len(filenames) == 0 {
 		fmt.Printf("No additional (non blockchain related) files found in CSV\n")
 	} else {
 		fmt.Printf("%d additional files in CSV that are not part of any block in the blockchain store\n", len(filenames))
 
 		fileTypesMap := make(map[string]int)
+
 		for filename := range filenames {
 			fileType := "no-extension"
 			parts := strings.Split(filename, ".")
+
 			if len(parts) > 0 {
 				fileType = parts[len(parts)-1]
 			}
+
 			fileTypesMap[fileType]++
 		}
 
@@ -130,11 +134,13 @@ func S3InventoryIntegrity(verbose bool, quick bool, blockchainStoreURLString str
 				fmt.Printf("%s: %d\n", fileType, count)
 			}
 		}
+
 		for fileType, count := range fileTypesMap {
 			switch fileType {
 			case "block", "utxodiff", "subtree":
 				continue
 			}
+
 			fmt.Printf("%s: %d\n", fileType, count)
 		}
 
@@ -161,9 +167,11 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 	foundSubtrees := 0
 
 	var previousHash chainhash.Hash
+
 	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	slices.Reverse(blockHeaders)
+
 	for _, blockHeader := range blockHeaders {
 		if blockHeader.Hash().IsEqual(hashGenesisBlock) {
 			continue
@@ -188,6 +196,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 		delete(filenames, blockHeader.Hash().String()+".block")
 
 		numDiffs++
+
 		if filenames[blockHeader.Hash().String()+".utxodiff"] {
 			foundDiffs++
 		} else {
@@ -207,6 +216,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 
 		for _, subtreeHash := range block.Subtrees {
 			numSubtrees++
+
 			if filenames[subtreeHash.String()+".subtree"] {
 				foundSubtrees++
 			} else {
@@ -226,9 +236,11 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 
 func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash chainhash.Hash, extension string, time time.Time, verboseLogger ulogger.Logger) bool {
 	found := false
+
 	for i, s3bucket := range s3buckets {
 		storeName := s3bucket.url
 		store := s3bucket.store
+
 		exists, err := store.Exists(ctx, hash[:], options.WithFileExtension(extension))
 		if err != nil {
 			fmt.Printf("failed to check if %s.block exists in %s: %s\n", hash, storeName, err)
@@ -244,6 +256,7 @@ func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash cha
 			}
 
 			found = true
+
 			break
 		}
 	}
@@ -258,6 +271,7 @@ func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash cha
 
 func loadFilenames(filename string) map[string]bool {
 	filenames := make(map[string]bool)
+
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("Unable to open CSV file: %v", err)

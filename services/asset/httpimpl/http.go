@@ -352,6 +352,7 @@ func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			}
 
 			logger.Infof("http request: Method=%s, URI=%s, RemoteAddr=%s Status=%d, Duration=%v, err=%v", c.Request().Method, c.Request().RequestURI, c.Request().RemoteAddr, status, duration, err)
+
 			return err
 		}
 	}

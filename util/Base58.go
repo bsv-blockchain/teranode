@@ -50,6 +50,7 @@ func decode(src []byte) ([]byte, int, error) {
 			break
 		}
 	}
+
 	flen := numZeros + len(tmpval)
 	val := make([]byte, flen)
 	copy(val[numZeros:], tmpval)
@@ -81,8 +82,8 @@ func MaxEncodedLen(b []byte) int {
 // from a byte slice.  The length is variable based on same
 // sized input slice.
 func encode(src []byte) ([]byte, int) {
-
 	var dst []byte
+
 	x := new(big.Int).SetBytes(src)
 	r := new(big.Int)
 	m := big.NewInt(58)
@@ -103,6 +104,7 @@ func encode(src []byte) ([]byte, int) {
 		if v != 0 {
 			break
 		}
+
 		dst = append(dst, base58table[0])
 	}
 

@@ -147,6 +147,7 @@ func (f ServiceFlag) String() string {
 
 	// Add individual bit flags.
 	s := ""
+
 	for _, flag := range orderedSFStrings {
 		if f&flag == flag {
 			s += sfStrings[flag] + "|"
@@ -159,7 +160,9 @@ func (f ServiceFlag) String() string {
 	if f != 0 {
 		s += "|0x" + strconv.FormatUint(uint64(f), 16)
 	}
+
 	s = strings.TrimLeft(s, "|")
+
 	return s
 }
 

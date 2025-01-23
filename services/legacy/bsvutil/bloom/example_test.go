@@ -28,11 +28,13 @@ func ExampleNewFilter() {
 	// trasaction is the first transaction in block 310,000 of the main
 	// bitcoin block chain.
 	txHashStr := "fd611c56ca0d378cdcd16244b45c2ba9588da3adac367c4ef43e808b280b8a45"
+
 	txHash, err := chainhash.NewHashFromStr(txHashStr)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+
 	filter.AddHash(txHash)
 
 	// Show that the filter matches.

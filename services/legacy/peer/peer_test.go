@@ -57,8 +57,10 @@ func (c conn) RemoteAddr() net.Addr {
 	if !c.proxy {
 		return &addr{c.rnet, c.raddr}
 	}
+
 	host, strPort, _ := net.SplitHostPort(c.raddr)
 	port, _ := strconv.Atoi(strPort)
+
 	return &socks.ProxiedAddr{
 		Net:  c.rnet,
 		Host: host,
@@ -71,6 +73,7 @@ func (c conn) Close() error {
 	if c.Closer == nil {
 		return nil
 	}
+
 	return c.Closer.Close()
 }
 
@@ -345,12 +348,14 @@ func TestPeerConnection(t *testing.T) {
 		},
 	}
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		inPeer, outPeer, err := test.setup()
 		if err != nil {
 			t.Errorf("TestPeerConnection setup #%d: unexpected err %v", i, err)
 			return
 		}
+
 		testPeer(t, inPeer, wantStats2)
 		testPeer(t, outPeer, wantStats1)
 
@@ -471,11 +476,13 @@ func TestPeerListeners(t *testing.T) {
 			verack <- struct{}{}
 		},
 	}
+
 	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err %v\n", err)
 		return
 	}
+
 	outPeer.AssociateConnection(outConn)
 
 	for i := 0; i < 2; i++ {
@@ -598,6 +605,7 @@ func TestPeerListeners(t *testing.T) {
 		},
 	}
 	t.Logf("Running %d tests", len(tests))
+
 	for _, test := range tests {
 		// Queue the test message
 		outPeer.QueueMessage(test.msg, nil)
@@ -608,6 +616,7 @@ func TestPeerListeners(t *testing.T) {
 			return
 		}
 	}
+
 	inPeer.Disconnect()
 	outPeer.Disconnect()
 }
@@ -669,6 +678,7 @@ func TestOutboundPeer(t *testing.T) {
 
 	fakeMsg := wire.NewMsgVerAck()
 	p.QueueMessage(fakeMsg, nil)
+
 	done := make(chan struct{})
 	p.QueueMessage(fakeMsg, done)
 	<-done
@@ -687,11 +697,13 @@ func TestOutboundPeer(t *testing.T) {
 	peerCfg.NewestBlock = newestBlock
 	r1, w1 := io.Pipe()
 	c1 := &conn{raddr: "10.0.0.1:8333", Writer: w1, Reader: r1}
+
 	p1, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err - %v\n", err)
 		return
 	}
+
 	p1.AssociateConnection(c1)
 
 	// Test update latest block
@@ -700,8 +712,10 @@ func TestOutboundPeer(t *testing.T) {
 		t.Errorf("NewHashFromStr: unexpected err %v\n", err)
 		return
 	}
+
 	p1.UpdateLastAnnouncedBlock(latestBlockHash)
 	p1.UpdateLastBlockHeight(234440)
+
 	if p1.LastAnnouncedBlock() != latestBlockHash {
 		t.Errorf("LastAnnouncedBlock: wrong block - got %v, want %v",
 			p1.LastAnnouncedBlock(), latestBlockHash)
@@ -717,11 +731,13 @@ func TestOutboundPeer(t *testing.T) {
 	peerCfg.Services = wire.SFNodeBloom
 	r2, w2 := io.Pipe()
 	c2 := &conn{raddr: "10.0.0.1:8333", Writer: w2, Reader: r2}
+
 	p2, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err - %v\n", err)
 		return
 	}
+
 	p2.AssociateConnection(c2)
 
 	// Test PushXXX
@@ -731,14 +747,17 @@ func TestOutboundPeer(t *testing.T) {
 		na := wire.NetAddress{}
 		addrs = append(addrs, &na)
 	}
+
 	if _, err := p2.PushAddrMsg(addrs); err != nil {
 		t.Errorf("PushAddrMsg: unexpected err %v\n", err)
 		return
 	}
+
 	if err := p2.PushGetBlocksMsg(nil, &chainhash.Hash{}); err != nil {
 		t.Errorf("PushGetBlocksMsg: unexpected err %v\n", err)
 		return
 	}
+
 	if err := p2.PushGetHeadersMsg(nil, &chainhash.Hash{}); err != nil {
 		t.Errorf("PushGetHeadersMsg: unexpected err %v\n", err)
 		return
@@ -791,6 +810,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOutboundPeer: unexpected err - %v\n", err)
 	}
+
 	p.AssociateConnection(localConn)
 
 	// Read outbound messages to peer into a channel
@@ -807,6 +827,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 				close(outboundMessages)
 				return
 			}
+
 			if err != nil {
 				t.Errorf("Error reading message from local node: %v\n", err)
 				return

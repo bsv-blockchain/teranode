@@ -51,6 +51,7 @@ func TestSigCacheAddExists(t *testing.T) {
 	// The previously added triplet should now be found within the sigcache.
 	sig1Copy, _ := bsvec.ParseSignature(sig1.Serialize(), bsvec.S256())
 	key1Copy, _ := bsvec.ParsePubKey(key1.SerializeCompressed(), bsvec.S256())
+
 	if !sigCache.Exists(*msg1, sig1Copy, key1Copy) {
 		t.Errorf("previously added item not found in signature cache")
 	}
@@ -75,6 +76,7 @@ func TestSigCacheAddEvictEntry(t *testing.T) {
 
 		sigCopy, _ := bsvec.ParseSignature(sig.Serialize(), bsvec.S256())
 		keyCopy, _ := bsvec.ParsePubKey(key.SerializeCompressed(), bsvec.S256())
+
 		if !sigCache.Exists(*msg, sigCopy, keyCopy) {
 			t.Errorf("previously added item not found in signature" +
 				"cache")
@@ -93,6 +95,7 @@ func TestSigCacheAddEvictEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to generate random signature test data")
 	}
+
 	sigCache.Add(*msgNew, sigNew, keyNew)
 
 	// The sigcache should still have sigCache entries.
@@ -104,6 +107,7 @@ func TestSigCacheAddEvictEntry(t *testing.T) {
 	// The entry added above should be found within the sigcache.
 	sigNewCopy, _ := bsvec.ParseSignature(sigNew.Serialize(), bsvec.S256())
 	keyNewCopy, _ := bsvec.ParsePubKey(keyNew.SerializeCompressed(), bsvec.S256())
+
 	if !sigCache.Exists(*msgNew, sigNewCopy, keyNewCopy) {
 		t.Fatalf("previously added item not found in signature cache")
 	}
@@ -127,6 +131,7 @@ func TestSigCacheAddMaxEntriesZeroOrNegative(t *testing.T) {
 	// The generated triplet should not be found.
 	sig1Copy, _ := bsvec.ParseSignature(sig1.Serialize(), bsvec.S256())
 	key1Copy, _ := bsvec.ParsePubKey(key1.SerializeCompressed(), bsvec.S256())
+
 	if sigCache.Exists(*msg1, sig1Copy, key1Copy) {
 		t.Errorf("previously added signature found in sigcache, but" +
 			"shouldn't have been")

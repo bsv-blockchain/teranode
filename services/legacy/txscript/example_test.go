@@ -25,6 +25,7 @@ func ExamplePayToAddrScript() {
 	// the address type.  It is also required for the upcoming call to
 	// PayToAddrScript.
 	addressStr := "bitcoincash:qqfgqp8l9l90zwetj84k2jcac2m8falvvydrpuu45u"
+
 	address, err := bsvutil.DecodeAddress(addressStr, &chaincfg.MainNetParams)
 	if err != nil {
 		fmt.Println(err)
@@ -37,6 +38,7 @@ func ExamplePayToAddrScript() {
 		fmt.Println(err)
 		return
 	}
+
 	fmt.Printf("Script Hex: %x\n", script)
 
 	disasm, err := txscript.DisasmString(script)
@@ -44,6 +46,7 @@ func ExamplePayToAddrScript() {
 		fmt.Println(err)
 		return
 	}
+
 	fmt.Println("Script Disassembly:", disasm)
 
 	// Output:
@@ -56,6 +59,7 @@ func ExamplePayToAddrScript() {
 func ExampleExtractPkScriptAddrs() {
 	// Start with a standard pay-to-pubkey-hash script.
 	scriptHex := "76a914128004ff2fcaf13b2b91eb654b1dc2b674f7ec6188ac"
+
 	script, err := hex.DecodeString(scriptHex)
 	if err != nil {
 		fmt.Println(err)
@@ -69,6 +73,7 @@ func ExampleExtractPkScriptAddrs() {
 		fmt.Println(err)
 		return
 	}
+
 	fmt.Println("Script Class:", scriptClass)
 	fmt.Println("Addresses:", addresses)
 	fmt.Println("Required Signatures:", reqSigs)
@@ -89,8 +94,10 @@ func ExampleSignTxOutput() {
 		fmt.Println(err)
 		return
 	}
+
 	privKey, pubKey := bsvec.PrivKeyFromBytes(bsvec.S256(), privKeyBytes)
 	pubKeyHash := bsvutil.Hash160(pubKey.SerializeCompressed())
+
 	addr, err := bsvutil.NewAddressPubKeyHash(pubKeyHash,
 		&chaincfg.MainNetParams)
 	if err != nil {
@@ -105,11 +112,13 @@ func ExampleSignTxOutput() {
 	prevOut := wire.NewOutPoint(&chainhash.Hash{}, ^uint32(0))
 	txIn := wire.NewTxIn(prevOut, []byte{txscript.OP_0, txscript.OP_0})
 	originTx.AddTxIn(txIn)
+
 	pkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+
 	txOut := wire.NewTxOut(100000000, pkScript)
 	originTx.AddTxOut(txOut)
 	originTxHash := originTx.TxHash()
@@ -158,6 +167,7 @@ func ExampleSignTxOutput() {
 		fmt.Println(err)
 		return
 	}
+
 	redeemTx.TxIn[0].SignatureScript = sigScript
 
 	// Prove that the transaction has been validly signed by executing the
@@ -166,16 +176,19 @@ func ExampleSignTxOutput() {
 		txscript.ScriptStrictMultiSig |
 		txscript.ScriptDiscourageUpgradableNops |
 		txscript.ScriptVerifyBip143SigHash
+
 	vm, err := txscript.NewEngine(originTx.TxOut[0].PkScript, redeemTx, 0,
 		flags, nil, nil, -1)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+
 	if err := vm.Execute(); err != nil {
 		fmt.Println(err)
 		return
 	}
+
 	fmt.Println("Transaction successfully signed")
 
 	// Output:

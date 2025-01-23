@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
 )

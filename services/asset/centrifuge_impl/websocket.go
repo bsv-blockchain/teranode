@@ -95,11 +95,13 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	} else {
 		upgrade.WriteBufferSize = c.WriteBufferSize
 	}
+
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
 		upgrade.CheckOrigin = sameHostOriginCheck()
 	}
+
 	return &WebsocketHandler{
 		node:    n,
 		config:  c,
@@ -152,10 +154,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if pingInterval == 0 {
 		pingInterval = DefaultWebsocketPingInterval
 	}
+
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
 		writeTimeout = DefaultWebsocketWriteTimeout
 	}
+
 	messageSizeLimit := s.config.MessageSizeLimit
 	if messageSizeLimit == 0 {
 		messageSizeLimit = DefaultWebsocketMessageSizeLimit
@@ -164,6 +168,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
+
 	if pingInterval > 0 {
 		pongWait := pingInterval * 10 / 9
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -200,9 +205,11 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "[Centrifuge] error creating client", map[string]any{"transport": transport.Name()}))
 			return
 		}
+
 		defer func() { _ = closeFn() }()
 
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection established", map[string]any{"client": c.ID(), "transport": transport.Name()}))
+
 		defer func(started time.Time) {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
 		}(time.Now())
@@ -213,6 +220,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		var req ConnectRequest
+
 		err = json.Unmarshal(data, &req)
 		if err != nil {
 			return
@@ -224,6 +232,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			Name:    req.Name,
 			Version: req.Version,
 		}
+
 		if req.Subs != nil {
 			subs := make(map[string]centrifuge.SubscribeRequest)
 			for k, v := range connectRequest.Subs {
@@ -249,6 +258,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		conn.SetPongHandler(nil)
 		conn.SetCloseHandler(nil)
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
+
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
 				close(graceCh)
@@ -288,6 +298,7 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 	if opts.pingInterval > 0 {
 		transport.addPing()
 	}
+
 	return transport
 }
 
@@ -297,11 +308,13 @@ func (t *websocketTransport) ping() {
 		return
 	default:
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
+
 		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
 		if err != nil {
 			_ = t.Close(centrifuge.DisconnectWriteError)
 			return
 		}
+
 		t.addPing()
 	}
 }
@@ -312,6 +325,7 @@ func (t *websocketTransport) addPing() {
 		t.mu.Unlock()
 		return
 	}
+
 	t.pingTimer = time.AfterFunc(t.opts.pingInterval, t.ping)
 	t.mu.Unlock()
 }
@@ -365,6 +379,7 @@ func (t *websocketTransport) writeData(data []byte) error {
 	if t.opts.compressionMinSize > 0 {
 		t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
 	}
+
 	var messageType = websocket.TextMessage
 	if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 		messageType = websocket.BinaryMessage
@@ -374,11 +389,13 @@ func (t *websocketTransport) writeData(data []byte) error {
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
 	}
+
 	err := t.conn.WriteMessage(messageType, data)
 	if err != nil {
 		t.writeMu.Unlock()
 		return err
 	}
+
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Time{})
 	}
@@ -416,6 +433,7 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 				return err
 			}
 		}
+
 		return nil
 	}
 }
@@ -435,12 +453,15 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 		t.mu.Unlock()
 		return nil
 	}
+
 	t.closed = true
 	if t.pingTimer != nil {
 		t.pingTimer.Stop()
 	}
+
 	close(t.closeCh)
 	t.mu.Unlock()
+
 	return t.conn.Close()
 }
 
@@ -464,17 +485,21 @@ func sameHostOriginCheck() func(r *http.Request) bool {
 //   - error: Error if origin check fails
 func checkSameHost(r *http.Request) error {
 	return nil
-
-	//origin := r.Header.Get("Origin")
-	//if origin == "" {
-	//	return nil
-	//}
-	//u, err := url.Parse(origin)
-	//if err != nil {
-	//	return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
-	//}
-	//if strings.EqualFold(r.Host, u.Host) {
-	//	return nil
-	//}
-	//return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+	// origin := r.Header.Get("Origin")
+	//
+	//	if origin == "" {
+	//		return nil
+	//	}
+	//
+	// u, err := url.Parse(origin)
+	//
+	//	if err != nil {
+	//		return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
+	//	}
+	//
+	//	if strings.EqualFold(r.Host, u.Host) {
+	//		return nil
+	//	}
+	//
+	// return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
 }

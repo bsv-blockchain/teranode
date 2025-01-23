@@ -189,6 +189,7 @@ func TestAmountUnitConversions(t *testing.T) {
 		// Verify that Amount.ToBSV works as advertised.
 		f1 := test.amount.ToUnit(AmountBSV)
 		f2 := test.amount.ToBSV()
+
 		if f1 != f2 {
 			t.Errorf("%v: ToBSV does not match ToUnit(AmountBSV): %v != %v", test.name, f1, f2)
 		}
@@ -196,6 +197,7 @@ func TestAmountUnitConversions(t *testing.T) {
 		// Verify that Amount.String works as advertised.
 		s1 := test.amount.Format(AmountBSV)
 		s2 := test.amount.String()
+
 		if s1 != s2 {
 			t.Errorf("%v: String does not match Format(AmountBitcoin): %v != %v", test.name, s1, s2)
 		}

@@ -6,9 +6,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"

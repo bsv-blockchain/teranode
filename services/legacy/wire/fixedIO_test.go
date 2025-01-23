@@ -26,8 +26,10 @@ func (w *fixedWriter) Write(p []byte) (n int, err error) {
 	if w.pos+lenp > cap(w.b) {
 		return 0, io.ErrShortWrite
 	}
+
 	n = lenp
 	w.pos += copy(w.b[w.pos:], p)
+
 	return
 }
 
@@ -41,6 +43,7 @@ func (w *fixedWriter) Bytes() []byte {
 func newFixedWriter(max int) io.Writer {
 	b := make([]byte, max)
 	fw := fixedWriter{b, 0}
+
 	return &fw
 }
 
@@ -60,6 +63,7 @@ type fixedReader struct {
 func (fr *fixedReader) Read(p []byte) (n int, err error) {
 	n, err = fr.iobuf.Read(p)
 	fr.pos += n
+
 	return
 }
 
@@ -68,10 +72,11 @@ func (fr *fixedReader) Read(p []byte) (n int, err error) {
 func newFixedReader(max int, buf []byte) io.Reader {
 	b := make([]byte, max)
 	if buf != nil {
-		copy(b[:], buf)
+		copy(b, buf)
 	}
 
 	iobuf := bytes.NewBuffer(b)
 	fr := fixedReader{b, 0, iobuf}
+
 	return &fr
 }

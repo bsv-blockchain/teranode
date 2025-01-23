@@ -533,6 +533,7 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 
 func getBlockStore(logger ulogger.Logger) blob.Store {
 	tSettings := settings.NewSettings()
+
 	blockStoreURL := tSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		panic("blockstore config not found")

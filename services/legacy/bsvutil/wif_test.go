@@ -29,6 +29,7 @@ func TestEncodeDecodeWIF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	wif2, err := NewWIF(priv2, &chaincfg.TestNetParams, true)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +65,7 @@ func TestEncodeDecodeWIF(t *testing.T) {
 			t.Error(err)
 			continue
 		}
+
 		if got := w.String(); got != test.encoded {
 			t.Errorf("NewWIF failed: want '%v', got '%v'", test.wif, got)
 		}

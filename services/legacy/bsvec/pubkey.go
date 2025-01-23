@@ -27,7 +27,6 @@ func isOdd(a *big.Int) bool {
 func decompressPoint(curve *KoblitzCurve, x *big.Int, ybit bool) (*big.Int, error) {
 	// TODO: This will probably only work for secp256k1 due to
 	// optimizations.
-
 	// Y = +-sqrt(x^3 + B)
 	x3 := new(big.Int).Mul(x, x)
 	x3.Mul(x3, x)
@@ -47,6 +46,7 @@ func decompressPoint(curve *KoblitzCurve, x *big.Int, ybit bool) (*big.Int, erro
 	// Check that y is a square root of x^3 + B.
 	y2 := new(big.Int).Mul(y, y)
 	y2.Mod(y2, curve.Params().P)
+
 	if y2.Cmp(x3) != 0 {
 		return nil, fmt.Errorf("invalid square root")
 	}
@@ -110,7 +110,9 @@ func ParsePubKey(pubKeyStr []byte, curve *KoblitzCurve) (key *PublicKey, err err
 			return nil, fmt.Errorf("invalid magic in compressed "+
 				"pubkey string: %d", pubKeyStr[0])
 		}
+
 		pubkey.X = new(big.Int).SetBytes(pubKeyStr[1:33])
+
 		pubkey.Y, err = decompressPoint(curve, pubkey.X, ybit)
 		if err != nil {
 			return nil, err
@@ -123,12 +125,15 @@ func ParsePubKey(pubKeyStr []byte, curve *KoblitzCurve) (key *PublicKey, err err
 	if pubkey.X.Cmp(pubkey.Curve.Params().P) >= 0 {
 		return nil, fmt.Errorf("pubkey X parameter is >= to P")
 	}
+
 	if pubkey.Y.Cmp(pubkey.Curve.Params().P) >= 0 {
 		return nil, fmt.Errorf("pubkey Y parameter is >= to P")
 	}
+
 	if !pubkey.Curve.IsOnCurve(pubkey.X, pubkey.Y) {
 		return nil, fmt.Errorf("pubkey isn't on secp256k1 curve")
 	}
+
 	return &pubkey, nil
 }
 
@@ -147,29 +152,36 @@ func (p *PublicKey) SerializeUncompressed() []byte {
 	b := make([]byte, 0, PubKeyBytesLenUncompressed)
 	b = append(b, pubkeyUncompressed)
 	b = paddedAppend(32, b, p.X.Bytes())
+
 	return paddedAppend(32, b, p.Y.Bytes())
 }
 
 // SerializeCompressed serializes a public key in a 33-byte compressed format.
 func (p *PublicKey) SerializeCompressed() []byte {
 	b := make([]byte, 0, PubKeyBytesLenCompressed)
+
 	format := pubkeyCompressed
 	if isOdd(p.Y) {
 		format |= 0x1
 	}
+
 	b = append(b, format)
+
 	return paddedAppend(32, b, p.X.Bytes())
 }
 
 // SerializeHybrid serializes a public key in a 65-byte hybrid format.
 func (p *PublicKey) SerializeHybrid() []byte {
 	b := make([]byte, 0, PubKeyBytesLenHybrid)
+
 	format := pubkeyHybrid
 	if isOdd(p.Y) {
 		format |= 0x1
 	}
+
 	b = append(b, format)
 	b = paddedAppend(32, b, p.X.Bytes())
+
 	return paddedAppend(32, b, p.Y.Bytes())
 }
 
@@ -188,5 +200,6 @@ func paddedAppend(size uint, dst, src []byte) []byte {
 	for i := 0; i < int(size)-len(src); i++ {
 		dst = append(dst, 0)
 	}
+
 	return append(dst, src...)
 }

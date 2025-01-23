@@ -32,7 +32,6 @@ type LookupFunc func(string) ([]net.IP, error)
 // SeedFromDNS uses DNS seeding to populate the address manager with peers.
 func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 	lookupFn LookupFunc, seedFn OnSeed) {
-
 	for _, dnsseed := range chainParams.DNSSeeds {
 		var host string
 		if !dnsseed.HasFiltering || reqServices == wire.SFNodeNetwork {
@@ -44,19 +43,22 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 		go func(host string) {
 			seedpeers, err := lookupFn(host)
 			if err != nil {
-				//log.Infof("DNS discovery failed on seed %s: %v", host, err)
+				// log.Infof("DNS discovery failed on seed %s: %v", host, err)
 				return
 			}
+
 			numPeers := len(seedpeers)
 
-			//log.Infof("%d addresses found from DNS seed %s", numPeers, host)
+			// log.Infof("%d addresses found from DNS seed %s", numPeers, host)
 
 			if numPeers == 0 {
 				return
 			}
+
 			addresses := make([]*wire.NetAddress, len(seedpeers))
 			// if this errors then we have *real* problems
 			intPort, _ := strconv.Atoi(chainParams.DefaultPort)
+
 			for i, peer := range seedpeers {
 				randSource := mrand.NewPCG(uint64(time.Now().UnixNano()), uint64(secondsIn4Days))
 				// #nosec G404

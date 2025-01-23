@@ -83,6 +83,7 @@ func TestErrorCodeStringer(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		result := test.in.String()
 		if result != test.want {
@@ -112,6 +113,7 @@ func TestError(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		result := test.in.Error()
 		if result != test.want {

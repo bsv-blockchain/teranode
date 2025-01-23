@@ -30,7 +30,6 @@ func init() {
 // scriptTestName returns a descriptive test name for the given reference script
 // test data.
 func scriptTestName(test []interface{}) (string, error) {
-
 	// The test must consist of at least a signature script, public key script,
 	// flags, and expected error.  Finally, it may optionally contain a comment.
 	if len(test) < 4 || len(test) > 5 {
@@ -47,6 +46,7 @@ func scriptTestName(test []interface{}) (string, error) {
 		name = fmt.Sprintf("test ([%s, %s, %s])", test[0],
 			test[1], test[2])
 	}
+
 	return name, nil
 }
 
@@ -55,6 +55,7 @@ func parseHex(tok string) ([]byte, error) {
 	if !strings.HasPrefix(tok, "0x") {
 		return nil, errors.New("not a hex number")
 	}
+
 	return hex.DecodeString(tok[2:])
 }
 
@@ -77,10 +78,12 @@ func parseShortForm(script string) ([]byte, error) {
 	// Only create the short form opcode map once.
 	if shortFormOps == nil {
 		ops := make(map[string]byte)
+
 		for opcodeName, opcodeValue := range OpcodeByName {
 			if strings.Contains(opcodeName, "OP_UNKNOWN") {
 				continue
 			}
+
 			ops[opcodeName] = opcodeValue
 
 			// The opcodes named OP_# can't have the OP_ prefix
@@ -92,10 +95,10 @@ func parseShortForm(script string) ([]byte, error) {
 			if (opcodeName == "OP_FALSE" || opcodeName == "OP_TRUE") ||
 				(opcodeValue != OP_0 && (opcodeValue < OP_1 ||
 					opcodeValue > OP_16)) {
-
 				ops[strings.TrimPrefix(opcodeName, "OP_")] = opcodeValue
 			}
 		}
+
 		shortFormOps = ops
 	}
 
@@ -128,8 +131,8 @@ func parseShortForm(script string) ([]byte, error) {
 		} else {
 			return nil, fmt.Errorf("bad token %q", tok)
 		}
-
 	}
+
 	return builder.Script()
 }
 
@@ -173,6 +176,7 @@ func parseScriptFlags(flagStr string) (ScriptFlags, error) {
 			return flags, fmt.Errorf("invalid flag: %s", flag)
 		}
 	}
+
 	return flags, nil
 }
 
@@ -256,12 +260,12 @@ func parseExpectedResult(expected string) ([]ErrorCode, error) {
 // signature, witness and public key scripts.
 func createSpendingTx(sigScript, pkScript []byte,
 	outputValue int64) *wire.MsgTx {
-
 	coinbaseTx := wire.NewMsgTx(wire.TxVersion)
 
 	outPoint := wire.NewOutPoint(&chainhash.Hash{}, ^uint32(0))
 	txIn := wire.NewTxIn(outPoint, []byte{OP_0, OP_0})
 	txOut := wire.NewTxOut(outputValue, pkScript)
+
 	coinbaseTx.AddTxIn(txIn)
 	coinbaseTx.AddTxOut(txOut)
 
@@ -298,7 +302,6 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 	for i, test := range tests {
 		// "Format is: [[wit..., amount]?, scriptSig, scriptPubKey,
 		//    flags, expected_scripterror, ... comments]"
-
 		// Skip single line comments.
 		if len(test) == 1 {
 			continue
@@ -320,6 +323,7 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 			t.Errorf("%s: signature script is not a string", name)
 			continue
 		}
+
 		scriptSig, err := parseShortForm(scriptSigStr)
 		if err != nil {
 			t.Errorf("%s: can't parse signature script: %v", name,
@@ -333,6 +337,7 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 			t.Errorf("%s: public key script is not a string", name)
 			continue
 		}
+
 		scriptPubKey, err := parseShortForm(scriptPubKeyStr)
 		if err != nil {
 			t.Errorf("%s: can't parse public key script: %v", name,
@@ -346,6 +351,7 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 			t.Errorf("%s: flags field is not a string", name)
 			continue
 		}
+
 		flags, err := parseScriptFlags(flagsStr)
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -364,6 +370,7 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 			t.Errorf("%s: result field is not a string", name)
 			continue
 		}
+
 		allowedErrorCodes, err := parseExpectedResult(resultStr)
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -375,6 +382,7 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 		// used, then create a new engine to execute the scripts.
 		tx := createSpendingTx(scriptSig, scriptPubKey,
 			int64(inputAmt))
+
 		vm, err := NewEngine(scriptPubKey, tx, 0, flags, sigCache, nil,
 			int64(inputAmt))
 		if err == nil {
@@ -386,26 +394,31 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 			if err != nil {
 				t.Errorf("%s failed to execute: %v", name, err)
 			}
+
 			continue
 		}
 
 		// At this point an error was expected so ensure the result of
 		// the execution matches it.
 		success := false
+
 		for _, code := range allowedErrorCodes {
 			if IsErrorCode(err, code) {
 				success = true
 				break
 			}
 		}
+
 		if !success {
 			if serr, ok := err.(Error); ok {
 				t.Errorf("%s: want error codes %v, got %v", name,
 					allowedErrorCodes, serr.ErrorCode)
 				continue
 			}
+
 			t.Errorf("%s: want error codes %v, got err: %v (%T)",
 				name, allowedErrorCodes, err, err)
+
 			continue
 		}
 	}
@@ -451,6 +464,7 @@ func TestTxInvalidTests(t *testing.T) {
 	}
 
 	var tests [][]interface{}
+
 	err = json.Unmarshal(file, &tests)
 	if err != nil {
 		t.Fatalf("TestTxInvalidTests couldn't Unmarshal: %v\n", err)
@@ -471,7 +485,6 @@ testloop:
 		if len(test) != 3 {
 			t.Errorf("bad test (bad length) %d: %v", i, test)
 			continue
-
 		}
 		serializedhex, ok := test[1].(string)
 		if !ok {
@@ -592,7 +605,6 @@ testloop:
 			if err != nil {
 				continue testloop
 			}
-
 		}
 		t.Errorf("test (%d:%v) succeeded when should fail",
 			i, test)
@@ -607,6 +619,7 @@ func TestTxValidTests(t *testing.T) {
 	}
 
 	var tests [][]interface{}
+
 	err = json.Unmarshal(file, &tests)
 	if err != nil {
 		t.Fatalf("TestTxValidTests couldn't Unmarshal: %v\n", err)
@@ -762,6 +775,7 @@ func TestCalcLegacySignatureHash(t *testing.T) {
 	}
 
 	var tests [][]interface{}
+
 	err = json.Unmarshal(file, &tests)
 	if err != nil {
 		t.Fatalf("TestCalcSignatureHash couldn't Unmarshal: %v\n",
@@ -773,12 +787,16 @@ func TestCalcLegacySignatureHash(t *testing.T) {
 			// Skip first line -- contains comments only.
 			continue
 		}
+
 		if len(test) != 5 {
 			t.Fatalf("TestCalcSignatureHash: Test #%d has "+
 				"wrong length.", i)
 		}
+
 		var tx wire.MsgTx
+
 		rawTx, _ := hex.DecodeString(test[0].(string))
+
 		err := tx.Deserialize(bytes.NewReader(rawTx))
 		if err != nil {
 			t.Errorf("TestCalcSignatureHash failed test #%d: "+
@@ -787,6 +805,7 @@ func TestCalcLegacySignatureHash(t *testing.T) {
 		}
 
 		subScript, _ := hex.DecodeString(test[1].(string))
+
 		parsedScript, err := ParseScript(subScript)
 		if err != nil {
 			t.Errorf("TestCalcSignatureHash failed test #%d: "+
@@ -795,7 +814,9 @@ func TestCalcLegacySignatureHash(t *testing.T) {
 		}
 
 		hashType := SigHashType(testVecF64ToUint32(test[3].(float64)))
+
 		var hash []byte
+
 		hash, err = calcLegacySignatureHash(parsedScript, hashType, &tx,
 			int(test[2].(float64)))
 		if err != nil {
@@ -803,6 +824,7 @@ func TestCalcLegacySignatureHash(t *testing.T) {
 				"calcLegacySignatureHash returned error: %v", i, err)
 			continue
 		}
+
 		expectedHash, _ := chainhash.NewHashFromStr(test[4].(string))
 		if !bytes.Equal(hash, expectedHash[:]) {
 			t.Errorf("TestCalcLegacySignatureHash failed test #%d: "+
@@ -819,23 +841,30 @@ func TestCalcBip143SignatureHash(t *testing.T) {
 	}
 
 	var tests [][]interface{}
+
 	err = json.Unmarshal(file, &tests)
 	if err != nil {
 		t.Fatalf("TestCalcSignatureHash couldn't Unmarshal: %v\n",
 			err)
 	}
+
 	fails := 0
+
 	for i, test := range tests {
 		if i == 0 {
 			// Skip first line -- contains comments only.
 			continue
 		}
+
 		if len(test) != 5 {
 			t.Fatalf("TestCalcSignatureHash: Test #%d has "+
 				"wrong length.", i)
 		}
+
 		var tx wire.MsgTx
+
 		rawTx, _ := hex.DecodeString(test[0].(string))
+
 		err := tx.Deserialize(bytes.NewReader(rawTx))
 		if err != nil {
 			t.Errorf("TestCalcSignatureHash failed test #%d: "+
@@ -844,6 +873,7 @@ func TestCalcBip143SignatureHash(t *testing.T) {
 		}
 
 		subScript, _ := hex.DecodeString(test[1].(string))
+
 		parsedScript, err := ParseScript(subScript)
 		if err != nil {
 			t.Errorf("TestCalcSignatureHash failed test #%d: "+
@@ -852,9 +882,11 @@ func TestCalcBip143SignatureHash(t *testing.T) {
 		}
 
 		hashType := SigHashType(testVecF64ToUint32(test[3].(float64)))
+
 		var hash []byte
 
 		sigHashes := NewTxSigHashes(&tx)
+
 		hash, err = calcBip143SignatureHash(parsedScript, sigHashes, hashType, &tx,
 			int(test[2].(float64)), 0)
 		if err != nil {
@@ -862,10 +894,12 @@ func TestCalcBip143SignatureHash(t *testing.T) {
 				"calcLegacySignatureHash returned error: %v", i, err)
 			continue
 		}
+
 		expectedHash, _ := chainhash.NewHashFromStr(test[4].(string))
 		if !bytes.Equal(hash, expectedHash[:]) {
 			t.Errorf("TestCalcBip143SignatureHash failed test #%d: "+
 				"Signature hash mismatch.", i)
+
 			fails++
 		}
 	}

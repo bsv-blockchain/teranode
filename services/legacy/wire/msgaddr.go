@@ -78,10 +78,12 @@ func (msg *MsgAddr) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) err
 
 	for i := uint64(0); i < count; i++ {
 		na := &addrList[i]
+
 		err := readNetAddress(r, pver, na, true)
 		if err != nil {
 			return err
 		}
+
 		_ = msg.AddAddress(na)
 	}
 

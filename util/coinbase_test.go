@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/libsv/go-bt/v2"
-
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,6 +87,6 @@ func TestExtractCoinbaseHeight(t *testing.T) {
 
 		_, err = ExtractCoinbaseHeight(tx)
 		require.Error(t, err)
-		//assert.Equal(t, uint32(210631), height)
+		// assert.Equal(t, uint32(210631), height)
 	})
 }

@@ -59,19 +59,23 @@ func TorLookupIP(host, proxy string) ([]net.IP, error) {
 	defer conn.Close()
 
 	buf := []byte{'\x05', '\x01', '\x00'}
+
 	_, err = conn.Write(buf)
 	if err != nil {
 		return nil, err
 	}
 
 	buf = make([]byte, 2)
+
 	_, err = conn.Read(buf)
 	if err != nil {
 		return nil, err
 	}
+
 	if buf[0] != '\x05' {
 		return nil, ErrTorInvalidProxyResponse
 	}
+
 	if buf[1] != '\x00' {
 		return nil, ErrTorUnrecognizedAuthMethod
 	}
@@ -91,31 +95,38 @@ func TorLookupIP(host, proxy string) ([]net.IP, error) {
 	}
 
 	buf = make([]byte, 4)
+
 	_, err = conn.Read(buf)
 	if err != nil {
 		return nil, err
 	}
+
 	if buf[0] != 5 {
 		return nil, ErrTorInvalidProxyResponse
 	}
+
 	if buf[1] != 0 {
 		if int(buf[1]) >= len(torStatusErrors) {
 			return nil, ErrTorInvalidProxyResponse
 		} else if err := torStatusErrors[buf[1]]; err != nil {
 			return nil, err
 		}
+
 		return nil, ErrTorInvalidProxyResponse
 	}
+
 	if buf[3] != 1 {
 		err := torStatusErrors[torGeneralError]
 		return nil, err
 	}
 
 	buf = make([]byte, 4)
+
 	bytes, err := conn.Read(buf)
 	if err != nil {
 		return nil, err
 	}
+
 	if bytes != 4 {
 		return nil, ErrTorInvalidAddressResponse
 	}

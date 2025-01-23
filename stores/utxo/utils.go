@@ -63,6 +63,7 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 	}
 
 	var fees uint64
+
 	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 
 	if !tx.IsCoinbase() {

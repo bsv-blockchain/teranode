@@ -155,6 +155,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 				if i >= subtree.Length() {
 					break
 				}
+
 				node := subtree.Nodes[i]
 
 				subtreeData := SubtreeTx{
@@ -180,14 +181,17 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 						continue
 					}
+
 					if txMeta == nil {
 						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta is nil", node.Hash.String())
 						continue
 					}
+
 					if txMeta.Tx == nil {
 						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta.Tx is nil", node.Hash.String())
 						continue
 					}
+
 					subtreeData.InputsCount = len(txMeta.Tx.Inputs)
 					subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
 					subtreeData.Size = int(txMeta.SizeInBytes)

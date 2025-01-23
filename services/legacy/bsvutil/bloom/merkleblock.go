@@ -35,12 +35,15 @@ func (m *merkleBlock) calcHash(height, pos uint32) *chainhash.Hash {
 	}
 
 	var right *chainhash.Hash
+
 	left := m.calcHash(height-1, pos*2)
+
 	if pos*2+1 < m.calcTreeWidth(height-1) {
 		right = m.calcHash(height-1, pos*2+1)
 	} else {
 		right = left
 	}
+
 	return blockchain.HashMerkleBranches(left, right)
 }
 
@@ -54,6 +57,7 @@ func (m *merkleBlock) traverseAndBuild(height, pos uint32) {
 	for i := pos << height; i < (pos+1)<<height && i < m.numTx; i++ {
 		isParent |= m.matchedBits[i]
 	}
+
 	m.bits = append(m.bits, isParent)
 
 	// When the node is a leaf node or not a parent of a matched node,
@@ -89,6 +93,7 @@ func NewMerkleBlock(block *bsvutil.Block, filter *Filter) (*wire.MsgMerkleBlock,
 
 	// Find and keep track of any transactions that match the filter.
 	var matchedIndices []uint32
+
 	for txIndex, tx := range block.Transactions() {
 		if filter.MatchTxAndUpdate(tx) {
 			mBlock.matchedBits = append(mBlock.matchedBits, 0x01)
@@ -96,6 +101,7 @@ func NewMerkleBlock(block *bsvutil.Block, filter *Filter) (*wire.MsgMerkleBlock,
 		} else {
 			mBlock.matchedBits = append(mBlock.matchedBits, 0x00)
 		}
+
 		mBlock.allHashes = append(mBlock.allHashes, tx.Hash())
 	}
 
@@ -118,8 +124,10 @@ func NewMerkleBlock(block *bsvutil.Block, filter *Filter) (*wire.MsgMerkleBlock,
 	for _, hash := range mBlock.finalHashes {
 		msgMerkleBlock.AddTxHash(hash)
 	}
+
 	for i := uint32(0); i < uint32(len(mBlock.bits)); i++ {
 		msgMerkleBlock.Flags[i/8] |= mBlock.bits[i] << (i % 8)
 	}
+
 	return &msgMerkleBlock, matchedIndices
 }

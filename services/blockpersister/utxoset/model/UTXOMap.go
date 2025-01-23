@@ -52,6 +52,7 @@ func (um *UTXOMap) Write(w io.Writer) error {
 	}
 
 	var err error
+
 	var count int
 
 	// Write each UTXO

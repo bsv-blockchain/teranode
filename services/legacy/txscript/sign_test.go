@@ -7,9 +7,8 @@ package txscript
 import (
 	"errors"
 	"fmt"
-	"testing"
-
 	"math/rand/v2"
+	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
@@ -30,12 +29,14 @@ func mkGetKey(keys map[string]addressToKey) KeyDB {
 			return nil, false, errors.New("nope")
 		})
 	}
+
 	return KeyClosure(func(addr bsvutil.Address) (*bsvec.PrivateKey,
 		bool, error) {
 		a2k, ok := keys[addr.EncodeAddress()]
 		if !ok {
 			return nil, false, errors.New("nope")
 		}
+
 		return a2k.key, a2k.compressed, nil
 	})
 }
@@ -46,17 +47,20 @@ func mkGetScript(scripts map[string][]byte) ScriptDB {
 			return nil, errors.New("nope")
 		})
 	}
+
 	return ScriptClosure(func(addr bsvutil.Address) ([]byte, error) {
 		script, ok := scripts[addr.EncodeAddress()]
 		if !ok {
 			return nil, errors.New("nope")
 		}
+
 		return script, nil
 	})
 }
 
 func checkScripts(msg string, tx *wire.MsgTx, idx int, inputAmt int64, sigScript, pkScript []byte) error {
 	tx.TxIn[idx].SignatureScript = sigScript
+
 	vm, err := NewEngine(pkScript, tx, idx,
 		ScriptBip16|ScriptVerifyDERSignatures|ScriptVerifyBip143SigHash, nil, nil, inputAmt)
 	if err != nil {
@@ -76,7 +80,6 @@ func checkScripts(msg string, tx *wire.MsgTx, idx int, inputAmt int64, sigScript
 func signAndCheck(msg string, tx *wire.MsgTx, idx int, inputAmt int64, pkScript []byte,
 	hashType SigHashType, kdb KeyDB, sdb ScriptDB,
 	previousScript []byte) error {
-
 	sigScript, err := SignTxOutput(&chaincfg.TestNetParams, tx, idx,
 		inputAmt, pkScript, hashType, kdb, sdb, nil)
 	if err != nil {
@@ -146,6 +149,7 @@ func TestSignTxOutput(t *testing.T) {
 		for i := range tx.TxIn {
 			msg := fmt.Sprintf("%d:%d", hashType, i)
 			key, err := bsvec.NewPrivateKey(bsvec.S256())
+
 			if err != nil {
 				t.Errorf("failed to make privKey for %s: %v",
 					msg, err)
@@ -154,6 +158,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -183,6 +188,7 @@ func TestSignTxOutput(t *testing.T) {
 		for i := range tx.TxIn {
 			msg := fmt.Sprintf("%d:%d", hashType, i)
 			key, err := bsvec.NewPrivateKey(bsvec.S256())
+
 			if err != nil {
 				t.Errorf("failed to make privKey for %s: %v",
 					msg, err)
@@ -191,6 +197,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -252,6 +259,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -291,6 +299,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -353,6 +362,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -392,6 +402,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -453,6 +464,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -492,6 +504,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -546,6 +559,7 @@ func TestSignTxOutput(t *testing.T) {
 		for i := range tx.TxIn {
 			msg := fmt.Sprintf("%d:%d", hashType, i)
 			key, err := bsvec.NewPrivateKey(bsvec.S256())
+
 			if err != nil {
 				t.Errorf("failed to make privKey for %s: %v",
 					msg, err)
@@ -554,6 +568,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -603,6 +618,7 @@ func TestSignTxOutput(t *testing.T) {
 		for i := range tx.TxIn {
 			msg := fmt.Sprintf("%d:%d", hashType, i)
 			key, err := bsvec.NewPrivateKey(bsvec.S256())
+
 			if err != nil {
 				t.Errorf("failed to make privKey for %s: %v",
 					msg, err)
@@ -611,6 +627,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -694,6 +711,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -751,6 +769,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKeyHash(
 				bsvutil.Hash160(pk), &chaincfg.TestNetParams)
 			if err != nil {
@@ -833,6 +852,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -890,6 +910,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeUncompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -971,6 +992,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1027,6 +1049,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk := (*bsvec.PublicKey)(&key.PublicKey).
 				SerializeCompressed()
+
 			address, err := bsvutil.NewAddressPubKey(pk,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1108,6 +1131,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk1 := (*bsvec.PublicKey)(&key1.PublicKey).
 				SerializeCompressed()
+
 			address1, err := bsvutil.NewAddressPubKey(pk1,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1125,6 +1149,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk2 := (*bsvec.PublicKey)(&key2.PublicKey).
 				SerializeCompressed()
+
 			address2, err := bsvutil.NewAddressPubKey(pk2,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1184,6 +1209,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk1 := (*bsvec.PublicKey)(&key1.PublicKey).
 				SerializeCompressed()
+
 			address1, err := bsvutil.NewAddressPubKey(pk1,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1201,6 +1227,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk2 := (*bsvec.PublicKey)(&key2.PublicKey).
 				SerializeCompressed()
+
 			address2, err := bsvutil.NewAddressPubKey(pk2,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1290,6 +1317,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk1 := (*bsvec.PublicKey)(&key1.PublicKey).
 				SerializeCompressed()
+
 			address1, err := bsvutil.NewAddressPubKey(pk1,
 				&chaincfg.TestNetParams)
 			if err != nil {
@@ -1307,6 +1335,7 @@ func TestSignTxOutput(t *testing.T) {
 
 			pk2 := (*bsvec.PublicKey)(&key2.PublicKey).
 				SerializeCompressed()
+
 			address2, err := bsvutil.NewAddressPubKey(pk2,
 				&chaincfg.TestNetParams)
 			if err != nil {

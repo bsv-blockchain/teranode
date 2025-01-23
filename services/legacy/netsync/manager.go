@@ -469,7 +469,6 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 	if sm.chainParams == &chaincfg.RegressionNetParams {
 		// The peer is not a candidate if it's not coming from localhost
 		// or the hostname can't be determined for some reason.
-
 		// If we need to allow the peer with different host to be a sync candidate
 		if !sm.settings.Legacy.AllowSyncCandidateFromLocalPeers {
 			host, _, err := net.SplitHostPort(peer.String())
@@ -871,6 +870,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	legacySyncMode := false
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
+
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("[handleBlockMsg][%s] Failed to get current FSM state: %v", bmsg.blockHash, err)
@@ -889,6 +889,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if sm.chainParams != &chaincfg.RegressionNetParams {
 			peer.Disconnect()
 			sm.logger.Errorf("[handleBlockMsg][%s] Got unrequested block from %s -- disconnected", bmsg.blockHash, peer)
+
 			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", bmsg.blockHash, peer)
 		}
 	}
@@ -904,6 +905,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	if sm.headersFirstMode {
 		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
+
 		firstNodeEl := sm.headerList.Front()
 		if firstNodeEl != nil {
 			firstNode := firstNodeEl.Value.(*headerNode)
@@ -1503,6 +1505,7 @@ func (sm *SyncManager) blockHandler() {
 				return
 			case msg := <-blockQueue:
 				sm.logger.Debugf("[blockHandler][%s] processing block queue message into handleBlockMsg", msg.blockHash)
+
 				err := sm.handleBlockMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- err

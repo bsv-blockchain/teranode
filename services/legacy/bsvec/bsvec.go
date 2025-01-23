@@ -137,7 +137,6 @@ func (curve *KoblitzCurve) addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *f
 	//
 	// This results in a cost of 4 field multiplications, 2 field squarings,
 	// 6 field additions, and 5 integer multiplications.
-
 	// When the x coordinates are the same for two points on the curve, the
 	// y coordinates either must be the same, in which case it is point
 	// doubling, or they are opposite and the result is the point at
@@ -146,6 +145,7 @@ func (curve *KoblitzCurve) addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *f
 	y1.Normalize()
 	x2.Normalize()
 	y2.Normalize()
+
 	if x1.Equals(x2) {
 		if y1.Equals(y2) {
 			// Since x1 == x2 and y1 == y2, point doubling must be
@@ -167,6 +167,7 @@ func (curve *KoblitzCurve) addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *f
 	// Calculate X3, Y3, and Z3 according to the intermediate elements
 	// breakdown above.
 	var h, i, j, r, v fieldVal
+
 	var negJ, neg2V, negX3 fieldVal
 
 	h.Set(x1).Negate(1).Add(x2)                // H = X2-X1 (mag: 3)
@@ -206,7 +207,6 @@ func (curve *KoblitzCurve) addZ1EqualsZ2(x1, y1, z1, x2, y2, x3, y3, z3 *fieldVa
 	//
 	// This results in a cost of 5 field multiplications, 2 field squarings,
 	// 9 field additions, and 0 integer multiplications.
-
 	// When the x coordinates are the same for two points on the curve, the
 	// y coordinates either must be the same, in which case it is point
 	// doubling, or they are opposite and the result is the point at
@@ -215,6 +215,7 @@ func (curve *KoblitzCurve) addZ1EqualsZ2(x1, y1, z1, x2, y2, x3, y3, z3 *fieldVa
 	y1.Normalize()
 	x2.Normalize()
 	y2.Normalize()
+
 	if x1.Equals(x2) {
 		if y1.Equals(y2) {
 			// Since x1 == x2 and y1 == y2, point doubling must be
@@ -236,6 +237,7 @@ func (curve *KoblitzCurve) addZ1EqualsZ2(x1, y1, z1, x2, y2, x3, y3, z3 *fieldVa
 	// Calculate X3, Y3, and Z3 according to the intermediate elements
 	// breakdown above.
 	var a, b, c, d, e, f fieldVal
+
 	var negX1, negY1, negE, negX3 fieldVal
 
 	negX1.Set(x1).Negate(1)                // negX1 = -X1 (mag: 2)
@@ -277,7 +279,6 @@ func (curve *KoblitzCurve) addZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *fieldV
 	//
 	// This results in a cost of 7 field multiplications, 4 field squarings,
 	// 9 field additions, and 4 integer multiplications.
-
 	// When the x coordinates are the same for two points on the curve, the
 	// y coordinates either must be the same, in which case it is point
 	// doubling, or they are opposite and the result is the point at
@@ -315,6 +316,7 @@ func (curve *KoblitzCurve) addZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3 *fieldV
 	// Calculate X3, Y3, and Z3 according to the intermediate elements
 	// breakdown above.
 	var h, hh, i, j, r, rr, v fieldVal
+
 	var negX1, negY1, negX3 fieldVal
 
 	negX1.Set(x1).Negate(1)                // negX1 = -X1 (mag: 2)
@@ -358,7 +360,6 @@ func (curve *KoblitzCurve) addGeneric(x1, y1, z1, x2, y2, z2, x3, y3, z3 *fieldV
 	//
 	// This results in a cost of 11 field multiplications, 5 field squarings,
 	// 9 field additions, and 4 integer multiplications.
-
 	// When the x coordinates are the same for two points on the curve, the
 	// y coordinates either must be the same, in which case it is point
 	// doubling, or they are opposite and the result is the point at
@@ -366,12 +367,14 @@ func (curve *KoblitzCurve) addGeneric(x1, y1, z1, x2, y2, z2, x3, y3, z3 *fieldV
 	// same affine point, the x and y values need to be converted to like
 	// terms.
 	var z1z1, z2z2, u1, u2, s1, s2 fieldVal
+
 	z1z1.SquareVal(z1)                        // Z1Z1 = Z1^2 (mag: 1)
 	z2z2.SquareVal(z2)                        // Z2Z2 = Z2^2 (mag: 1)
 	u1.Set(x1).Mul(&z2z2).Normalize()         // U1 = X1*Z2Z2 (mag: 1)
 	u2.Set(x2).Mul(&z1z1).Normalize()         // U2 = X2*Z1Z1 (mag: 1)
 	s1.Set(y1).Mul(&z2z2).Mul(z2).Normalize() // S1 = Y1*Z2*Z2Z2 (mag: 1)
 	s2.Set(y2).Mul(&z1z1).Mul(z1).Normalize() // S2 = Y2*Z1*Z1Z1 (mag: 1)
+
 	if u1.Equals(&u2) {
 		if s1.Equals(&s2) {
 			// Since x1 == x2 and y1 == y2, point doubling must be
@@ -393,6 +396,7 @@ func (curve *KoblitzCurve) addGeneric(x1, y1, z1, x2, y2, z2, x3, y3, z3 *fieldV
 	// Calculate X3, Y3, and Z3 according to the intermediate elements
 	// breakdown above.
 	var h, i, j, r, rr, v fieldVal
+
 	var negU1, negS1, negX3 fieldVal
 
 	negU1.Set(&u1).Negate(1)               // negU1 = -U1 (mag: 2)
@@ -445,8 +449,10 @@ func (curve *KoblitzCurve) addJacobian(x1, y1, z1, x2, y2, z2, x3, y3, z3 *field
 	// by using those assumptions.
 	z1.Normalize()
 	z2.Normalize()
+
 	isZ1One := z1.Equals(fieldOne)
 	isZ2One := z2.Equals(fieldOne)
+
 	switch {
 	case isZ1One && isZ2One:
 		curve.addZ1AndZ2EqualsOne(x1, y1, z1, x2, y2, x3, y3, z3)
@@ -520,6 +526,7 @@ func (curve *KoblitzCurve) doubleZ1EqualsOne(x1, y1, x3, y3, z3 *fieldVal) {
 	// This results in a cost of 1 field multiplication, 5 field squarings,
 	// 6 field additions, and 5 integer multiplications.
 	var a, b, c, d, e, f fieldVal
+
 	z3.Set(y1).MulInt(2)                     // Z3 = 2*Y1 (mag: 2)
 	a.SquareVal(x1)                          // A = X1^2 (mag: 1)
 	b.SquareVal(y1)                          // B = Y1^2 (mag: 1)
@@ -569,6 +576,7 @@ func (curve *KoblitzCurve) doubleGeneric(x1, y1, z1, x3, y3, z3 *fieldVal) {
 	// This results in a cost of 1 field multiplication, 5 field squarings,
 	// 6 field additions, and 5 integer multiplications.
 	var a, b, c, d, e, f fieldVal
+
 	z3.Mul2(y1, z1).MulInt(2)                // Z3 = 2*Y1*Z1 (mag: 2)
 	a.SquareVal(x1)                          // A = X1^2 (mag: 1)
 	b.SquareVal(y1)                          // B = Y1^2 (mag: 1)
@@ -717,10 +725,12 @@ func NAF(k []byte) ([]byte, []byte) {
 	// these default to zero
 	retPos := make([]byte, len(k)+1)
 	retNeg := make([]byte, len(k)+1)
+
 	for i := len(k) - 1; i >= 0; i-- {
 		curByte := k[i]
 		for j := uint(0); j < 8; j++ {
 			curIsOne = curByte&1 == 1
+
 			if j == 7 {
 				if i == 0 {
 					nextIsOne = false
@@ -730,6 +740,7 @@ func NAF(k []byte) ([]byte, []byte) {
 			} else {
 				nextIsOne = curByte&2 == 2
 			}
+
 			if carry {
 				if curIsOne {
 					// This bit is 1, so continue to carry
@@ -969,9 +980,10 @@ func initS256() {
 	secp256k1.b1 = fromHex("-E4437ED6010E88286F547FA90ABFE4C3")
 	secp256k1.a2 = fromHex("114CA50F7A8E2F3F657C1108D9D44CFD8")
 	secp256k1.b2 = fromHex("3086D221A7D46BCDE86C90E49284EB15")
-
 	// Alternatively, we can use the parameters below, however, they seem
-	//  to be about 8% slower.
+	//
+	//	to be about 8% slower.
+	//
 	// secp256k1.lambda = fromHex("AC9C52B33FA3CF1F5AD9E3FD77ED9BA4A880B9FC8EC739C2E0CFC810B51283CE")
 	// secp256k1.beta = new(fieldVal).SetHex("851695D49A83F8EF919BB86153CBCB16630FB68AED0A766A3EC693D68E6AFA40")
 	// secp256k1.a1 = fromHex("E4437ED6010E88286F547FA90ABFE4C3")

@@ -37,16 +37,17 @@ func (e ErrScriptNotCanonical) Error() string {
 // For example, the following would build a 2-of-3 multisig script for usage in
 // a pay-to-script-hash (although in this situation MultiSigScript() would be a
 // better choice to generate the script):
-// 	builder := txscript.NewScriptBuilder()
-// 	builder.AddOp(txscript.OP_2).AddData(pubKey1).AddData(pubKey2)
-// 	builder.AddData(pubKey3).AddOp(txscript.OP_3)
-// 	builder.AddOp(txscript.OP_CHECKMULTISIG)
-// 	script, err := builder.Script()
-// 	if err != nil {
-// 		// Handle the error.
-// 		return
-// 	}
-// 	fmt.Printf("Final multi-sig script: %x\n", script)
+//
+//	builder := txscript.NewScriptBuilder()
+//	builder.AddOp(txscript.OP_2).AddData(pubKey1).AddData(pubKey2)
+//	builder.AddData(pubKey3).AddOp(txscript.OP_3)
+//	builder.AddOp(txscript.OP_CHECKMULTISIG)
+//	script, err := builder.Script()
+//	if err != nil {
+//		// Handle the error.
+//		return
+//	}
+//	fmt.Printf("Final multi-sig script: %x\n", script)
 type ScriptBuilder struct {
 	script []byte
 	err    error
@@ -66,10 +67,12 @@ func (b *ScriptBuilder) AddOp(opcode byte) *ScriptBuilder {
 		str := fmt.Sprintf("adding an opcode would exceed the maximum "+
 			"allowed canonical script length of %d", MaxScriptSize)
 		b.err = ErrScriptNotCanonical(str)
+
 		return b
 	}
 
 	b.script = append(b.script, opcode)
+
 	return b
 }
 
@@ -87,10 +90,12 @@ func (b *ScriptBuilder) AddOps(opcodes []byte) *ScriptBuilder {
 		str := fmt.Sprintf("adding opcodes would exceed the maximum "+
 			"allowed canonical script length of %d", MaxScriptSize)
 		b.err = ErrScriptNotCanonical(str)
+
 		return b
 	}
 
 	b.script = append(b.script, opcodes...)
+
 	return b
 }
 
@@ -153,11 +158,13 @@ func (b *ScriptBuilder) addData(data []byte) *ScriptBuilder {
 	} else if dataLen <= 0xffff {
 		buf := make([]byte, 2)
 		binary.LittleEndian.PutUint16(buf, uint16(dataLen))
+
 		b.script = append(b.script, OP_PUSHDATA2)
 		b.script = append(b.script, buf...)
 	} else {
 		buf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buf, uint32(dataLen))
+
 		b.script = append(b.script, OP_PUSHDATA4)
 		b.script = append(b.script, buf...)
 	}
@@ -203,6 +210,7 @@ func (b *ScriptBuilder) AddData(data []byte) *ScriptBuilder {
 			"maximum allowed canonical script length of %d",
 			dataSize, MaxScriptSize)
 		b.err = ErrScriptNotCanonical(str)
+
 		return b
 	}
 
@@ -214,6 +222,7 @@ func (b *ScriptBuilder) AddData(data []byte) *ScriptBuilder {
 			"exceed the maximum allowed script element size of %d",
 			dataLen, MaxScriptElementSize)
 		b.err = ErrScriptNotCanonical(str)
+
 		return b
 	}
 
@@ -235,6 +244,7 @@ func (b *ScriptBuilder) AddInt64(val int64) *ScriptBuilder {
 			"maximum allow canonical script length of %d",
 			MaxScriptSize)
 		b.err = ErrScriptNotCanonical(str)
+
 		return b
 	}
 
@@ -243,6 +253,7 @@ func (b *ScriptBuilder) AddInt64(val int64) *ScriptBuilder {
 		b.script = append(b.script, OP_0)
 		return b
 	}
+
 	if val == -1 || (val >= 1 && val <= 16) {
 		b.script = append(b.script, byte((OP_1-1)+val))
 		return b
@@ -255,6 +266,7 @@ func (b *ScriptBuilder) AddInt64(val int64) *ScriptBuilder {
 func (b *ScriptBuilder) Reset() *ScriptBuilder {
 	b.script = b.script[0:0]
 	b.err = nil
+
 	return b
 }
 

@@ -665,6 +665,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		// create the utxos in the background
 		// we don't have a method to revert anything that goes wrong anyway
 		ch := make(chan struct{})
+
 		c.g.Go(func() error {
 			defer close(ch)
 

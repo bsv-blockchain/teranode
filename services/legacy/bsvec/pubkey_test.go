@@ -222,14 +222,18 @@ func TestPubKeys(t *testing.T) {
 				t.Errorf("%s pubkey failed when shouldn't %v",
 					test.name, err)
 			}
+
 			continue
 		}
+
 		if !test.isValid {
 			t.Errorf("%s counted as valid when it should fail",
 				test.name)
 			continue
 		}
+
 		var pkStr []byte
+
 		switch test.format {
 		case pubkeyUncompressed:
 			pkStr = (*PublicKey)(pk).SerializeUncompressed()
@@ -238,6 +242,7 @@ func TestPubKeys(t *testing.T) {
 		case pubkeyHybrid:
 			pkStr = (*PublicKey)(pk).SerializeHybrid()
 		}
+
 		if !bytes.Equal(test.key, pkStr) {
 			t.Errorf("%s pubkey: serialized keys do not match.",
 				test.name)
@@ -287,6 +292,7 @@ func TestIsCompressed(t *testing.T) {
 	for _, test := range pubKeyTests {
 		isCompressed := IsCompressedPubKey(test.key)
 		wantCompressed := (test.format == pubkeyCompressed)
+
 		if isCompressed != wantCompressed {
 			t.Fatalf("%s (%x) pubkey: unexpected compressed result, "+
 				"got %v, want %v", test.name, test.key,

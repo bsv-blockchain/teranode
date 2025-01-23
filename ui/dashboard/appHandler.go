@@ -26,7 +26,6 @@ func init() {
 }
 
 func AppHandler(c echo.Context) error {
-
 	var resource string
 
 	path := c.Request().URL.Path
@@ -45,9 +44,11 @@ func AppHandler(c echo.Context) error {
 		// Just in case we're missing the /index.html, add it and try again...
 		resource += "/index.html"
 		b, err = res.ReadFile(resource)
+
 		if err != nil {
 			resource = "build/index.html"
 			b, err = res.ReadFile(resource)
+
 			if err != nil {
 				logger.Debugf("Resource %q - NOT FOUND", resource)
 				return c.String(http.StatusNotFound, "Not found")
@@ -74,5 +75,6 @@ func AppHandler(c echo.Context) error {
 	}
 
 	logger.Debugf("Resource %q [%s] - OK", resource, mimeType)
+
 	return c.Blob(http.StatusOK, mimeType, b)
 }

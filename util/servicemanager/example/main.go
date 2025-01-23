@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/go-utils/servicemanager"
 )
@@ -67,6 +66,7 @@ func (s *SampleService) Stop(ctx context.Context) error {
 	case <-time.After(1 * time.Second): // Simulating some delay for stopping
 		s.logger.Infof("Service %s stopped\n", s.name)
 	}
+
 	return nil
 }
 

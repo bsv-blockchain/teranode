@@ -341,6 +341,7 @@ func TestExtractPkScriptAddrs(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests.", len(tests))
+
 	for i, test := range tests {
 		class, addrs, reqSigs, _ := ExtractPkScriptAddrs(
 			test.script, &chaincfg.MainNetParams)
@@ -349,6 +350,7 @@ func TestExtractPkScriptAddrs(t *testing.T) {
 			t.Errorf("ExtractPkScriptAddrs #%d (%s) unexpected "+
 				"addresses\ngot  %v\nwant %v", i, test.name,
 				addrs, test.addrs)
+
 			continue
 		}
 
@@ -356,6 +358,7 @@ func TestExtractPkScriptAddrs(t *testing.T) {
 			t.Errorf("ExtractPkScriptAddrs #%d (%s) unexpected "+
 				"number of required signatures - got %d, "+
 				"want %d", i, test.name, reqSigs, test.reqSigs)
+
 			continue
 		}
 
@@ -363,6 +366,7 @@ func TestExtractPkScriptAddrs(t *testing.T) {
 			t.Errorf("ExtractPkScriptAddrs #%d (%s) unexpected "+
 				"script type - got %s, want %s", i, test.name,
 				class, test.class)
+
 			continue
 		}
 	}
@@ -475,6 +479,7 @@ func TestCalcScriptInfo(t *testing.T) {
 			t.Errorf("scriptinfo test %q: %v", test.name, e)
 			continue
 		}
+
 		if err != nil {
 			continue
 		}
@@ -483,6 +488,7 @@ func TestCalcScriptInfo(t *testing.T) {
 			t.Errorf("%s: scriptinfo doesn't match expected. "+
 				"got: %q expected %q", test.name, *si,
 				test.scriptInfo)
+
 			continue
 		}
 	}
@@ -531,6 +537,7 @@ func TestPayToAddrScript(t *testing.T) {
 	// b0539a45de13b3e0403909b8bd1a555b8cbe45fd4e3f3fda76f3a5f52835c29d
 	p2shMain, _ := bsvutil.NewAddressScriptHashFromHash(hexToBytes("e8c300"+
 		"c87986efa84c37c0519929019ef86eb5b4"), &chaincfg.MainNetParams)
+
 	if err != nil {
 		t.Fatalf("Unable to create script hash address: %v", err)
 	}
@@ -543,6 +550,7 @@ func TestPayToAddrScript(t *testing.T) {
 		t.Fatalf("Unable to create pubkey address (compressed): %v",
 			err)
 	}
+
 	p2pkCompressed2Main, err := bsvutil.NewAddressPubKey(hexToBytes("03b0b"+
 		"d634234abbb1ba1e986e884185c61cf43e001f9137f23c2c409273eb16e65"),
 		&chaincfg.MainNetParams)
@@ -617,6 +625,7 @@ func TestPayToAddrScript(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		pkScript, err := PayToAddrScript(test.in)
 		if e := tstCheckScriptError(err, test.err); e != nil {
@@ -647,6 +656,7 @@ func TestMultiSigScript(t *testing.T) {
 		t.Fatalf("Unable to create pubkey address (compressed): %v",
 			err)
 	}
+
 	p2pkCompressed2Main, err := bsvutil.NewAddressPubKey(hexToBytes("03b0b"+
 		"d634234abbb1ba1e986e884185c61cf43e001f9137f23c2c409273eb16e65"),
 		&chaincfg.MainNetParams)
@@ -725,6 +735,7 @@ func TestMultiSigScript(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		script, err := MultiSigScript(test.keys, test.nrequired)
 		if e := tstCheckScriptError(err, test.err); e != nil {
@@ -778,6 +789,7 @@ func TestCalcMultiSigStats(t *testing.T) {
 
 	for i, test := range tests {
 		script := mustParseShortForm(test.script)
+
 		_, _, err := CalcMultiSigStats(script)
 		if e := tstCheckScriptError(err, test.err); e != nil {
 			t.Errorf("CalcMultiSigStats #%d (%s): %v", i, test.name,
@@ -974,6 +986,7 @@ func TestScriptClass(t *testing.T) {
 	for _, test := range scriptClassTests {
 		script := mustParseShortForm(test.script)
 		class := GetScriptClass(script)
+
 		if class != test.class {
 			t.Errorf("%s: expected %s got %s (script %x)", test.name,
 				test.class, class, script)
@@ -1119,7 +1132,6 @@ func TestNullDataScript(t *testing.T) {
 			t.Errorf("NullDataScript: #%d (%s): %v", i, test.name,
 				e)
 			continue
-
 		}
 
 		// Check that the expected result was returned.
@@ -1127,6 +1139,7 @@ func TestNullDataScript(t *testing.T) {
 			t.Errorf("NullDataScript: #%d (%s) wrong result\n"+
 				"got: %x\nwant: %x", i, test.name, script,
 				test.expected)
+
 			continue
 		}
 
@@ -1136,6 +1149,7 @@ func TestNullDataScript(t *testing.T) {
 			t.Errorf("GetScriptClass: #%d (%s) wrong result -- "+
 				"got: %v, want: %v", i, test.name, scriptType,
 				test.class)
+
 			continue
 		}
 	}

@@ -166,6 +166,7 @@ func NewWorker(
 	}
 
 	var rateLimiter *rate.Limiter
+
 	if rateLimit > 0 {
 		var rateLimitDuration time.Duration
 		if rateLimit < 1 {
@@ -173,11 +174,12 @@ func NewWorker(
 		} else {
 			rateLimitDuration = time.Second / time.Duration(rateLimit)
 		}
+
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
-	//var rollingCache *RollingCache
-	//if useQuic {
+	// var rollingCache *RollingCache
+	// if useQuic {
 	//	rollingCache = NewRollingCache(100)
 	//}
 
@@ -211,12 +213,11 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error getting utxo from coinbaseTracker %s", w.address.AddressString, err)
 	}
 
-	//if w.sentTxCache != nil {
+	// if w.sentTxCache != nil {
 	//	w.sentTxCache.Add(tx.TxIDChainHash().String())
 	//}
 
 	for outerRetry := 0; outerRetry < 3; outerRetry++ {
-
 		//nolint:gosec // G404: Use of weak random number generator is acceptable here, not security-sensitive
 		index := rand.Intn(len(w.distributors))
 
@@ -263,18 +264,23 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 	start := time.Now()
 
 	prometheusWorkers.Inc()
+
 	defer func() {
 		prometheusWorkers.Dec()
+
 		if err != nil {
 			w.logger.Errorf("Worker error: %v", err)
 		}
 	}()
 
-	var utxo *bt.UTXO
-	var tx *bt.Tx
-	var counterLoad uint64
-	var txPs float64
-	var ts float64
+	var (
+		utxo        *bt.UTXO
+		tx          *bt.Tx
+		counterLoad uint64
+		txPs        float64
+		ts          float64
+	)
+
 	if w.topic != nil {
 		sub, err := w.topic.Subscribe()
 		if err != nil {
@@ -283,31 +289,35 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 
 		go func() {
 			defer sub.Cancel()
+
 			var rejectedTxMsg p2p.RejectedTxMessage
 			// Continuously check messages
 			for i := 0; ; i++ {
 				msg, err := sub.Next(ctx)
 				w.logger.Errorf("Error reading next rejected tx message: %+v", err)
-				if err != nil {
 
+				if err != nil {
 					return
 				}
+
 				rejectedTxMsg = p2p.RejectedTxMessage{}
+
 				err = json.Unmarshal(msg.Data, &rejectedTxMsg)
 				if err != nil {
 					w.logger.Errorf("json unmarshal error: ", err)
 					continue
 				}
+
 				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
-				//if w.sentTxCache != nil && w.sentTxCache.Contains(rejectedTxMsg.TxId) {
+				// if w.sentTxCache != nil && w.sentTxCache.Contains(rejectedTxMsg.TxId) {
 				//	w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
 				//	// TODO (I think) use error channel to kill worker
 				//	return
 				//}
 			}
 		}()
-
 	}
+
 	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
@@ -323,6 +333,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			if w.printProgress > 0 && counterLoad%w.printProgress == 0 {
 				txPs = float64(0)
 				ts = time.Since(*w.globalStartTime).Seconds()
+
 				if ts > 0 {
 					txPs = float64(counterLoad) / ts
 				}
@@ -346,7 +357,6 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			if w.rateLimiter != nil {
 				_ = w.rateLimiter.Wait(ctx)
 			}
-
 		}
 
 		if w.iterations >= 0 && i+1 >= w.iterations {
@@ -357,6 +367,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 
 func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx *bt.Tx, err error) {
 	tx = bt.NewTx()
+
 	err = tx.FromUTXOs(utxo)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
@@ -374,7 +385,7 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 		return nil, errors.NewTxError("error filling tx inputs", err)
 	}
 
-	//if w.sentTxCache != nil {
+	// if w.sentTxCache != nil {
 	//	w.sentTxCache.Add(tx.TxIDChainHash().String())
 	//}
 

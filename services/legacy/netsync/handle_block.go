@@ -328,13 +328,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			if err = sm.validateTransactionsLegacyMode(ctx, txMap, block); err != nil {
 				return nil, err
 			}
-
 			// } else {
 			// do not validate transactions, just create the subtree and send to block validation
 			// maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
-			// if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
-			// 	return nil, err
-			// }
+			//
+			//	if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
+			//		return nil, err
+			//	}
 		}
 
 		var subtreeBytes []byte

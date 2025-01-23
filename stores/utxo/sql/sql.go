@@ -664,6 +664,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &conflicting, &spendableIn)
 			if err != nil {
 				errorFound = true
+
 				if errors.Is(err, sql.ErrNoRows) {
 					spend.Err = errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}

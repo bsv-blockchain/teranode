@@ -11,14 +11,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-
-	"golang.org/x/crypto/ripemd160"
-
 	"hash"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/crypto/ripemd160"
 )
 
 // An opcode defines the information related to a txscript opcode.  opfunc, if
@@ -683,6 +681,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 			str := fmt.Sprintf("data push of the value %d encoded "+
 				"with opcode %s instead of OP_%d", data[0],
 				pop.opcode.name, data[0])
+
 			return scriptError(ErrMinimalData, str)
 		}
 	} else if dataLen == 1 && data[0] == 0x81 {
@@ -690,6 +689,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 			str := fmt.Sprintf("data push of the value -1 encoded "+
 				"with opcode %s instead of OP_1NEGATE",
 				pop.opcode.name)
+
 			return scriptError(ErrMinimalData, str)
 		}
 	} else if dataLen <= 75 {
@@ -698,6 +698,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 			str := fmt.Sprintf("data push of %d bytes encoded "+
 				"with opcode %s instead of OP_DATA_%d", dataLen,
 				pop.opcode.name, dataLen)
+
 			return scriptError(ErrMinimalData, str)
 		}
 	} else if dataLen <= 255 {
@@ -705,6 +706,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 			str := fmt.Sprintf("data push of %d bytes encoded "+
 				"with opcode %s instead of OP_PUSHDATA1",
 				dataLen, pop.opcode.name)
+
 			return scriptError(ErrMinimalData, str)
 		}
 	} else if dataLen <= 65535 {
@@ -712,9 +714,11 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 			str := fmt.Sprintf("data push of %d bytes encoded "+
 				"with opcode %s instead of OP_PUSHDATA2",
 				dataLen, pop.opcode.name)
+
 			return scriptError(ErrMinimalData, str)
 		}
 	}
+
 	return nil
 }
 
@@ -747,6 +751,7 @@ func (pop *parsedOpcode) print(oneline bool) string {
 
 	// Add length for the OP_PUSHDATA# opcodes.
 	retString := opcodeName
+
 	switch pop.opcode.length {
 	case -1:
 		retString += fmt.Sprintf(" 0x%02x", len(pop.data))
@@ -771,18 +776,22 @@ func (pop *parsedOpcode) bytes() ([]byte, error) {
 	}
 
 	retbytes[0] = pop.opcode.value
+
 	if pop.opcode.length == 1 {
 		if len(pop.data) != 0 {
 			str := fmt.Sprintf("internal consistency error - "+
 				"parsed opcode %s has data length %d when %d "+
 				"was expected", pop.opcode.name, len(pop.data),
 				0)
+
 			return nil, scriptError(ErrInternal, str)
 		}
+
 		return retbytes, nil
 	}
 
 	nbytes := pop.opcode.length
+
 	if pop.opcode.length < 0 {
 		l := len(pop.data)
 		// tempting just to hardcode to avoid the complexity here.
@@ -810,6 +819,7 @@ func (pop *parsedOpcode) bytes() ([]byte, error) {
 		str := fmt.Sprintf("internal consistency error - "+
 			"parsed opcode %s has data length %d when %d was "+
 			"expected", pop.opcode.name, len(retbytes), nbytes)
+
 		return nil, scriptError(ErrInternal, str)
 	}
 
@@ -892,6 +902,7 @@ func opcodeNop(op *parsedOpcode, vm *Engine) error {
 			return scriptError(ErrDiscourageUpgradableNOPs, str)
 		}
 	}
+
 	return nil
 }
 
@@ -917,6 +928,7 @@ func popIfBool(vm *Engine) (bool, error) {
 // Conditional stack transformation: [...] -> [... OpCondValue]
 func opcodeIf(op *parsedOpcode, vm *Engine) error {
 	condVal := OpCondFalse
+
 	if vm.isBranchExecuting() {
 		ok, err := popIfBool(vm)
 		if err != nil {
@@ -929,7 +941,9 @@ func opcodeIf(op *parsedOpcode, vm *Engine) error {
 	} else {
 		condVal = OpCondSkip
 	}
+
 	vm.condStack = append(vm.condStack, condVal)
+
 	return nil
 }
 
@@ -951,6 +965,7 @@ func opcodeIf(op *parsedOpcode, vm *Engine) error {
 // Conditional stack transformation: [...] -> [... OpCondValue]
 func opcodeNotIf(op *parsedOpcode, vm *Engine) error {
 	condVal := OpCondFalse
+
 	if vm.isBranchExecuting() {
 		ok, err := popIfBool(vm)
 		if err != nil {
@@ -1009,6 +1024,7 @@ func opcodeEndif(op *parsedOpcode, vm *Engine) error {
 	}
 
 	vm.condStack = vm.condStack[:len(vm.condStack)-1]
+
 	return nil
 }
 
@@ -1027,6 +1043,7 @@ func abstractVerify(op *parsedOpcode, vm *Engine, c ErrorCode) error {
 		str := fmt.Sprintf("%s failed", op.opcode.name)
 		return scriptError(c, str)
 	}
+
 	return nil
 }
 
@@ -1057,6 +1074,7 @@ func verifyLockTime(txLockTime, threshold, lockTime int64) error {
 		str := fmt.Sprintf("locktime requirement not satisfied -- "+
 			"locktime is greater than the transaction locktime: "+
 			"%d > %d", lockTime, txLockTime)
+
 		return scriptError(ErrUnsatisfiedLockTime, str)
 	}
 
@@ -1076,6 +1094,7 @@ func opcodeCheckLockTimeVerify(op *parsedOpcode, vm *Engine) error {
 			return scriptError(ErrDiscourageUpgradableNOPs,
 				"OP_NOP2 reserved for soft-fork upgrades")
 		}
+
 		return nil
 	}
 
@@ -1151,6 +1170,7 @@ func opcodeCheckSequenceVerify(op *parsedOpcode, vm *Engine) error {
 			return scriptError(ErrDiscourageUpgradableNOPs,
 				"OP_NOP3 reserved for soft-fork upgrades")
 		}
+
 		return nil
 	}
 
@@ -1437,20 +1457,26 @@ func opcodeSplit(op *parsedOpcode, vm *Engine) error {
 	if err != nil {
 		return err
 	}
+
 	c, err := vm.dstack.PopByteArray()
 	if err != nil {
 		return err
 	}
+
 	if n.Int32() > int32(len(c)) {
 		return scriptError(ErrNumberTooBig, "n is larger than length of array")
 	}
+
 	if n < 0 {
 		return scriptError(ErrNumberTooSmall, "n is negative")
 	}
+
 	a := c[:n]
 	b := c[n:]
+
 	vm.dstack.PushByteArray(a)
 	vm.dstack.PushByteArray(b)
+
 	return nil
 }
 
@@ -1549,6 +1575,7 @@ func opcodeSize(op *parsedOpcode, vm *Engine) error {
 	}
 
 	vm.dstack.PushInt(scriptNum(len(so)))
+
 	return nil
 }
 
@@ -1576,18 +1603,23 @@ func opcodeAnd(op *parsedOpcode, vm *Engine) error {
 	if err != nil {
 		return err
 	}
+
 	b, err := vm.dstack.PopByteArray()
 	if err != nil {
 		return err
 	}
+
 	if len(a) != len(b) {
 		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
 	}
+
 	c := make([]byte, len(a))
 	for i := range a {
 		c[i] = a[i] & b[i]
 	}
+
 	vm.dstack.PushByteArray(c)
+
 	return nil
 }
 
@@ -1599,18 +1631,23 @@ func opcodeOr(op *parsedOpcode, vm *Engine) error {
 	if err != nil {
 		return err
 	}
+
 	b, err := vm.dstack.PopByteArray()
 	if err != nil {
 		return err
 	}
+
 	if len(a) != len(b) {
 		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
 	}
+
 	c := make([]byte, len(a))
 	for i := range a {
 		c[i] = a[i] | b[i]
 	}
+
 	vm.dstack.PushByteArray(c)
+
 	return nil
 }
 
@@ -1784,6 +1821,7 @@ func opcode0NotEqual(op *parsedOpcode, vm *Engine) error {
 	if m != 0 {
 		m = 1
 	}
+
 	vm.dstack.PushInt(m)
 
 	return nil
@@ -1868,6 +1906,7 @@ func opcodeDiv(op *parsedOpcode, vm *Engine) error {
 	if b == 0 {
 		return scriptError(ErrNumberTooSmall, "divide by zero")
 	}
+
 	vm.dstack.PushInt(a / b)
 
 	return nil
@@ -1891,7 +1930,9 @@ func opcodeMod(op *parsedOpcode, vm *Engine) error {
 	if b == 0 {
 		return scriptError(ErrNumberTooSmall, "mod by zero")
 	}
+
 	vm.dstack.PushInt(a % b)
+
 	return nil
 }
 
@@ -2029,6 +2070,7 @@ func opcodeNumEqualVerify(op *parsedOpcode, vm *Engine) error {
 	if err == nil {
 		err = abstractVerify(op, vm, ErrNumEqualVerify)
 	}
+
 	return err
 }
 
@@ -2379,12 +2421,15 @@ func opcodeCheckSig(op *parsedOpcode, vm *Engine) error {
 	// requirements enabled by the flags.
 	hashType := SigHashType(fullSigBytes[len(fullSigBytes)-1])
 	sigBytes := fullSigBytes[:len(fullSigBytes)-1]
+
 	if err := vm.checkHashTypeEncoding(hashType); err != nil {
 		return err
 	}
+
 	if err := vm.checkSignatureEncoding(sigBytes); err != nil {
 		return err
 	}
+
 	if err := vm.checkPubKeyEncoding(pkBytes); err != nil {
 		return err
 	}
@@ -2417,7 +2462,6 @@ func opcodeCheckSig(op *parsedOpcode, vm *Engine) error {
 	var signature *bsvec.Signature
 	if vm.hasFlag(ScriptVerifyStrictEncoding) ||
 		vm.hasFlag(ScriptVerifyDERSignatures) {
-
 		signature, err = bsvec.ParseDERSignature(sigBytes, bsvec.S256())
 	} else {
 		signature, err = bsvec.ParseSignature(sigBytes, bsvec.S256())
@@ -2429,13 +2473,16 @@ func opcodeCheckSig(op *parsedOpcode, vm *Engine) error {
 	}
 
 	var valid bool
+
 	if vm.sigCache != nil {
 		var sigHash chainhash.Hash
+
 		copy(sigHash[:], hash)
 
 		valid = vm.sigCache.Exists(sigHash, signature, pubKey)
 		if !valid && signature.Verify(hash, pubKey) {
 			vm.sigCache.Add(sigHash, signature, pubKey)
+
 			valid = true
 		}
 	} else {
@@ -2521,11 +2568,13 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 	}
 
 	pubKeys := make([][]byte, 0, numPubKeys)
+
 	for i := 0; i < numPubKeys; i++ {
 		pubKey, err := vm.dstack.PopByteArray()
 		if err != nil {
 			return err
 		}
+
 		pubKeys = append(pubKeys, pubKey)
 	}
 
@@ -2548,6 +2597,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 	}
 
 	signatures := make([]*parsedSigInfo, 0, numSignatures)
+
 	for i := 0; i < numSignatures; i++ {
 		signature, err := vm.dstack.PopByteArray()
 		if err != nil {
@@ -2587,6 +2637,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 	numPubKeys++
 	pubKeyIdx := -1
 	signatureIdx := 0
+
 	var sigHashes *TxSigHashes
 
 	if vm.hasFlag(ScriptVerifyBip143SigHash) {
@@ -2598,6 +2649,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 		// there is no way to succeed since too many signatures are
 		// invalid, so exit early.
 		pubKeyIdx++
+
 		numPubKeys--
 		if numSignatures > numPubKeys {
 			success = false
@@ -2623,6 +2675,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 
 		// Only parse and check the signature encoding once.
 		var parsedSig *bsvec.Signature
+
 		if !sigInfo.parsed {
 			if err := vm.checkHashTypeEncoding(hashType); err != nil {
 				return err
@@ -2636,7 +2689,6 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 			var err error
 			if vm.hasFlag(ScriptVerifyStrictEncoding) ||
 				vm.hasFlag(ScriptVerifyDERSignatures) {
-
 				parsedSig, err = bsvec.ParseDERSignature(signature,
 					bsvec.S256())
 			} else {
@@ -2645,6 +2697,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 			}
 
 			sigInfo.parsed = true
+
 			if err != nil {
 				continue
 			}
@@ -2679,13 +2732,16 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 		}
 
 		var valid bool
+
 		if vm.sigCache != nil {
 			var sigHash chainhash.Hash
+
 			copy(sigHash[:], signatureHash)
 
 			valid = vm.sigCache.Exists(sigHash, parsedSig, parsedPubKey)
 			if !valid && parsedSig.Verify(signatureHash, parsedPubKey) {
 				vm.sigCache.Add(sigHash, parsedSig, parsedPubKey)
+
 				valid = true
 			}
 		} else {

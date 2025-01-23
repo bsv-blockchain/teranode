@@ -38,6 +38,7 @@ func (m *SyncedMap[K, V]) Exists(key K) bool {
 	defer m.mu.RUnlock()
 
 	_, ok := m.m[key]
+
 	return ok
 }
 

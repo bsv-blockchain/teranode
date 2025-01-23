@@ -3722,6 +3722,7 @@ func TestPushedData(t *testing.T) {
 
 	for i, test := range tests {
 		script := mustParseShortForm(test.script)
+
 		data, err := PushedData(script)
 		if test.valid && err != nil {
 			t.Errorf("TestPushedData failed test #%d: %v\n", i, err)
@@ -3731,6 +3732,7 @@ func TestPushedData(t *testing.T) {
 				"be invalid\n", i)
 			continue
 		}
+
 		if !reflect.DeepEqual(data, test.out) {
 			t.Errorf("TestPushedData failed test #%d: want: %x "+
 				"got: %x\n", i, test.out, data)
@@ -3789,7 +3791,6 @@ func TestGetPreciseSigOps(t *testing.T) {
 		if count != test.nSigOps {
 			t.Errorf("%s: expected count of %d, got %d", test.name,
 				test.nSigOps, count)
-
 		}
 	}
 }
@@ -3865,6 +3866,7 @@ func TestRemoveOpcodes(t *testing.T) {
 	for _, test := range tests {
 		before := mustParseShortForm(test.before)
 		after := mustParseShortForm(test.after)
+
 		result, err := tstRemoveOpcode(before, test.remove)
 		if e := tstCheckScriptError(err, test.err); e != nil {
 			t.Errorf("%s: %v", test.name, e)
@@ -4038,6 +4040,7 @@ func TestIsPayToScriptHash(t *testing.T) {
 		script := mustParseShortForm(test.script)
 		shouldBe := (test.class == ScriptHashTy)
 		p2sh := IsPayToScriptHash(script)
+
 		if p2sh != shouldBe {
 			t.Errorf("%s: expected p2sh %v, got %v", test.name,
 				shouldBe, p2sh)
@@ -4070,18 +4073,22 @@ func TestHasCanonicalPushes(t *testing.T) {
 
 	for i, test := range tests {
 		script := mustParseShortForm(test.script)
+
 		pops, err := ParseScript(script)
 		if err != nil {
 			if test.expected {
 				t.Errorf("TstParseScript #%d failed: %v", i, err)
 			}
+
 			continue
 		}
+
 		for _, pop := range pops {
 			if CanonicalPush(pop) != test.expected {
 				t.Errorf("CanonicalPush: #%d (%s) wrong result"+
 					"\ngot: %v\nwant: %v", i, test.name,
 					true, test.expected)
+
 				break
 			}
 		}

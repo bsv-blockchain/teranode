@@ -17,6 +17,7 @@ func TestP2PKHAddressToScript(t *testing.T) {
 	} else {
 		h := hex.EncodeToString(script)
 		expected := "76a9148be87b3978d8ef936b30ddd4ed903f8da7abd27788ac"
+
 		if h != expected {
 			t.Errorf("Expected %s, got %s", expected, h)
 		}
@@ -31,6 +32,7 @@ func TestP2SHAddressToScript(t *testing.T) {
 	} else {
 		h := hex.EncodeToString(script)
 		expected := "a9143c5031fd7b3f8dfc4aef2d98b76e74b1bb7a51b887"
+
 		if h != expected {
 			t.Errorf("Expected %s, got %s", expected, h)
 		}

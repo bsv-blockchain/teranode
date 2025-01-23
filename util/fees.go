@@ -9,7 +9,6 @@ func GetFees(btTx *bt.Tx) (uint64, error) {
 
 	if btTx.IsCoinbase() {
 		// fmt.Printf("coinbase tx: %s\n", btTx.String())
-
 		for _, output := range btTx.Outputs {
 			if output.Satoshis > 0 {
 				fees += output.Satoshis
@@ -32,6 +31,7 @@ func GetFees(btTx *bt.Tx) (uint64, error) {
 	for _, input := range btTx.Inputs {
 		fees += input.PreviousTxSatoshis
 	}
+
 	for _, output := range btTx.Outputs {
 		if output.Satoshis > 0 {
 			fees -= output.Satoshis

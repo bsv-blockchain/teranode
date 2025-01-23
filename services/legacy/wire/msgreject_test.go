@@ -31,6 +31,7 @@ func TestRejectCodeStringer(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		result := test.in.String()
 		if result != test.want {
@@ -39,7 +40,6 @@ func TestRejectCodeStringer(t *testing.T) {
 			continue
 		}
 	}
-
 }
 
 // TestRejectLatest tests the MsgPong API against the latest protocol version.
@@ -56,14 +56,17 @@ func TestRejectLatest(t *testing.T) {
 	// Ensure we get the correct data back out.
 	msg := NewMsgReject(rejCommand, rejCode, rejReason)
 	msg.Hash = rejHash
+
 	if msg.Cmd != rejCommand {
 		t.Errorf("NewMsgReject: wrong rejected command - got %v, "+
 			"want %v", msg.Cmd, rejCommand)
 	}
+
 	if msg.Code != rejCode {
 		t.Errorf("NewMsgReject: wrong rejected code - got %v, "+
 			"want %v", msg.Code, rejCode)
 	}
+
 	if msg.Reason != rejReason {
 		t.Errorf("NewMsgReject: wrong rejected reason - got %v, "+
 			"want %v", msg.Reason, rejReason)
@@ -79,6 +82,7 @@ func TestRejectLatest(t *testing.T) {
 	// Ensure max payload is expected value for latest protocol version.
 	wantPayload := uint64(maxMessagePayload())
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -87,6 +91,7 @@ func TestRejectLatest(t *testing.T) {
 
 	// Test encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("encode of MsgReject failed %v err <%v>", msg, err)
@@ -94,6 +99,7 @@ func TestRejectLatest(t *testing.T) {
 
 	// Test decode with latest protocol version.
 	readMsg := MsgReject{}
+
 	err = readMsg.Bsvdecode(&buf, pver, enc)
 	if err != nil {
 		t.Errorf("decode of MsgReject failed %v err <%v>", buf.Bytes(),
@@ -105,14 +111,17 @@ func TestRejectLatest(t *testing.T) {
 		t.Errorf("Should get same reject command - got %v, want %v",
 			readMsg.Cmd, msg.Cmd)
 	}
+
 	if msg.Code != readMsg.Code {
 		t.Errorf("Should get same reject code - got %v, want %v",
 			readMsg.Code, msg.Code)
 	}
+
 	if msg.Reason != readMsg.Reason {
 		t.Errorf("Should get same reject reason - got %v, want %v",
 			readMsg.Reason, msg.Reason)
 	}
+
 	if msg.Hash != readMsg.Hash {
 		t.Errorf("Should get same reject hash - got %v, want %v",
 			readMsg.Hash, msg.Hash)
@@ -144,6 +153,7 @@ func TestRejectBeforeAdded(t *testing.T) {
 
 	// Test encode with old protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, pver, enc)
 	if err == nil {
 		t.Errorf("encode of MsgReject succeeded when it shouldn't "+
@@ -152,6 +162,7 @@ func TestRejectBeforeAdded(t *testing.T) {
 
 	//	// Test decode with old protocol version.
 	readMsg := MsgReject{}
+
 	err = readMsg.Bsvdecode(&buf, pver, enc)
 	if err == nil {
 		t.Errorf("decode of MsgReject succeeded when it shouldn't "+
@@ -164,14 +175,17 @@ func TestRejectBeforeAdded(t *testing.T) {
 		t.Errorf("Should not get same reject command for protocol "+
 			"version %d", pver)
 	}
+
 	if msg.Code == readMsg.Code {
 		t.Errorf("Should not get same reject code for protocol "+
 			"version %d", pver)
 	}
+
 	if msg.Reason == readMsg.Reason {
 		t.Errorf("Should not get same reject reason for protocol "+
 			"version %d", pver)
 	}
+
 	if msg.Hash == readMsg.Hash {
 		t.Errorf("Should not get same reject hash for protocol "+
 			"version %d", pver)
@@ -193,6 +207,7 @@ func TestRejectCrossProtocol(t *testing.T) {
 
 	// Encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, ProtocolVersion, BaseEncoding)
 	if err != nil {
 		t.Errorf("encode of MsgReject failed %v err <%v>", msg, err)
@@ -200,6 +215,7 @@ func TestRejectCrossProtocol(t *testing.T) {
 
 	// Decode with old protocol version.
 	readMsg := MsgReject{}
+
 	err = readMsg.Bsvdecode(&buf, RejectVersion-1, BaseEncoding)
 	if err == nil {
 		t.Errorf("encode of MsgReject succeeded when it shouldn't "+
@@ -212,12 +228,15 @@ func TestRejectCrossProtocol(t *testing.T) {
 	if msg.Cmd == readMsg.Cmd {
 		t.Errorf("Should not get same reject command for cross protocol")
 	}
+
 	if msg.Code == readMsg.Code {
 		t.Errorf("Should not get same reject code for cross protocol")
 	}
+
 	if msg.Reason == readMsg.Reason {
 		t.Errorf("Should not get same reject reason for cross protocol")
 	}
+
 	if msg.Hash == readMsg.Hash {
 		t.Errorf("Should not get same reject hash for cross protocol")
 	}
@@ -273,14 +292,17 @@ func TestRejectWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
+
 		err := test.msg.BsvEncode(&buf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -289,12 +311,15 @@ func TestRejectWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgReject
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(msg, test.msg) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.msg))
@@ -346,9 +371,11 @@ func TestRejectWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -368,7 +395,9 @@ func TestRejectWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgReject
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",

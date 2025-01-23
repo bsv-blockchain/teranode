@@ -55,6 +55,7 @@ func TestAddr(t *testing.T) {
 
 	// Ensure the address list is cleared properly.
 	msg.ClearAddresses()
+
 	if len(msg.AddrList) != 0 {
 		t.Errorf("ClearAddresses: address list is not empty - "+
 			"got %v [%v], want %v", len(msg.AddrList),
@@ -182,6 +183,7 @@ func TestAddrWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
@@ -200,6 +202,7 @@ func TestAddrWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgAddr
+
 		rbuf := bytes.NewReader(test.buf)
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 
@@ -261,6 +264,7 @@ func TestAddrWireErrors(t *testing.T) {
 	for i := 0; i < MaxAddrPerMsg; i++ {
 		_ = maxAddr.AddAddress(na)
 	}
+
 	maxAddr.AddrList = append(maxAddr.AddrList, na)
 	maxAddrEncoded := []byte{
 		0xfd, 0x03, 0xe9, // Varint for number of addresses (1001)
@@ -288,6 +292,7 @@ func TestAddrWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
@@ -311,6 +316,7 @@ func TestAddrWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgAddr
+
 		r := newFixedReader(test.max, test.buf)
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 

@@ -285,6 +285,7 @@ func (m *Memory) Spend(_ context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 		if tx.frozenMap[*spend.UTXOHash] {
 			errorFound = true
 			spend.Err = errors.NewUtxoFrozenError("%v is frozen", spend.TxID)
+
 			break
 		}
 
@@ -292,6 +293,7 @@ func (m *Memory) Spend(_ context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 		if tx.utxoSpendableIn[spend.Vout] != 0 && m.txs[*spend.TxID].utxoSpendableIn[spend.Vout] > m.blockHeight.Load() {
 			errorFound = true
 			spend.Err = errors.NewTxLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
+
 			break
 		}
 

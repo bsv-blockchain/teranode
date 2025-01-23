@@ -34,9 +34,11 @@ func NewMultisetFromPoint(curve *KoblitzCurve, x, y *big.Int) *Multiset {
 	if x != nil {
 		copyX = *x
 	}
+
 	if y != nil {
 		copyY = *y
 	}
+
 	return &Multiset{curve: curve, x: &copyX, y: &copyY, mtx: sync.RWMutex{}}
 }
 
@@ -87,6 +89,7 @@ func (ms *Multiset) Hash() chainhash.Hash {
 	for i, b := range h {
 		reversed[len(h)-i-1] = b
 	}
+
 	return chainhash.Hash(reversed)
 }
 
@@ -96,6 +99,7 @@ func (ms *Multiset) Point() (x *big.Int, y *big.Int) {
 	defer ms.mtx.RUnlock()
 
 	copyX, copyY := *ms.x, *ms.y
+
 	return &copyX, &copyY
 }
 
@@ -105,8 +109,11 @@ func (ms *Multiset) Point() (x *big.Int, y *big.Int) {
 // and we try again. There is a 50% chance of success for any given iteration.
 func hashToPoint(curve *KoblitzCurve, data []byte) (*big.Int, *big.Int) {
 	i := uint64(0)
+
 	var x, y *big.Int
+
 	var err error
+
 	h := sha256.Sum256(data)
 	n := make([]byte, 8)
 
@@ -120,7 +127,9 @@ func hashToPoint(curve *KoblitzCurve, data []byte) (*big.Int, *big.Int) {
 		if err == nil && x.Cmp(curve.N) < 0 {
 			break
 		}
+
 		i++
 	}
+
 	return x, y
 }

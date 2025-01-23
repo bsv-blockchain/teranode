@@ -67,6 +67,7 @@ func String() string {
 // characters in semanticAlphabet.
 func normalizeVerString(str string) string {
 	var result bytes.Buffer
+
 	for _, r := range str {
 		if strings.ContainsRune(semanticAlphabet, r) {
 			result.WriteRune(r)

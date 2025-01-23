@@ -137,6 +137,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 				SizeInBytes: meta.SizeInBytes,
 				Miner:       meta.Miner,
 			}
+
 			return c.JSONPretty(200, headerResponse, "  ")
 		default:
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())

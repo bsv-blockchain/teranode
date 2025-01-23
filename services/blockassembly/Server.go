@@ -406,7 +406,6 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 // Returns:
 //   - error: Any error encountered during startup
 func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
-
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}

@@ -24,6 +24,7 @@ func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -48,6 +49,7 @@ func NewFilter(elements, tweak uint32, fprate float64, flags wire.BloomUpdateTyp
 	if fprate > 1.0 {
 		fprate = 1.0
 	}
+
 	if fprate < 1e-9 {
 		fprate = 1e-9
 	}
@@ -91,6 +93,7 @@ func (bf *Filter) IsLoaded() bool {
 	bf.mtx.Lock()
 	loaded := bf.msgFilterLoad != nil
 	bf.mtx.Unlock()
+
 	return loaded
 }
 
@@ -147,6 +150,7 @@ func (bf *Filter) matches(data []byte) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -158,6 +162,7 @@ func (bf *Filter) Matches(data []byte) bool {
 	bf.mtx.Lock()
 	match := bf.matches(data)
 	bf.mtx.Unlock()
+
 	return match
 }
 
@@ -168,6 +173,7 @@ func (bf *Filter) Matches(data []byte) bool {
 func (bf *Filter) matchesOutPoint(outpoint *wire.OutPoint) bool {
 	// Serialize
 	var buf [chainhash.HashSize + 4]byte
+
 	copy(buf[:], outpoint.Hash[:])
 	binary.LittleEndian.PutUint32(buf[chainhash.HashSize:], outpoint.Index)
 
@@ -182,6 +188,7 @@ func (bf *Filter) MatchesOutPoint(outpoint *wire.OutPoint) bool {
 	bf.mtx.Lock()
 	match := bf.matchesOutPoint(outpoint)
 	bf.mtx.Unlock()
+
 	return match
 }
 
@@ -230,6 +237,7 @@ func (bf *Filter) AddHash(hash *chainhash.Hash) {
 func (bf *Filter) addOutPoint(outpoint *wire.OutPoint) {
 	// Serialize
 	var buf [chainhash.HashSize + 4]byte
+
 	copy(buf[:], outpoint.Hash[:])
 	binary.LittleEndian.PutUint32(buf[chainhash.HashSize:], outpoint.Index)
 
@@ -295,7 +303,9 @@ func (bf *Filter) matchTxAndUpdate(tx *bsvutil.Tx) bool {
 			}
 
 			matched = true
+
 			bf.maybeAddOutpoint(txOut.PkScript, tx.Hash(), uint32(i))
+
 			break
 		}
 	}
@@ -319,6 +329,7 @@ func (bf *Filter) matchTxAndUpdate(tx *bsvutil.Tx) bool {
 		if err != nil {
 			continue
 		}
+
 		for _, data := range pushedData {
 			if bf.matches(data) {
 				return true
@@ -339,6 +350,7 @@ func (bf *Filter) MatchTxAndUpdate(tx *bsvutil.Tx) bool {
 	bf.mtx.Lock()
 	match := bf.matchTxAndUpdate(tx)
 	bf.mtx.Unlock()
+
 	return match
 }
 
@@ -350,5 +362,6 @@ func (bf *Filter) MsgFilterLoad() *wire.MsgFilterLoad {
 	bf.mtx.Lock()
 	msg := bf.msgFilterLoad
 	bf.mtx.Unlock()
+
 	return msg
 }

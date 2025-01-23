@@ -47,7 +47,6 @@ type PartialBlock struct {
 // with protocol reference documentation at
 // https://bitcoin.org/en/developer-examples#parsing-a-merkleblock
 func NewMerkleBlockFromMsg(msg wire.MsgMerkleBlock) *PartialBlock {
-
 	// get number of hashes in message
 	numTx := uint64(msg.Transactions)
 

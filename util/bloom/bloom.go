@@ -81,18 +81,21 @@ func NewShardedBloomFilter() *ShardedBloomFilter {
 	for i := range sbf.shards {
 		sbf.shards[i] = NewBloomFilter(shardSize)
 	}
+
 	return sbf
 }
 
 func hashValue1(data []byte) uint64 {
 	hash := fnv.New64a()
 	hash.Write(data)
+
 	return hash.Sum64()
 }
 
 func hashValue2(data []byte) uint64 {
 	hash := murmur3.New64()
 	hash.Write(data)
+
 	return hash.Sum64()
 }
 
@@ -129,5 +132,6 @@ func (s *ShardedBloomFilter) Add(data []byte) {
 func (s *ShardedBloomFilter) Test(data []byte) bool {
 	hash := hashValue1(data)
 	i := hash % uint64(numShards)
+
 	return s.shards[i].Test(data)
 }

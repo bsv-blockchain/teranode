@@ -58,13 +58,16 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	defer aerospikeConnectionMutex.Unlock()
 
 	var err error
+
 	client, found := aerospikeConnections[url.Host]
 	if !found {
 		logger.Infof("[AEROSPIKE] Creating aerospike client for host: %s", url.Host)
+
 		client, err = getAerospikeClient(logger, url, tSettings)
 		if err != nil {
 			return nil, err
 		}
+
 		aerospikeConnections[url.Host] = client
 	} else {
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
@@ -209,6 +212,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		// todo optimize read policies
 		// todo optimize write policies
 		logger.Infof("[Aerospike] base/connection policy url %s", url)
+
 		policy.LimitConnectionsToQueueSize, err = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 		if err != nil {
 			return nil, err
@@ -264,7 +268,9 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		policy.AuthMode = aerospike.AuthModeInternal
 
 		policy.User = url.User.Username()
+
 		var ok bool
+
 		policy.Password, ok = url.User.Password()
 		if !ok {
 			policy.User = ""
@@ -273,6 +279,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	}
 
 	var hosts []*aerospike.Host
+
 	urlHosts := strings.Split(url.Host, ",")
 
 	for _, host := range urlHosts {
@@ -310,8 +317,10 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		if err != nil {
 			return nil, err
 		}
+
 		cnxNum, err := client.WarmUp(warmUp)
 		logger.Infof("Warmed up %d aerospike connections", cnxNum)
+
 		if err != nil {
 			return nil, err
 		}
@@ -439,6 +448,7 @@ func getQueryBool(url *url.URL, key string, defaultValue bool, logger ulogger.Lo
 		logger.Infof("[Aerospike] %s=%t [default]", key, defaultValue)
 		return defaultValue, nil
 	}
+
 	valueBool, err := strconv.ParseBool(value)
 	if err != nil {
 		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
@@ -455,10 +465,12 @@ func getQueryInt(url *url.URL, key string, defaultValue int, logger ulogger.Logg
 		logger.Infof("[Aerospike] %s=%d [default]", key, defaultValue)
 		return defaultValue, nil
 	}
+
 	valueInt, err := strconv.Atoi(value)
 	if err != nil {
 		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
 	}
+
 	logger.Infof("[Aerospike] %s=%d", key, valueInt)
 
 	return valueInt, nil
@@ -470,6 +482,7 @@ func getQueryDuration(url *url.URL, key string, defaultValue time.Duration, logg
 		logger.Infof("[Aerospike] %s=%s [default]", key, defaultValue.String())
 		return defaultValue, nil
 	}
+
 	valueDuration, err := time.ParseDuration(value)
 	if err != nil {
 		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
@@ -486,11 +499,14 @@ func getQueryFloat64(url *url.URL, key string, defaultValue float64, logger ulog
 		logger.Infof("[Aerospike] %s=%f [default]", key, defaultValue)
 		return defaultValue, nil
 	}
+
 	valueFloat64, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return defaultValue, errors.NewInvalidArgumentError("[Aerospike] Invalid value %s=%v", key, value, err)
 	}
+
 	logger.Infof("[Aerospike] %s=%f", key, valueFloat64)
+
 	return valueFloat64, nil
 }
 

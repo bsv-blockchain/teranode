@@ -76,6 +76,7 @@ func NewNetAddressTimestamp(
 		IP:        ip,
 		Port:      port,
 	}
+
 	return &na
 }
 
@@ -117,6 +118,7 @@ func readNetAddress(r io.Reader, pver uint32, na *NetAddress, ts bool) error {
 		IP:        net.IP(ip[:]),
 		Port:      port,
 	}
+
 	return nil
 }
 
@@ -139,6 +141,7 @@ func writeNetAddress(w io.Writer, pver uint32, na *NetAddress, ts bool) error {
 	if na.IP != nil {
 		copy(ip[:], na.IP.To16())
 	}
+
 	err := writeElements(w, na.Services, ip)
 	if err != nil {
 		return err

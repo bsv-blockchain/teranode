@@ -56,7 +56,6 @@ func New(logger ulogger.Logger,
 	blockValidation blockvalidation.Interface,
 	blockAssemblyClient *blockassembly.Client,
 ) *Server {
-
 	initPrometheusMetrics()
 
 	return &Server{
@@ -130,6 +129,7 @@ func (s *Server) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	defaultListenAddresses := []string{ip.String() + ":8333"}
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses := s.settings.Legacy.ListenAddresses
@@ -210,6 +210,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 			Inbound: sp.Inbound(),
 		})
 	}
+
 	return resp, nil
 }
 

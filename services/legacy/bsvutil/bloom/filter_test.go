@@ -34,7 +34,9 @@ func TestFilterLoad(t *testing.T) {
 			true, !f.IsLoaded())
 		return
 	}
+
 	f.Unload()
+
 	if f.IsLoaded() {
 		t.Errorf("TestFilterLoad IsLoaded test failed: want %v got %v",
 			f.IsLoaded(), false)
@@ -64,6 +66,7 @@ func TestFilterInsert(t *testing.T) {
 			t.Errorf("TestFilterInsert DecodeString failed: %v\n", err)
 			return
 		}
+
 		if test.insert {
 			f.Add(data)
 		}
@@ -83,6 +86,7 @@ func TestFilterInsert(t *testing.T) {
 	}
 
 	got := bytes.NewBuffer(nil)
+
 	err = f.MsgFilterLoad().BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
 	if err != nil {
 		t.Errorf("TestFilterInsert BsvDecode failed: %v\n", err)
@@ -132,6 +136,7 @@ func TestFilterFPRange(t *testing.T) {
 			t.Errorf("NewHashFromStr unexpected error: %v", err)
 			continue
 		}
+
 		want, err := hex.DecodeString(test.want)
 		if err != nil {
 			t.Errorf("DecodeString unexpected error: %v\n", err)
@@ -142,12 +147,15 @@ func TestFilterFPRange(t *testing.T) {
 		// filter serializes to the expected bytes.
 		f := test.filter
 		f.AddHash(hash)
+
 		got := bytes.NewBuffer(nil)
+
 		err = f.MsgFilterLoad().BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
 		if err != nil {
 			t.Errorf("BsvDecode unexpected error: %v\n", err)
 			continue
 		}
+
 		if !bytes.Equal(got.Bytes(), want) {
 			t.Errorf("serialized filter mismatch: got %x want %x\n",
 				got.Bytes(), want)
@@ -178,6 +186,7 @@ func TestFilterInsertWithTweak(t *testing.T) {
 			t.Errorf("TestFilterInsertWithTweak DecodeString failed: %v\n", err)
 			return
 		}
+
 		if test.insert {
 			f.Add(data)
 		}
@@ -195,7 +204,9 @@ func TestFilterInsertWithTweak(t *testing.T) {
 		t.Errorf("TestFilterInsertWithTweak DecodeString failed: %v\n", err)
 		return
 	}
+
 	got := bytes.NewBuffer(nil)
+
 	err = f.MsgFilterLoad().BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
 	if err != nil {
 		t.Errorf("TestFilterInsertWithTweak BsvDecode failed: %v\n", err)
@@ -230,7 +241,9 @@ func TestFilterInsertKey(t *testing.T) {
 		t.Errorf("TestFilterInsertWithTweak DecodeString failed: %v\n", err)
 		return
 	}
+
 	got := bytes.NewBuffer(nil)
+
 	err = f.MsgFilterLoad().BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
 	if err != nil {
 		t.Errorf("TestFilterInsertWithTweak BsvDecode failed: %v\n", err)
@@ -254,16 +267,19 @@ func TestFilterBloomMatch(t *testing.T) {
 		"9ffffffff021bff3d11000000001976a91404943fdd508053c75000106d3" +
 		"bc6e2754dbcff1988ac2f15de00000000001976a914a266436d296554760" +
 		"8b9e15d9032a7b9d64fa43188ac00000000"
+
 	strBytes, err := hex.DecodeString(str)
 	if err != nil {
 		t.Errorf("TestFilterBloomMatch DecodeString failure: %v", err)
 		return
 	}
+
 	tx, err := bsvutil.NewTxFromBytes(strBytes)
 	if err != nil {
 		t.Errorf("TestFilterBloomMatch NewTxFromBytes failure: %v", err)
 		return
 	}
+
 	spendingTxBytes := []byte{0x01, 0x00, 0x00, 0x00, 0x01, 0x6b, 0xff, 0x7f,
 		0xcd, 0x4f, 0x85, 0x65, 0xef, 0x40, 0x6d, 0xd5, 0xd6,
 		0x3d, 0x4f, 0xf9, 0x4f, 0x31, 0x8f, 0xe8, 0x20, 0x27,
@@ -325,7 +341,9 @@ func TestFilterBloomMatch(t *testing.T) {
 
 		return
 	}
+
 	f.Add(hashBytes)
+
 	if !f.MatchTxAndUpdate(tx) {
 		t.Errorf("TestFilterBloomMatch didn't match hash %s", inputStr)
 	}
@@ -334,13 +352,16 @@ func TestFilterBloomMatch(t *testing.T) {
 	inputStr = "30450220070aca44506c5cef3a16ed519d7c3c39f8aab192c4e1c90d065" +
 		"f37b8a4af6141022100a8e160b856c2d43d27d8fba71e5aef6405b8643" +
 		"ac4cb7cb3c462aced7f14711a01"
+
 	hashBytes, err = hex.DecodeString(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterBloomMatch DecodeString failed: %v\n", err)
 
 		return
 	}
+
 	f.Add(hashBytes)
+
 	if !f.MatchTxAndUpdate(tx) {
 		t.Errorf("TestFilterBloomMatch didn't match input signature %s", inputStr)
 	}
@@ -446,6 +467,7 @@ func TestFilterBloomMatch(t *testing.T) {
 
 	f = bloom.NewFilter(10, 0, 0.000001, wire.BloomUpdateAll)
 	inputStr = "90c122d70786e899529d71dbeba91ba216982fb6ba58f3bdaab65e73b7e9260b"
+
 	hash, err = chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterBloomMatch NewHashFromStr failed: %v\n", err)
@@ -484,23 +506,28 @@ func TestFilterInsertUpdateNone(t *testing.T) {
 	inputStr := "04eaafc2314def4ca98ac970241bcab022b9c1e1f4ea423a20f134c" +
 		"876f2c01ec0f0dd5b2e86e7168cefe0d81113c3807420ce13ad1357231a" +
 		"2252247d97a46a91"
+
 	inputBytes, err := hex.DecodeString(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertUpdateNone DecodeString failed: %v", err)
 		return
 	}
+
 	f.Add(inputBytes)
 
 	// Add the output address for the 4th transaction
 	inputStr = "b6efd80d99179f4f4ff6f4dd0a007d018c385d21"
+
 	inputBytes, err = hex.DecodeString(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertUpdateNone DecodeString failed: %v", err)
 		return
 	}
+
 	f.Add(inputBytes)
 
 	inputStr = "147caa76786596590baa4e98f5d9f48b86c7765e489f7a6ff3360fe5c674360b"
+
 	hash, err := chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertUpdateNone NewHashFromStr failed: %v", err)
@@ -515,11 +542,13 @@ func TestFilterInsertUpdateNone(t *testing.T) {
 	}
 
 	inputStr = "02981fa052f0481dbc5868f4fc2166035a10f27a03cfd2de67326471df5bc041"
+
 	hash, err = chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertUpdateNone NewHashFromStr failed: %v", err)
 		return
 	}
+
 	outpoint = wire.NewOutPoint(hash, 0)
 
 	if f.MatchesOutPoint(outpoint) {
@@ -616,11 +645,13 @@ func TestFilterInsertP2PubKeyOnly(t *testing.T) {
 		"0edca9ef982c35fda2d255afba340068c5035552368bc7200c1488fffff" +
 		"fff0100093d00000000001976a9148edb68822f1ad580b043c7b3df2e40" +
 		"0f8699eb4888ac00000000"
+
 	blockBytes, err := hex.DecodeString(blockStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertP2PubKeyOnly DecodeString failed: %v", err)
 		return
 	}
+
 	block, err := bsvutil.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		t.Errorf("TestFilterInsertP2PubKeyOnly NewBlockFromBytes failed: %v", err)
@@ -633,20 +664,24 @@ func TestFilterInsertP2PubKeyOnly(t *testing.T) {
 	inputStr := "04eaafc2314def4ca98ac970241bcab022b9c1e1f4ea423a20f134c" +
 		"876f2c01ec0f0dd5b2e86e7168cefe0d81113c3807420ce13ad1357231a" +
 		"2252247d97a46a91"
+
 	inputBytes, err := hex.DecodeString(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertP2PubKeyOnly DecodeString failed: %v", err)
 		return
 	}
+
 	f.Add(inputBytes)
 
 	// Output address of 4th transaction
 	inputStr = "b6efd80d99179f4f4ff6f4dd0a007d018c385d21"
+
 	inputBytes, err = hex.DecodeString(inputStr)
 	if err != nil {
 		t.Errorf("TestFilterInsertP2PubKeyOnly DecodeString failed: %v", err)
 		return
 	}
+
 	f.Add(inputBytes)
 
 	// Ignore return value -- this is just used to update the filter.
@@ -654,11 +689,13 @@ func TestFilterInsertP2PubKeyOnly(t *testing.T) {
 
 	// We should match the generation pubkey
 	inputStr = "147caa76786596590baa4e98f5d9f48b86c7765e489f7a6ff3360fe5c674360b"
+
 	hash, err := chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestMerkleBlockP2PubKeyOnly NewHashFromStr failed: %v", err)
 		return
 	}
+
 	outpoint := wire.NewOutPoint(hash, 0)
 	if !f.MatchesOutPoint(outpoint) {
 		t.Errorf("TestMerkleBlockP2PubKeyOnly didn't match the generation "+
@@ -668,11 +705,13 @@ func TestFilterInsertP2PubKeyOnly(t *testing.T) {
 
 	// We should not match the 4th transaction, which is not p2pk
 	inputStr = "02981fa052f0481dbc5868f4fc2166035a10f27a03cfd2de67326471df5bc041"
+
 	hash, err = chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestMerkleBlockP2PubKeyOnly NewHashFromStr failed: %v", err)
 		return
 	}
+
 	outpoint = wire.NewOutPoint(hash, 0)
 	if f.MatchesOutPoint(outpoint) {
 		t.Errorf("TestMerkleBlockP2PubKeyOnly matched outpoint %s", inputStr)
@@ -688,6 +727,7 @@ func TestFilterReload(t *testing.T) {
 		t.Errorf("TestFilterReload LoadFilter test failed")
 		return
 	}
+
 	bFilter.Reload(nil)
 
 	if bFilter.MsgFilterLoad() != nil {

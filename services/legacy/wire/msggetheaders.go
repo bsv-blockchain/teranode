@@ -42,6 +42,7 @@ func (msg *MsgGetHeaders) AddBlockLocatorHash(hash *chainhash.Hash) error {
 	}
 
 	msg.BlockLocatorHashes = append(msg.BlockLocatorHashes, hash)
+
 	return nil
 }
 
@@ -58,6 +59,7 @@ func (msg *MsgGetHeaders) Bsvdecode(r io.Reader, pver uint32, enc MessageEncodin
 	if err != nil {
 		return err
 	}
+
 	if count > MaxBlockLocatorsPerMsg {
 		str := fmt.Sprintf("too many block locator hashes for message "+
 			"[count %v, max %v]", count, MaxBlockLocatorsPerMsg)
@@ -68,12 +70,15 @@ func (msg *MsgGetHeaders) Bsvdecode(r io.Reader, pver uint32, enc MessageEncodin
 	// reduce the number of allocations.
 	locatorHashes := make([]chainhash.Hash, count)
 	msg.BlockLocatorHashes = make([]*chainhash.Hash, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		hash := &locatorHashes[i]
+
 		err := readElement(r, hash)
 		if err != nil {
 			return err
 		}
+
 		msg.AddBlockLocatorHash(hash)
 	}
 

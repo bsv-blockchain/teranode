@@ -98,6 +98,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 							continue
 						}
+
 						txMetaSlice[data.Idx] = data.Data
 					}
 

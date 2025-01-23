@@ -12,6 +12,7 @@ func Test_bytes2Uint16(t *testing.T) {
 		b   [32]byte
 		mod uint16
 	}
+
 	tests := []struct {
 		name string
 		args args

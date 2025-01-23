@@ -28,6 +28,7 @@ func TestFilterClearLatest(t *testing.T) {
 	// Ensure max payload is expected value for latest protocol version.
 	wantPayload := uint64(0)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -100,6 +101,7 @@ func TestFilterClearWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
@@ -120,6 +122,7 @@ func TestFilterClearWire(t *testing.T) {
 		var msg MsgFilterClear
 
 		rbuf := bytes.NewReader(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
@@ -160,9 +163,11 @@ func TestFilterClearWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -182,7 +187,9 @@ func TestFilterClearWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgFilterClear
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",

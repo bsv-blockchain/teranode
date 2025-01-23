@@ -87,6 +87,7 @@ func (c *ConnReq) State() ConnState {
 	c.stateMtx.RLock()
 	state := c.state
 	c.stateMtx.RUnlock()
+
 	return state
 }
 
@@ -223,12 +224,15 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 	if atomic.LoadInt32(&cm.stop) != 0 {
 		return
 	}
+
 	if c.Permanent {
 		c.retryCount++
+
 		d := time.Duration(c.retryCount) * cm.cfg.RetryDuration
 		if d > maxRetryDuration {
 			d = maxRetryDuration
 		}
+
 		cm.logger.Debugf("Retrying connection to %v in %v", c, d)
 		time.AfterFunc(d, func() {
 			cm.Connect(c)
@@ -258,7 +262,6 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 // connections so that we remain connected to the network.  Connection requests
 // are processed and mapped by their assigned ids.
 func (cm *ConnManager) connHandler() {
-
 	var ()
 
 out:
@@ -266,7 +269,6 @@ out:
 		select {
 		case req := <-cm.requests:
 			switch msg := req.(type) {
-
 			case registerPending:
 				connReq := msg.c
 				connReq.updateState(ConnPending)
@@ -417,6 +419,7 @@ func (cm *ConnManager) NewConnReq() {
 		case cm.requests <- handleFailed{c, err}:
 		case <-cm.quit:
 		}
+
 		return
 	}
 
@@ -559,6 +562,7 @@ func (cm *ConnManager) Remove(id uint64) {
 // run as a goroutine.
 func (cm *ConnManager) listenHandler(listener net.Listener) {
 	cm.logger.Infof("Server listening on %s", listener.Addr())
+
 	for atomic.LoadInt32(&cm.stop) == 0 {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -566,8 +570,10 @@ func (cm *ConnManager) listenHandler(listener net.Listener) {
 			if atomic.LoadInt32(&cm.stop) == 0 {
 				cm.logger.Errorf("Can't accept connection: %v", err)
 			}
+
 			continue
 		}
+
 		go cm.cfg.OnAccept(conn)
 	}
 
@@ -584,6 +590,7 @@ func (cm *ConnManager) Start() {
 
 	cm.logger.Infof("Connection manager started")
 	cm.wg.Add(1)
+
 	go cm.connHandler()
 
 	// Start all the listeners so long as the caller requested them and

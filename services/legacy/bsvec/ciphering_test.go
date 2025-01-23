@@ -16,6 +16,7 @@ func TestGenerateSharedSecret(t *testing.T) {
 		t.Errorf("private key generation error: %s", err)
 		return
 	}
+
 	privKey2, err := NewPrivateKey(S256())
 	if err != nil {
 		t.Errorf("private key generation error: %s", err)

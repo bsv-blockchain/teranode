@@ -31,6 +31,7 @@ func (msg *MsgHeaders) AddBlockHeader(bh *BlockHeader) error {
 	}
 
 	msg.Headers = append(msg.Headers, bh)
+
 	return nil
 }
 
@@ -53,8 +54,10 @@ func (msg *MsgHeaders) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) 
 	// reduce the number of allocations.
 	headers := make([]BlockHeader, count)
 	msg.Headers = make([]*BlockHeader, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		bh := &headers[i]
+
 		err := readBlockHeader(r, pver, bh)
 		if err != nil {
 			return err
@@ -71,6 +74,7 @@ func (msg *MsgHeaders) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) 
 				"transactions [count %v]", txCount)
 			return messageError("MsgHeaders.Bsvdecode", str)
 		}
+
 		msg.AddBlockHeader(bh)
 	}
 

@@ -19,7 +19,6 @@ import (
 // TestValidNewMerkleBlockWithTxnSet tests encoding a merkle proof for a given block
 // with specified transaction set
 func TestValidNewMerkleBlockWithTxnSet(t *testing.T) {
-
 	tests := []struct {
 		name      string
 		blockHash string
@@ -121,7 +120,6 @@ func TestValidNewMerkleBlockWithTxnSet(t *testing.T) {
 }
 
 func TestInvalidNewMerkleBlockWithTxnSet(t *testing.T) {
-
 	tests := []struct {
 		name      string
 		blockHash string

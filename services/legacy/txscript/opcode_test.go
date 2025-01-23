@@ -21,6 +21,7 @@ func TestOpcodeDisabled(t *testing.T) {
 	tests := []byte{OP_2MUL, OP_2DIV}
 	for _, opcodeVal := range tests {
 		pop := parsedOpcode{opcode: &opcodeArray[opcodeVal], data: nil}
+
 		err := opcodeDisabled(&pop, nil)
 		if !IsErrorCode(err, ErrDisabledOpcode) {
 			t.Errorf("opcodeDisabled: unexpected error - got %v, "+
@@ -43,6 +44,7 @@ func TestOpcodeDisasm(t *testing.T) {
 	// than manually listing them here.
 	oneBytes := []byte{0x01}
 	oneStr := "01"
+
 	expectedStrings := [256]string{0x00: "0", 0x4f: "-1",
 		0x50: "OP_RESERVED", 0x61: "OP_NOP", 0x62: "OP_VER",
 		0x63: "OP_IF", 0x64: "OP_NOTIF", 0x65: "OP_VERIF",
@@ -78,6 +80,7 @@ func TestOpcodeDisasm(t *testing.T) {
 	}
 	for opcodeVal, expectedStr := range expectedStrings {
 		var data []byte
+
 		switch {
 		// OP_DATA_1 through OP_DATA_65 display the pushed data.
 		case opcodeVal >= 0x01 && opcodeVal < 0x4c:
@@ -125,11 +128,13 @@ func TestOpcodeDisasm(t *testing.T) {
 		}
 
 		pop := parsedOpcode{opcode: &opcodeArray[opcodeVal], data: data}
+
 		gotStr := pop.print(true)
 		if gotStr != expectedStr {
 			t.Errorf("pop.print (opcode %x): Unexpected disasm "+
 				"string - got %v, want %v", opcodeVal, gotStr,
 				expectedStr)
+
 			continue
 		}
 	}
@@ -137,8 +142,10 @@ func TestOpcodeDisasm(t *testing.T) {
 	// Now, replace the relevant fields and test the full disassembly.
 	expectedStrings[0x00] = "OP_0"
 	expectedStrings[0x4f] = "OP_1NEGATE"
+
 	for opcodeVal, expectedStr := range expectedStrings {
 		var data []byte
+
 		switch {
 		// OP_DATA_1 through OP_DATA_65 display the opcode followed by
 		// the pushed data.
@@ -191,11 +198,13 @@ func TestOpcodeDisasm(t *testing.T) {
 		}
 
 		pop := parsedOpcode{opcode: &opcodeArray[opcodeVal], data: data}
+
 		gotStr := pop.print(false)
 		if gotStr != expectedStr {
 			t.Errorf("pop.print (opcode %x): Unexpected disasm "+
 				"string - got %v, want %v", opcodeVal, gotStr,
 				expectedStr)
+
 			continue
 		}
 	}

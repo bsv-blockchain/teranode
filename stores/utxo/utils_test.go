@@ -38,9 +38,11 @@ func TestGetFeesAndUtxoHashes(t *testing.T) {
 		assert.Equal(t, 5, len(utxoHashes))
 
 		createdUtxoHashesMap := make(map[chainhash.Hash]struct{})
+
 		for _, utxoHash := range utxoHashes {
 			_, ok := utxoHashesMap[*utxoHash]
 			assert.True(t, ok, "utxo hash not found in map: "+utxoHash.String())
+
 			createdUtxoHashesMap[*utxoHash] = struct{}{}
 		}
 
@@ -78,6 +80,7 @@ func TestGetUtxoHashes(t *testing.T) {
 		assert.Equal(t, 5, len(utxoHashes))
 
 		createdUtxoHashesMap := make(map[chainhash.Hash]struct{})
+
 		for _, utxoHash := range utxoHashes {
 			_, ok := utxoHashesMap[*utxoHash]
 			assert.True(t, ok, "utxo hash not found in map: "+utxoHash.String())

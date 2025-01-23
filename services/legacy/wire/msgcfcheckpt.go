@@ -46,6 +46,7 @@ func (msg *MsgCFCheckpt) AddCFHeader(header *chainhash.Hash) error {
 	}
 
 	msg.FilterHeaders = append(msg.FilterHeaders, header)
+
 	return nil
 }
 
@@ -78,12 +79,15 @@ func (msg *MsgCFCheckpt) Bsvdecode(r io.Reader, pver uint32, _ MessageEncoding) 
 	// Create a contiguous slice of hashes to deserialize into in order to
 	// reduce the number of allocations.
 	msg.FilterHeaders = make([]*chainhash.Hash, count)
+
 	for i := uint64(0); i < count; i++ {
 		var cfh chainhash.Hash
+
 		err := readElement(r, &cfh)
 		if err != nil {
 			return err
 		}
+
 		msg.FilterHeaders[i] = &cfh
 	}
 
@@ -107,6 +111,7 @@ func (msg *MsgCFCheckpt) BsvEncode(w io.Writer, pver uint32, _ MessageEncoding) 
 
 	// Write length of FilterHeaders slice
 	count := len(msg.FilterHeaders)
+
 	err = WriteVarInt(w, pver, uint64(count))
 	if err != nil {
 		return err

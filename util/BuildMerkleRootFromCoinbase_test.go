@@ -25,9 +25,11 @@ func TestBuildMerkleRootFromCoinbase(t *testing.T) {
 		}
 
 		merkleBranches := make([][]byte, len(merkleBranchesStr))
+
 		for i, s := range merkleBranchesStr {
 			hash, err := chainhash.NewHashFromStr(s)
 			require.NoError(t, err)
+
 			merkleBranches[i] = hash.CloneBytes()
 		}
 

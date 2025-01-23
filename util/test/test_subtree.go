@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -25,14 +24,16 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 	}()
 
 	var subtreeBytes []byte
+
 	subtree, err := util.NewTreeByLeafCount(config.SubtreeSize)
 	if err != nil {
 		return nil, err
 	}
+
 	_ = subtree.AddCoinbaseNode()
 
 	var subtreeFile *os.File
-	//var subtreeFileMerkleHashes *os.File
+	// var subtreeFileMerkleHashes *os.File
 	subtreeCount := 0
 
 	// create the first files
@@ -48,9 +49,13 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 	subtreeHashes := make([]*chainhash.Hash, 0)
 
 	txId := make([]byte, 32)
+
 	var hash chainhash.Hash
+
 	fees := uint64(0)
+
 	var n int
+
 	for i := 1; i < int(TxCount); i++ {
 		binary.LittleEndian.PutUint64(txId, uint64(i))
 		hash = chainhash.Hash(txId)
@@ -63,6 +68,7 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 		if err != nil {
 			return nil, err
 		}
+
 		if n != 48 {
 			return nil, errors.NewProcessingError("expected to write 48 bytes, wrote %d", n)
 		}

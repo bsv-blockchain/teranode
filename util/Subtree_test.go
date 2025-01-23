@@ -35,6 +35,7 @@ func TestRootHash(t *testing.T) {
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
+
 		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
 		hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
@@ -57,6 +58,7 @@ func Test_RootHashWithReplaceRootNode(t *testing.T) {
 		if st.Size() != 4 {
 			t.Errorf("expected size to be 4, got %d", st.Size())
 		}
+
 		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
 		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
 		hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
@@ -189,6 +191,7 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+
 		for i := 0; i < len(st.Nodes); i++ {
 			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
 			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
@@ -233,6 +236,7 @@ func Test_Serialize(t *testing.T) {
 
 		newSubtree, err := NewSubtreeFromBytes(serializedBytes)
 		require.NoError(t, err)
+
 		for i := 0; i < newSubtree.Size(); i += chainhash.HashSize {
 			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), newSubtree.Nodes[i/chainhash.HashSize].Hash.String())
 		}
@@ -245,6 +249,7 @@ func Test_Serialize(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, chainhash.HashSize*4, len(subtreeBytes))
+
 		for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
 			txHash := chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
 			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), txHash.String())
@@ -266,6 +271,7 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+
 		for i := 0; i < len(st.Nodes); i++ {
 			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
 			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
@@ -306,12 +312,14 @@ func Test_Serialize(t *testing.T) {
 		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+
 		for i := 0; i < len(st.Nodes); i++ {
 			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
 			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
 		}
 
 		assert.Equal(t, len(st.ConflictingNodes), len(newSubtree.ConflictingNodes))
+
 		for i := 0; i < len(st.ConflictingNodes); i++ {
 			assert.Equal(t, st.ConflictingNodes[i].String(), newSubtree.ConflictingNodes[i].String())
 		}
@@ -344,6 +352,7 @@ func Test_Duplicate(t *testing.T) {
 		assert.Equal(t, st.RootHash(), newSubtree.RootHash())
 
 		assert.Equal(t, len(st.Nodes), len(newSubtree.Nodes))
+
 		for i := 0; i < len(st.Nodes); i++ {
 			assert.Equal(t, st.Nodes[i].Hash.String(), newSubtree.Nodes[i].Hash.String())
 			assert.Equal(t, st.Nodes[i].Fee, newSubtree.Nodes[i].Fee)
@@ -523,6 +532,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		}
 
 		actualMerkleStore := make([]string, len(*merkleStore))
+
 		for idx, merkle := range *merkleStore {
 			if merkle.Equal(chainhash.Hash{}) {
 				actualMerkleStore[idx] = ""
@@ -563,6 +573,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 		}
 
 		actualMerkleStore := make([]string, len(*merkleStore))
+
 		for idx, merkle := range *merkleStore {
 			if merkle.Equal(chainhash.Hash{}) {
 				actualMerkleStore[idx] = ""
@@ -606,6 +617,7 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 
 	// create a slice of random hashes
 	hashes := make([]*chainhash.Hash, b.N)
+
 	for i := 0; i < b.N; i++ {
 		// create random 32 bytes
 		bytes := make([]byte, 32)
@@ -627,6 +639,7 @@ func BenchmarkSubtree_Serialize(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// int to bytes
 		var bb [32]byte
+
 		binary.LittleEndian.PutUint32(bb[:], uint32(i))
 		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
 	}
@@ -645,6 +658,7 @@ func BenchmarkSubtree_SerializeNodes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// int to bytes
 		var bb [32]byte
+
 		binary.LittleEndian.PutUint32(bb[:], uint32(i))
 		_ = st.AddNode(*(*chainhash.Hash)(&bb), 111, 234)
 	}

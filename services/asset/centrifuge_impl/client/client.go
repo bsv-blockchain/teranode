@@ -84,10 +84,12 @@ func (c *Client) Start(_ context.Context, addr string) error {
 	subscriptions := []string{"blocks", "subtrees"}
 	for _, channel := range subscriptions {
 		c.logger.Infof("[CentrifugeClient] subscribing to %s", channel)
+
 		sub, err := c.client.NewSubscription(channel, centrifuge.SubscriptionConfig{})
 		if err != nil {
 			return err
 		}
+
 		if err = sub.Subscribe(); err != nil {
 			return err
 		}

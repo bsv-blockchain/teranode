@@ -22,6 +22,7 @@ func tstCheckScriptError(gotErr, wantErr error) error {
 		return fmt.Errorf("wrong error - got %T (%[1]v), want %T",
 			gotErr, wantErr)
 	}
+
 	if gotErr == nil {
 		return nil
 	}
@@ -909,6 +910,7 @@ func TestStack(t *testing.T) {
 		for i := range test.before {
 			s.PushByteArray(test.before[i])
 		}
+
 		err := test.operation(&s)
 
 		// Ensure the error code is of the expected type and the error
@@ -917,6 +919,7 @@ func TestStack(t *testing.T) {
 			t.Errorf("%s: %v", test.name, e)
 			continue
 		}
+
 		if err != nil {
 			continue
 		}
@@ -926,6 +929,7 @@ func TestStack(t *testing.T) {
 			t.Errorf("%s: stack depth doesn't match expected: %v "+
 				"vs %v", test.name, len(test.after),
 				s.Depth())
+
 			continue
 		}
 
@@ -943,6 +947,7 @@ func TestStack(t *testing.T) {
 				t.Errorf("%s: %dth stack entry doesn't match "+
 					"expected: %v vs %v", test.name, i, val,
 					test.after[i])
+
 				break
 			}
 		}

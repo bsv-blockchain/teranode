@@ -44,6 +44,7 @@ func solveBlock(header *wire.BlockHeader, targetDifficulty *big.Int) bool {
 				return
 			default:
 				hdr.Nonce = i
+
 				hash := hdr.BlockHash()
 				if HashToBig(&hash).Cmp(targetDifficulty) <= 0 {
 					select {
@@ -69,6 +70,7 @@ func solveBlock(header *wire.BlockHeader, targetDifficulty *big.Int) bool {
 
 	for i := uint32(0); i < numCores; i++ {
 		rangeStart := startNonce + (noncesPerCore * i)
+
 		rangeStop := startNonce + (noncesPerCore * (i + 1)) - 1
 		if i == numCores-1 {
 			rangeStop = stopNonce
@@ -130,6 +132,7 @@ func createCoinbaseTx(coinbaseScript []byte, nextBlockHeight int32,
 			tx.AddTxOut(&mineTo[i])
 		}
 	}
+
 	return bsvutil.NewTx(tx), nil
 }
 
@@ -215,6 +218,7 @@ func CreateBlock(prevBlock *bsvutil.Block, inclusionTxs []*bsvutil.Tx,
 
 	utilBlock := bsvutil.NewBlock(&block)
 	utilBlock.SetHeight(blockHeight)
+
 	return utilBlock, nil
 }
 

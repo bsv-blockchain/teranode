@@ -72,6 +72,7 @@ func (h *HTTP) getLimitOffset(c echo.Context) (int, int, error) {
 	// get subtree information
 	offset := 0
 	offsetStr := c.QueryParam("offset")
+
 	if offsetStr != "" {
 		offset, err = strconv.Atoi(offsetStr)
 		if err != nil {
@@ -81,12 +82,14 @@ func (h *HTTP) getLimitOffset(c echo.Context) (int, int, error) {
 
 	limit := 20
 	limitStr := c.QueryParam("limit")
+
 	if limitStr != "" {
 		limit, err = strconv.Atoi(limitStr)
 		if err != nil {
 			return 0, 0, echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid limit format", err).Error())
 		}
 	}
+
 	if limit > 100 {
 		limit = 100
 	}

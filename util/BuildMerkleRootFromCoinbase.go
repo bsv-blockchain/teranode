@@ -8,7 +8,7 @@ func BuildMerkleRootFromCoinbase(coinbaseHash []byte, merkleBranches [][]byte) [
 	for _, branch := range merkleBranches {
 		concat := append(acc, branch...)
 		hash := Sha256d(concat)
-		acc = hash[:]
+		acc = hash
 	}
 
 	return acc

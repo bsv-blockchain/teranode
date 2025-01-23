@@ -10,9 +10,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestNotFound tests the MsgNotFound API.
@@ -22,6 +21,7 @@ func TestNotFound(t *testing.T) {
 	// Ensure the command is expected value.
 	wantCmd := "notfound"
 	msg := NewMsgNotFound()
+
 	if cmd := msg.Command(); cmd != wantCmd {
 		t.Errorf("NewMsgNotFound: wrong command - got %v want %v",
 			cmd, wantCmd)
@@ -31,6 +31,7 @@ func TestNotFound(t *testing.T) {
 	// Num inventory vectors (varInt) + max allowed inventory vectors.
 	wantPayload := uint64(1800009)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -40,10 +41,12 @@ func TestNotFound(t *testing.T) {
 	// Ensure inventory vectors are added properly.
 	hash := chainhash.Hash{}
 	iv := NewInvVect(InvTypeBlock, &hash)
+
 	err := msg.AddInvVect(iv)
 	if err != nil {
 		t.Errorf("AddInvVect: %v", err)
 	}
+
 	if msg.InvList[0] != iv {
 		t.Errorf("AddInvVect: wrong invvect added - got %v, want %v",
 			spew.Sprint(msg.InvList[0]), spew.Sprint(iv))
@@ -54,6 +57,7 @@ func TestNotFound(t *testing.T) {
 	for i := 0; i < MaxInvPerMsg; i++ {
 		err = msg.AddInvVect(iv)
 	}
+
 	if err == nil {
 		t.Errorf("AddInvVect: expected error on too many inventory " +
 			"vectors not received")
@@ -65,6 +69,7 @@ func TestNotFound(t *testing.T) {
 func TestNotFoundWire(t *testing.T) {
 	// Block 203707 hash.
 	hashStr := "3264bc2ac36a60840790ba1d475d01367e7c723da941069e9dc"
+
 	blockHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -72,6 +77,7 @@ func TestNotFoundWire(t *testing.T) {
 
 	// Transaction 1 of Block 203707 hash.
 	hashStr = "d28a3dc7392bf00a9855ee93dd9a81eff82a2c4fe57fbd42cfe71b487accfaf0"
+
 	txHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -90,6 +96,7 @@ func TestNotFoundWire(t *testing.T) {
 	MultiInv := NewMsgNotFound()
 	MultiInv.AddInvVect(iv)
 	MultiInv.AddInvVect(iv2)
+
 	MultiInvEncoded := []byte{
 		0x02,                   // Varint for number of inv vectors
 		0x02, 0x00, 0x00, 0x00, // InvTypeBlock
@@ -203,14 +210,17 @@ func TestNotFoundWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
+
 		err := test.in.BsvEncode(&buf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -219,12 +229,15 @@ func TestNotFoundWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgNotFound
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -241,6 +254,7 @@ func TestNotFoundWireErrors(t *testing.T) {
 
 	// Block 203707 hash.
 	hashStr := "3264bc2ac36a60840790ba1d475d01367e7c723da941069e9dc"
+
 	blockHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -251,6 +265,7 @@ func TestNotFoundWireErrors(t *testing.T) {
 	// Base message used to induce errors.
 	baseNotFound := NewMsgNotFound()
 	baseNotFound.AddInvVect(iv)
+
 	baseNotFoundEncoded := []byte{
 		0x02,                   // Varint for number of inv vectors
 		0x02, 0x00, 0x00, 0x00, // InvTypeBlock
@@ -266,6 +281,7 @@ func TestNotFoundWireErrors(t *testing.T) {
 	for i := 0; i < MaxInvPerMsg; i++ {
 		maxNotFound.AddInvVect(iv)
 	}
+
 	maxNotFound.InvList = append(maxNotFound.InvList, iv)
 	maxNotFoundEncoded := []byte{
 		0xfd, 0x51, 0xc3, // Varint for number of inv vectors (50001)
@@ -289,9 +305,11 @@ func TestNotFoundWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -311,7 +329,9 @@ func TestNotFoundWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgNotFound
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",

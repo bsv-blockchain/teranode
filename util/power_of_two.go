@@ -23,6 +23,7 @@ func IsPowerOfTwo(num int) bool {
 	if num <= 0 {
 		return false
 	}
+
 	return (num & (num - 1)) == 0
 }
 
@@ -37,6 +38,7 @@ func NextPowerOfTwo(n int) int {
 
 	// Figure out and return the next power of two.
 	exponent := uint(math.Log2(float64(n))) + 1
+
 	return 1 << exponent // 2^exponent
 }
 

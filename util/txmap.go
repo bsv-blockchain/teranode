@@ -33,6 +33,7 @@ func (s *SwissMap) Exists(hash [32]byte) bool {
 	defer s.mu.RUnlock()
 
 	_, ok := s.m.Get(hash)
+
 	return ok
 }
 
@@ -52,6 +53,7 @@ func (s *SwissMap) Put(hash [32]byte) error {
 	s.length++
 
 	s.m.Put(hash, struct{}{})
+
 	return nil
 }
 
@@ -61,8 +63,10 @@ func (s *SwissMap) PutMulti(hashes [][32]byte) error {
 
 	for _, hash := range hashes {
 		s.m.Put(hash, struct{}{})
+
 		s.length++
 	}
+
 	return nil
 }
 
@@ -73,6 +77,7 @@ func (s *SwissMap) Delete(hash [32]byte) error {
 	s.length--
 
 	s.m.Delete(hash)
+
 	return nil
 }
 
@@ -104,6 +109,7 @@ func (s *SwissMapUint64) Exists(hash [32]byte) bool {
 	defer s.mu.Unlock()
 
 	_, ok := s.m.Get(hash)
+
 	return ok
 }
 
@@ -117,6 +123,7 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 	}
 
 	s.m.Put(hash, n)
+
 	s.length++
 
 	return nil
@@ -176,7 +183,6 @@ func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
 
 func (s *SwissMapKVUint64) Get(hash uint64) (uint64, bool) {
 	// s.length.Add(1)
-
 	n, ok := s.m.Get(hash)
 	if !ok {
 		return 0, false

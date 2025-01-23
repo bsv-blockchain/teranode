@@ -37,10 +37,12 @@ func postMessageToSlack(channel, text string, slackToken string) error {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
+
 	defer resp.Body.Close()
 
 	if _, err := io.ReadAll(resp.Body); err != nil {

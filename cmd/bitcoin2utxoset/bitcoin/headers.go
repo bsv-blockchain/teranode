@@ -85,6 +85,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 			if !errors.Is(err, errors.ErrBlockInvalid) {
 				log.Printf("Failed to parse block index: %v", err)
 			}
+
 			continue
 		}
 

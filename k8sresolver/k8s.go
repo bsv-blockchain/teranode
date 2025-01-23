@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/jellydator/ttlcache/v3"
 	v1 "k8s.io/api/core/v1"

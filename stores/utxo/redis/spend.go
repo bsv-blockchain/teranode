@@ -35,6 +35,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 		select {
 		case <-ctx.Done():
 			errorFound = true
+
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				spend.Err = errors.NewStorageError("timeout spending %d of %d utxos", i, len(spends))
 			} else {

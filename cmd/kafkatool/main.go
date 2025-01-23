@@ -72,6 +72,7 @@ func resetTopic(configName string) error {
 			"retention.ms": &retentionPeriod, // Set the retention period
 		},
 	}
+
 	err = admin.CreateTopic(topic, topicDetail, false)
 	if err != nil {
 		return errors.NewServiceError("failed to create topic %s", topic, err)

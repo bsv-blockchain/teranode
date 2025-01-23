@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -52,7 +51,7 @@ func BuildMerkleTreeStoreFromBytes(nodes []SubtreeNode) (*[]chainhash.Hash, erro
 	arraySize := nextPoT*2 - 1
 	// we do not include the original nodes in the merkle tree
 	merkles := make([]chainhash.Hash, nextPoT-1)
-	//merkles := []byte{MaxSubtreeSize: 0}
+	// merkles := []byte{MaxSubtreeSize: 0}
 
 	if arraySize == 1 {
 		// Handle this Bitcoin exception that the merkle root is the same as the transaction hash if there
@@ -73,11 +72,13 @@ func BuildMerkleTreeStoreFromBytes(nodes []SubtreeNode) (*[]chainhash.Hash, erro
 			// if we are calculating a large merkle tree, we can do this in parallel
 			for i := merkleFrom; i < merkleTo; i += routineSplitSize {
 				wg.Add(1)
+
 				go func(i int) {
 					defer wg.Done()
 					calcMerkles(nodes, i, Min(i+routineSplitSize, merkleTo), nextPoT, length, merkles)
 				}(i)
 			}
+
 			wg.Wait()
 		} else {
 			calcMerkles(nodes, merkleFrom, merkleTo, nextPoT, length, merkles)
@@ -91,8 +92,11 @@ func BuildMerkleTreeStoreFromBytes(nodes []SubtreeNode) (*[]chainhash.Hash, erro
 
 func calcMerkles(nodes []SubtreeNode, merkleFrom, merkleTo, nextPoT, length int, merkles []chainhash.Hash) {
 	var offset int
+
 	var currentMerkle chainhash.Hash
+
 	var currentMerkle1 chainhash.Hash
+
 	for i := merkleFrom; i < merkleTo; i += 2 {
 		offset = i / 2
 
@@ -130,6 +134,7 @@ func calcMerkle(currentMerkle chainhash.Hash, currentMerkle1 chainhash.Hash) [32
 		copy(shaBytes[0:32], currentMerkle[:])
 		copy(shaBytes[32:64], currentMerkle[:])
 		hash := sha256.Sum256(shaBytes[:])
+
 		return sha256.Sum256(hash[:])
 
 	// The normal case sets the parent node to the double sha256
@@ -139,6 +144,7 @@ func calcMerkle(currentMerkle chainhash.Hash, currentMerkle1 chainhash.Hash) [32
 		copy(shaBytes[0:32], currentMerkle[:])
 		copy(shaBytes[32:64], currentMerkle1[:])
 		hash := sha256.Sum256(shaBytes[:])
+
 		return sha256.Sum256(hash[:])
 	}
 }

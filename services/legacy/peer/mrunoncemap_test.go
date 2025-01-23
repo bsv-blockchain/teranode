@@ -16,6 +16,7 @@ func TestMruNonceMap(t *testing.T) {
 	// Create a bunch of fake nonces to use in testing the mru nonce code.
 	numNonces := 10
 	nonces := make([]uint64, 0, numNonces)
+
 	for i := 0; i < numNonces; i++ {
 		nonces = append(nonces, uint64(i))
 	}
@@ -124,6 +125,7 @@ func TestMruNonceMapStringer(t *testing.T) {
 	wantStr1 := fmt.Sprintf("<%d>[%d, %d]", 2, nonce1, nonce2)
 	wantStr2 := fmt.Sprintf("<%d>[%d, %d]", 2, nonce2, nonce1)
 	gotStr := mruNonceMap.String()
+
 	if gotStr != wantStr1 && gotStr != wantStr2 {
 		t.Fatalf("unexpected string representation - got %q, want %q "+
 			"or %q", gotStr, wantStr1, wantStr2)
@@ -136,15 +138,19 @@ func BenchmarkMruNonceList(b *testing.B) {
 	// Create a bunch of fake nonces to use in benchmarking the mru nonce
 	// code.
 	b.StopTimer()
+
 	numNonces := 100000
 	nonces := make([]uint64, 0, numNonces)
+
 	for i := 0; i < numNonces; i++ {
 		nonces = append(nonces, uint64(i))
 	}
+
 	b.StartTimer()
 
 	// Benchmark the add plus evicition code.
 	limit := 20000
+
 	mruNonceMap := newMruNonceMap(uint(limit))
 	for i := 0; i < b.N; i++ {
 		mruNonceMap.Add(nonces[i%numNonces])

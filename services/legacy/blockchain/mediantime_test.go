@@ -81,6 +81,7 @@ func TestMedianTime(t *testing.T) {
 		gotOffset := filter.Offset()
 		wantOffset := time.Duration(test.wantOffset) * time.Second
 		wantOffset2 := time.Duration(test.wantOffset-1) * time.Second
+
 		if gotOffset != wantOffset && gotOffset != wantOffset2 {
 			t.Errorf("Offset #%d: unexpected offset -- got %v, "+
 				"want %v or %v", i, gotOffset, wantOffset,
@@ -96,6 +97,7 @@ func TestMedianTime(t *testing.T) {
 		now := time.Unix(time.Now().Unix(), 0)
 		wantTime := now.Add(filter.Offset())
 		wantTime2 := now.Add(filter.Offset() - time.Second)
+
 		if !adjustedTime.Equal(wantTime) && !adjustedTime.Equal(wantTime2) {
 			t.Errorf("AdjustedTime #%d: unexpected result -- got %v, "+
 				"want %v or %v", i, adjustedTime, wantTime,

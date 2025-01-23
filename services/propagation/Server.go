@@ -602,6 +602,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 
 			prometheusInvalidTransactions.Inc()
+
 			return err
 		}
 	}
@@ -668,6 +669,7 @@ func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *p
 	if err = ps.storeTransaction(ctx, btTx); err != nil {
 		return nil, errors.WrapGRPC(errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err))
 	}
+
 	return &propagation_api.EmptyMessage{}, nil
 }
 
@@ -728,6 +730,7 @@ func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, errors.NewError("error generating x509 key pair", err)
 	}
+
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		NextProtos:   []string{"txblaster2"},
@@ -753,5 +756,6 @@ func RemoveInvalidUTF8(s string) string {
 
 		buf = append(buf, r)
 	}
+
 	return string(buf)
 }

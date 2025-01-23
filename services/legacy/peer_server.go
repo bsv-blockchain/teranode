@@ -338,6 +338,7 @@ func (sp *serverPeer) newestBlock() (*chainhash.Hash, int32, error) {
 func (sp *serverPeer) addKnownAddresses(addresses []*wire.NetAddress) {
 	sp.addrMtx.Lock()
 	defer sp.addrMtx.Unlock()
+
 	for _, na := range addresses {
 		sp.knownAddresses[addrmgr.NetAddressKey(na)] = struct{}{}
 	}
@@ -348,6 +349,7 @@ func (sp *serverPeer) addressKnown(na *wire.NetAddress) bool {
 	sp.addrMtx.RLock()
 	defer sp.addrMtx.RUnlock()
 	_, exists := sp.knownAddresses[addrmgr.NetAddressKey(na)]
+
 	return exists
 }
 
@@ -375,17 +377,21 @@ func (sp *serverPeer) relayTxDisabled() bool {
 func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 	// Filter addresses already known to the peer.
 	addrs := make([]*wire.NetAddress, 0, len(addresses))
+
 	for _, addr := range addresses {
 		if !sp.addressKnown(addr) {
 			addrs = append(addrs, addr)
 		}
 	}
+
 	known, err := sp.PushAddrMsg(addrs)
 	if err != nil {
 		sp.server.logger.Errorf("Can't push address message to %s: %v", sp.Peer, err)
 		sp.Disconnect()
+
 		return
 	}
+
 	sp.addKnownAddresses(known)
 }
 
@@ -405,6 +411,7 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	}
 
 	warnThreshold := cfg.BanThreshold >> 1
+
 	if transient == 0 && persistent == 0 {
 		// The score is not being increased, but a warning message is still
 		// logged if the score is above the warn threshold.
@@ -413,12 +420,15 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 			sp.server.logger.Warnf("Misbehaving peer %s: %s -- ban score is %d, "+
 				"it was not increased this time", sp, reason, score)
 		}
+
 		return
 	}
+
 	score := sp.banScore.Increase(persistent, transient)
 	if score > warnThreshold {
 		sp.server.logger.Warnf("Misbehaving peer %s: %s -- ban score increased to %d",
 			sp, reason, score)
+
 		if score > cfg.BanThreshold {
 			sp.server.logger.Warnf("Misbehaving peer %s -- banning and disconnecting",
 				sp)
@@ -456,6 +466,7 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	isInbound := sp.Inbound()
 	remoteAddr := sp.NA()
 	addrManager := sp.server.addrManager
+
 	if !cfg.SimNet && !isInbound {
 		addrManager.SetServices(remoteAddr, msg.Services)
 	}
@@ -469,7 +480,9 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Ignore peers that aren't running Bitcoin
 	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "Cash") || strings.Contains(msg.UserAgent, "Unlimited") {
 		sp.server.logger.Debugf("Rejecting peer %s for not running compatible Bitcoin", sp.Peer)
+
 		reason := "Sorry, you are not running Bitcoin"
+
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
 
@@ -480,8 +493,10 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		sp.server.logger.Debugf("Rejecting peer %s with services %v due to not "+
 			"providing desired services %v", sp.Peer, msg.Services,
 			missingServices)
+
 		reason := fmt.Sprintf("required services %#x not offered",
 			uint64(missingServices))
+
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
 
@@ -647,18 +662,23 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 		if len(msg.InvList) > 0 {
 			sp.server.syncManager.QueueInv(msg, sp.Peer)
 		}
+
 		return
 	}
 
 	newInv := wire.NewMsgInvSizeHint(uint(len(msg.InvList)))
+
 	for _, invVect := range msg.InvList {
 		if invVect.Type == wire.InvTypeTx {
 			sp.server.logger.Infof("[OnInv] Ignoring tx %v in inv from %v -- blocksonly enabled", invVect.Hash, sp)
+
 			if sp.ProtocolVersion() >= wire.BIP0037Version {
 				sp.server.logger.Infof("[OnInv] Peer %v is announcing transactions -- disconnecting", sp)
 				sp.Disconnect()
+
 				return
 			}
+
 			continue
 		}
 
@@ -713,6 +733,7 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 	// The waiting occurs after the database fetch for the next one to
 	// provide a little pipelining.
 	var waitChan chan struct{}
+
 	doneChan := make(chan struct{}, 1)
 
 	for i, iv := range msg.InvList {
@@ -724,7 +745,9 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 			// Buffered so as to not make the send goroutine block.
 			c = make(chan struct{}, 1)
 		}
+
 		var err error
+
 		switch iv.Type {
 		case wire.InvTypeTx:
 			err = sp.server.pushTxMsg(sp, &iv.Hash, c, waitChan, wire.BaseEncoding)
@@ -737,6 +760,7 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 				iv.Type)
 			continue
 		}
+
 		if err != nil {
 			notFound.AddInvVect(iv)
 
@@ -749,9 +773,11 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 				<-c
 			}
 		}
+
 		numAdded++
 		waitChan = c
 	}
+
 	if len(notFound.InvList) != 0 {
 		sp.QueueMessage(notFound, doneChan)
 	}
@@ -795,6 +821,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 
 	// Generate inventory message.
 	invMsg := wire.NewMsgInv()
+
 	for i := range hashList {
 		iv := wire.NewInvVect(wire.InvTypeBlock, hashList[i])
 		_ = invMsg.AddInvVect(iv)
@@ -811,6 +838,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 			continueHash := invMsg.InvList[invListLen-1].Hash
 			sp.continueHash = &continueHash
 		}
+
 		sp.QueueMessage(invMsg, nil)
 	} else { // if sp.server.chain.PruneMode() {
 		// Typically nodes will just not respond to a GetBlocks message
@@ -823,6 +851,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 		for _, inv := range invMsg.InvList {
 			_ = notFound.AddInvVect(inv)
 		}
+
 		sp.QueueMessage(notFound, nil)
 	}
 }
@@ -859,6 +888,7 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	for i, blockHeader := range blockHeaders {
 		wireBlockHeaders[i] = blockHeader.ToWireBlockHeader()
 	}
+
 	sp.QueueMessage(&wire.MsgHeaders{Headers: wireBlockHeaders}, nil)
 }
 
@@ -896,11 +926,11 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 		// disconnected regardless.
 		if sp.ProtocolVersion() >= wire.BIP0111Version &&
 			!cfg.DisableBanning {
-
 			// Disconnect the peer regardless of whether it was
 			// banned.
 			sp.addBanScore(100, 0, cmd)
 			sp.Disconnect()
+
 			return false
 		}
 
@@ -909,6 +939,7 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 		sp.server.logger.Debugf("%s sent an unsupported %s request -- "+
 			"disconnecting", sp, cmd)
 		sp.Disconnect()
+
 		return false
 	}
 
@@ -929,6 +960,7 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
 		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
 			"disconnecting", sp, bsvutil.Amount(msg.MinFee))
 		sp.Disconnect()
+
 		return
 	}
 
@@ -992,6 +1024,7 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 		sp.server.logger.Debugf("Ignoring repeated getaddr request from peer %v", sp)
 		return
 	}
+
 	sp.sentAddrs = true
 
 	// Get the current known addresses from the address manager.
@@ -1007,6 +1040,7 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 		if len(addrCache) > 0 {
 			addrCache = addrCache[1:]
 		}
+
 		addrCache = append(addrCache, bestAddress)
 	}
 
@@ -1038,6 +1072,7 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 	if len(msg.AddrList) == 0 {
 		sp.server.logger.Errorf("Command [%s] from %s does not contain any addresses", msg.Command(), sp.Peer)
 		sp.Disconnect()
+
 		return
 	}
 
@@ -1114,9 +1149,12 @@ func randomUint16Number(max uint16) uint16 {
 	// from a random source that has a range limited to a multiple of the
 	// modulus.
 	var randomNumber uint16
+
 	var limitRange = (math.MaxUint16 / max) * max
+
 	for {
 		binary.Read(rand.Reader, binary.LittleEndian, &randomNumber)
+
 		if randomNumber < limitRange {
 			return randomNumber % max
 		}
@@ -1174,7 +1212,6 @@ func (s *server) TransactionConfirmed(tx *bsvutil.Tx) {
 // connected peer.  An error is returned if the transaction hash is not known.
 func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
-
 	// Attempt to fetch the requested transaction from the pool.  A
 	// call could be made to check for existence first, but simply trying
 	// to fetch a missing transaction results in the same behavior.
@@ -1185,6 +1222,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		if doneChan != nil {
 			doneChan <- struct{}{}
 		}
+
 		return err
 	}
 
@@ -1195,6 +1233,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		if doneChan != nil {
 			doneChan <- struct{}{}
 		}
+
 		return err
 	}
 
@@ -1212,7 +1251,6 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
-
 	// use a concurrent store to make sure we do not request the legacy block multiple times
 	// for different peers. This makes sure we serve the block from a local cache store and not from the utxo store.
 	reader, err := s.concurrentStore.Get(s.ctx, *hash, func() (io.ReadCloser, error) {
@@ -1252,11 +1290,14 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	// We only send the channel for this message if we aren't sending
 	// an inv straight after.
 	var dc chan<- struct{}
+
 	continueHash := sp.continueHash
+
 	sendInv := continueHash != nil && continueHash.IsEqual(hash)
 	if !sendInv {
 		dc = doneChan
 	}
+
 	sp.QueueMessageWithEncoding(&msgBlock, dc, encoding)
 
 	// When the peer requests the final block that was advertised in
@@ -1286,12 +1327,12 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 // error is returned if the block hash is not known.
 func (s *server) pushMerkleBlockMsg(sp *serverPeer, _ *chainhash.Hash,
 	doneChan chan<- struct{}, waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
-
 	// Do not send a response if the peer doesn't have a filter loaded.
 	if !sp.filter.IsLoaded() {
 		if doneChan != nil {
 			doneChan <- struct{}{}
 		}
+
 		return nil
 	}
 
@@ -1323,16 +1364,19 @@ func (s *server) pushMerkleBlockMsg(sp *serverPeer, _ *chainhash.Hash,
 	if len(matchedTxIndices) == 0 {
 		dc = doneChan
 	}
+
 	sp.QueueMessage(merkle, dc)
 
 	// Finally, send any matched transactions.
 	blkTransactions := blk.MsgBlock().Transactions
+
 	for i, txIndex := range matchedTxIndices {
 		// Only send the done channel on the final transaction.
 		var dc chan<- struct{}
 		if i == len(matchedTxIndices)-1 {
 			dc = doneChan
 		}
+
 		if txIndex < uint32(len(blkTransactions)) {
 			sp.QueueMessageWithEncoding(blkTransactions[txIndex], dc,
 				encoding)
@@ -1386,6 +1430,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	if s.banList.IsBanned(sp.Addr()) {
 		s.logger.Infof("Rejecting banned peer %s", sp.Addr())
 		sp.Disconnect()
+
 		return false
 	}
 
@@ -1393,6 +1438,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	if atomic.LoadInt32(&s.shutdown) != 0 {
 		s.logger.Infof("New peer %s ignored - server is shutting down", sp)
 		sp.Disconnect()
+
 		return false
 	}
 
@@ -1401,6 +1447,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	if err != nil {
 		sp.server.logger.Debugf("can't split hostport %v", err)
 		sp.Disconnect()
+
 		return false
 	}
 
@@ -1409,6 +1456,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 			sp.server.logger.Debugf("Peer %s is banned for another %v - disconnecting",
 				host, time.Until(banEnd))
 			sp.Disconnect()
+
 			return false
 		}
 
@@ -1514,6 +1562,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 		}
 
 		sp.server.logger.Debugf("Removed peer %s", sp)
+
 		return
 	}
 
@@ -1526,7 +1575,6 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 	if sp.VerAckReceived() && sp.VersionKnown() && sp.NA() != nil {
 		s.addrManager.Connected(sp.NA())
 	}
-
 	// If we get here it means that either we didn't know about the peer
 	// or we purposefully deleted it.
 }
@@ -1564,13 +1612,16 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 				sp.server.logger.Warnf("Underlying data for headers is not a block header")
 				return
 			}
+
 			msgHeaders := wire.NewMsgHeaders()
 			if err := msgHeaders.AddBlockHeader(blockHeader); err != nil {
 				sp.server.logger.Errorf("Failed to add block"+
 					" header: %v", err)
 				return
 			}
+
 			sp.QueueMessage(msgHeaders, nil)
+
 			return
 		}
 
@@ -1580,29 +1631,31 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			if sp.relayTxDisabled() {
 				return
 			}
-
 			// txD, ok := msg.data.(*mempool.TxDesc)
-			// if !ok {
-			//	sp.server.logger.Warnf("Underlying data for tx inv "+
-			//		"relay is not a *mempool.TxDesc: %T",
-			//		msg.data)
-			//	return
-			// }
-
+			//
+			//	if !ok {
+			//		sp.server.logger.Warnf("Underlying data for tx inv "+
+			//			"relay is not a *mempool.TxDesc: %T",
+			//			msg.data)
+			//		return
+			//	}
+			//
 			// Don't relay the transaction if the transaction fee-per-kb
 			// is less than the peer's feefilter.
 			// feeFilter := atomic.LoadInt64(&sp.feeFilter)
-			// if feeFilter > 0 && txD.FeePerKB < feeFilter {
-			//	return
-			// }
-
-			// Don't relay the transaction if there is a bloom
-			// filter loaded and the transaction doesn't match it.
-			// if sp.filter.IsLoaded() {
-			//	if !sp.filter.MatchTxAndUpdate(txD.Tx) {
+			//
+			//	if feeFilter > 0 && txD.FeePerKB < feeFilter {
 			//		return
 			//	}
-			// }
+			//
+			// Don't relay the transaction if there is a bloom
+			// filter loaded and the transaction doesn't match it.
+			//
+			//	if sp.filter.IsLoaded() {
+			//		if !sp.filter.MatchTxAndUpdate(txD.Tx) {
+			//			return
+			//		}
+			//	}
 		}
 
 		// Queue the inventory to be relayed with the next batch.
@@ -1669,6 +1722,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	switch msg := querymsg.(type) {
 	case getConnCountMsg:
 		nconnected := int32(0)
+
 		state.forAllPeers(func(sp *serverPeer) {
 			if sp.Connected() {
 				nconnected++
@@ -1682,6 +1736,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			if !sp.Connected() {
 				return
 			}
+
 			peers = append(peers, sp)
 		})
 		msg.reply <- peers
@@ -1706,6 +1761,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 				} else {
 					msg.reply <- errors.New("peer exists as a permanent peer")
 				}
+
 				return
 			}
 		}
@@ -1780,6 +1836,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 				})
 			}
 			msg.reply <- nil
+
 			return
 		}
 
@@ -1805,9 +1862,11 @@ func disconnectPeer(peerList *util.SyncedMap[int32, *serverPeer], compareFunc fu
 			// to iterate so won't corrupt the loop.
 			peerList.Delete(addr)
 			peer.Disconnect()
+
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1861,12 +1920,14 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 // for disconnection.
 func (s *server) inboundPeerConnected(conn net.Conn) {
 	var err error
+
 	sp := newServerPeer(s, false)
 
 	addr := conn.RemoteAddr().String()
 	if s.banList.IsBanned(addr) {
 		s.logger.Infof("Rejecting banned inbound peer %s", addr)
 		conn.Close()
+
 		return
 	}
 
@@ -1877,6 +1938,7 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 
 	sp.Peer = peer.NewInboundPeer(s.logger, s.settings, newPeerConfig(sp))
 	sp.AssociateConnection(conn)
+
 	go s.peerDoneHandler(sp)
 }
 
@@ -1901,14 +1963,17 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.GetAddr(), err)
 		s.connManager.Disconnect(c.ID())
 	}
+
 	sp.Peer = p
 	sp.connReq = c
+
 	sp.isWhitelisted, err = isWhitelisted(conn.RemoteAddr())
 	if err != nil {
 		s.logger.Warnf("Cannot whitelist peer %v: %v", conn.RemoteAddr(), err)
 	}
 
 	sp.AssociateConnection(conn)
+
 	go s.peerDoneHandler(sp)
 	s.addrManager.Attempt(sp.NA())
 }
@@ -1922,15 +1987,16 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 	// Only tell sync manager we are gone if we ever told it we existed.
 	if sp.VersionKnown() {
 		s.syncManager.DonePeer(sp.Peer, nil)
-
 		// Evict any remaining orphans that were sent by the peer.
 		// numEvicted := s.txMemPool.RemoveOrphansByTag(mempool.Tag(sp.ID()))
-		// if numEvicted > 0 {
-		//	s.logger.Debugf("Evicted %d %s from peer %v (id %d)",
-		//		numEvicted, pickNoun(numEvicted, "orphan",
-		//			"orphans"), sp, sp.ID())
-		// }
+		//
+		//	if numEvicted > 0 {
+		//		s.logger.Debugf("Evicted %d %s from peer %v (id %d)",
+		//			numEvicted, pickNoun(numEvicted, "orphan",
+		//				"orphans"), sp, sp.ID())
+		//	}
 	}
+
 	close(sp.quit)
 }
 
@@ -1970,6 +2036,7 @@ func (s *server) peerHandler() {
 				s.addrManager.AddAddresses(addrs, addrs[0])
 			})
 	}
+
 	go s.connManager.Start()
 
 out:
@@ -2077,6 +2144,7 @@ func (s *server) ConnectedCount() int32 {
 func (s *server) OutboundGroupCount(key string) int {
 	replyChan := make(chan int)
 	s.query <- getOutboundGroup{key: key, reply: replyChan}
+
 	return <-replyChan
 }
 
@@ -2169,7 +2237,6 @@ cleanup:
 
 // Start begins accepting connections from peers.
 func (s *server) Start() {
-
 	// Already started?
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return
@@ -2202,6 +2269,7 @@ func (s *server) Stop() error {
 
 	// Signal the remaining goroutines to quit.
 	close(s.quit)
+
 	return nil
 }
 
@@ -2218,7 +2286,9 @@ func (s *server) ScheduleShutdown(duration time.Duration) {
 	if atomic.AddInt32(&s.shutdownSched, 1) != 1 {
 		return
 	}
+
 	s.logger.Warnf("Server shutdown in %v", duration)
+
 	go func() {
 		remaining := duration
 		tickDuration := dynamicTickDuration(remaining)
@@ -2256,6 +2326,7 @@ func (s *server) ScheduleShutdown(duration time.Duration) {
 // address as both IPv4 and IPv6.
 func parseListeners(addrs []string) ([]net.Addr, error) {
 	netAddrs := make([]net.Addr, 0, len(addrs)*2)
+
 	for _, addr := range addrs {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -2267,6 +2338,7 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 		if host == "" || (host == "*" && runtime.GOOS == "plan9") {
 			netAddrs = append(netAddrs, simpleAddr{net: "tcp4", addr: addr})
 			netAddrs = append(netAddrs, simpleAddr{net: "tcp6", addr: addr})
+
 			continue
 		}
 
@@ -2291,6 +2363,7 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 			netAddrs = append(netAddrs, simpleAddr{net: "tcp4", addr: addr})
 		}
 	}
+
 	return netAddrs, nil
 }
 func (s *server) getPeers() []*serverPeer {
@@ -2430,14 +2503,17 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	amgr := addrmgr.New(logger, peersDir, bsvdLookup)
 
 	var listeners []net.Listener
+
 	var nat NAT
 
 	if !cfg.DisableListen {
 		var err error
+
 		listeners, nat, err = initListeners(logger, amgr, listenAddrs, services)
 		if err != nil {
 			return nil, err
 		}
+
 		if len(listeners) == 0 {
 			return nil, errors.New("no valid listen address")
 		}
@@ -2561,6 +2637,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 				}
 
 				addrString := addrmgr.NetAddressKey(addr.NetAddress())
+
 				return addrStringToNetAddr(addrString)
 			}
 
@@ -2573,6 +2650,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if cfg.MaxPeers < int(targetOutbound) {
 		targetOutbound = uint32(cfg.MaxPeers)
 	}
+
 	cmgr, err := connmgr.New(logger, &connmgr.Config{
 		Listeners:      listeners,
 		OnAccept:       s.inboundPeerConnected,
@@ -2585,6 +2663,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if err != nil {
 		return nil, err
 	}
+
 	s.connManager = cmgr
 
 	// Start up persistent peers.
@@ -2593,6 +2672,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	if len(permanentPeers) == 0 {
 		permanentPeers = cfg.AddPeers
 	}
+
 	for _, addr := range permanentPeers {
 		netAddr, err := addrStringToNetAddr(addr)
 		if err != nil {
@@ -2629,24 +2709,29 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 	}
 
 	listeners := make([]net.Listener, 0, len(netAddrs))
+
 	for _, addr := range netAddrs {
 		listener, err := net.Listen(addr.Network(), addr.String())
 		if err != nil {
 			logger.Warnf("Can't listen on %s: %v", addr, err)
 			continue
 		}
+
 		listeners = append(listeners, listener)
 	}
 
 	var nat NAT
+
 	defaultPort, err := strconv.ParseUint(activeNetParams.DefaultPort, 10, 16)
 	if err != nil {
 		logger.Errorf("Can not parse default port %s for active chain: %v", activeNetParams.DefaultPort, err)
 		return nil, nil, err
 	}
+
 	if len(cfg.ExternalIPs) != 0 {
 		for _, sip := range cfg.ExternalIPs {
 			eport := uint16(defaultPort)
+
 			host, portstr, err := net.SplitHostPort(sip)
 			if err != nil {
 				// no port, use default.
@@ -2658,8 +2743,10 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 						"externalip: %v", sip, err)
 					continue
 				}
+
 				eport = uint16(port)
 			}
+
 			na, err := amgr.HostToNetAddress(host, eport, services)
 			if err != nil {
 				logger.Warnf("Not adding %s as externalip: %v", sip, err)
@@ -2681,6 +2768,7 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 	} else {
 		if cfg.Upnp {
 			var err error
+
 			nat, err = Discover()
 			if err != nil {
 				logger.Warnf("Can't discover upnp: %v", err)
@@ -2693,13 +2781,13 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 				addr, err := nat.GetExternalAddress()
 				if err == nil {
 					eport := uint16(defaultPort)
+
 					na, err := amgr.HostToNetAddress(addr.String(), eport, services)
 					if err == nil {
 						if addrMe == nil {
 							addrMe = na
 						}
 					}
-
 				}
 			}
 		}
@@ -2708,6 +2796,7 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 		for _, listener := range listeners {
 			addr := listener.Addr().String()
 			err := addLocalAddress(amgr, addr, services)
+
 			if err != nil {
 				logger.Warnf("Skipping bound address %s: %v", addr, err)
 			}
@@ -2745,6 +2834,7 @@ func addrStringToNetAddr(addr string) (net.Addr, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("no addresses found for %s", host)
 	}
@@ -2762,6 +2852,7 @@ func addLocalAddress(addrMgr *addrmgr.AddrManager, addr string, services wire.Se
 	if err != nil {
 		return err
 	}
+
 	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return err
@@ -2820,6 +2911,7 @@ func dynamicTickDuration(remaining time.Duration) time.Duration {
 	case remaining <= time.Hour:
 		return time.Minute * 15
 	}
+
 	return time.Hour
 }
 
@@ -2834,6 +2926,7 @@ func isWhitelisted(addr net.Addr) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("Unable to SplitHostPort on '%s': %v", addr, err)
 	}
+
 	ip := net.ParseIP(host)
 	if ip == nil {
 		return false, fmt.Errorf("Unable to parse IP '%s'", addr)
@@ -2887,6 +2980,7 @@ func mergeCheckpoints(defaultCheckpoints, additional []chaincfg.Checkpoint) []ch
 	// additional checkpoints.
 	numDefault := len(defaultCheckpoints)
 	checkpoints := make([]chaincfg.Checkpoint, 0, numDefault+len(extra))
+
 	for _, checkpoint := range defaultCheckpoints {
 		if _, exists := extra[checkpoint.Height]; !exists {
 			checkpoints = append(checkpoints, checkpoint)
@@ -2897,7 +2991,9 @@ func mergeCheckpoints(defaultCheckpoints, additional []chaincfg.Checkpoint) []ch
 	for _, checkpoint := range extra {
 		checkpoints = append(checkpoints, checkpoint)
 	}
+
 	sort.Sort(checkpointSorter(checkpoints))
+
 	return checkpoints
 }
 
@@ -2907,6 +3003,7 @@ func directionString(inbound bool) string {
 	if inbound {
 		return "inbound"
 	}
+
 	return "outbound"
 }
 
@@ -2916,6 +3013,7 @@ func pickNoun(n uint64, singular, plural string) string {
 	if n == 1 {
 		return singular
 	}
+
 	return plural
 }
 

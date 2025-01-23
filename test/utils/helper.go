@@ -299,6 +299,7 @@ func MineBlock(ctx context.Context, tSettings *settings.Settings, baClient ba.Cl
 func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger) (string, error) {
 	teranode1RPCEndpoint := node.RPCURL
 	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+
 	resp, err := CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	if err != nil {
 		return "", errors.NewProcessingError("error generating block", err)

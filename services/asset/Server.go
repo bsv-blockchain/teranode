@@ -119,7 +119,6 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - error: Any error encountered during initialization
 func (v *Server) Init(ctx context.Context) (err error) {
-
 	v.httpAddr = v.settings.Asset.HTTPListenAddress
 	if v.httpAddr == "" {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
@@ -175,6 +174,7 @@ func (v *Server) Start(ctx context.Context) error {
 			if err != nil {
 				v.logger.Errorf("[Asset] error in http server: %v", err)
 			}
+
 			return err
 		})
 	}
@@ -205,6 +205,7 @@ func (v *Server) Stop(ctx context.Context) error {
 
 	if v.httpServer != nil {
 		v.logger.Infof("[Asset] Stopping http server")
+
 		if err := v.httpServer.Stop(ctx); err != nil {
 			v.logger.Errorf("[Asset] error stopping http server: %v", err)
 		}

@@ -28,6 +28,7 @@ func (msg *MsgAuthch) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) e
 	if err != nil {
 		return err
 	}
+
 	msg.Length = uint32(len(msg.Challenge))
 
 	return nil

@@ -550,6 +550,7 @@ func TestGenenerateSeed(t *testing.T) {
 			t.Errorf("GenerateSeed #%d (%s): length mismatch -- "+
 				"got %d, want %d", i, test.name, len(seed),
 				test.length)
+
 			continue
 		}
 	}
@@ -599,6 +600,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 			t.Errorf("IsPrivate #%d (%s): mismatched key type -- "+
 				"want private %v, got private %v", i, test.name,
 				test.isPrivate, key.IsPrivate())
+
 			continue
 		}
 
@@ -607,6 +609,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 			t.Errorf("ParentFingerprint #%d (%s): mismatched "+
 				"parent fingerprint -- want %d, got %d", i,
 				test.name, test.parentFP, parentFP)
+
 			continue
 		}
 
@@ -615,6 +618,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 			t.Errorf("String #%d (%s): mismatched serialized key "+
 				"-- want %s, got %s", i, test.name, test.extKey,
 				serializedKey)
+
 			continue
 		}
 
@@ -631,6 +635,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 				t.Errorf("ECPrivKey #%d (%s): mismatched "+
 					"private key -- want %s, got %s", i,
 					test.name, test.privKey, privKeyStr)
+
 				continue
 			}
 		}
@@ -647,6 +652,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 			t.Errorf("ECPubKey #%d (%s): mismatched public key -- "+
 				"want %s, got %s", i, test.name, test.pubKey,
 				pubKeyStr)
+
 			continue
 		}
 
@@ -661,6 +667,7 @@ func TestExtendedKeyAPI(t *testing.T) {
 			t.Errorf("Address #%d (%s): mismatched address -- want "+
 				"%s, got %s", i, test.name, test.address,
 				addr.EncodeAddress())
+
 			continue
 		}
 	}
@@ -756,6 +763,7 @@ func TestNet(t *testing.T) {
 			t.Errorf("NewKeyFromString #%d (%s): unexpected error "+
 				"creating extended key: %v", i, test.name,
 				err)
+
 			continue
 		}
 
@@ -766,10 +774,12 @@ func TestNet(t *testing.T) {
 		}
 
 		extKey.SetNet(test.newNet)
+
 		if !extKey.IsForNet(test.newNet) {
 			t.Errorf("SetNet/IsForNet #%d (%s): key is not for "+
 				"expected network %v", i, test.name,
 				test.newNet.Name)
+
 			continue
 		}
 
@@ -779,6 +789,7 @@ func TestNet(t *testing.T) {
 				t.Errorf("Serialize #%d (%s): mismatched serialized "+
 					"private extended key -- got: %s, want: %s", i,
 					test.name, privStr, test.newPriv)
+
 				continue
 			}
 
@@ -795,6 +806,7 @@ func TestNet(t *testing.T) {
 			t.Errorf("Neuter #%d (%s): mismatched serialized "+
 				"public extended key -- got: %s, want: %s", i,
 				test.name, pubStr, test.newPub)
+
 			continue
 		}
 	}
@@ -805,6 +817,7 @@ func TestNet(t *testing.T) {
 func TestErrors(t *testing.T) {
 	// Should get an error when seed has too few bytes.
 	net := &chaincfg.MainNetParams
+
 	_, err := NewMaster(bytes.Repeat([]byte{0x00}, 15), net)
 	if err != ErrInvalidSeedLen {
 		t.Fatalf("NewMaster: mismatched error -- got: %v, want: %v",
@@ -879,6 +892,7 @@ func TestErrors(t *testing.T) {
 			t.Errorf("NewKeyFromString #%d (%s): mismatched error "+
 				"-- got: %v, want: %v", i, test.name, err,
 				test.err)
+
 			continue
 		}
 
@@ -888,6 +902,7 @@ func TestErrors(t *testing.T) {
 				t.Errorf("Neuter #%d (%s): mismatched error "+
 					"-- got: %v, want: %v", i, test.name,
 					err, test.neuterErr)
+
 				continue
 			}
 		}
@@ -928,6 +943,7 @@ func TestZero(t *testing.T) {
 			t.Errorf("IsPrivate #%d (%s): mismatched key type -- "+
 				"want private %v, got private %v", i, testName,
 				false, key.IsPrivate())
+
 			return false
 		}
 
@@ -936,20 +952,24 @@ func TestZero(t *testing.T) {
 			t.Errorf("ParentFingerprint #%d (%s): mismatched "+
 				"parent fingerprint -- want %d, got %d", i,
 				testName, 0, parentFP)
+
 			return false
 		}
 
 		wantKey := "zeroed extended key"
 		serializedKey := key.String()
+
 		if serializedKey != wantKey {
 			t.Errorf("String #%d (%s): mismatched serialized key "+
 				"-- want %s, got %s", i, testName, wantKey,
 				serializedKey)
+
 			return false
 		}
 
 		wantErr := ErrNotPrivExtKey
 		_, err := key.ECPrivKey()
+
 		if !reflect.DeepEqual(err, wantErr) {
 			t.Errorf("ECPrivKey #%d (%s): mismatched error: want "+
 				"%v, got %v", i, testName, wantErr, err)
@@ -958,6 +978,7 @@ func TestZero(t *testing.T) {
 
 		wantErr = errors.New("pubkey string is empty")
 		_, err = key.ECPubKey()
+
 		if !reflect.DeepEqual(err, wantErr) {
 			t.Errorf("ECPubKey #%d (%s): mismatched error: want "+
 				"%v, got %v", i, testName, wantErr, err)
@@ -965,6 +986,7 @@ func TestZero(t *testing.T) {
 		}
 
 		wantAddr := "qz689gnx6z7cnsfhq6jpxtx0k9hhcwulevraunu2dj"
+
 		addr, err := key.Address(&chaincfg.MainNetParams)
 		if err != nil {
 			t.Errorf("Address #%d (%s): unexpected error: %v", i,
@@ -976,6 +998,7 @@ func TestZero(t *testing.T) {
 			t.Errorf("Address #%d (%s): mismatched address -- want "+
 				"%s, got %s", i, testName, wantAddr,
 				addr.EncodeAddress())
+
 			return false
 		}
 
@@ -996,6 +1019,7 @@ func TestZero(t *testing.T) {
 			t.Errorf("NewMaster #%d (%s): unexpected error when "+
 				"creating new master key: %v", i, test.name,
 				err)
+
 			continue
 		}
 
@@ -1009,11 +1033,13 @@ func TestZero(t *testing.T) {
 		// Ensure both non-neutered and neutered keys are zeroed
 		// properly.
 		key.Zero()
+
 		if !testZeroed(i, test.name+" from seed not neutered", key) {
 			continue
 		}
 
 		neuteredKey.Zero()
+
 		if !testZeroed(i, test.name+" from seed neutered", key) {
 			continue
 		}
@@ -1036,11 +1062,13 @@ func TestZero(t *testing.T) {
 		// Ensure both non-neutered and neutered keys are zeroed
 		// properly.
 		key.Zero()
+
 		if !testZeroed(i, test.name+" deserialized not neutered", key) {
 			continue
 		}
 
 		neuteredKey.Zero()
+
 		if !testZeroed(i, test.name+" deserialized neutered", key) {
 			continue
 		}
@@ -1064,10 +1092,12 @@ func TestMaximumDepth(t *testing.T) {
 			t.Fatalf("extendedkey depth %d should match expected value %d",
 				extKey.Depth(), i)
 		}
+
 		newKey, err := extKey.Child(1)
 		if err != nil {
 			t.Fatalf("Child: unexpected error: %v", err)
 		}
+
 		extKey = newKey
 	}
 

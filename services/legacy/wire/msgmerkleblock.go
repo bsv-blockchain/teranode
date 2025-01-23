@@ -39,6 +39,7 @@ func (msg *MsgMerkleBlock) AddTxHash(hash *chainhash.Hash) error {
 	}
 
 	msg.Hashes = append(msg.Hashes, hash)
+
 	return nil
 }
 
@@ -66,6 +67,7 @@ func (msg *MsgMerkleBlock) Bsvdecode(r io.Reader, pver uint32, enc MessageEncodi
 	if err != nil {
 		return err
 	}
+
 	if count > uint64(maxTxPerBlock()) {
 		str := fmt.Sprintf("too many transaction hashes for message "+
 			"[count %v, max %v]", count, maxTxPerBlock())
@@ -76,17 +78,21 @@ func (msg *MsgMerkleBlock) Bsvdecode(r io.Reader, pver uint32, enc MessageEncodi
 	// reduce the number of allocations.
 	hashes := make([]chainhash.Hash, count)
 	msg.Hashes = make([]*chainhash.Hash, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		hash := &hashes[i]
+
 		err := readElement(r, hash)
 		if err != nil {
 			return err
 		}
+
 		msg.AddTxHash(hash)
 	}
 
 	msg.Flags, err = ReadVarBytes(r, pver, maxFlagsPerMerkleBlock(),
 		"merkle block flags size")
+
 	return err
 }
 
@@ -106,6 +112,7 @@ func (msg *MsgMerkleBlock) BsvEncode(w io.Writer, pver uint32, enc MessageEncodi
 			"[count %v, max %v]", numHashes, maxTxPerBlock())
 		return messageError("MsgMerkleBlock.Bsvdecode", str)
 	}
+
 	numFlagBytes := len(msg.Flags)
 	if numFlagBytes > int(maxFlagsPerMerkleBlock()) {
 		str := fmt.Sprintf("too many flag bytes for message [count %v, "+
@@ -127,6 +134,7 @@ func (msg *MsgMerkleBlock) BsvEncode(w io.Writer, pver uint32, enc MessageEncodi
 	if err != nil {
 		return err
 	}
+
 	for _, hash := range msg.Hashes {
 		err = writeElement(w, hash)
 		if err != nil {

@@ -176,6 +176,7 @@ func (f *fieldVal) Set(val *fieldVal) *fieldVal {
 func (f *fieldVal) SetInt(ui uint) *fieldVal {
 	f.Zero()
 	f.n[0] = uint32(ui)
+
 	return f
 }
 
@@ -208,6 +209,7 @@ func (f *fieldVal) SetBytes(b *[32]byte) *fieldVal {
 	f.n[8] = uint32(b[5]) | uint32(b[4])<<8 | uint32(b[3])<<16 |
 		(uint32(b[2])&twoBitsMask)<<24
 	f.n[9] = uint32(b[2])>>2 | uint32(b[1])<<6 | uint32(b[0])<<14
+
 	return f
 }
 
@@ -224,11 +226,13 @@ func (f *fieldVal) SetByteSlice(b []byte) *fieldVal {
 	}
 
 	var b32 [32]byte
+
 	for i := 0; i < len(b); i++ {
 		if i < 32 {
 			b32[i+(32-len(b))] = b[i]
 		}
 	}
+
 	return f.SetBytes(&b32)
 }
 
@@ -241,7 +245,9 @@ func (f *fieldVal) SetHex(hexString string) *fieldVal {
 	if len(hexString)%2 != 0 {
 		hexString = "0" + hexString
 	}
+
 	bytes, _ := hex.DecodeString(hexString)
+
 	return f.SetByteSlice(bytes)
 }
 
@@ -319,21 +325,25 @@ func (f *fieldVal) Normalize() *fieldVal {
 	} else {
 		m &= 0
 	}
+
 	if t2&t3&t4&t5&t6&t7&t8 == fieldBaseMask {
 		m &= 1
 	} else {
 		m &= 0
 	}
+
 	if ((t0+977)>>fieldBase + t1 + 64) > fieldBaseMask {
 		m &= 1
 	} else {
 		m &= 0
 	}
+
 	if t9>>fieldMSBBits != 0 {
 		m |= 1
 	} else {
 		m |= 0
 	}
+
 	t0 = t0 + m*977
 	t1 = (t0 >> fieldBase) + t1 + (m << 6)
 	t0 = t0 & fieldBaseMask
@@ -366,6 +376,7 @@ func (f *fieldVal) Normalize() *fieldVal {
 	f.n[7] = t7
 	f.n[8] = t8
 	f.n[9] = t9
+
 	return f
 }
 
@@ -426,6 +437,7 @@ func (f *fieldVal) PutBytes(b *[32]byte) {
 func (f *fieldVal) Bytes() *[32]byte {
 	b := new([32]byte)
 	f.PutBytes(b)
+
 	return b
 }
 
@@ -625,7 +637,6 @@ func (f *fieldVal) Mul2(val *fieldVal, val2 *fieldVal) *fieldVal {
 	// This could be done with a couple of for loops and an array to store
 	// the intermediate terms, but this unrolled version is significantly
 	// faster.
-
 	// Terms for 2^(fieldBase*0).
 	m := uint64(val.n[0]) * uint64(val2.n[0])
 	t0 := m & fieldBaseMask
@@ -905,7 +916,6 @@ func (f *fieldVal) SquareVal(val *fieldVal) *fieldVal {
 	// This could be done with a couple of for loops and an array to store
 	// the intermediate terms, but this unrolled version is significantly
 	// faster.
-
 	// Terms for 2^(fieldBase*0).
 	m := uint64(val.n[0]) * uint64(val.n[0])
 	t0 := m & fieldBaseMask
@@ -1166,7 +1176,6 @@ func (f *fieldVal) Inverse() *fieldVal {
 		---------------------------------------------------------
 		-- Total length: 269   =   255 doubles  +  15 adds
 	*/
-
 	// This has a cost of 255 field squarings and 15 field multiplications.
 	var x1, x2, x3, x11, x22, x44, x88 fieldVal
 	x1 = *f
@@ -1192,6 +1201,7 @@ func (f *fieldVal) Inverse() *fieldVal {
 		Square().Square().Square().Square().Square().
 		Square().Square().Square().Square().Square().
 		Square().Square().Square().Square().Mul(&x44)
+
 	return f.SquareVal(&x88).Square().Square().Square().Square().
 		Square().Square().Square().Square().Square().
 		Square().Square().Square().Square().Square().

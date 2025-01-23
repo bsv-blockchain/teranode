@@ -30,10 +30,12 @@ func (msg *fakeMessage) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding)
 			Func:        "fakeMessage.BsvEncode",
 			Description: "intentional error",
 		}
+
 		return err
 	}
 
 	_, err := w.Write(msg.payload)
+
 	return err
 }
 

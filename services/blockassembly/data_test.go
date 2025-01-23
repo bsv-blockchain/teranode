@@ -36,6 +36,7 @@ func BenchmarkNewFromBytes(b *testing.B) {
 	bytes := d.Bytes()
 
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_, _ = NewFromBytes(bytes)
 	}

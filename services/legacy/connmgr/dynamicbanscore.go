@@ -45,6 +45,7 @@ func decayFactor(t int64) float64 {
 	if t < precomputedLen {
 		return precomputedFactor[t]
 	}
+
 	return math.Exp(-1.0 * float64(t) * lambda)
 }
 
@@ -73,6 +74,7 @@ func (s *DynamicBanScore) String() string {
 	r := fmt.Sprintf("persistent %v + transient %v at %v = %v as of now",
 		s.persistent, s.transient, s.lastUnix, s.Int())
 	s.mtx.Unlock()
+
 	return r
 }
 
@@ -84,6 +86,7 @@ func (s *DynamicBanScore) Int() uint32 {
 	s.mtx.Lock()
 	r := s.int(time.Now())
 	s.mtx.Unlock()
+
 	return r
 }
 
@@ -95,6 +98,7 @@ func (s *DynamicBanScore) Increase(persistent, transient uint32) uint32 {
 	s.mtx.Lock()
 	r := s.increase(persistent, transient, time.Now())
 	s.mtx.Unlock()
+
 	return r
 }
 
@@ -119,6 +123,7 @@ func (s *DynamicBanScore) int(t time.Time) uint32 {
 	if s.transient < 1 || dt < 0 || Lifetime < dt {
 		return s.persistent
 	}
+
 	return s.persistent + uint32(s.transient*decayFactor(dt))
 }
 
@@ -139,8 +144,10 @@ func (s *DynamicBanScore) increase(persistent, transient uint32, t time.Time) ui
 		} else if s.transient > 1 && dt > 0 {
 			s.transient *= decayFactor(dt)
 		}
+
 		s.transient += float64(transient)
 		s.lastUnix = tu
 	}
+
 	return s.persistent + uint32(s.transient)
 }

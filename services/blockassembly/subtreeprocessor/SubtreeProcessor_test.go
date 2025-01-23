@@ -77,7 +77,6 @@ var (
 )
 
 func TestRotate(t *testing.T) {
-
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	endTestChan := make(chan bool)
 

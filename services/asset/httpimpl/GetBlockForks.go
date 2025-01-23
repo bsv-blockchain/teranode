@@ -149,12 +149,14 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 
 	limit := 20
 	limitStr := c.QueryParam("limit")
+
 	if limitStr != "" {
 		limit, err = strconv.Atoi(limitStr)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid limit parameter").Error())
 		}
 	}
+
 	if limit > 100 {
 		limit = 100
 	}
@@ -183,6 +185,7 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 	blockHeadersParentChild := make(map[chainhash.Hash][]*model.BlockHeader)
 	blockHeadersMap := make(map[chainhash.Hash]*model.BlockHeader)
 	metasMap := make(map[chainhash.Hash]*model.BlockHeaderMeta)
+
 	for idx, blockHeader := range blockHeaders {
 		blockHeadersParentChild[*blockHeader.HashPrevBlock] = append(blockHeadersParentChild[*blockHeader.HashPrevBlock], blockHeader)
 		blockHeadersMap[*blockHeader.Hash()] = blockHeader
@@ -237,7 +240,6 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 //   - Each node includes block details and link information for visualization
 func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainhash.Hash][]*model.BlockHeader,
 	blockHeadersMap map[chainhash.Hash]*model.BlockHeader, metasMap map[chainhash.Hash]*model.BlockHeaderMeta) {
-
 	children := blockHeadersParentChild[tree.hash]
 	for _, child := range children {
 		childTree := forksTree{

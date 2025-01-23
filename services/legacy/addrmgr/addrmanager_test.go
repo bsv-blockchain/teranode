@@ -106,6 +106,7 @@ func lookupFunc(host string) ([]net.IP, error) {
 func TestStartStop(t *testing.T) {
 	n := addrmgr.New(ulogger.TestLogger{}, "teststartstop", lookupFunc)
 	n.Start()
+
 	err := n.Stop()
 	if err != nil {
 		t.Fatalf("Address Manager failed to stop: %v", err)
@@ -115,6 +116,7 @@ func TestStartStop(t *testing.T) {
 func TestAddAddressByIP(t *testing.T) {
 	fmtErr := fmt.Errorf("")
 	addrErr := &net.AddrError{}
+
 	var tests = []struct {
 		addrIP string
 		err    error
@@ -195,6 +197,7 @@ func TestAddLocalAddress(t *testing.T) {
 			true,
 		},
 	}
+
 	amgr := addrmgr.New(ulogger.TestLogger{}, "testaddlocaladdress", nil)
 	for x, test := range tests {
 		result := amgr.AddLocalAddress(&test.address, test.priority)
@@ -203,6 +206,7 @@ func TestAddLocalAddress(t *testing.T) {
 				"been accepted", x, test.address.IP)
 			continue
 		}
+
 		if result != nil && test.valid {
 			t.Errorf("TestAddLocalAddress test #%d failed: %s should not have "+
 				"been accepted", x, test.address.IP)
@@ -267,9 +271,11 @@ func TestNeedMoreAddresses(t *testing.T) {
 	addrs := make([]*wire.NetAddress, addrsToAdd)
 
 	var err error
+
 	for i := 0; i < addrsToAdd; i++ {
 		s := fmt.Sprintf("%d.%d.173.147:8333", i/128+60, i%128+60)
 		addrs[i], err = n.DeserializeNetAddress(s)
+
 		if err != nil {
 			t.Errorf("Failed to turn %s into an address: %v", s, err)
 		}
@@ -278,6 +284,7 @@ func TestNeedMoreAddresses(t *testing.T) {
 	srcAddr := wire.NewNetAddressIPPort(net.IPv4(173, 144, 173, 111), 8333, 0)
 
 	n.AddAddresses(addrs, srcAddr)
+
 	numAddrs := n.NumAddresses()
 	if numAddrs > addrsToAdd {
 		t.Errorf("Number of addresses is too many %d vs %d", numAddrs, addrsToAdd)
@@ -295,9 +302,11 @@ func TestGood(t *testing.T) {
 	addrs := make([]*wire.NetAddress, addrsToAdd)
 
 	var err error
+
 	for i := 0; i < addrsToAdd; i++ {
 		s := fmt.Sprintf("%d.173.147.%d:8333", i/64+60, i%64+60)
 		addrs[i], err = n.DeserializeNetAddress(s)
+
 		if err != nil {
 			t.Errorf("Failed to turn %s into an address: %v", s, err)
 		}
@@ -306,6 +315,7 @@ func TestGood(t *testing.T) {
 	srcAddr := wire.NewNetAddressIPPort(net.IPv4(173, 144, 173, 111), 8333, 0)
 
 	n.AddAddresses(addrs, srcAddr)
+
 	for _, addr := range addrs {
 		n.Good(addr)
 	}
@@ -346,6 +356,7 @@ func TestGetAddress(t *testing.T) {
 
 	// Mark this as a good address and get it
 	n.Good(ka.NetAddress())
+
 	ka = n.GetAddress()
 	if ka == nil {
 		t.Fatalf("Did not get an address where there is one in the pool")
@@ -471,6 +482,7 @@ func TestNetAddressKey(t *testing.T) {
 	addNaTests()
 
 	t.Logf("Running %d tests", len(naTests))
+
 	for i, test := range naTests {
 		key := addrmgr.NetAddressKey(&test.in)
 		if key != test.want {

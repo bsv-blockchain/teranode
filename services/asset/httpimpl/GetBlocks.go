@@ -136,6 +136,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting last n blocks", err).Error())
 		}
 	}
+
 	prometheusAssetHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
 
 	response := ExtendedResponse{

@@ -294,7 +294,7 @@ func resultTypeHelp(xT descLookupFunc, rt reflect.Type, fieldDescKey string) str
 
 	for i, text := range results {
 		if i == len(results)-1 {
-			fmt.Fprintf(w, text)
+			fmt.Fprintf(w, "%s", text)
 		} else {
 			fmt.Fprintln(w, text)
 		}

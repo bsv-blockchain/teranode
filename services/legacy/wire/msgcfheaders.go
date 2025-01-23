@@ -42,6 +42,7 @@ func (msg *MsgCFHeaders) AddCFHash(hash *chainhash.Hash) error {
 	}
 
 	msg.FilterHashes = append(msg.FilterHashes, hash)
+
 	return nil
 }
 
@@ -77,18 +78,22 @@ func (msg *MsgCFHeaders) Bsvdecode(r io.Reader, pver uint32, _ MessageEncoding) 
 		str := fmt.Sprintf("too many committed filter headers for "+
 			"message [count %v, max %v]", count,
 			MaxBlockHeadersPerMsg)
+
 		return messageError("MsgCFHeaders.Bsvdecode", str)
 	}
 
 	// Create a contiguous slice of hashes to deserialize into in order to
 	// reduce the number of allocations.
 	msg.FilterHashes = make([]*chainhash.Hash, 0, count)
+
 	for i := uint64(0); i < count; i++ {
 		var cfh chainhash.Hash
+
 		err := readElement(r, &cfh)
 		if err != nil {
 			return err
 		}
+
 		_ = msg.AddCFHash(&cfh)
 	}
 
@@ -122,6 +127,7 @@ func (msg *MsgCFHeaders) BsvEncode(w io.Writer, pver uint32, _ MessageEncoding) 
 		str := fmt.Sprintf("too many committed filter headers for "+
 			"message [count %v, max %v]", count,
 			MaxBlockHeadersPerMsg)
+
 		return messageError("MsgCFHeaders.BsvEncode", str)
 	}
 

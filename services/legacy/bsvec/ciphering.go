@@ -72,6 +72,7 @@ func Encrypt(pubkey *PublicKey, in []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	ecdhKey := GenerateSharedSecret(ephemeral, pubkey)
 	derivedKey := sha512.Sum512(ecdhKey)
 	keyE := derivedKey[:32]
@@ -80,6 +81,7 @@ func Encrypt(pubkey *PublicKey, in []byte) ([]byte, error) {
 	paddedIn := addPKCSPadding(in)
 	// IV + Curve params/X/Y + padded plaintext/ciphertext + HMAC-256
 	out := make([]byte, aes.BlockSize+70+len(paddedIn)+sha256.Size)
+
 	iv := out[:aes.BlockSize]
 	if _, err = io.ReadFull(rand.Reader, iv); err != nil {
 		return nil, err
@@ -106,6 +108,7 @@ func Encrypt(pubkey *PublicKey, in []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	mode := cipher.NewCBCEncrypter(block, iv)
 	mode.CryptBlocks(out[offset:len(out)-sha256.Size], paddedIn)
 
@@ -132,11 +135,13 @@ func Decrypt(priv *PrivateKey, in []byte) ([]byte, error) {
 	if !bytes.Equal(in[offset:offset+2], ciphCurveBytes[:]) {
 		return nil, errUnsupportedCurve
 	}
+
 	offset += 2
 
 	if !bytes.Equal(in[offset:offset+2], ciphCoordLength[:]) {
 		return nil, errInvalidXLength
 	}
+
 	offset += 2
 
 	xBytes := in[offset : offset+32]
@@ -145,6 +150,7 @@ func Decrypt(priv *PrivateKey, in []byte) ([]byte, error) {
 	if !bytes.Equal(in[offset:offset+2], ciphCoordLength[:]) {
 		return nil, errInvalidYLength
 	}
+
 	offset += 2
 
 	yBytes := in[offset : offset+32]
@@ -177,6 +183,7 @@ func Decrypt(priv *PrivateKey, in []byte) ([]byte, error) {
 	// verify mac
 	hm := hmac.New(sha256.New, keyM)
 	hm.Write(in[:len(in)-sha256.Size]) // everything is hashed
+
 	expectedMAC := hm.Sum(nil)
 	if !hmac.Equal(messageMAC, expectedMAC) {
 		return nil, ErrInvalidMAC
@@ -187,6 +194,7 @@ func Decrypt(priv *PrivateKey, in []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	mode := cipher.NewCBCDecrypter(block, iv)
 	// same length as ciphertext
 	plaintext := make([]byte, len(in)-offset-sha256.Size)
@@ -201,6 +209,7 @@ func Decrypt(priv *PrivateKey, in []byte) ([]byte, error) {
 func addPKCSPadding(src []byte) []byte {
 	padding := aes.BlockSize - len(src)%aes.BlockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+
 	return append(src, padtext...)
 }
 

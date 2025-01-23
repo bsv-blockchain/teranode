@@ -29,6 +29,7 @@ func TestNBit(t *testing.T) {
 	require.Equal(t, "1e0cbb05", bits.String())
 	difficulty := bits.CalculateDifficulty()
 	require.Equal(t, "0.0003068360688", difficulty.String())
+
 	target := bits.CalculateTarget()
 	require.Equal(t, "87862992749702277876753291758735394717545048148536728461472937357082624", target.String())
 }
@@ -39,6 +40,7 @@ func TestCalculateTarget(t *testing.T) {
 	difficulty, _ := bits.CalculateDifficulty().Float32()
 	expectedDifficulty, _ := big.NewFloat(70944300723.85233).Float32()
 	require.Equal(t, expectedDifficulty, difficulty)
+
 	target := bits.CalculateTarget()
 	require.Equal(t, "380009881215830907712605183958726704270100120947772096512", target.String())
 }

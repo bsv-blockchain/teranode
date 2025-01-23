@@ -17,9 +17,11 @@ func asBool(t []byte) bool {
 			if i == len(t)-1 && t[i] == 0x80 {
 				return false
 			}
+
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -28,6 +30,7 @@ func fromBool(v bool) []byte {
 	if v {
 		return []byte{1}
 	}
+
 	return nil
 }
 
@@ -152,6 +155,7 @@ func (s *stack) nipN(idx int32) ([]byte, error) {
 	}
 
 	so := s.stk[sz-idx-1]
+
 	if idx == 0 {
 		s.stk = s.stk[:sz-1]
 	} else if idx == sz-1 {
@@ -163,6 +167,7 @@ func (s *stack) nipN(idx int32) ([]byte, error) {
 		s.stk = s.stk[:sz-idx-1]
 		s.stk = append(s.stk, s1...)
 	}
+
 	return so, nil
 }
 
@@ -186,10 +191,12 @@ func (s *stack) Tuck() error {
 	if err != nil {
 		return err
 	}
+
 	so1, err := s.PopByteArray()
 	if err != nil {
 		return err
 	}
+
 	s.PushByteArray(so2) // stack [... x2]
 	s.PushByteArray(so1) // stack [... x2 x1]
 	s.PushByteArray(so2) // stack [... x2 x1 x2]
@@ -214,6 +221,7 @@ func (s *stack) DropN(n int32) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -235,8 +243,10 @@ func (s *stack) DupN(n int32) error {
 		if err != nil {
 			return err
 		}
+
 		s.PushByteArray(so)
 	}
+
 	return nil
 }
 
@@ -262,6 +272,7 @@ func (s *stack) RotN(n int32) error {
 
 		s.PushByteArray(so)
 	}
+
 	return nil
 }
 
@@ -286,6 +297,7 @@ func (s *stack) SwapN(n int32) error {
 
 		s.PushByteArray(so)
 	}
+
 	return nil
 }
 
@@ -308,6 +320,7 @@ func (s *stack) OverN(n int32) error {
 		if err != nil {
 			return err
 		}
+
 		s.PushByteArray(so)
 	}
 
@@ -325,6 +338,7 @@ func (s *stack) PickN(n int32) error {
 	if err != nil {
 		return err
 	}
+
 	s.PushByteArray(so)
 
 	return nil
@@ -350,10 +364,12 @@ func (s *stack) RollN(n int32) error {
 // String returns the stack in a readable format.
 func (s *stack) String() string {
 	var result string
+
 	for _, stack := range s.stk {
 		if len(stack) == 0 {
 			result += "00000000  <empty>\n"
 		}
+
 		result += hex.Dump(stack)
 	}
 

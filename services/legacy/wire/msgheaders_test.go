@@ -20,6 +20,7 @@ func TestHeaders(t *testing.T) {
 	// Ensure the command is expected value.
 	wantCmd := "headers"
 	msg := NewMsgHeaders()
+
 	if cmd := msg.Command(); cmd != wantCmd {
 		t.Errorf("NewMsgHeaders: wrong command - got %v want %v",
 			cmd, wantCmd)
@@ -30,6 +31,7 @@ func TestHeaders(t *testing.T) {
 	// for the number of transactions which is always 0).
 	wantPayload := uint64(162009)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -39,6 +41,7 @@ func TestHeaders(t *testing.T) {
 	// Ensure headers are added properly.
 	bh := &blockOne.Header
 	msg.AddBlockHeader(bh)
+
 	if !reflect.DeepEqual(msg.Headers[0], bh) {
 		t.Errorf("AddHeader: wrong header - got %v, want %v",
 			spew.Sdump(msg.Headers),
@@ -51,6 +54,7 @@ func TestHeaders(t *testing.T) {
 	for i := 0; i < MaxBlockHeadersPerMsg+1; i++ {
 		err = msg.AddBlockHeader(bh)
 	}
+
 	if reflect.TypeOf(err) != reflect.TypeOf(&MessageError{}) {
 		t.Errorf("AddBlockHeader: expected error on too many headers " +
 			"not received")
@@ -77,6 +81,7 @@ func TestHeadersWire(t *testing.T) {
 	// Headers message with one header.
 	oneHeader := NewMsgHeaders()
 	oneHeader.AddBlockHeader(bh)
+
 	oneHeaderEncoded := []byte{
 		0x01,                   // VarInt for number of headers.
 		0x01, 0x00, 0x00, 0x00, // Version 1
@@ -192,14 +197,17 @@ func TestHeadersWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
+
 		err := test.in.BsvEncode(&buf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -208,12 +216,15 @@ func TestHeadersWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgHeaders
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(&msg), spew.Sdump(test.out))
@@ -239,6 +250,7 @@ func TestHeadersWireErrors(t *testing.T) {
 	// Headers message with one header.
 	oneHeader := NewMsgHeaders()
 	oneHeader.AddBlockHeader(bh)
+
 	oneHeaderEncoded := []byte{
 		0x01,                   // VarInt for number of headers.
 		0x01, 0x00, 0x00, 0x00, // Version 1
@@ -262,6 +274,7 @@ func TestHeadersWireErrors(t *testing.T) {
 	for i := 0; i < MaxBlockHeadersPerMsg; i++ {
 		maxHeaders.AddBlockHeader(bh)
 	}
+
 	maxHeaders.Headers = append(maxHeaders.Headers, bh)
 	maxHeadersEncoded := []byte{
 		0xfd, 0xd1, 0x07, // Varint for number of addresses (2001)7D1
@@ -275,6 +288,7 @@ func TestHeadersWireErrors(t *testing.T) {
 
 	transHeader := NewMsgHeaders()
 	transHeader.AddBlockHeader(bhTrans)
+
 	transHeaderEncoded := []byte{
 		0x01,                   // VarInt for number of headers.
 		0x01, 0x00, 0x00, 0x00, // Version 1
@@ -315,9 +329,11 @@ func TestHeadersWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -337,7 +353,9 @@ func TestHeadersWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgHeaders
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
@@ -354,6 +372,5 @@ func TestHeadersWireErrors(t *testing.T) {
 				continue
 			}
 		}
-
 	}
 }

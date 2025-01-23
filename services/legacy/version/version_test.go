@@ -30,6 +30,7 @@ func TestString(t *testing.T) {
 
 	for _, tc := range testCases {
 		appBuild = tc.build
+
 		v := String()
 		if v != tc.expected {
 			t.Fatalf("%s: expected %s, got %s", tc.name, tc.expected, v)

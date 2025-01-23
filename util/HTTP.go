@@ -83,6 +83,7 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 				return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
 			}
 		}
+
 		return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 

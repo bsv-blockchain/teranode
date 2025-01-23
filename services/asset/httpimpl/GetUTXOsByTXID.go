@@ -140,6 +140,7 @@ func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 		b, err := h.repository.GetTransaction(ctx, hash)
 		if err != nil {
 			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTxID error getting transaction: %s", hash.String(), err.Error())
+
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {

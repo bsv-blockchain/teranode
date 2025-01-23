@@ -13,16 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // makeHeader is a convenience function to make a message header in the form of
 // a byte slice.  It is used to force errors when reading messages.
 func makeHeader(bsvnet BitcoinNet, command string,
 	payloadLen uint32, checksum uint32) []byte {
-
 	// The length of a bitcoin message header is 24 bytes.
 	// 4 byte magic number of the bitcoin network + 12 byte command + 4 byte
 	// payload length + 4 byte checksum.
@@ -31,6 +29,7 @@ func makeHeader(bsvnet BitcoinNet, command string,
 	copy(buf[4:], []byte(command))
 	binary.LittleEndian.PutUint32(buf[16:], payloadLen)
 	binary.LittleEndian.PutUint32(buf[20:], checksum)
+
 	return buf
 }
 
@@ -100,9 +99,11 @@ func TestMessage(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
+
 		nw, err := WriteMessageN(&buf, test.in, test.pver, test.bsvnet)
 		if err != nil {
 			t.Errorf("WriteMessage #%d error %v", i, err)
@@ -117,12 +118,14 @@ func TestMessage(t *testing.T) {
 
 		// Decode from wire format.
 		rbuf := bytes.NewReader(buf.Bytes())
+
 		nr, msg, _, err := ReadMessageN(rbuf, test.pver, test.bsvnet)
 		if err != nil {
 			t.Errorf("ReadMessage #%d error %v, msg %v", i, err,
 				spew.Sdump(msg))
 			continue
 		}
+
 		if !reflect.DeepEqual(msg, test.out) {
 			t.Errorf("ReadMessage #%d\n got: %v want: %v", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -139,9 +142,11 @@ func TestMessage(t *testing.T) {
 	// Do the same thing for Read/WriteMessage, but ignore the bytes since
 	// they don't return them.
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
+
 		err := WriteMessage(&buf, test.in, test.pver, test.bsvnet)
 		if err != nil {
 			t.Errorf("WriteMessage #%d error %v", i, err)
@@ -150,12 +155,14 @@ func TestMessage(t *testing.T) {
 
 		// Decode from wire format.
 		rbuf := bytes.NewReader(buf.Bytes())
+
 		msg, _, err := ReadMessage(rbuf, test.pver, test.bsvnet)
 		if err != nil {
 			t.Errorf("ReadMessage #%d error %v, msg %v", i, err,
 				spew.Sdump(msg))
 			continue
 		}
+
 		if !reflect.DeepEqual(msg, test.out) {
 			t.Errorf("ReadMessage #%d\n got: %v want: %v", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -173,6 +180,7 @@ func TestReadMessageWireErrors(t *testing.T) {
 	// Ensure message errors are as expected with no function specified.
 	wantErr := "something bad happened"
 	testErr := MessageError{Description: wantErr}
+
 	if testErr.Error() != wantErr {
 		t.Errorf("MessageError: wrong error - got %v, want %v",
 			testErr.Error(), wantErr)
@@ -181,6 +189,7 @@ func TestReadMessageWireErrors(t *testing.T) {
 	// Ensure message errors are as expected with a function specified.
 	wantFunc := "foo"
 	testErr = MessageError{Func: wantFunc, Description: wantErr}
+
 	if testErr.Error() != wantFunc+": "+wantErr {
 		t.Errorf("MessageError: wrong error - got %v, want %v",
 			testErr.Error(), wantErr)
@@ -337,9 +346,11 @@ func TestReadMessageWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Decode from wire format.
 		r := newFixedReader(test.max, test.buf)
+
 		nr, _, _, err := ReadMessageN(r, test.pver, test.bsvnet)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("ReadMessage #%d wrong error got: %v <%T>, "+
@@ -360,6 +371,7 @@ func TestReadMessageWireErrors(t *testing.T) {
 				t.Errorf("ReadMessage #%d wrong error got: %v <%T>, "+
 					"want: %v <%T>", i, err, err,
 					test.readErr, test.readErr)
+
 				continue
 			}
 		}
@@ -415,9 +427,11 @@ func TestWriteMessageWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode wire format.
 		w := newFixedWriter(test.max)
+
 		nw, err := WriteMessageN(w, test.msg, test.pver, test.bsvnet)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("WriteMessage #%d wrong error got: %v <%T>, "+
@@ -438,6 +452,7 @@ func TestWriteMessageWireErrors(t *testing.T) {
 				t.Errorf("ReadMessage #%d wrong error got: %v <%T>, "+
 					"want: %v <%T>", i, err, err,
 					test.err, test.err)
+
 				continue
 			}
 		}

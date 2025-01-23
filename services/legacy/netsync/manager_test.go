@@ -55,16 +55,19 @@ func (ctx *testContext) Setup(config *testConfig) error {
 	peerNotifier := NewMockPeerNotifier()
 
 	storeURL, _ := url.Parse("sqlitememory://")
+
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	if err != nil {
 		return errors.NewServiceError("failed to create blockchain store", err)
 	}
+
 	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create blockchain client", err)
 	}
 
 	utxoStore := utxostore.New(ulogger.TestLogger{})
+
 	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create validator client", err)
@@ -101,6 +104,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 
 	ctx.syncManager = syncMgr
 	ctx.peerNotifier = peerNotifier
+
 	return nil
 }
 
@@ -113,6 +117,7 @@ func TestPeerConnections(t *testing.T) {
 	chainParams := &chaincfg.MainNetParams
 
 	var ctx testContext
+
 	err := ctx.Setup(&testConfig{
 		dbName:      "TestPeerConnections",
 		chainParams: chainParams,
@@ -133,6 +138,7 @@ func TestPeerConnections(t *testing.T) {
 		ChainParams:      chainParams,
 		Services:         0,
 	}
+
 	_, localNode1, err := MakeConnectedPeers(peerCfg, peerCfg, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -380,6 +386,7 @@ func xTestBlockchainSync(t *testing.T) {
 	chainParams.CoinbaseMaturity = 1
 
 	var ctx testContext
+
 	err := ctx.Setup(&testConfig{
 		dbName:      "TestBlockchainSync",
 		chainParams: &chainParams,
@@ -459,6 +466,7 @@ func xTestBlockchainSync(t *testing.T) {
 	blocks := make([]*bsvutil.Block, 0, 3)
 	blockVersion := int32(2)
 	prevBlock := genesisBlock
+
 	for i := 0; i < 3; i++ {
 		block, err := CreateBlock(prevBlock, nil, blockVersion,
 			nullTime, address, []wire.TxOut{}, &chainParams)
@@ -526,6 +534,7 @@ func xTestBlockchainSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	spendTx, err := createSpendingTx(prevTx, 0, scriptSig, address)
 	if err != nil {
 		t.Fatal(err)
@@ -534,6 +543,7 @@ func xTestBlockchainSync(t *testing.T) {
 	timestamp := time.Now().Truncate(time.Second)
 	prevBlock = blocks[len(blocks)-1]
 	txns := []*bsvutil.Tx{spendTx}
+
 	block, err := CreateBlock(prevBlock, txns, blockVersion,
 		timestamp, address, []wire.TxOut{}, &chainParams)
 	if err != nil {
@@ -606,6 +616,7 @@ func xTestBlockchainSync(t *testing.T) {
 	// Send invalid block with timestamp in the far future
 	prevBlock = block
 	timestamp = time.Now().Truncate(time.Second).Add(1000 * time.Hour)
+
 	block, err = CreateBlock(prevBlock, nil, blockVersion,
 		timestamp, address, []wire.TxOut{}, &chainParams)
 	if err != nil {
@@ -673,6 +684,7 @@ func newMessageChans() *msgChans {
 	instance.getBlocksChan = make(chan *wire.MsgGetBlocks)
 	instance.getHeadersChan = make(chan *wire.MsgGetHeaders)
 	instance.rejectChan = make(chan *wire.MsgReject)
+
 	return &instance
 }
 
@@ -702,5 +714,6 @@ func createSpendingTx(prevTx *bsvutil.Tx, index uint32, scriptSig []byte, addres
 	spendTx := wire.NewMsgTx(1)
 	spendTx.AddTxIn(wire.NewTxIn(prevOutPoint, scriptSig))
 	spendTx.AddTxOut(wire.NewTxOut(prevOut.Value, scriptPubKey))
+
 	return bsvutil.NewTx(spendTx), nil
 }

@@ -41,6 +41,7 @@ func NewPrivateKey(curve elliptic.Curve) (*PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return (*PrivateKey)(key), nil
 }
 

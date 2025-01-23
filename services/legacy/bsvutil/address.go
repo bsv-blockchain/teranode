@@ -130,6 +130,7 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 	case ripemd160.Size: // P2PKH or P2SH
 		isP2PKH := chaincfg.IsPubKeyHashAddrID(netID)
 		isP2SH := chaincfg.IsScriptHashAddrID(netID)
+
 		switch hash160 := decoded; {
 		case isP2PKH && isP2SH:
 			return nil, ErrAddressCollision
@@ -463,6 +464,7 @@ func NewAddressPubKey(serializedPubKey []byte, net *chaincfg.Params) (*AddressPu
 	// pubkey is valid since it parsed above, so it's safe to simply examine
 	// the leading byte to get the format.
 	pkFormat := PKFUncompressed
+
 	switch serializedPubKey[0] {
 	case 0x02, 0x03:
 		pkFormat = PKFCompressed
@@ -547,6 +549,7 @@ func (a *AddressPubKey) AddressPubKeyHash() *AddressPubKeyHash {
 	params := paramsFromNetID(a.pubKeyHashID)
 	addr := &AddressPubKeyHash{prefix: params.CashAddressPrefix}
 	copy(addr.hash[:], Hash160(a.serialize()))
+
 	return addr
 }
 
@@ -694,7 +697,6 @@ func polyMod(v []byte) uint64 {
 		 * If we call (x^6 mod g(x)) = k(x), this can be written as
 		 * c'(x) = (c1*x^5 + c2*x^4 + c3*x^3 + c4*x^2 + c5*x + d) + c0*k(x)
 		 */
-
 		// First, determine the value of c0:
 		c0 := byte(c >> 35)
 
@@ -801,6 +803,7 @@ func DecodeCashAddress(str string) (string, []byte, error) {
 	// Go over the string and do some sanity checks.
 	lower, upper := false, false
 	prefixSize := 0
+
 	for i := 0; i < len(str); i++ {
 		c := str[i]
 		if c >= 'a' && c <= 'z' {
@@ -830,6 +833,7 @@ func DecodeCashAddress(str string) (string, []byte, error) {
 			}
 
 			prefixSize = i
+
 			continue
 		}
 
@@ -896,6 +900,7 @@ func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, err
 
 	for _, value := range uintArr {
 		acc = ((acc << fromBits) | value) & maxAcc
+
 		bits += fromBits
 		for bits >= tobits {
 			bits -= tobits
@@ -937,6 +942,7 @@ func packAddressData(addrType AddressType, addrHash []byte) ([]byte, error) {
 	}
 
 	versionByte |= encodedSize
+
 	var addrHashUint []byte
 	addrHashUint = append(addrHashUint, addrHash...)
 	data := append([]byte{byte(versionByte)}, addrHashUint...)

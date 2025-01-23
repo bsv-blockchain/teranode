@@ -123,6 +123,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 		}
 
 		namespace := storeURL.Path[1:]
+
 		setName := storeURL.Query().Get("set")
 		if setName == "" {
 			setName = "txmeta"
@@ -171,6 +172,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 
 			// convert to json using jsoniter, since Bins cannot be marshalled by encoding/json
 			var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
 			b, err := json.MarshalIndent(record, "", "  ")
 			if err != nil {
 				h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error: %s", hash.String(), err.Error())

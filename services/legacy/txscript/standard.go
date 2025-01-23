@@ -73,6 +73,7 @@ func (t ScriptClass) String() string {
 	if int(t) > len(scriptClassToName) || int(t) < 0 {
 		return "Invalid"
 	}
+
 	return scriptClassToName[t]
 }
 
@@ -94,7 +95,6 @@ func isPubkeyHash(pops []parsedOpcode) bool {
 		pops[2].opcode.value == OP_DATA_20 &&
 		pops[3].opcode.value == OP_EQUALVERIFY &&
 		pops[4].opcode.value == OP_CHECKSIG
-
 }
 
 // isMultiSig returns true if the passed script is a multisig transaction, false
@@ -106,12 +106,15 @@ func isMultiSig(pops []parsedOpcode) bool {
 	if l < 4 {
 		return false
 	}
+
 	if !isSmallInt(pops[0].opcode) {
 		return false
 	}
+
 	if !isSmallInt(pops[l-2].opcode) {
 		return false
 	}
+
 	if pops[l-1].opcode.value != OP_CHECKMULTISIG {
 		return false
 	}
@@ -128,6 +131,7 @@ func isMultiSig(pops []parsedOpcode) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -163,6 +167,7 @@ func typeOfScript(pops []parsedOpcode) ScriptClass {
 	} else if isNullData(pops) {
 		return NullDataTy
 	}
+
 	return NonStandardTy
 }
 
@@ -174,6 +179,7 @@ func GetScriptClass(script []byte) ScriptClass {
 	if err != nil {
 		return NonStandardTy
 	}
+
 	return typeOfScript(pops)
 }
 
@@ -235,7 +241,6 @@ type ScriptInfo struct {
 // be analysed, i.e. if they do not parse or the pkScript is not a push-only
 // script
 func CalcScriptInfo(sigScript, pkScript []byte, scriptFlags ScriptFlags) (*ScriptInfo, error) {
-
 	sigPops, err := ParseScript(sigScript)
 	if err != nil {
 		return nil, err
@@ -264,6 +269,7 @@ func CalcScriptInfo(sigScript, pkScript []byte, scriptFlags ScriptFlags) (*Scrip
 		// The pay-to-hash-script is the final data push of the
 		// signature script.
 		script := sigPops[len(sigPops)-1].data
+
 		shPops, err := ParseScript(script)
 		if err != nil {
 			return nil, err
@@ -275,6 +281,7 @@ func CalcScriptInfo(sigScript, pkScript []byte, scriptFlags ScriptFlags) (*Scrip
 		} else {
 			si.ExpectedInputs += shInputs
 		}
+
 		si.SigOps = getSigOpCount(shPops, true, scriptFlags)
 
 		// All entries pushed to stack (or are OP_RESERVED and exec
@@ -315,6 +322,7 @@ func CalcMultiSigStats(script []byte) (int, int, error) {
 
 	numSigs := asSmallInt(pops[0].opcode)
 	numPubKeys := asSmallInt(pops[len(pops)-2].opcode)
+
 	return numPubKeys, numSigs, nil
 }
 
@@ -352,35 +360,41 @@ func PayToAddrScript(addr bsvutil.Address) ([]byte, error) {
 			return nil, scriptError(ErrUnsupportedAddress,
 				nilAddrErrStr)
 		}
+
 		return payToPubKeyHashScript(addr.ScriptAddress())
 	case *bsvutil.AddressPubKeyHash:
 		if addr == nil {
 			return nil, scriptError(ErrUnsupportedAddress,
 				nilAddrErrStr)
 		}
+
 		return payToPubKeyHashScript(addr.ScriptAddress())
 	case *bsvutil.LegacyAddressScriptHash:
 		if addr == nil {
 			return nil, scriptError(ErrUnsupportedAddress,
 				nilAddrErrStr)
 		}
+
 		return payToScriptHashScript(addr.ScriptAddress())
 	case *bsvutil.AddressScriptHash:
 		if addr == nil {
 			return nil, scriptError(ErrUnsupportedAddress,
 				nilAddrErrStr)
 		}
+
 		return payToScriptHashScript(addr.ScriptAddress())
 	case *bsvutil.AddressPubKey:
 		if addr == nil {
 			return nil, scriptError(ErrUnsupportedAddress,
 				nilAddrErrStr)
 		}
+
 		return payToPubKeyScript(addr.ScriptAddress())
 	}
 
 	str := fmt.Sprintf("unable to generate payment script for unsupported "+
 		"address type %T", addr)
+
 	return nil, scriptError(ErrUnsupportedAddress, str)
 }
 
@@ -406,6 +420,7 @@ func MultiSigScript(pubkeys []*bsvutil.AddressPubKey, nrequired int) ([]byte, er
 		str := fmt.Sprintf("unable to generate multisig script with "+
 			"%d required signatures when there are only %d public "+
 			"keys available", nrequired, len(pubkeys))
+
 		return nil, scriptError(ErrTooManyRequiredSigs, str)
 	}
 
@@ -413,6 +428,7 @@ func MultiSigScript(pubkeys []*bsvutil.AddressPubKey, nrequired int) ([]byte, er
 	for _, key := range pubkeys {
 		builder.AddData(key.ScriptAddress())
 	}
+
 	builder.AddInt64(int64(len(pubkeys)))
 	builder.AddOp(OP_CHECKMULTISIG)
 
@@ -435,6 +451,7 @@ func PushedData(script []byte) ([][]byte, error) {
 			data = append(data, nil)
 		}
 	}
+
 	return data, nil
 }
 
@@ -444,6 +461,7 @@ func PushedData(script []byte) ([][]byte, error) {
 // invalid are omitted from the results.
 func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (ScriptClass, []bsvutil.Address, int, error) {
 	var addrs []bsvutil.Address
+
 	var requiredSigs int
 
 	// No valid addresses or required signatures if the script doesn't
@@ -461,6 +479,7 @@ func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (Script
 		// Therefore the pubkey hash is the 3rd item on the stack.
 		// Skip the pubkey hash if it's invalid for some reason.
 		requiredSigs = 1
+
 		addr, err := bsvutil.NewAddressPubKeyHash(pops[2].data,
 			chainParams)
 		if err == nil {
@@ -473,6 +492,7 @@ func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (Script
 		// Therefore the pubkey is the first item on the stack.
 		// Skip the pubkey if it's invalid for some reason.
 		requiredSigs = 1
+
 		addr, err := bsvutil.NewAddressPubKey(pops[0].data, chainParams)
 		if err == nil {
 			addrs = append(addrs, addr)
@@ -484,6 +504,7 @@ func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (Script
 		// Therefore the script hash is the 2nd item on the stack.
 		// Skip the script hash if it's invalid for some reason.
 		requiredSigs = 1
+
 		addr, err := bsvutil.NewAddressScriptHashFromHash(pops[1].data,
 			chainParams)
 		if err == nil {
@@ -501,6 +522,7 @@ func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (Script
 
 		// Extract the public keys while skipping any that are invalid.
 		addrs = make([]bsvutil.Address, 0, numPubKeys)
+
 		for i := 0; i < numPubKeys; i++ {
 			addr, err := bsvutil.NewAddressPubKey(pops[i+1].data,
 				chainParams)
@@ -550,6 +572,7 @@ func ExtractAtomicSwapDataPushes(version uint16, pkScript []byte) (*AtomicSwapDa
 	if len(pops) != 20 {
 		return nil, nil
 	}
+
 	isAtomicSwap := pops[0].opcode.value == OP_IF &&
 		pops[1].opcode.value == OP_SIZE &&
 		CanonicalPush(pops[2]) &&
@@ -578,27 +601,32 @@ func ExtractAtomicSwapDataPushes(version uint16, pkScript []byte) (*AtomicSwapDa
 	copy(pushes.SecretHash[:], pops[5].data)
 	copy(pushes.RecipientHash160[:], pops[9].data)
 	copy(pushes.RefundHash160[:], pops[16].data)
+
 	if pops[2].data != nil {
 		locktime, err := makeScriptNum(pops[2].data, true, 5)
 		if err != nil {
 			return nil, nil
 		}
+
 		pushes.SecretSize = int64(locktime)
 	} else if op := pops[2].opcode; isSmallInt(op) {
 		pushes.SecretSize = int64(asSmallInt(op))
 	} else {
 		return nil, nil
 	}
+
 	if pops[11].data != nil {
 		locktime, err := makeScriptNum(pops[11].data, true, 5)
 		if err != nil {
 			return nil, nil
 		}
+
 		pushes.LockTime = int64(locktime)
 	} else if op := pops[11].opcode; isSmallInt(op) {
 		pushes.LockTime = int64(asSmallInt(op))
 	} else {
 		return nil, nil
 	}
+
 	return pushes, nil
 }

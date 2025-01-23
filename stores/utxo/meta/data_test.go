@@ -111,6 +111,7 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		NewMetaDataFromBytes(&dataBytes, data)
 	}
@@ -133,6 +134,7 @@ func Benchmark_Bytes(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = data.Bytes()
 	}
@@ -150,6 +152,7 @@ func Benchmark_MetaBytes(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		_ = data.MetaBytes()
 	}

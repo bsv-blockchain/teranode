@@ -129,9 +129,11 @@ func (sc *StreamingClient) closeResources() {
 	if sc.stream != nil {
 		_ = sc.stream.CloseSend()
 	}
+
 	if sc.conn != nil {
 		_ = sc.conn.Close()
 	}
+
 	sc.stream = nil
 	sc.conn = nil
 }
@@ -217,5 +219,6 @@ func (sc *StreamingClient) initStream(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }

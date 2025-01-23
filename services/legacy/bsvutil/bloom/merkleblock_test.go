@@ -24,11 +24,13 @@ func TestMerkleBlock3(t *testing.T) {
 		"104ecd3229b0571c3be876feaac0442a9f13c5a572742927af1dc623353" +
 		"ecf8c202225f64868137a18cdd85cbbb4c74fbccfd4f49639cf1bdc94a5" +
 		"672bb15ad5d4cac00000000"
+
 	blockBytes, err := hex.DecodeString(blockStr)
 	if err != nil {
 		t.Errorf("TestMerkleBlock3 DecodeString failed: %v", err)
 		return
 	}
+
 	blk, err := bsvutil.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		t.Errorf("TestMerkleBlock3 NewBlockFromBytes failed: %v", err)
@@ -38,6 +40,7 @@ func TestMerkleBlock3(t *testing.T) {
 	f := bloom.NewFilter(10, 0, 0.000001, wire.BloomUpdateAll)
 
 	inputStr := "63194f18be0af63f2c6bc9dc0f777cbefed3d9415c4af83f3ee3a3d669c00cb5"
+
 	hash, err := chainhash.NewHashFromStr(inputStr)
 	if err != nil {
 		t.Errorf("TestMerkleBlock3 NewHashFromStr failed: %v", err)
@@ -53,6 +56,7 @@ func TestMerkleBlock3(t *testing.T) {
 		"96b2c3ff60abe184f196367291b4d4c86041b8fa45d630100000001b50c" +
 		"c069d6a3e33e3ff84a5c41d9d3febe7c770fdcc96b2c3ff60abe184f196" +
 		"30101"
+
 	want, err := hex.DecodeString(wantStr)
 	if err != nil {
 		t.Errorf("TestMerkleBlock3 DecodeString failed: %v", err)
@@ -60,6 +64,7 @@ func TestMerkleBlock3(t *testing.T) {
 	}
 
 	got := bytes.NewBuffer(nil)
+
 	err = mBlock.BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
 	if err != nil {
 		t.Errorf("TestMerkleBlock3 BsvEncode failed: %v", err)

@@ -31,7 +31,6 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 
 	if tp.idx == 0 {
 		// this must be a coinbase transaction
-
 		// our .subtree file appears to store the placeholder coinbase tx with the correct hash but doesn't bother with the rest of the tx
 		isCoinbasePlaceholder := len(tx.Inputs) == 0 && len(tx.Outputs) == 0 && tx.Version == bt.DefaultSequenceNumber && tx.LockTime == bt.DefaultSequenceNumber
 

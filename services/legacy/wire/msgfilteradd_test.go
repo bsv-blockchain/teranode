@@ -30,6 +30,7 @@ func TestFilterAddLatest(t *testing.T) {
 	// Ensure max payload is expected value for latest protocol version.
 	wantPayload := uint64(523)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -58,12 +59,14 @@ func TestFilterAddLatest(t *testing.T) {
 func TestFilterAddCrossProtocol(t *testing.T) {
 	data := []byte{0x01, 0x02}
 	msg := NewMsgFilterAdd(data)
+
 	if !bytes.Equal(msg.Data, data) {
 		t.Errorf("should get same data back out")
 	}
 
 	// Encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, ProtocolVersion, LatestEncoding)
 	if err != nil {
 		t.Errorf("encode of MsgFilterAdd failed %v err <%v>", msg, err)
@@ -71,6 +74,7 @@ func TestFilterAddCrossProtocol(t *testing.T) {
 
 	// Decode with old protocol version.
 	var readmsg MsgFilterAdd
+
 	err = readmsg.Bsvdecode(&buf, BIP0031Version, LatestEncoding)
 	if err == nil {
 		t.Errorf("decode of MsgFilterAdd succeeded when it shouldn't "+
@@ -91,6 +95,7 @@ func TestFilterAddMaxDataSize(t *testing.T) {
 
 	// Encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, ProtocolVersion, LatestEncoding)
 	if err == nil {
 		t.Errorf("encode of MsgFilterAdd succeeded when it shouldn't "+
@@ -99,6 +104,7 @@ func TestFilterAddMaxDataSize(t *testing.T) {
 
 	// Decode with latest protocol version.
 	readbuf := bytes.NewReader(data)
+
 	err = msg.Bsvdecode(readbuf, ProtocolVersion, LatestEncoding)
 	if err == nil {
 		t.Errorf("decode of MsgFilterAdd succeeded when it shouldn't "+
@@ -145,9 +151,11 @@ func TestFilterAddWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -169,6 +177,7 @@ func TestFilterAddWireErrors(t *testing.T) {
 		var msg MsgFilterAdd
 
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",

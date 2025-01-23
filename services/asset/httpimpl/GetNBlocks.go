@@ -131,6 +131,7 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 			if numberOfBlocks == 0 {
 				numberOfBlocks = 100
 			}
+
 			if numberOfBlocks > 1000 {
 				numberOfBlocks = 1000
 			}
@@ -163,12 +164,14 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 		}
 
 		bytes := make([]byte, 0, len(blocks)*32*1024)
+
 		for _, block := range blocks {
 			blockBytes, err := block.Bytes()
 			if err != nil {
 				// error is already properly formed
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
+
 			bytes = append(bytes, blockBytes...)
 		}
 

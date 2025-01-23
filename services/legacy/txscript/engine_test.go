@@ -121,6 +121,7 @@ func TestCheckErrorCondition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to step %dth time: %v", i, err)
 		}
+
 		if done {
 			t.Fatalf("finshed early on %dth time", i)
 		}
@@ -131,10 +132,12 @@ func TestCheckErrorCondition(t *testing.T) {
 				err, i)
 		}
 	}
+
 	done, err := vm.Step()
 	if err != nil {
 		t.Fatalf("final step failed %v", err)
 	}
+
 	if !done {
 		t.Fatalf("final step isn't done!")
 	}
@@ -252,7 +255,6 @@ func TestCheckPubKeyEncoding(t *testing.T) {
 				"when it should have failed", test.name)
 		}
 	}
-
 }
 
 // TestCheckSignatureEncoding ensures the internal checkSignatureEncoding
@@ -565,6 +567,7 @@ func TestCheckHashTypeEncoding(t *testing.T) {
 
 	for i, test := range encodingTests {
 		e := Engine{flags: test.EngineFlags}
+
 		err := e.checkHashTypeEncoding(test.SigHash)
 		if test.ShouldFail && err == nil {
 			t.Errorf("Expected test %d to fail", i)

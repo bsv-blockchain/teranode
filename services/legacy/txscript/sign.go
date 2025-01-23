@@ -18,13 +18,13 @@ import (
 // the given transaction, with hashType appended to it.
 func RawTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 	hashType SigHashType, key *bsvec.PrivateKey, amt int64) ([]byte, error) {
-
 	// If the forkID was not passed in with the hashtype then add it here
 	if hashType&SigHashForkID != SigHashForkID {
 		hashType |= SigHashForkID
 	}
 
 	sigHashes := NewTxSigHashes(tx)
+
 	hash, err := CalcSignatureHash(subScript, sigHashes, hashType, tx, idx, amt, true)
 	if err != nil {
 		return nil, err
@@ -42,8 +42,8 @@ func RawTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 // hashing algorithm
 func LegacyTxInSignature(tx *wire.MsgTx, idx int, subScript []byte,
 	hashType SigHashType, key *bsvec.PrivateKey) ([]byte, error) {
-
 	script, _ := ParseScript(subScript)
+
 	hash, err := calcLegacySignatureHash(script, hashType, tx, idx)
 	if err != nil {
 		return nil, err
@@ -129,6 +129,7 @@ func signMultiSig(tx *wire.MsgTx, idx int, amt int64, subScript []byte, hashType
 	// the end of OP_CHECKMULTISIG.
 	builder := NewScriptBuilder().AddOp(OP_FALSE)
 	signed := 0
+
 	for _, addr := range addresses {
 		key, _, err := kdb.GetKey(addr)
 		if err != nil {
@@ -141,6 +142,7 @@ func signMultiSig(tx *wire.MsgTx, idx int, amt int64, subScript []byte, hashType
 		}
 
 		builder.AddData(sig)
+
 		signed++
 		if signed == nRequired {
 			break
@@ -155,7 +157,6 @@ func signMultiSig(tx *wire.MsgTx, idx int, amt int64, subScript []byte, hashType
 func sign(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int, amt int64,
 	subScript []byte, hashType SigHashType, kdb KeyDB, sdb ScriptDB) ([]byte,
 	ScriptClass, []bsvutil.Address, int, error) {
-
 	class, addresses, nrequired, err := ExtractPkScriptAddrs(subScript,
 		chainParams)
 	if err != nil {
@@ -220,7 +221,6 @@ func sign(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int, amt int64,
 func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 	amt int64, pkScript []byte, class ScriptClass, addresses []bsvutil.Address, nRequired int,
 	sigScript, prevScript []byte) ([]byte, error) {
-
 	// TODO: the scripthash and multisig paths here are overly
 	// inefficient in that they will recompute already known data.
 	// some internal refactoring could probably make this avoid needless
@@ -292,7 +292,6 @@ func mergeScripts(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 // each other, behaviour is undefined if this contract is broken.
 func mergeMultiSig(tx *wire.MsgTx, idx int, amt int64, addresses []bsvutil.Address,
 	nRequired int, pkScript, sigScript, prevScript []byte) ([]byte, error) {
-
 	// This is an internal only function and we already parsed this script
 	// as ok for multisig (this is how we got here), so if this fails then
 	// all assumptions are broken and who knows which way is up?
@@ -331,7 +330,6 @@ func mergeMultiSig(tx *wire.MsgTx, idx int, amt int64, addresses []bsvutil.Addre
 	addrToSig := make(map[string][]byte)
 sigLoop:
 	for _, sig := range possibleSigs {
-
 		// can't have a valid signature that doesn't at least have a
 		// hashtype, in practise it is even longer than this. but
 		// that'll be checked next.
@@ -391,6 +389,7 @@ sigLoop:
 		}
 
 		builder.AddData(sig)
+
 		doneSigs++
 		if doneSigs == nRequired {
 			break
@@ -446,7 +445,6 @@ func (sc ScriptClosure) GetScript(address bsvutil.Address) ([]byte, error) {
 func SignTxOutput(chainParams *chaincfg.Params, tx *wire.MsgTx, idx int,
 	amt int64, pkScript []byte, hashType SigHashType, kdb KeyDB, sdb ScriptDB,
 	previousScript []byte) ([]byte, error) {
-
 	sigScript, class, addresses, nrequired, err := sign(chainParams, tx, idx, amt, pkScript, hashType, kdb, sdb)
 	if err != nil {
 		return nil, err

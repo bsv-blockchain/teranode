@@ -25,6 +25,7 @@ func (e *MessageError) Error() string {
 	if e.Func != "" {
 		return fmt.Sprintf("%v: %v", e.Func, e.Description)
 	}
+
 	return e.Description
 }
 

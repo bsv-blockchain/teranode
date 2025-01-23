@@ -22,6 +22,7 @@ func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript *bscript
 	utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
 
 	chHash := chainhash.HashH(utxoHash)
+
 	return &chHash, nil
 }
 

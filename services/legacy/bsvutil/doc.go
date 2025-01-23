@@ -5,21 +5,21 @@
 /*
 Package bsvutil provides Bitcoin (BSV) specific convenience functions and types.
 
-Block Overview
+# Block Overview
 
 A Block defines a Bitcoin block that provides easier and more efficient
 manipulation of raw wire protocol blocks.  It also memoizes hashes for the
 block and its transactions on their first access so subsequent accesses don't
 have to repeat the relatively expensive hashing operations.
 
-Tx Overview
+# Tx Overview
 
 A Tx defines a Bitcoin transaction that provides more efficient manipulation of
 raw wire protocol transactions.  It memoizes the hash for the transaction on its
 first access so subsequent accesses don't have to repeat the relatively
 expensive hashing operations.
 
-Address Overview
+# Address Overview
 
 The Address interface provides an abstraction for a Bitcoin Cashaddress.  While the
 most common type is a pay-to-pubkey-hash, Bitcoin Cash already supports others and

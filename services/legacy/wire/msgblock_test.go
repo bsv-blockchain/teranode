@@ -29,6 +29,7 @@ func TestBlock(t *testing.T) {
 	// Ensure the command is expected value.
 	wantCmd := "block"
 	msg := NewMsgBlock(bh)
+
 	if cmd := msg.Command(); cmd != wantCmd {
 		t.Errorf("NewMsgBlock: wrong command - got %v want %v",
 			cmd, wantCmd)
@@ -38,6 +39,7 @@ func TestBlock(t *testing.T) {
 	// Num addresses (varInt) + max allowed addresses.
 	wantPayload := fixedExcessiveBlockSize
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -53,6 +55,7 @@ func TestBlock(t *testing.T) {
 	// Ensure transactions are added properly.
 	tx := blockOne.Transactions[0].Copy()
 	_ = msg.AddTransaction(tx)
+
 	if !reflect.DeepEqual(msg.Transactions, blockOne.Transactions) {
 		t.Errorf("AddTransaction: wrong transactions - got %v, want %v",
 			spew.Sdump(msg.Transactions),
@@ -61,6 +64,7 @@ func TestBlock(t *testing.T) {
 
 	// Ensure transactions are properly cleared.
 	msg.ClearTransactions()
+
 	if len(msg.Transactions) != 0 {
 		t.Errorf("ClearTransactions: wrong transactions - got %v, want %v",
 			len(msg.Transactions), 0)
@@ -72,6 +76,7 @@ func TestBlock(t *testing.T) {
 func TestBlockTxHashes(t *testing.T) {
 	// Block 1, transaction 1 hash.
 	hashStr := "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098"
+
 	wantHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -79,10 +84,12 @@ func TestBlockTxHashes(t *testing.T) {
 	}
 
 	wantHashes := []chainhash.Hash{*wantHash}
+
 	hashes, err := blockOne.TxHashes()
 	if err != nil {
 		t.Errorf("TxHashes: %v", err)
 	}
+
 	if !reflect.DeepEqual(hashes, wantHashes) {
 		t.Errorf("TxHashes: wrong transaction hashes - got %v, want %v",
 			spew.Sdump(hashes), spew.Sdump(wantHashes))
@@ -93,6 +100,7 @@ func TestBlockTxHashes(t *testing.T) {
 func TestBlockHash(t *testing.T) {
 	// Block 1 hash.
 	hashStr := "839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+
 	wantHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -170,14 +178,17 @@ func TestBlockWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
+
 		err := test.in.BsvEncode(&buf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -186,12 +197,15 @@ func TestBlockWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgBlock
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(&msg), spew.Sdump(test.out))
@@ -236,9 +250,11 @@ func TestBlockWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if err != test.writeErr {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -248,7 +264,9 @@ func TestBlockWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgBlock
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = msg.Bsvdecode(r, test.pver, test.enc)
 		if err != test.readErr {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
@@ -275,14 +293,17 @@ func TestBlockSerialize(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Serialize the block.
 		var buf bytes.Buffer
+
 		err := test.in.Serialize(&buf)
 		if err != nil {
 			t.Errorf("Serialize #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("Serialize #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -291,12 +312,15 @@ func TestBlockSerialize(t *testing.T) {
 
 		// Deserialize the block.
 		var block MsgBlock
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = block.Deserialize(rbuf)
 		if err != nil {
 			t.Errorf("Deserialize #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&block, test.out) {
 			t.Errorf("Deserialize #%d\n got: %s want: %s", i,
 				spew.Sdump(&block), spew.Sdump(test.out))
@@ -306,17 +330,21 @@ func TestBlockSerialize(t *testing.T) {
 		// Deserialize the block while gathering transaction location
 		// information.
 		var txLocBlock MsgBlock
+
 		br := bytes.NewBuffer(test.buf)
+
 		txLocs, err := txLocBlock.DeserializeTxLoc(br)
 		if err != nil {
 			t.Errorf("DeserializeTxLoc #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&txLocBlock, test.out) {
 			t.Errorf("DeserializeTxLoc #%d\n got: %s want: %s", i,
 				spew.Sdump(&txLocBlock), spew.Sdump(test.out))
 			continue
 		}
+
 		if !reflect.DeepEqual(txLocs, test.txLocs) {
 			t.Errorf("DeserializeTxLoc #%d\n got: %s want: %s", i,
 				spew.Sdump(txLocs), spew.Sdump(test.txLocs))
@@ -354,9 +382,11 @@ func TestBlockSerializeErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Serialize the block.
 		w := newFixedWriter(test.max)
+
 		err := test.in.Serialize(w)
 		if err != test.writeErr {
 			t.Errorf("Serialize #%d wrong error got: %v, want: %v",
@@ -366,7 +396,9 @@ func TestBlockSerializeErrors(t *testing.T) {
 
 		// Deserialize the block.
 		var block MsgBlock
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = block.Deserialize(r)
 		if err != test.readErr {
 			t.Errorf("Deserialize #%d wrong error got: %v, want: %v",
@@ -375,7 +407,9 @@ func TestBlockSerializeErrors(t *testing.T) {
 		}
 
 		var txLocBlock MsgBlock
+
 		br := bytes.NewBuffer(test.buf[0:test.max])
+
 		_, err = txLocBlock.DeserializeTxLoc(br)
 		if err != test.readErr {
 			t.Errorf("DeserializeTxLoc #%d wrong error got: %v, want: %v",
@@ -423,10 +457,13 @@ func TestBlockOverflowErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Decode from wire format.
 		var msg MsgBlock
+
 		r := bytes.NewReader(test.buf)
+
 		err := msg.Bsvdecode(r, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
@@ -436,6 +473,7 @@ func TestBlockOverflowErrors(t *testing.T) {
 
 		// Deserialize from wire format.
 		r = bytes.NewReader(test.buf)
+
 		err = msg.Deserialize(r)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("Deserialize #%d wrong error got: %v, want: %v",
@@ -445,6 +483,7 @@ func TestBlockOverflowErrors(t *testing.T) {
 
 		// Deserialize with transaction location info from wire format.
 		br := bytes.NewBuffer(test.buf)
+
 		_, err = msg.DeserializeTxLoc(br)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.err) {
 			t.Errorf("DeserializeTxLoc #%d wrong error got: %v, "+
@@ -472,6 +511,7 @@ func TestBlockSerializeSize(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		serializedSize := test.in.SerializeSize()
 		if serializedSize != test.size {

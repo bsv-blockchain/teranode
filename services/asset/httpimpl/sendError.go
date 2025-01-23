@@ -69,7 +69,6 @@ type errorResponse struct {
 //   - Status in response body matches HTTP status code
 //   - Supports Swagger documentation generation
 func sendError(c echo.Context, status int, code int32, err error) error {
-
 	if status == http.StatusInternalServerError && strings.Contains(err.Error(), "rpc error: code = InvalidArgument desc") {
 		status = http.StatusBadRequest
 	}

@@ -24,6 +24,7 @@ func Start() {
 	debug := flag.Bool("debug", false, "enable debug logging")
 	logfile := flag.String("logfile", "chainextract.log", "path to logfile")
 	flag.Parse()
+
 	tSettings := settings.NewSettings()
 
 	debugLevel := "INFO"

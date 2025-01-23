@@ -115,6 +115,7 @@ type Message interface {
 // on the command.
 func makeEmptyMessage(command string) (Message, error) {
 	var msg Message
+
 	switch command {
 	case CmdVersion:
 		msg = &MsgVersion{}
@@ -218,6 +219,7 @@ func makeEmptyMessage(command string) (Message, error) {
 	default:
 		return nil, fmt.Errorf("unhandled command [%s]: %#v", command, msg)
 	}
+
 	return msg, nil
 }
 
@@ -237,15 +239,19 @@ func readMessageHeader(r io.Reader) (int, *messageHeader, error) {
 	// short read so the proper amount of read bytes are known.  This works
 	// since the header is a fixed size.
 	var headerBytes [MessageHeaderSize]byte
+
 	n, err := io.ReadFull(r, headerBytes[:])
 	if err != nil {
 		return n, nil, err
 	}
+
 	hr := bytes.NewReader(headerBytes[:])
 
 	// Create and populate a messageHeader struct from the raw header bytes.
 	hdr := messageHeader{}
+
 	var command [CommandSize]byte
+
 	readElements(hr, &hdr.magic, &command, &hdr.length, &hdr.checksum)
 
 	// Strip trailing zeros from command string.
@@ -254,7 +260,9 @@ func readMessageHeader(r io.Reader) (int, *messageHeader, error) {
 	if hdr.command == "extmsg" && hdr.length == 0xffffffff && bytes.Equal(hdr.checksum[:], []byte{0x00, 0x00, 0x00, 0x00}) {
 		// This is a special case for the extmsg command which has a
 		var actualCmd [CommandSize]byte
+
 		var extLength uint64
+
 		readElements(hr, &actualCmd, &extLength)
 
 		hdr.command = string(bytes.TrimRight(actualCmd[:], string(rune(0))))
@@ -272,12 +280,14 @@ func discardInput(r io.Reader, n uint64) {
 	maxSize := uint64(10 * 1024) // 10k at a time
 	numReads := n / maxSize
 	bytesRemaining := n % maxSize
+
 	if n > 0 {
 		buf := make([]byte, maxSize)
 		for i := uint64(0); i < numReads; i++ {
 			_, _ = io.ReadFull(r, buf)
 		}
 	}
+
 	if bytesRemaining > 0 {
 		buf := make([]byte, bytesRemaining)
 		_, _ = io.ReadFull(r, buf)
@@ -308,7 +318,6 @@ func WriteMessage(w io.Writer, msg Message, pver uint32, bsvnet BitcoinNet) erro
 // messages.
 func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 	bsvnet BitcoinNet, encoding MessageEncoding) (int, error) {
-
 	if w == nil {
 		return 0, errors.New("writer must not be nil")
 	}
@@ -317,20 +326,24 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 
 	// Enforce max command size.
 	var command [CommandSize]byte
+
 	cmd := msg.Command()
 	if len(cmd) > CommandSize {
 		str := fmt.Sprintf("command [%s] is too long [max %v]",
 			cmd, CommandSize)
 		return totalBytes, messageError("WriteMessage", str)
 	}
+
 	copy(command[:], []byte(cmd))
 
 	// Encode the message payload.
 	var bw bytes.Buffer
+
 	err := msg.BsvEncode(&bw, pver, encoding)
 	if err != nil {
 		return totalBytes, err
 	}
+
 	payload := bw.Bytes()
 	lenp := len(payload)
 
@@ -339,6 +352,7 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 		str := fmt.Sprintf("message payload is too large - encoded "+
 			"%d bytes, but maximum message payload is %d bytes",
 			lenp, maxMessagePayload())
+
 		return totalBytes, messageError("WriteMessage", str)
 	}
 
@@ -348,6 +362,7 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 		str := fmt.Sprintf("message payload is too large - encoded "+
 			"%d bytes, but maximum message payload size for "+
 			"messages of type [%s] is %d.", lenp, cmd, mpl)
+
 		return totalBytes, messageError("WriteMessage", str)
 	}
 
@@ -390,10 +405,10 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 // allows the caller to specify which message encoding is to consult when
 // decoding wire messages.
 func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc MessageEncoding) (int, Message, []byte, error) {
-
 	totalBytes := 0
 	n, hdr, err := readMessageHeader(r)
 	totalBytes += n
+
 	if err != nil {
 		return totalBytes, nil, nil, err
 	}
@@ -419,6 +434,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	command := hdr.command
 	if !utf8.ValidString(command) {
 		discardInput(r, uint64(hdr.length))
+
 		str := fmt.Sprintf("invalid command %v", []byte(command))
 
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
@@ -461,6 +477,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	payload := make([]byte, length)
 	n, err = io.ReadFull(r, payload)
 	totalBytes += n
+
 	if err != nil {
 		return totalBytes, nil, nil, err
 	}
@@ -470,7 +487,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	// data sets, and the limited utility of such a checksum.
 	if length != 0xffffffff && hdr.extLength == 0 {
 		checksum := chainhash.DoubleHashB(payload)[0:4]
-		if !bytes.Equal(checksum[:], hdr.checksum[:]) {
+		if !bytes.Equal(checksum, hdr.checksum[:]) {
 			str := fmt.Sprintf("payload checksum failed - header "+
 				"indicates %v, but actual checksum is %v.",
 				hdr.checksum, checksum)
@@ -482,6 +499,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, bsvnet BitcoinNet, enc M
 	// Unmarshal message.  NOTE: This must be a *bytes.Buffer since the
 	// MsgVersion Bsvdecode function requires it.
 	pr := bytes.NewBuffer(payload)
+
 	err = msg.Bsvdecode(pr, pver, enc)
 	if err != nil {
 		return totalBytes, nil, nil, err

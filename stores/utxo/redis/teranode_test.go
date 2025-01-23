@@ -100,15 +100,14 @@ func TestSpend(t *testing.T) {
 
 	err = store.client.HSet(ctx, hash.String(), fields).Err()
 	require.NoError(t, err)
-
-	// spends := []*utxo.Spend{
-	// 	{
-	// 		TxID:         &hash,
-	// 		Vout:         0,
-	// 		UTXOHash:     &hash,
-	// 		SpendingTxID: &hash,
-	// 	},
-	// }
+	//	spends := []*utxo.Spend{
+	//		{
+	//			TxID:         &hash,
+	//			Vout:         0,
+	//			UTXOHash:     &hash,
+	//			SpendingTxID: &hash,
+	//		},
+	//	}
 	//
 	// err = store.Spend(ctx, spends, 0)
 	// require.NoError(t, err)

@@ -27,24 +27,29 @@ func TestNetAddress(t *testing.T) {
 	if !na.IP.Equal(ip) {
 		t.Errorf("NetNetAddress: wrong ip - got %v, want %v", na.IP, ip)
 	}
+
 	if na.Port != uint16(port) {
 		t.Errorf("NetNetAddress: wrong port - got %v, want %v", na.Port,
 			port)
 	}
+
 	if na.Services != 0 {
 		t.Errorf("NetNetAddress: wrong services - got %v, want %v",
 			na.Services, 0)
 	}
+
 	if na.HasService(SFNodeNetwork) {
 		t.Errorf("HasService: SFNodeNetwork service is set")
 	}
 
 	// Ensure adding the full service node flag works.
 	na.AddService(SFNodeNetwork)
+
 	if na.Services != SFNodeNetwork {
 		t.Errorf("AddService: wrong services - got %v, want %v",
 			na.Services, SFNodeNetwork)
 	}
+
 	if !na.HasService(SFNodeNetwork) {
 		t.Errorf("HasService: SFNodeNetwork service not set")
 	}
@@ -53,6 +58,7 @@ func TestNetAddress(t *testing.T) {
 	pver := ProtocolVersion
 	wantPayload := uint64(30)
 	maxPayload := maxNetAddressPayload(ProtocolVersion)
+
 	if maxPayload != wantPayload {
 		t.Errorf("maxNetAddressPayload: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -64,6 +70,7 @@ func TestNetAddress(t *testing.T) {
 	pver = NetAddressTimeVersion - 1
 	wantPayload = 26
 	maxPayload = maxNetAddressPayload(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("maxNetAddressPayload: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -170,15 +177,18 @@ func TestNetAddressWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		test := test
 		// Encode to wire format.
 		var buf bytes.Buffer
+
 		err := writeNetAddress(&buf, test.pver, &test.in, test.ts)
 		if err != nil {
 			t.Errorf("writeNetAddress #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("writeNetAddress #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -187,12 +197,15 @@ func TestNetAddressWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var na NetAddress
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = readNetAddress(rbuf, test.pver, &na, test.ts)
 		if err != nil {
 			t.Errorf("readNetAddress #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(na, test.out) {
 			t.Errorf("readNetAddress #%d\n got: %s want: %s", i,
 				spew.Sdump(na), spew.Sdump(test.out))
@@ -256,9 +269,11 @@ func TestNetAddressWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := writeNetAddress(w, test.pver, test.in, test.ts)
 		if err != test.writeErr {
 			t.Errorf("writeNetAddress #%d wrong error got: %v, want: %v",
@@ -268,7 +283,9 @@ func TestNetAddressWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var na NetAddress
+
 		r := newFixedReader(test.max, test.buf)
+
 		err = readNetAddress(r, test.pver, &na, test.ts)
 		if err != test.readErr {
 			t.Errorf("readNetAddress #%d wrong error got: %v, want: %v",

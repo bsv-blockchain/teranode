@@ -50,6 +50,7 @@ func (q *LockFreeQ[T]) Dequeue() *T {
 	}
 
 	q.head = next
+
 	return &next.value
 }
 

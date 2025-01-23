@@ -177,7 +177,6 @@ func (vm *Engine) executeOpcode(pop *parsedOpcode) error {
 	// the minimal data verification flag is set.
 	if vm.dstack.verifyMinimalData && vm.isBranchExecuting() &&
 		pop.opcode.value <= OP_PUSHDATA4 {
-
 		if err := pop.checkMinimalDataPush(); err != nil {
 			return err
 		}
@@ -208,6 +207,7 @@ func (vm *Engine) validPC() error {
 		str := fmt.Sprintf("past input scripts %v:%v %v:%04d",
 			vm.scriptIdx, vm.scriptOff, vm.scriptIdx,
 			len(vm.scripts[vm.scriptIdx]))
+
 		return scriptError(ErrInvalidProgramCounter, str)
 	}
 
@@ -267,7 +267,6 @@ func (vm *Engine) CheckErrorCondition(finalScript bool) error {
 
 	if finalScript && vm.hasFlag(ScriptVerifyCleanStack) &&
 		vm.dstack.Depth() != 1 {
-
 		str := fmt.Sprintf("stack contains %d unexpected items",
 			vm.dstack.Depth()-1)
 		return scriptError(ErrCleanStack, str)
@@ -359,6 +358,7 @@ func (vm *Engine) Step() (done bool, err error) {
 			}
 
 			script := vm.savedFirstStack[len(vm.savedFirstStack)-1]
+
 			pops, err := ParseScript(script)
 			if err != nil {
 				return false, err
@@ -405,6 +405,7 @@ func (vm *Engine) Execute() (err error) {
 		if err != nil {
 			return err
 		}
+
 		log.Debugf("%v", newLogClosure(func() string {
 			var dstr, astr string
 
@@ -439,6 +440,7 @@ func (vm *Engine) checkHashTypeEncoding(hashType SigHashType) error {
 	sigHashType := hashType & ^SigHashAnyOneCanPay
 	if vm.hasFlag(ScriptVerifyBip143SigHash) {
 		sigHashType ^= SigHashForkID
+
 		if hashType&SigHashForkID == 0 {
 			str := fmt.Sprintf("hash type does not contain uahf forkID 0x%x", hashType)
 
@@ -480,7 +482,6 @@ func (vm *Engine) checkSignatureEncoding(sig []byte) error {
 	if !vm.hasFlag(ScriptVerifyDERSignatures) &&
 		!vm.hasFlag(ScriptVerifyLowS) &&
 		!vm.hasFlag(ScriptVerifyStrictEncoding) {
-
 		return nil
 	}
 
@@ -600,6 +601,7 @@ func (vm *Engine) checkSignatureEncoding(sig []byte) error {
 	// represents the S value of the signature.
 	sOffset := sLenOffset + 1
 	sLen := int(sig[sLenOffset])
+
 	if sOffset+sLen != sigLen {
 		str := "malformed signature: invalid S length"
 		return scriptError(ErrSigInvalidSLen, str)
@@ -726,7 +728,6 @@ func (vm *Engine) SetAltStack(data [][]byte) {
 // engine according to the description provided by each flag.
 func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags,
 	sigCache *SigCache, hashCache *TxSigHashes, inputAmount int64) (*Engine, error) {
-
 	// The provided transaction input index must refer to a valid input.
 	if txIdx < 0 || txIdx >= len(tx.TxIn) {
 		str := fmt.Sprintf("transaction input index %d is negative or "+
@@ -773,6 +774,7 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 	// a third script to execute.
 	scripts := [][]byte{scriptSig, scriptPubKey}
 	vm.scripts = make([][]parsedOpcode, len(scripts))
+
 	for i, scr := range scripts {
 		if len(scr) > MaxScriptSize {
 			str := fmt.Sprintf("script size %d is larger than max "+
@@ -781,6 +783,7 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 		}
 
 		var err error
+
 		vm.scripts[i], err = ParseScript(scr)
 		if err != nil {
 			return nil, err
@@ -800,6 +803,7 @@ func NewEngine(scriptPubKey []byte, tx *wire.MsgTx, txIdx int, flags ScriptFlags
 			return nil, scriptError(ErrNotPushOnly,
 				"pay to script hash is not push only")
 		}
+
 		vm.bip16 = true
 	}
 

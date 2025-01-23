@@ -14,6 +14,7 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
+
 	fmt.Println(hex)
 
 	pk, err1 := decodeHexEd25519PrivateKey(hex)

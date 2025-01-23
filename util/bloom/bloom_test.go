@@ -25,14 +25,17 @@ func Test_BloomFilterSharded(t *testing.T) {
 
 	// Add 10% of the txids
 	start := time.Now()
+
 	for i := 0; i < numTxids/insertionDiv; i++ {
 		filter.Add(txids[i])
 	}
+
 	t.Logf("Time to add txids: %v\n", time.Since(start))
 
 	// Test the txids and count false positives
 	start = time.Now()
 	falsePositives := 0
+
 	for i := 0; i < numTxids; i++ {
 		if i < numTxids/insertionDiv {
 			if !filter.Test(txids[i]) {
@@ -44,6 +47,7 @@ func Test_BloomFilterSharded(t *testing.T) {
 			}
 		}
 	}
+
 	t.Logf("\nTime to test txids: %v\n", time.Since(start))
 	t.Logf("Number of false positives: %v\n", falsePositives)
 }
@@ -59,6 +63,8 @@ func generateRandomTxid() []byte {
 
 func getAlloc() uint64 {
 	var m runtime.MemStats
+
 	runtime.ReadMemStats(&m)
+
 	return m.Alloc
 }

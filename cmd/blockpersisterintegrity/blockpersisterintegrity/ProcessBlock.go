@@ -45,6 +45,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 	}
 
 	bp.logger.Debugf("checking block %d %s\n", height, block.Hash())
+
 	if block.CoinbaseTx == nil || !block.CoinbaseTx.IsCoinbase() {
 		return errors.NewBlockError("block %s does not have a valid coinbase transaction", block.Hash())
 	}
@@ -90,6 +91,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 
 	blockReward := block.CoinbaseTx.TotalOutputSatoshis()
 	blockSubsidy := util.GetBlockSubsidyForHeight(height, bp.settings.ChainCfgParams)
+
 	if blockFees+blockSubsidy != blockReward {
 		return errors.NewBlockError("block %s has incorrect fees: %d != %d\n", block.Hash(), blockFees, blockReward)
 		// } else {

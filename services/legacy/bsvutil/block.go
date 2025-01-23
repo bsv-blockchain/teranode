@@ -57,14 +57,17 @@ func (b *Block) Bytes() ([]byte, error) {
 
 	// Serialize the MsgBlock.
 	w := bytes.NewBuffer(make([]byte, 0, b.msgBlock.SerializeSize()))
+
 	err := b.msgBlock.Serialize(w)
 	if err != nil {
 		return nil, err
 	}
+
 	serializedBlock := w.Bytes()
 
 	// Cache the serialized bytes and return them.
 	b.serializedBlock = serializedBlock
+
 	return serializedBlock, nil
 }
 
@@ -80,6 +83,7 @@ func (b *Block) Hash() *chainhash.Hash {
 	// Cache the block hash and return it.
 	hash := b.msgBlock.BlockHash()
 	b.blockHash = &hash
+
 	return &hash
 }
 
@@ -112,6 +116,7 @@ func (b *Block) Tx(txNum int) (*Tx, error) {
 	newTx := NewTx(b.msgBlock.Transactions[txNum])
 	newTx.SetIndex(txNum)
 	b.transactions[txNum] = newTx
+
 	return newTx, nil
 }
 
@@ -143,6 +148,7 @@ func (b *Block) Transactions() []*Tx {
 	}
 
 	b.txnsGenerated = true
+
 	return b.transactions
 }
 
@@ -173,13 +179,16 @@ func (b *Block) TxLoc() ([]wire.TxLoc, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	rbuf := bytes.NewBuffer(rawMsg)
 
 	var mblock wire.MsgBlock
+
 	txLocs, err := mblock.DeserializeTxLoc(rbuf)
 	if err != nil {
 		return nil, err
 	}
+
 	return txLocs, err
 }
 
@@ -207,11 +216,14 @@ func NewBlock(msgBlock *wire.MsgBlock) *Block {
 // serialized bytes.  See Block.
 func NewBlockFromBytes(serializedBlock []byte) (*Block, error) {
 	br := bytes.NewReader(serializedBlock)
+
 	b, err := NewBlockFromReader(br)
 	if err != nil {
 		return nil, err
 	}
+
 	b.serializedBlock = serializedBlock
+
 	return b, nil
 }
 
@@ -220,6 +232,7 @@ func NewBlockFromBytes(serializedBlock []byte) (*Block, error) {
 func NewBlockFromReader(r io.Reader) (*Block, error) {
 	// Deserialize the bytes into a MsgBlock.
 	var msgBlock wire.MsgBlock
+
 	err := msgBlock.Deserialize(r)
 	if err != nil {
 		return nil, err
@@ -229,6 +242,7 @@ func NewBlockFromReader(r io.Reader) (*Block, error) {
 		msgBlock:    &msgBlock,
 		blockHeight: BlockHeightUnknown,
 	}
+
 	return &b, nil
 }
 

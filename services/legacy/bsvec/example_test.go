@@ -22,11 +22,13 @@ func Example_signMessage() {
 		fmt.Println(err)
 		return
 	}
+
 	privKey, pubKey := bsvec.PrivKeyFromBytes(bsvec.S256(), pkBytes)
 
 	// Sign a message using the private key.
 	message := "test message"
 	messageHash := chainhash.DoubleHashB([]byte(message))
+
 	signature, err := privKey.Sign(messageHash)
 	if err != nil {
 		fmt.Println(err)
@@ -56,6 +58,7 @@ func Example_verifySignature() {
 		fmt.Println(err)
 		return
 	}
+
 	pubKey, err := bsvec.ParsePubKey(pubKeyBytes, bsvec.S256())
 	if err != nil {
 		fmt.Println(err)
@@ -71,6 +74,7 @@ func Example_verifySignature() {
 		fmt.Println(err)
 		return
 	}
+
 	signature, err := bsvec.ParseSignature(sigBytes, bsvec.S256())
 	if err != nil {
 		fmt.Println(err)
@@ -98,6 +102,7 @@ func Example_encryptMessage() {
 		fmt.Println(err)
 		return
 	}
+
 	pubKey, err := bsvec.ParsePubKey(pubKeyBytes, bsvec.S256())
 	if err != nil {
 		fmt.Println(err)
@@ -106,6 +111,7 @@ func Example_encryptMessage() {
 
 	// Encrypt a message decryptable by the private key corresponding to pubKey
 	message := "test message"
+
 	ciphertext, err := bsvec.Encrypt(pubKey, []byte(message))
 	if err != nil {
 		fmt.Println(err)

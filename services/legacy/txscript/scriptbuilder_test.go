@@ -38,44 +38,53 @@ func TestScriptBuilderAddOp(t *testing.T) {
 
 	// Run tests and individually add each op via AddOp.
 	builder := NewScriptBuilder()
+
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		builder.Reset()
+
 		for _, opcode := range test.opcodes {
 			builder.AddOp(opcode)
 		}
+
 		result, err := builder.Script()
 		if err != nil {
 			t.Errorf("ScriptBuilder.AddOp #%d (%s) unexpected "+
 				"error: %v", i, test.name, err)
 			continue
 		}
+
 		if !bytes.Equal(result, test.expected) {
 			t.Errorf("ScriptBuilder.AddOp #%d (%s) wrong result\n"+
 				"got: %x\nwant: %x", i, test.name, result,
 				test.expected)
+
 			continue
 		}
 	}
 
 	// Run tests and bulk add ops via AddOps.
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		builder.Reset()
+
 		result, err := builder.AddOps(test.opcodes).Script()
 		if err != nil {
 			t.Errorf("ScriptBuilder.AddOps #%d (%s) unexpected "+
 				"error: %v", i, test.name, err)
 			continue
 		}
+
 		if !bytes.Equal(result, test.expected) {
 			t.Errorf("ScriptBuilder.AddOps #%d (%s) wrong result\n"+
 				"got: %x\nwant: %x", i, test.name, result,
 				test.expected)
+
 			continue
 		}
 	}
-
 }
 
 // TestScriptBuilderAddInt64 tests that pushing signed integers to a script via
@@ -129,19 +138,24 @@ func TestScriptBuilderAddInt64(t *testing.T) {
 	}
 
 	builder := NewScriptBuilder()
+
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		builder.Reset().AddInt64(test.val)
+
 		result, err := builder.Script()
 		if err != nil {
 			t.Errorf("ScriptBuilder.AddInt64 #%d (%s) unexpected "+
 				"error: %v", i, test.name, err)
 			continue
 		}
+
 		if !bytes.Equal(result, test.expected) {
 			t.Errorf("ScriptBuilder.AddInt64 #%d (%s) wrong result\n"+
 				"got: %x\nwant: %x", i, test.name, result,
 				test.expected)
+
 			continue
 		}
 	}
@@ -270,18 +284,22 @@ func TestScriptBuilderAddData(t *testing.T) {
 	}
 
 	builder := NewScriptBuilder()
+
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		if !test.useFull {
 			builder.Reset().AddData(test.data)
 		} else {
 			builder.Reset().AddFullData(test.data)
 		}
+
 		result, _ := builder.Script()
 		if !bytes.Equal(result, test.expected) {
 			t.Errorf("ScriptBuilder.AddData #%d (%s) wrong result\n"+
 				"got: %x\nwant: %x", i, test.name, result,
 				test.expected)
+
 			continue
 		}
 	}
@@ -296,6 +314,7 @@ func TestExceedMaxScriptSize(t *testing.T) {
 	// Start off by constructing a max size script.
 	builder := NewScriptBuilder()
 	builder.Reset().AddFullData(make([]byte, MaxScriptSize-3))
+
 	origScript, err := builder.Script()
 	if err != nil {
 		t.Fatalf("Unexpected error for max size script: %v", err)
@@ -308,6 +327,7 @@ func TestExceedMaxScriptSize(t *testing.T) {
 		t.Fatalf("ScriptBuilder.AddData allowed exceeding max script "+
 			"size: %v", len(script))
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddData unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
@@ -316,11 +336,13 @@ func TestExceedMaxScriptSize(t *testing.T) {
 	// Ensure adding an opcode that would exceed the maximum size of the
 	// script does not add the data.
 	builder.Reset().AddFullData(make([]byte, MaxScriptSize-3))
+
 	script, err = builder.AddOp(OP_0).Script()
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatalf("ScriptBuilder.AddOp unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddOp unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
@@ -329,11 +351,13 @@ func TestExceedMaxScriptSize(t *testing.T) {
 	// Ensure adding an integer that would exceed the maximum size of the
 	// script does not add the data.
 	builder.Reset().AddFullData(make([]byte, MaxScriptSize-3))
+
 	script, err = builder.AddInt64(0).Script()
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatalf("ScriptBuilder.AddInt64 unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddInt64 unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
@@ -350,15 +374,18 @@ func TestErroredScript(t *testing.T) {
 	// initial error condition.
 	builder := NewScriptBuilder()
 	builder.Reset().AddFullData(make([]byte, MaxScriptSize-8))
+
 	origScript, err := builder.Script()
 	if err != nil {
 		t.Fatalf("ScriptBuilder.AddFullData unexpected error: %v", err)
 	}
+
 	script, err := builder.AddData([]byte{0x00, 0x00, 0x00, 0x00, 0x00}).Script()
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatalf("ScriptBuilder.AddData allowed exceeding max script "+
 			"size: %v", len(script))
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddData unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
@@ -370,6 +397,7 @@ func TestErroredScript(t *testing.T) {
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatal("ScriptBuilder.AddFullData succeeded on errored script")
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddFullData unexpected modified "+
 			"script - got len %d, want len %d", len(script),
@@ -381,6 +409,7 @@ func TestErroredScript(t *testing.T) {
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatal("ScriptBuilder.AddData succeeded on errored script")
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddData unexpected modified "+
 			"script - got len %d, want len %d", len(script),
@@ -392,6 +421,7 @@ func TestErroredScript(t *testing.T) {
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatal("ScriptBuilder.AddOp succeeded on errored script")
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddOp unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))
@@ -403,6 +433,7 @@ func TestErroredScript(t *testing.T) {
 	if _, ok := err.(ErrScriptNotCanonical); !ok || err == nil {
 		t.Fatal("ScriptBuilder.AddInt64 succeeded on errored script")
 	}
+
 	if !bytes.Equal(script, origScript) {
 		t.Fatalf("ScriptBuilder.AddInt64 unexpected modified script - "+
 			"got len %d, want len %d", len(script), len(origScript))

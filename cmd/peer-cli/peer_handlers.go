@@ -31,6 +31,7 @@ func OnInv(p *peer.Peer, msg *wire.MsgInv) {
 	for i, vect := range msg.InvList {
 		fmt.Printf("%d. vect: type: %s\nhash: %s\n", i, vect.Type, vect.Hash.String())
 	}
+
 	fmt.Printf("\n")
 }
 
@@ -59,11 +60,12 @@ func OnGetAddr(p *peer.Peer, msg *wire.MsgGetAddr) {
 }
 func OnAddr(p *peer.Peer, msg *wire.MsgAddr) {
 	fmt.Printf("received addr: %+v\n\n", msg)
+
 	for i, vect := range msg.AddrList {
 		fmt.Printf("%d. address: %+v\n", i, vect)
 	}
-	fmt.Printf("\n")
 
+	fmt.Printf("\n")
 }
 
 // OnRead is invoked when a peer receives a bitcoin message.  It
@@ -75,14 +77,17 @@ func OnAddr(p *peer.Peer, msg *wire.MsgAddr) {
 // not directly provide a callback.
 func OnRead(p *peer.Peer, bytesRead int, msg wire.Message, err error) {
 	fmt.Printf("onRead: bytesRead: %d\nmsg: %+v\n", bytesRead, msg)
+
 	if err != nil {
 		fmt.Printf("err: %v\n", err)
+
 		if err.Error() == "ReadMessage: unhandled command [protoconf]" {
 			// We don't understand this command, log and ignore it instead of disconnecting
 			fmt.Println("Received unhandled command [protoconf], ignoring")
 			return
 		}
 	}
+
 	fmt.Println("")
 }
 
@@ -92,9 +97,11 @@ func OnRead(p *peer.Peer, bytesRead int, msg wire.Message, err error) {
 // circumstances such as keeping track of server-wide byte counts.
 func OnWrite(p *peer.Peer, bytesWritten int, msg wire.Message, err error) {
 	fmt.Printf("onWrite: bytesWritten: %d\nmsg: %+v\n", bytesWritten, msg)
+
 	if err != nil {
 		fmt.Printf("err: %v\n", err)
 	}
+
 	fmt.Println("")
 }
 func OnReject(p *peer.Peer, msg *wire.MsgReject) {

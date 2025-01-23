@@ -56,6 +56,7 @@ func (l binaryFreeList) Borrow() []byte {
 	default:
 		buf = make([]byte, 8)
 	}
+
 	return buf[:8]
 }
 
@@ -77,8 +78,10 @@ func (l binaryFreeList) Uint8(r io.Reader) (uint8, error) {
 		l.Return(buf)
 		return 0, err
 	}
+
 	rv := buf[0]
 	l.Return(buf)
+
 	return rv, nil
 }
 
@@ -91,8 +94,10 @@ func (l binaryFreeList) Uint16(r io.Reader, byteOrder binary.ByteOrder) (uint16,
 		l.Return(buf)
 		return 0, err
 	}
+
 	rv := byteOrder.Uint16(buf)
 	l.Return(buf)
+
 	return rv, nil
 }
 
@@ -105,8 +110,10 @@ func (l binaryFreeList) Uint32(r io.Reader, byteOrder binary.ByteOrder) (uint32,
 		l.Return(buf)
 		return 0, err
 	}
+
 	rv := byteOrder.Uint32(buf)
 	l.Return(buf)
+
 	return rv, nil
 }
 
@@ -119,8 +126,10 @@ func (l binaryFreeList) Uint64(r io.Reader, byteOrder binary.ByteOrder) (uint64,
 		l.Return(buf)
 		return 0, err
 	}
+
 	rv := byteOrder.Uint64(buf)
 	l.Return(buf)
+
 	return rv, nil
 }
 
@@ -131,6 +140,7 @@ func (l binaryFreeList) PutUint8(w io.Writer, val uint8) error {
 	buf[0] = val
 	_, err := w.Write(buf)
 	l.Return(buf)
+
 	return err
 }
 
@@ -142,6 +152,7 @@ func (l binaryFreeList) PutUint16(w io.Writer, byteOrder binary.ByteOrder, val u
 	byteOrder.PutUint16(buf, val)
 	_, err := w.Write(buf)
 	l.Return(buf)
+
 	return err
 }
 
@@ -153,6 +164,7 @@ func (l binaryFreeList) PutUint32(w io.Writer, byteOrder binary.ByteOrder, val u
 	byteOrder.PutUint32(buf, val)
 	_, err := w.Write(buf)
 	l.Return(buf)
+
 	return err
 }
 
@@ -164,6 +176,7 @@ func (l binaryFreeList) PutUint64(w io.Writer, byteOrder binary.ByteOrder, val u
 	byteOrder.PutUint64(buf, val)
 	_, err := w.Write(buf)
 	l.Return(buf)
+
 	return err
 }
 
@@ -197,7 +210,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = int32(rv)
+
 		return nil
 
 	case *uint32:
@@ -205,7 +220,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = rv
+
 		return nil
 
 	case *int64:
@@ -213,7 +230,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = int64(rv)
+
 		return nil
 
 	case *uint64:
@@ -221,7 +240,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = rv
+
 		return nil
 
 	case *bool:
@@ -229,11 +250,13 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		if rv == 0x00 {
 			*e = false
 		} else {
 			*e = true
 		}
+
 		return nil
 
 	// Unix timestamp encoded as a uint32.
@@ -242,7 +265,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = uint32Time(time.Unix(int64(rv), 0))
+
 		return nil
 
 	// Unix timestamp encoded as an int64.
@@ -251,7 +276,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = int64Time(time.Unix(int64(rv), 0))
+
 		return nil
 
 	// Message header checksum.
@@ -260,6 +287,7 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	// Message header command.
@@ -268,6 +296,7 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	// IP address.
@@ -276,6 +305,7 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case *chainhash.Hash:
@@ -283,6 +313,7 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case *ServiceFlag:
@@ -290,7 +321,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = ServiceFlag(rv)
+
 		return nil
 
 	case *InvType:
@@ -298,7 +331,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = InvType(rv)
+
 		return nil
 
 	case *BitcoinNet:
@@ -306,7 +341,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = BitcoinNet(rv)
+
 		return nil
 
 	case *BloomUpdateType:
@@ -314,7 +351,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = BloomUpdateType(rv)
+
 		return nil
 
 	case *RejectCode:
@@ -322,7 +361,9 @@ func readElement(r io.Reader, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		*e = RejectCode(rv)
+
 		return nil
 	}
 
@@ -340,6 +381,7 @@ func readElements(r io.Reader, elements ...interface{}) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -353,6 +395,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case uint32:
@@ -360,6 +403,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case int64:
@@ -367,6 +411,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case uint64:
@@ -374,6 +419,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case bool:
@@ -383,9 +429,11 @@ func writeElement(w io.Writer, element interface{}) error {
 		} else {
 			err = binarySerializer.PutUint8(w, 0x00)
 		}
+
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	// Message header checksum.
@@ -394,6 +442,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	// Message header command.
@@ -402,6 +451,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	// IP address.
@@ -410,6 +460,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case *chainhash.Hash:
@@ -417,6 +468,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case ServiceFlag:
@@ -424,6 +476,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case InvType:
@@ -431,6 +484,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case BitcoinNet:
@@ -438,6 +492,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case BloomUpdateType:
@@ -445,6 +500,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 
 	case RejectCode:
@@ -452,6 +508,7 @@ func writeElement(w io.Writer, element interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		return nil
 	}
 
@@ -469,6 +526,7 @@ func writeElements(w io.Writer, elements ...interface{}) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -480,12 +538,14 @@ func ReadVarInt(r io.Reader, pver uint32) (uint64, error) {
 	}
 
 	var rv uint64
+
 	switch discriminant {
 	case 0xff:
 		sv, err := binarySerializer.Uint64(r, littleEndian)
 		if err != nil {
 			return 0, err
 		}
+
 		rv = sv
 
 		// The encoding is not canonical if the value could have been
@@ -501,6 +561,7 @@ func ReadVarInt(r io.Reader, pver uint32) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
+
 		rv = uint64(sv)
 
 		// The encoding is not canonical if the value could have been
@@ -516,6 +577,7 @@ func ReadVarInt(r io.Reader, pver uint32) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
+
 		rv = uint64(sv)
 
 		// The encoding is not canonical if the value could have been
@@ -545,6 +607,7 @@ func WriteVarInt(w io.Writer, pver uint32, val uint64) error {
 		if err != nil {
 			return err
 		}
+
 		return binarySerializer.PutUint16(w, littleEndian, uint16(val))
 	}
 
@@ -553,6 +616,7 @@ func WriteVarInt(w io.Writer, pver uint32, val uint64) error {
 		if err != nil {
 			return err
 		}
+
 		return binarySerializer.PutUint32(w, littleEndian, uint32(val))
 	}
 
@@ -560,6 +624,7 @@ func WriteVarInt(w io.Writer, pver uint32, val uint64) error {
 	if err != nil {
 		return err
 	}
+
 	return binarySerializer.PutUint64(w, littleEndian, val)
 }
 
@@ -608,10 +673,12 @@ func ReadVarString(r io.Reader, pver uint32) (string, error) {
 	}
 
 	buf := make([]byte, count)
+
 	_, err = io.ReadFull(r, buf)
 	if err != nil {
 		return "", err
 	}
+
 	return string(buf), nil
 }
 
@@ -623,7 +690,9 @@ func WriteVarString(w io.Writer, pver uint32, str string) error {
 	if err != nil {
 		return err
 	}
+
 	_, err = w.Write([]byte(str))
+
 	return err
 }
 
@@ -636,7 +705,6 @@ func WriteVarString(w io.Writer, pver uint32, str string) error {
 // the error.
 func ReadVarBytes(r io.Reader, pver uint32, maxAllowed uint64,
 	fieldName string) ([]byte, error) {
-
 	count, err := ReadVarInt(r, pver)
 	if err != nil {
 		return nil, err
@@ -652,10 +720,12 @@ func ReadVarBytes(r io.Reader, pver uint32, maxAllowed uint64,
 	}
 
 	b := make([]byte, count)
+
 	_, err = io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
 	}
+
 	return b, nil
 }
 
@@ -663,12 +733,14 @@ func ReadVarBytes(r io.Reader, pver uint32, maxAllowed uint64,
 // containing the number of bytes, followed by the bytes themselves.
 func WriteVarBytes(w io.Writer, pver uint32, bytes []byte) error {
 	slen := uint64(len(bytes))
+
 	err := WriteVarInt(w, pver, slen)
 	if err != nil {
 		return err
 	}
 
 	_, err = w.Write(bytes)
+
 	return err
 }
 
@@ -680,6 +752,7 @@ func randomUint64(r io.Reader) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	return rv, nil
 }
 

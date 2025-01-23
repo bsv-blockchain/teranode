@@ -95,5 +95,6 @@ func (s *SigCache) Add(sigHash chainhash.Hash, sig *bsvec.Signature, pubKey *bsv
 			break
 		}
 	}
+
 	s.validSigs[sigHash] = sigCacheEntry{sig, pubKey}
 }

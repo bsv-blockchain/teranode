@@ -53,9 +53,11 @@ type pipeConn struct {
 func (conn *pipeConn) Close() error {
 	err := conn.PipeReader.Close()
 	err1 := conn.PipeWriter.Close()
+
 	if err == nil {
 		err = err1
 	}
+
 	return err
 }
 
@@ -92,6 +94,7 @@ func Pipe(addr1, addr2 net.Addr) (net.Conn, net.Conn) {
 	conn2 := pipeConn{localAddr: addr2, remoteAddr: addr1}
 	conn1.PipeReader, conn2.PipeWriter = io.Pipe()
 	conn2.PipeReader, conn1.PipeWriter = io.Pipe()
+
 	return &conn1, &conn2
 }
 
@@ -122,6 +125,7 @@ func MakeConnectedPeers(inboundCfg peer.Config, outboundCfg peer.Config, index u
 		err = fmt.Errorf("failed to create new outbound peer: %v", err)
 		return nil, nil, err
 	}
+
 	outboundPeer.AssociateConnection(conn2)
 
 	// Now that both sides are connected, wait for handshake to complete
@@ -146,6 +150,7 @@ func WaitUntil(fn func() bool, timeout time.Duration) bool {
 	defer ticker.Stop()
 
 	timeoutChan := time.After(timeout)
+
 	for {
 		select {
 		case <-ticker.C:
@@ -228,13 +233,16 @@ func NewMockPeerNotifier() *MockPeerNotifier {
 // convenience.
 func GenerateAnyoneCanSpendAddress(chainParams *chaincfg.Params) (bsvutil.Address, []byte, error) {
 	redeemScript := []byte{txscript.OP_TRUE}
+
 	scriptSig, err := txscript.NewScriptBuilder().AddData(redeemScript).Script()
 	if err != nil {
 		return nil, nil, err
 	}
+
 	address, err := bsvutil.NewAddressScriptHash(redeemScript, chainParams)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return address, scriptSig, err
 }

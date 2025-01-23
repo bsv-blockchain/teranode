@@ -19,6 +19,7 @@ func Stack() string {
 	skip := 2
 
 	var simplifiedStack []string
+
 	var lastFuncName string
 
 	for scanner.Scan() {
@@ -43,6 +44,7 @@ func Stack() string {
 					}
 
 					simplifiedStack = append(simplifiedStack, "["+part+"] "+funcName)
+
 					break
 				}
 			}
@@ -80,7 +82,9 @@ func StackSimple() string {
 						skip--
 						break
 					}
+
 					simplifiedStack = append(simplifiedStack, strings.TrimSpace(part))
+
 					break
 				}
 			}

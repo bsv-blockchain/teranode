@@ -91,7 +91,7 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			require.NoError(t, err)
 
 			sm := &SyncManager{}
-			//sm.utxoStore = utxostore.New(ulogger.TestLogger{})
+			// sm.utxoStore = utxostore.New(ulogger.TestLogger{})
 			txMap, err := sm.createTxMap(context.Background(), block)
 			require.NoError(t, err)
 			require.Len(t, txMap, tc.expectedTxMapLen)
@@ -109,15 +109,16 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 						}
 					}
 				}
-
 			}
 
 			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
 			assert.Equal(t, tc.expectedLevels, maxLevel)
+
 			allParents := 0
 			for i := range blockTXsPerLevel {
 				allParents += len(blockTXsPerLevel[i])
 			}
+
 			assert.Equal(t, tc.expectedTxMapLen, allParents)
 		})
 	}

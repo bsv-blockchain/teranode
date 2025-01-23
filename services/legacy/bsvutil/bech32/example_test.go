@@ -14,6 +14,7 @@ import (
 // This example demonstrates how to decode a bech32 encoded string.
 func ExampleDecode() {
 	encoded := "bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k7grplx"
+
 	hrp, decoded, err := bech32.Decode(encoded)
 	if err != nil {
 		fmt.Println("Error:", err)
@@ -36,6 +37,7 @@ func ExampleEncode() {
 	if err != nil {
 		fmt.Println("Error:", err)
 	}
+
 	encoded, err := bech32.Encode("customHrp!11111q", conv)
 	if err != nil {
 		fmt.Println("Error:", err)

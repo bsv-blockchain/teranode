@@ -123,7 +123,6 @@ type ExtendedKey struct {
 // other applications should just use NewMaster, Child, or Neuter.
 func NewExtendedKey(version, key, chainCode, parentFP []byte, depth uint8,
 	childNum uint32, isPrivate bool) *ExtendedKey {
-
 	// NOTE: The pubKey field is intentionally left nil so it is only
 	// computed and memoized as required.
 	return &ExtendedKey{
@@ -235,6 +234,7 @@ func (k *ExtendedKey) Child(i uint32) (*ExtendedKey, error) {
 	// For normal children:
 	//   serP(parentPubKey) || ser32(i)
 	keyLen := 33
+
 	data := make([]byte, keyLen+4)
 	if isChildHardened {
 		// Case #1.
@@ -249,6 +249,7 @@ func (k *ExtendedKey) Child(i uint32) (*ExtendedKey, error) {
 		// starts with the secp256k1 compressed public key bytes.
 		copy(data, k.pubKeyBytes())
 	}
+
 	binary.BigEndian.PutUint32(data[keyLen:], i)
 
 	// Take the HMAC-SHA512 of the current key's chain code and the derived
@@ -284,7 +285,9 @@ func (k *ExtendedKey) Child(i uint32) (*ExtendedKey, error) {
 	// For public children:
 	//   childKey = serP(point(parse256(Il)) + parentKey)
 	var isPrivate bool
+
 	var childKey []byte
+
 	if k.isPrivate {
 		// Case #1 or #2.
 		// Add the parent private key to the intermediate private key to
@@ -403,6 +406,7 @@ func (k *ExtendedKey) String() string {
 	}
 
 	var childNumBytes [4]byte
+
 	binary.BigEndian.PutUint32(childNumBytes[:], k.childNum)
 
 	// The serialized format is:
@@ -526,6 +530,7 @@ func NewKeyFromString(key string) (*ExtendedKey, error) {
 	payload := decoded[:len(decoded)-4]
 	checkSum := decoded[len(decoded)-4:]
 	expectedCheckSum := chainhash.DoubleHashB(payload)[:4]
+
 	if !bytes.Equal(checkSum, expectedCheckSum) {
 		return nil, ErrBadChecksum
 	}
@@ -545,6 +550,7 @@ func NewKeyFromString(key string) (*ExtendedKey, error) {
 		// Ensure the private key is valid.  It must be within the range
 		// of the order of the secp256k1 curve and not be 0.
 		keyData = keyData[1:]
+
 		keyNum := new(big.Int).SetBytes(keyData)
 		if keyNum.Cmp(bsvec.S256().N) >= 0 || keyNum.Sign() == 0 {
 			return nil, ErrUnusableSeed
@@ -575,6 +581,7 @@ func GenerateSeed(length uint8) ([]byte, error) {
 	}
 
 	buf := make([]byte, length)
+
 	_, err := rand.Read(buf)
 	if err != nil {
 		return nil, err

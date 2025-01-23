@@ -228,17 +228,20 @@ func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
 	}
 
 	node.RPCURL = rpcURL
+
 	return nil
 }
 
 func (t *TeranodeTestEnv) setupAssetURL(node *TeranodeTestClient) error {
 	assetPort := fmt.Sprintf("%d/tcp", node.Settings.Asset.HTTPPort)
+
 	assetURL, err := t.getServiceAddress(node.Name, assetPort)
 	if err != nil {
 		return errors.NewConfigurationError("error getting asset url:", err)
 	}
 
 	node.AssetURL = assetURL
+
 	return nil
 }
 
@@ -249,6 +252,7 @@ func (t *TeranodeTestEnv) setupCoinbaseClient(node *TeranodeTestClient) error {
 	}
 
 	coinbaseGRPCPort := fmt.Sprintf("%s/tcp", port)
+
 	coinbaseGrpcAddress, err := t.getServiceAddress(node.Name, coinbaseGRPCPort)
 	if err != nil {
 		return errors.NewConfigurationError("error getting coinbase grpc address:", err)
@@ -271,6 +275,7 @@ func (t *TeranodeTestEnv) setupBlockchainClient(node *TeranodeTestClient) error 
 	}
 
 	blockchainGRPCPort := fmt.Sprintf("%s/tcp", port)
+
 	blockchainAddress, err := t.getServiceAddress(node.Name, blockchainGRPCPort)
 	if err != nil {
 		return errors.NewConfigurationError("error getting blockchain grpc address:", err)
@@ -293,6 +298,7 @@ func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) err
 	}
 
 	blockassemblyGRPCPort := fmt.Sprintf("%s/tcp", port)
+
 	blockassemblyAddress, err := t.getServiceAddress(node.Name, blockassemblyGRPCPort)
 	if err != nil {
 		return errors.NewConfigurationError("error getting blockassembly grpc address:", err)
@@ -594,6 +600,7 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 		time.Sleep(30 * time.Second)
 
 		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
+
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 		for idx, key := range order {
 			settings := settings.NewSettings(envSettings[key])

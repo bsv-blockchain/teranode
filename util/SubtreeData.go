@@ -57,6 +57,7 @@ func (s *SubtreeData) AddTx(tx *bt.Tx, index int) error {
 	}
 
 	s.Txs[index] = tx
+
 	return nil
 }
 
@@ -73,11 +74,13 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 
 	for {
 		tx := &bt.Tx{}
+
 		_, err = tx.ReadFrom(buf)
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
+
 			return errors.NewProcessingError("error reading transaction", err)
 		}
 
@@ -119,6 +122,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 
 	for i := txStartIndex; i < subtreeLen; i++ {
 		b := s.Txs[i].ExtendedBytes()
+
 		_, err = buf.Write(b)
 		if err != nil {
 			return nil, errors.NewProcessingError("error writing tx data", err)

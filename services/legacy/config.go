@@ -72,6 +72,7 @@ func minUint32(a, b uint32) uint32 {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -81,6 +82,7 @@ func minUint64(a, b uint64) uint64 {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -90,6 +92,7 @@ func maxUint32(a, b uint32) uint32 {
 	if a > b {
 		return a
 	}
+
 	return b
 }
 
@@ -99,6 +102,7 @@ func maxUint64(a, b uint64) uint64 {
 	if a > b {
 		return a
 	}
+
 	return b
 }
 
@@ -175,6 +179,7 @@ type serviceOptions struct {
 // addrs removed.
 func removeDuplicateAddresses(addrs []string) []string {
 	result := make([]string, 0, len(addrs))
+
 	seen := map[string]struct{}{}
 	for _, val := range addrs {
 		if _, ok := seen[val]; !ok {
@@ -182,6 +187,7 @@ func removeDuplicateAddresses(addrs []string) []string {
 			seen[val] = struct{}{}
 		}
 	}
+
 	return result
 }
 
@@ -192,6 +198,7 @@ func normalizeAddress(addr, defaultPort string) string {
 	if err != nil {
 		return net.JoinHostPort(addr, defaultPort)
 	}
+
 	return addr
 }
 
@@ -224,6 +231,7 @@ func newCheckpointFromStr(checkpoint string) (chaincfg.Checkpoint, error) {
 		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
 			"checkpoint %q due to missing hash", checkpoint)
 	}
+
 	hash, err := chainhash.NewHashFromStr(parts[1])
 	if err != nil {
 		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
@@ -242,14 +250,18 @@ func parseCheckpoints(checkpointStrings []string) ([]chaincfg.Checkpoint, error)
 	if len(checkpointStrings) == 0 {
 		return nil, nil
 	}
+
 	checkpoints := make([]chaincfg.Checkpoint, len(checkpointStrings))
+
 	for i, cpString := range checkpointStrings {
 		checkpoint, err := newCheckpointFromStr(cpString)
 		if err != nil {
 			return nil, err
 		}
+
 		checkpoints[i] = checkpoint
 	}
+
 	return checkpoints, nil
 }
 
@@ -311,6 +323,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	appName := filepath.Base(os.Args[0])
 	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
 	usageMessage := fmt.Sprintf("Use %s -h to show usage", appName)
+
 	if preCfg.ShowVersion {
 		logger.Infof("app: %s, version: %s", appName, version.String())
 		os.Exit(0)
@@ -324,6 +337,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		if err != nil {
 			logger.Errorf("%v", err)
 		}
+
 		os.Exit(0)
 	}
 
@@ -367,6 +381,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		numNets++
 		activeNetParams = &testNetParams
 	}
+
 	if cfg.RegressionTest {
 		numNets++
 		activeNetParams = &regressionNetParams
@@ -383,6 +398,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -391,6 +407,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	// configuration value takes precedence over the default value for the
 	// selected network.
 	relayNonStd := activeNetParams.RelayNonStdTxs
+
 	switch {
 	case cfg.RelayNonStd && cfg.RejectNonStd:
 		str := "%s: rejectnonstd and relaynonstd cannot be used " +
@@ -398,12 +415,14 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	case cfg.RejectNonStd:
 		relayNonStd = false
 	case cfg.RelayNonStd:
 		relayNonStd = true
 	}
+
 	cfg.RelayNonStd = relayNonStd
 
 	// Validate profile port number
@@ -414,6 +433,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 			err := fmt.Errorf(str, funcName)
 			logger.Errorf("%v", err)
 			logger.Errorf("%s", usageMessage)
+
 			return nil, nil, err
 		}
 	}
@@ -424,6 +444,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName, cfg.BanDuration)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -431,12 +452,14 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf("%s: The pruneheight option may not be less than %d -- parsed [%d]", funcName, minPruneDepth, cfg.PruneDepth)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
 	// Validate any given whitelisted IP addresses and networks.
 	if len(cfg.Whitelists) > 0 {
 		var ip net.IP
+
 		cfg.whitelists = make([]*net.IPNet, 0, len(cfg.Whitelists))
 
 		for _, addr := range cfg.Whitelists {
@@ -448,8 +471,10 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 					err = fmt.Errorf(str, funcName, addr)
 					logger.Errorf("%v", err)
 					logger.Errorf("%s", usageMessage)
+
 					return nil, nil, err
 				}
+
 				var bits int
 				if ip.To4() == nil {
 					// IPv6
@@ -457,11 +482,13 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 				} else {
 					bits = 32
 				}
+
 				ipnet = &net.IPNet{
 					IP:   ip,
 					Mask: net.CIDRMask(bits, bits),
 				}
 			}
+
 			cfg.whitelists = append(cfg.whitelists, ipnet)
 		}
 	}
@@ -473,6 +500,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -504,6 +532,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName, err)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -514,6 +543,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName, cfg.MaxOrphanTxs)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -528,6 +558,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 			blockMaxSizeMax, cfg.BlockMaxSize)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 	// Limit the minimum block sizes to max block size.
@@ -544,6 +575,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 				funcName)
 			logger.Errorf("%v", err)
 			logger.Errorf("%s", usageMessage)
+
 			return nil, nil, err
 		}
 	}
@@ -557,15 +589,19 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 			err := fmt.Errorf(str, funcName, strAddr, err)
 			logger.Errorf("%v", err)
 			logger.Errorf("%s", usageMessage)
+
 			return nil, nil, err
 		}
+
 		if !addr.IsForNet(activeNetParams.Params) {
 			str := "%s: mining address '%s' is on the wrong network"
 			err := fmt.Errorf(str, funcName, strAddr)
 			logger.Errorf("%v", err)
 			logger.Errorf("%s", usageMessage)
+
 			return nil, nil, err
 		}
+
 		cfg.miningAddrs = append(cfg.miningAddrs, addr)
 	}
 
@@ -577,6 +613,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -599,6 +636,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		err := fmt.Errorf(str, funcName, err)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
+
 		return nil, nil, err
 	}
 
@@ -610,6 +648,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	// specified in which case the system DNS resolver is used).
 	cfg.dial = net.DialTimeout
 	cfg.lookup = net.LookupIP
+
 	if cfg.Proxy != "" {
 		_, _, err := net.SplitHostPort(cfg.Proxy)
 		if err != nil {
@@ -617,6 +656,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 			err := fmt.Errorf(str, funcName, cfg.Proxy, err)
 			logger.Errorf("%v", err)
 			logger.Errorf("%s", usageMessage)
+
 			return nil, nil, err
 		}
 

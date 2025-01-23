@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRetry(t *testing.T) {
 	logger := mock_logger.NewTestLogger()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -28,6 +28,7 @@ func TestRetry(t *testing.T) {
 			staticCallCount++
 			return "", errors.NewProcessingError("error")
 		}
+
 		return "success", nil
 	}
 
@@ -65,6 +66,7 @@ func TestRetry(t *testing.T) {
 	// Test case 4: Context cancellation
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel() // Immediately cancel the context
+
 	result, err = Retry(cancelCtx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.Empty(t, result)
 	assert.Error(t, err)
@@ -133,6 +135,7 @@ func TestRetryTimer(t *testing.T) {
 					errorCount++
 					return "", errors.NewError("test error")
 				}
+
 				return "success", nil
 			}
 
@@ -145,16 +148,15 @@ func TestRetryTimer(t *testing.T) {
 			if errorCount >= tc.simulateErrors && tc.expectedError == false && err != nil {
 				t.Errorf("Expected no error but got %v", err)
 			}
-
-			//if len(recordedSleeps) != len(tc.expectedSleeps) {
-			//	t.Errorf("Expected %d sleep calls but got %d", len(tc.expectedSleeps), len(recordedSleeps))
-			//}
-
-			//for i, expected := range tc.expectedSleeps {
-			//	if recordedSleeps[i] != expected {
-			//		t.Errorf("Expected sleep of %v but got %v on attempt %d", expected, recordedSleeps[i], i+1)
+			//	if len(recordedSleeps) != len(tc.expectedSleeps) {
+			//		t.Errorf("Expected %d sleep calls but got %d", len(tc.expectedSleeps), len(recordedSleeps))
 			//	}
-			//}
+			//
+			//	for i, expected := range tc.expectedSleeps {
+			//		if recordedSleeps[i] != expected {
+			//			t.Errorf("Expected sleep of %v but got %v on attempt %d", expected, recordedSleeps[i], i+1)
+			//		}
+			//	}
 		})
 	}
 }

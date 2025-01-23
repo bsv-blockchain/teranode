@@ -115,7 +115,7 @@ func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (s *MockStore) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 
@@ -156,7 +156,6 @@ func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo 
 }
 
 func TestBlock(t *testing.T) {
-
 	initPrometheusMetrics()
 
 	// Take block 100,000 from mainnet

@@ -21,6 +21,7 @@ func hexToBytes(s string) []byte {
 	if err != nil {
 		panic("invalid hex in source file: " + s)
 	}
+
 	return b
 }
 
@@ -83,6 +84,7 @@ func TestScriptNumBytes(t *testing.T) {
 			t.Errorf("Bytes: did not get expected bytes for %d - "+
 				"got %x, want %x", test.num, gotBytes,
 				test.serialized)
+
 			continue
 		}
 	}
@@ -208,6 +210,7 @@ func TestMakeScriptNum(t *testing.T) {
 			t.Errorf("makeScriptNum(%#x): did not get expected "+
 				"number - got %d, want %d", test.serialized,
 				gotNum, test.num)
+
 			continue
 		}
 	}
@@ -280,10 +283,12 @@ func TestDisasmString(t *testing.T) {
 	tx := wire.NewMsgTx(1)
 	in := wire.NewTxIn(&wire.OutPoint{}, script)
 	tx.TxIn = append(tx.TxIn, in)
+
 	vm, err := NewEngine(prev, tx, 0, ScriptBip16|ScriptVerifyCleanStack, nil, nil, 0)
 	if err != nil {
 		t.Error(err)
 	}
+
 	err = vm.Execute()
 	if err != nil {
 		t.Error(err)

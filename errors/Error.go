@@ -282,6 +282,7 @@ func WrapGRPC(err error) error {
 		}
 
 		wrappedErrDetails = append(wrappedErrDetails, details)
+
 		if castedErr.wrappedErr != nil {
 			currWrappedErr := castedErr.wrappedErr
 			for currWrappedErr != nil {

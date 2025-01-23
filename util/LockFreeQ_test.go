@@ -29,7 +29,9 @@ func TestEnqueueDequeue(t *testing.T) {
 
 func TestConcurrentEnqueue(t *testing.T) {
 	q := NewLockFreeQ[int]()
+
 	var wg sync.WaitGroup
+
 	numWorkers := 100 // Number of concurrent goroutines
 	numEnqueues := 10 // Number of enqueues per goroutine
 
@@ -38,6 +40,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 		go func(workerID int) {
 			defer wg.Done()
+
 			for j := 0; j < numEnqueues; j++ {
 				q.Enqueue(workerID*numEnqueues + j)
 			}
@@ -50,14 +53,17 @@ func TestConcurrentEnqueue(t *testing.T) {
 	// We can't guarantee the order of elements, but we can check if all elements are present.
 	// This part of the test will need adjustment based on your dequeue method's thread safety.
 	seen := make(map[int]bool)
+
 	for i := 0; i < numWorkers*numEnqueues; i++ {
 		val := q.Dequeue()
 		if val == nil {
 			t.Fatalf("Expected a value, got nil at iteration %d", i)
 		}
+
 		if seen[*val] {
 			t.Errorf("Duplicate value detected: %v", *val)
 		}
+
 		seen[*val] = true
 	}
 

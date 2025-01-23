@@ -74,6 +74,7 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 	defer deferFn()
 
 	periodMillis := int64(0)
+
 	switch c.Param("period") {
 	case "2h":
 		periodMillis = time.Now().Add(-2*time.Hour).UnixNano() / int64(time.Millisecond)

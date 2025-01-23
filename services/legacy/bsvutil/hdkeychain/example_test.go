@@ -52,7 +52,6 @@ func Example_defaultWalletLayout() {
 	//   * m/iH/1/k
 	//     corresponds to the k'th keypair of the internal chain of account
 	//     number i of the HDW derived from master m.
-
 	// Ordinarily this would either be read from some encrypted source
 	// and be decrypted or generated as the NewMaster example shows, but
 	// for the purposes of this example, the private extended key for the
@@ -123,11 +122,13 @@ func Example_defaultWalletLayout() {
 		fmt.Println(err)
 		return
 	}
+
 	acct0IntAddr, err := acct0Int0.Address(&chaincfg.MainNetParams)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+
 	fmt.Println("Account 0 External Address 10:", acct0ExtAddr)
 	fmt.Println("Account 0 Internal Address 0:", acct0IntAddr)
 
@@ -148,7 +149,6 @@ func Example_audits() {
 	//   * N(m/*)
 	//   corresponds to the neutered master extended key (also called
 	//   the master public extended key)
-
 	// Ordinarily this would either be read from some encrypted source
 	// and be decrypted or generated as the NewMaster example shows, but
 	// for the purposes of this example, the private extended key for the

@@ -666,6 +666,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		g.SetLimit(u.settings.SubtreeValidation.SpendBatcherSize * 2)
 
 		u.logger.Debugf("[processMissingTransactions][%s] processing level %d with %d transactions", subtreeHash.String(), level, len(txsPerLevel[level]))
+
 		for _, mTx = range txsPerLevel[level] {
 			tx := mTx.tx
 			txIdx := mTx.idx

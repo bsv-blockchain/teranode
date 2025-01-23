@@ -127,6 +127,7 @@ func (c scriptFreeList) Borrow(size uint64) []byte {
 	default:
 		buf = make([]byte, freeListMaxScriptSize)
 	}
+
 	return buf[:size]
 }
 
@@ -184,6 +185,7 @@ func (o OutPoint) String() string {
 	copy(buf, o.Hash.String())
 	buf[2*chainhash.HashSize] = ':'
 	buf = strconv.AppendUint(buf, uint64(o.Index), 10)
+
 	return string(buf)
 }
 
@@ -269,6 +271,7 @@ func (msg *MsgTx) TxHash() chainhash.Hash {
 	// cause a run-time panic.
 	buf := bytes.NewBuffer(make([]byte, 0, msg.SerializeSize()))
 	msg.Serialize(buf)
+
 	return chainhash.DoubleHashH(buf.Bytes())
 }
 
@@ -294,7 +297,9 @@ func (msg *MsgTx) Copy() *MsgTx {
 
 		// Deep copy the old signature script.
 		var newScript []byte
+
 		oldScript := oldTxIn.SignatureScript
+
 		oldScriptLen := len(oldScript)
 		if oldScriptLen > 0 {
 			newScript = make([]byte, oldScriptLen)
@@ -316,7 +321,9 @@ func (msg *MsgTx) Copy() *MsgTx {
 	for _, oldTxOut := range msg.TxOut {
 		// Deep copy the old PkScript
 		var newScript []byte
+
 		oldScript := oldTxOut.PkScript
+
 		oldScriptLen := len(oldScript)
 		if oldScriptLen > 0 {
 			newScript = make([]byte, oldScriptLen)
@@ -344,6 +351,7 @@ func (msg *MsgTx) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) error
 	if err != nil {
 		return err
 	}
+
 	msg.Version = int32(version)
 
 	count, err := ReadVarInt(r, pver)
@@ -375,28 +383,34 @@ func (msg *MsgTx) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) error
 				scriptPool.Return(txIn.SignatureScript)
 			}
 		}
+
 		for _, txOut := range msg.TxOut {
 			if txOut == nil || txOut.PkScript == nil {
 				continue
 			}
+
 			scriptPool.Return(txOut.PkScript)
 		}
 	}
 
 	// Deserialize the inputs.
 	var totalScriptSize uint64
+
 	txIns := make([]TxIn, count)
 	msg.TxIn = make([]*TxIn, count)
+
 	for i := uint64(0); i < count; i++ {
 		// The pointer is set now in case a script buffer is borrowed
 		// and needs to be returned to the pool on error.
 		ti := &txIns[i]
 		msg.TxIn[i] = ti
+
 		err = readTxIn(r, pver, msg.Version, ti)
 		if err != nil {
 			returnScriptBuffers()
 			return err
 		}
+
 		totalScriptSize += uint64(len(ti.SignatureScript))
 	}
 
@@ -411,24 +425,29 @@ func (msg *MsgTx) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) error
 	// without a sane upper bound on this count.
 	if count > uint64(maxTxOutPerMessage()) {
 		returnScriptBuffers()
+
 		str := fmt.Sprintf("too many output transactions to fit into "+
 			"max message size [count %d, max %d]", count, maxTxOutPerMessage())
+
 		return messageError("MsgTx.Bsvdecode", str)
 	}
 
 	// Deserialize the outputs.
 	txOuts := make([]TxOut, count)
 	msg.TxOut = make([]*TxOut, count)
+
 	for i := uint64(0); i < count; i++ {
 		// The pointer is set now in case a script buffer is borrowed
 		// and needs to be returned to the pool on error.
 		to := &txOuts[i]
 		msg.TxOut[i] = to
+
 		err = readTxOut(r, pver, msg.Version, to)
 		if err != nil {
 			returnScriptBuffers()
 			return err
 		}
+
 		totalScriptSize += uint64(len(to.PkScript))
 	}
 
@@ -453,7 +472,9 @@ func (msg *MsgTx) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) error
 	// scripts in the transaction inputs and outputs no longer point to the
 	// buffers.
 	var offset uint64
+
 	scripts := make([]byte, totalScriptSize)
+
 	for i := 0; i < len(msg.TxIn); i++ {
 		// Copy the signature script into the contiguous buffer at the
 		// appropriate offset.
@@ -470,6 +491,7 @@ func (msg *MsgTx) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) error
 		// Return the temporary script buffer to the pool.
 		scriptPool.Return(signatureScript)
 	}
+
 	for i := 0; i < len(msg.TxOut); i++ {
 		// Copy the public key script into the contiguous buffer at the
 		// appropriate offset.
@@ -518,6 +540,7 @@ func (msg *MsgTx) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding) error
 	}
 
 	count := uint64(len(msg.TxIn))
+
 	err = WriteVarInt(w, pver, count)
 	if err != nil {
 		return err
@@ -531,6 +554,7 @@ func (msg *MsgTx) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding) error
 	}
 
 	count = uint64(len(msg.TxOut))
+
 	err = WriteVarInt(w, pver, count)
 	if err != nil {
 		return err
@@ -625,6 +649,7 @@ func (msg *MsgTx) PkScriptLocs() []int {
 
 	// Calculate and set the appropriate offset for each public key script.
 	pkScriptLocs := make([]int, numTxOut)
+
 	for i, txOut := range msg.TxOut {
 		// The offset of the script in the transaction output is:
 		//
@@ -659,6 +684,7 @@ func readOutPoint(r io.Reader, pver uint32, version int32, op *OutPoint) error {
 	}
 
 	op.Index, err = binarySerializer.Uint32(r, littleEndian)
+
 	return err
 }
 
@@ -697,10 +723,12 @@ func readScript(r io.Reader, pver uint32, maxAllowed uint64, fieldName string) (
 
 	b := scriptPool.Borrow(count)
 	_, err = io.ReadFull(r, b)
+
 	if err != nil {
 		scriptPool.Return(b)
 		return nil, err
 	}
+
 	return b, nil
 }
 
@@ -747,6 +775,7 @@ func readTxOut(r io.Reader, pver uint32, version int32, to *TxOut) error {
 
 	to.PkScript, err = readScript(r, pver, maxMessagePayload(),
 		"transaction output public key script")
+
 	return err
 }
 

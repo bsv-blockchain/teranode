@@ -348,6 +348,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
 			return err
 		}
 

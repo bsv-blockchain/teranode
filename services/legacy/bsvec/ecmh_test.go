@@ -40,6 +40,7 @@ func TestHashToPoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		x, y := hashToPoint(S256(), data)
 		if hex.EncodeToString(x.Bytes()) != test.point[0] || hex.EncodeToString(y.Bytes()) != test.point[1] {
 			t.Fatal("hashToPoint return incorrect point")
@@ -53,16 +54,20 @@ func TestMultiset_Hash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		x, y := hashToPoint(S256(), data)
 		m := NewMultiset(S256())
 		m.x, m.y = x, y
+
 		if m.Hash().String() != test.ecmhHash {
 			t.Fatal("Multiset-Hash returned incorrect hash serialization")
 		}
 	}
+
 	m := NewMultiset(S256())
 	emptySet := m.Hash()
 	zeroHash := chainhash.Hash{}
+
 	if !bytes.Equal(emptySet[:], zeroHash[:]) {
 		t.Fatal("Empty set did not return zero hash")
 	}
@@ -70,6 +75,7 @@ func TestMultiset_Hash(t *testing.T) {
 
 func TestMultiset_AddRemove(t *testing.T) {
 	m := NewMultiset(S256())
+
 	for _, test := range testVectors {
 		data, err := hex.DecodeString(test.dataElementHex)
 		if err != nil {
@@ -88,7 +94,9 @@ func TestMultiset_AddRemove(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		m.Remove(data)
+
 		if testVectors[i-1].cumulativeHash != "" && m.Hash().String() != testVectors[i-1].cumulativeHash {
 			t.Fatal("Multiset-Remove returned incorrect hash")
 		}

@@ -88,6 +88,7 @@ func TestIPTypes(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for _, test := range tests {
 		if rv := addrmgr.IsRFC1918(&test.in); rv != test.rfc1918 {
 			t.Errorf("IsRFC1918 %s\n got: %v want: %v", test.in.IP, rv, test.rfc1918)
@@ -193,6 +194,7 @@ func TestGroupKey(t *testing.T) {
 
 	for i, test := range tests {
 		nip := net.ParseIP(test.ip)
+
 		na := *wire.NewNetAddressIPPort(nip, 8333, wire.SFNodeNetwork)
 		if key := addrmgr.GroupKey(&na); key != test.expected {
 			t.Errorf("TestGroupKey #%d (%s): unexpected group key "+

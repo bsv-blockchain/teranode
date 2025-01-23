@@ -32,6 +32,7 @@ func Init() {
 	httpAddr, ok := gocore.Config().Get("profilerAddr")
 	if !ok {
 		log.Printf("Profiler address not set, defaulting to localhost:6060")
+
 		httpAddr = "localhost:6060"
 	}
 
@@ -50,6 +51,7 @@ func Init() {
 	}
 
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
+
 	go func() {
 		log.Printf("%v", server.ListenAndServe())
 	}()
@@ -125,6 +127,7 @@ func worker(logger ulogger.Logger) {
 
 func generateRandomBytes() []byte {
 	b := make([]byte, 32)
+
 	_, err := rand.Read(b)
 	if err != nil {
 		panic(err)

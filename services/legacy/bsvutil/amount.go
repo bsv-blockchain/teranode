@@ -61,6 +61,7 @@ func round(f float64) Amount {
 	if f < 0 {
 		return Amount(f - 0.5)
 	}
+
 	return Amount(f + 0.5)
 }
 

@@ -2,10 +2,11 @@ package util
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 var (
@@ -49,6 +50,7 @@ func TestNewSubtreeMeta(t *testing.T) {
 		assert.Equal(t, 4, len(subtreeMeta.ParentTxHashes))
 
 		assert.Equal(t, 1, len(subtreeMeta.ParentTxHashes[0]))
+
 		for i := 1; i < 4; i++ {
 			assert.Equal(t, 0, len(subtreeMeta.ParentTxHashes[i]))
 		}
@@ -89,8 +91,10 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 
 		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
 		assert.Equal(t, len(subtreeMeta.ParentTxHashes), len(subtreeMeta2.ParentTxHashes))
+
 		for i := 0; i < 4; i++ {
 			assert.Equal(t, len(subtreeMeta.ParentTxHashes[i]), len(subtreeMeta2.ParentTxHashes[i]))
+
 			for j := 0; j < len(subtreeMeta.ParentTxHashes[i]); j++ {
 				assert.Equal(t, subtreeMeta.ParentTxHashes[i][j], subtreeMeta2.ParentTxHashes[i][j])
 			}
@@ -113,8 +117,10 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 
 		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
 		assert.Equal(t, len(subtreeMeta.ParentTxHashes), len(subtreeMeta2.ParentTxHashes))
+
 		for i := 0; i < 4; i++ {
 			assert.Equal(t, len(subtreeMeta.ParentTxHashes[i]), len(subtreeMeta2.ParentTxHashes[i]))
+
 			for j := 0; j < len(subtreeMeta.ParentTxHashes[i]); j++ {
 				assert.Equal(t, subtreeMeta.ParentTxHashes[i][j], subtreeMeta2.ParentTxHashes[i][j])
 			}
@@ -145,8 +151,10 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 
 		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
 		assert.Equal(t, len(subtreeMeta.ParentTxHashes), len(subtreeMeta2.ParentTxHashes))
+
 		for i := 0; i < 4; i++ {
 			assert.Equal(t, len(subtreeMeta.ParentTxHashes[i]), len(subtreeMeta2.ParentTxHashes[i]))
+
 			for j := 0; j < len(subtreeMeta.ParentTxHashes[i]); j++ {
 				assert.Equal(t, subtreeMeta.ParentTxHashes[i][j], subtreeMeta2.ParentTxHashes[i][j])
 			}

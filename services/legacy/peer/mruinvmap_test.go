@@ -21,6 +21,7 @@ func TestMruInventoryMap(t *testing.T) {
 	// inventory code.
 	numInvVects := 10
 	invVects := make([]*wire.InvVect, 0, numInvVects)
+
 	for i := 0; i < numInvVects; i++ {
 		hash := &chainhash.Hash{byte(i)}
 		iv := wire.NewInvVect(wire.InvTypeBlock, hash)
@@ -138,6 +139,7 @@ func TestMruInventoryMapStringer(t *testing.T) {
 	wantStr1 := fmt.Sprintf("<%d>[%s, %s]", 2, *iv1, *iv2)
 	wantStr2 := fmt.Sprintf("<%d>[%s, %s]", 2, *iv2, *iv1)
 	gotStr := mruInvMap.String()
+
 	if gotStr != wantStr1 && gotStr != wantStr2 {
 		t.Fatalf("unexpected string representation - got %q, want %q "+
 			"or %q", gotStr, wantStr1, wantStr2)
@@ -150,8 +152,10 @@ func BenchmarkMruInventoryList(b *testing.B) {
 	// Create a bunch of fake inventory vectors to use in benchmarking
 	// the mru inventory code.
 	b.StopTimer()
+
 	numInvVects := 100000
 	invVects := make([]*wire.InvVect, 0, numInvVects)
+
 	for i := 0; i < numInvVects; i++ {
 		hashBytes := make([]byte, chainhash.HashSize)
 		rand.Read(hashBytes)
@@ -159,10 +163,12 @@ func BenchmarkMruInventoryList(b *testing.B) {
 		iv := wire.NewInvVect(wire.InvTypeBlock, hash)
 		invVects = append(invVects, iv)
 	}
+
 	b.StartTimer()
 
 	// Benchmark the add plus evicition code.
 	limit := 20000
+
 	mruInvMap := newMruInventoryMap(uint(limit))
 	for i := 0; i < b.N; i++ {
 		mruInvMap.Add(invVects[i%numInvVects])

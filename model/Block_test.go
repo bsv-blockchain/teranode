@@ -281,6 +281,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		}
 		currentChainIDs[i] = uint32(i) // nolint:gosec
 	}
+
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := &sync.Map{}
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())

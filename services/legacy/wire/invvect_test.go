@@ -9,9 +9,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestInvVectStringer tests the stringized output for inventory vector types.
@@ -27,6 +26,7 @@ func TestInvTypeStringer(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		result := test.in.String()
 		if result != test.want {
@@ -60,6 +60,7 @@ func TestInvVect(t *testing.T) {
 func TestInvVectWire(t *testing.T) {
 	// Block 203707 hash.
 	hashStr := "3264bc2ac36a60840790ba1d475d01367e7c723da941069e9dc"
+
 	baseHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -238,6 +239,7 @@ func TestInvVectWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		test := test
 		// Encode to wire format.
@@ -257,6 +259,7 @@ func TestInvVectWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var iv InvVect
+
 		rbuf := bytes.NewReader(test.buf)
 		err = readInvVect(rbuf, test.pver, &iv)
 

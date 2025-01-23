@@ -152,6 +152,7 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 		)
 
 		data := make([]SubtreeMeta, 0, limit)
+
 		if len(block.Subtrees) > 0 {
 			for i := offset; i < offset+limit; i++ {
 				if i >= len(block.Subtrees) {

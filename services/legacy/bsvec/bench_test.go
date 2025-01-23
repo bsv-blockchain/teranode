@@ -10,6 +10,7 @@ import "testing"
 // Z values of 1 so that the associated optimizations are used.
 func BenchmarkAddJacobian(b *testing.B) {
 	b.StopTimer()
+
 	x1 := new(fieldVal).SetHex("34f9460f0e4f08393d192b3c5133a6ba099aa0ad9fd54ebccfacdfa239ff49c6")
 	y1 := new(fieldVal).SetHex("0b71ea9bd730fd8923f6d25a7a91e7dd7728a960686cb5a901bb419e0f2ca232")
 	z1 := new(fieldVal).SetHex("1")
@@ -31,6 +32,7 @@ func BenchmarkAddJacobian(b *testing.B) {
 // Z=1 aren't used.
 func BenchmarkAddJacobianNotZOne(b *testing.B) {
 	b.StopTimer()
+
 	x1 := new(fieldVal).SetHex("d3e5183c393c20e4f464acf144ce9ae8266a82b67f553af33eb37e88e7fd2718")
 	y1 := new(fieldVal).SetHex("5b8f54deb987ec491fb692d3d48f3eebb9454b034365ad480dda0cf079651190")
 	z1 := new(fieldVal).SetHex("2")
@@ -52,6 +54,7 @@ func BenchmarkAddJacobianNotZOne(b *testing.B) {
 func BenchmarkScalarBaseMult(b *testing.B) {
 	k := fromHex("d74bf844b0862475103d96a611cf2d898447e288d34b360bc885cb8ce7c00575")
 	curve := S256()
+
 	for i := 0; i < b.N; i++ {
 		curve.ScalarBaseMult(k.Bytes())
 	}
@@ -62,6 +65,7 @@ func BenchmarkScalarBaseMult(b *testing.B) {
 func BenchmarkScalarBaseMultLarge(b *testing.B) {
 	k := fromHex("d74bf844b0862475103d96a611cf2d898447e288d34b360bc885cb8ce7c005751111111011111110")
 	curve := S256()
+
 	for i := 0; i < b.N; i++ {
 		curve.ScalarBaseMult(k.Bytes())
 	}
@@ -73,6 +77,7 @@ func BenchmarkScalarMult(b *testing.B) {
 	y := fromHex("0b71ea9bd730fd8923f6d25a7a91e7dd7728a960686cb5a901bb419e0f2ca232")
 	k := fromHex("d74bf844b0862475103d96a611cf2d898447e288d34b360bc885cb8ce7c00575")
 	curve := S256()
+
 	for i := 0; i < b.N; i++ {
 		curve.ScalarMult(x, y, k.Bytes())
 	}

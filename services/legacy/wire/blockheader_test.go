@@ -19,6 +19,7 @@ func TestBlockHeader(t *testing.T) {
 	if err != nil {
 		t.Errorf("RandomUint64: Error generating nonce: %v", err)
 	}
+
 	nonce := uint32(nonce64)
 
 	hash := mainNetGenesisHash
@@ -31,14 +32,17 @@ func TestBlockHeader(t *testing.T) {
 		t.Errorf("NewBlockHeader: wrong prev hash - got %v, want %v",
 			spew.Sprint(bh.PrevBlock), spew.Sprint(hash))
 	}
+
 	if !bh.MerkleRoot.IsEqual(&merkleHash) {
 		t.Errorf("NewBlockHeader: wrong merkle root - got %v, want %v",
 			spew.Sprint(bh.MerkleRoot), spew.Sprint(merkleHash))
 	}
+
 	if bh.Bits != bits {
 		t.Errorf("NewBlockHeader: wrong bits - got %v, want %v",
 			bh.Bits, bits)
 	}
+
 	if bh.Nonce != nonce {
 		t.Errorf("NewBlockHeader: wrong nonce - got %v, want %v",
 			bh.Nonce, nonce)
@@ -132,14 +136,17 @@ func TestBlockHeaderWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		var buf bytes.Buffer
+
 		err := writeBlockHeader(&buf, test.pver, test.in)
 		if err != nil {
 			t.Errorf("writeBlockHeader #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("writeBlockHeader #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -147,11 +154,13 @@ func TestBlockHeaderWire(t *testing.T) {
 		}
 
 		buf.Reset()
+
 		err = test.in.BsvEncode(&buf, pver, 0)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -160,12 +169,15 @@ func TestBlockHeaderWire(t *testing.T) {
 
 		// Decode the block header from wire format.
 		var bh BlockHeader
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = readBlockHeader(rbuf, test.pver, &bh)
 		if err != nil {
 			t.Errorf("readBlockHeader #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&bh, test.out) {
 			t.Errorf("readBlockHeader #%d\n got: %s want: %s", i,
 				spew.Sdump(&bh), spew.Sdump(test.out))
@@ -173,11 +185,13 @@ func TestBlockHeaderWire(t *testing.T) {
 		}
 
 		rbuf = bytes.NewReader(test.buf)
+
 		err = bh.Bsvdecode(rbuf, pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&bh, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(&bh), spew.Sdump(test.out))
@@ -230,14 +244,17 @@ func TestBlockHeaderSerialize(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Serialize the block header.
 		var buf bytes.Buffer
+
 		err := test.in.Serialize(&buf)
 		if err != nil {
 			t.Errorf("Serialize #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("Serialize #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -246,12 +263,15 @@ func TestBlockHeaderSerialize(t *testing.T) {
 
 		// Deserialize the block header.
 		var bh BlockHeader
+
 		rbuf := bytes.NewReader(test.buf)
+
 		err = bh.Deserialize(rbuf)
 		if err != nil {
 			t.Errorf("Deserialize #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&bh, test.out) {
 			t.Errorf("Deserialize #%d\n got: %s want: %s", i,
 				spew.Sdump(&bh), spew.Sdump(test.out))

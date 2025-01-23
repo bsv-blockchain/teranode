@@ -21,6 +21,7 @@ func TestFeeFilterLatest(t *testing.T) {
 	//nolint:gosec // G404: Use of weak random number generator (math/rand)
 	minfee := rand.Int64()
 	msg := NewMsgFeeFilter(minfee)
+
 	if msg.MinFee != minfee {
 		t.Errorf("NewMsgFeeFilter: wrong minfee - got %v, want %v",
 			msg.MinFee, minfee)
@@ -36,6 +37,7 @@ func TestFeeFilterLatest(t *testing.T) {
 	// Ensure max payload is expected value for latest protocol version.
 	wantPayload := uint64(8)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -44,6 +46,7 @@ func TestFeeFilterLatest(t *testing.T) {
 
 	// Test encode with latest protocol version.
 	var buf bytes.Buffer
+
 	err := msg.BsvEncode(&buf, pver, BaseEncoding)
 	if err != nil {
 		t.Errorf("encode of MsgFeeFilter failed %v err <%v>", msg, err)
@@ -51,6 +54,7 @@ func TestFeeFilterLatest(t *testing.T) {
 
 	// Test decode with latest protocol version.
 	readmsg := NewMsgFeeFilter(0)
+
 	err = readmsg.Bsvdecode(&buf, pver, BaseEncoding)
 	if err != nil {
 		t.Errorf("decode of MsgFeeFilter failed [%v] err <%v>", buf, err)
@@ -89,6 +93,7 @@ func TestFeeFilterWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
@@ -107,6 +112,7 @@ func TestFeeFilterWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgFeeFilter
+
 		rbuf := bytes.NewReader(test.buf)
 		err = msg.Bsvdecode(rbuf, test.pver, BaseEncoding)
 
@@ -151,6 +157,7 @@ func TestFeeFilterWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
@@ -174,6 +181,7 @@ func TestFeeFilterWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgFeeFilter
+
 		r := newFixedReader(test.max, test.buf)
 		err = msg.Bsvdecode(r, test.pver, BaseEncoding)
 

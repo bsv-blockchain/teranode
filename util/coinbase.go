@@ -23,6 +23,7 @@ func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
 	if err != nil && errors.Is(err, errors.ErrBlockCoinbaseMissingHeight) {
 		err = nil
 	}
+
 	return miner, err
 }
 

@@ -78,6 +78,7 @@ func NewSubtreeFromBytes(b []byte) (*Subtree, error) {
 	}()
 
 	subtree := &Subtree{}
+
 	err := subtree.Deserialize(b)
 	if err != nil {
 		return nil, err
@@ -101,11 +102,13 @@ func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err erro
 
 	numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
 	subtreeBytes = make([]byte, chainhash.HashSize*int(numLeaves))
+
 	byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
 	for i := uint64(0); i < numLeaves; i++ {
 		if _, err = io.ReadFull(buf, byteBuffer); err != nil {
 			return nil, errors.NewSubtreeError("unable to read subtree node information", err)
 		}
+
 		copy(subtreeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize], byteBuffer[:chainhash.HashSize])
 	}
 
@@ -285,6 +288,7 @@ func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64,
 	}
 
 	rootHash := chainhash.Hash((*store)[len(*store)-1][:])
+
 	return &rootHash, nil
 }
 
@@ -310,6 +314,7 @@ func (st *Subtree) NodeIndex(hash chainhash.Hash) int {
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]SubtreeNode, 0, 1_000)
+
 	for _, node := range st.Nodes {
 		if !ids.Exists(node.Hash) {
 			diff = append(diff, node)
@@ -337,6 +342,7 @@ func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 	treeIndexPos := 0
 	treeIndex := index
 	nodes := make([]*chainhash.Hash, 0, int(height))
+
 	for i := height; i > 0; i-- {
 		if i == height {
 			// we are at the leaf level and read from the Nodes array
@@ -381,18 +387,21 @@ func (st *Subtree) Serialize() ([]byte, error) {
 
 	// write fees
 	binary.LittleEndian.PutUint64(b[:], st.Fees)
+
 	if _, err = buf.Write(b[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to write fees", err)
 	}
 
 	// write size
 	binary.LittleEndian.PutUint64(b[:], st.SizeInBytes)
+
 	if _, err = buf.Write(b[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to write sizeInBytes", err)
 	}
 
 	// write number of nodes
 	binary.LittleEndian.PutUint64(b[:], uint64(len(st.Nodes)))
+
 	if _, err = buf.Write(b[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to write number of nodes", err)
 	}
@@ -400,6 +409,7 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	// write nodes
 	feeBytes := make([]byte, 8)
 	sizeBytes := make([]byte, 8)
+
 	var node SubtreeNode
 	for _, node = range st.Nodes {
 		_, err = buf.Write(node.Hash[:])
@@ -408,12 +418,14 @@ func (st *Subtree) Serialize() ([]byte, error) {
 		}
 
 		binary.LittleEndian.PutUint64(feeBytes, node.Fee)
+
 		_, err = buf.Write(feeBytes)
 		if err != nil {
 			return nil, errors.NewProcessingError("unable to write fee", err)
 		}
 
 		binary.LittleEndian.PutUint64(sizeBytes, node.SizeInBytes)
+
 		_, err = buf.Write(sizeBytes)
 		if err != nil {
 			return nil, errors.NewProcessingError("unable to write sizeInBytes", err)
@@ -422,6 +434,7 @@ func (st *Subtree) Serialize() ([]byte, error) {
 
 	// write number of conflicting nodes
 	binary.LittleEndian.PutUint64(b[:], uint64(len(st.ConflictingNodes)))
+
 	if _, err = buf.Write(b[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to write number of conflicting nodes", err)
 	}
@@ -533,18 +546,21 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
 		return errors.NewProcessingError("unable to read fees", err)
 	}
+
 	st.Fees = binary.LittleEndian.Uint64(bytes8)
 
 	// read sizeInBytes
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
 		return errors.NewProcessingError("unable to read sizeInBytes", err)
 	}
+
 	st.SizeInBytes = binary.LittleEndian.Uint64(bytes8)
 
 	// read number of leaves
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
 		return errors.NewProcessingError("unable to read number of leaves", err)
 	}
+
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
 
 	st.treeSize = int(numLeaves)
@@ -553,12 +569,14 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 
 	// read leaves
 	st.Nodes = make([]SubtreeNode, numLeaves)
+
 	bytes48 := make([]byte, 48)
 	for i := uint64(0); i < numLeaves; i++ {
 		// read all the node data in 1 go
 		if _, err = io.ReadFull(buf, bytes48); err != nil {
 			return errors.NewProcessingError("unable to read node", err)
 		}
+
 		st.Nodes[i].Hash = chainhash.Hash(bytes48[:32])
 		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes48[32:40])
 		st.Nodes[i].SizeInBytes = binary.LittleEndian.Uint64(bytes48[40:48])
@@ -568,6 +586,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
 		return errors.NewProcessingError("unable to read number of conflicting nodes", err)
 	}
+
 	numConflictingLeaves := binary.LittleEndian.Uint64(bytes8)
 
 	// read conflicting nodes
@@ -586,6 +605,7 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 
 	// read root hash
 	var rootHash [32]byte
+
 	_, err = buf.Read(rootHash[:])
 	if err != nil {
 		return errors.NewProcessingError("unable to read root hash", err)
@@ -620,6 +640,7 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 
 	// read leaves
 	st.Nodes = make([]SubtreeNode, numLeaves)
+
 	var hash *chainhash.Hash
 	for i := uint64(0); i < numLeaves; i++ {
 		hash, err = chainhash.NewHash(buf.Next(32))
@@ -648,12 +669,15 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 
 	// read conflicting nodes
 	var conflictingHash *chainhash.Hash
+
 	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+
 	for i := uint64(0); i < numConflictingLeaves; i++ {
 		conflictingHash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
 			return errors.NewProcessingError("unable to read conflicting node", err)
 		}
+
 		st.ConflictingNodes[i] = *conflictingHash
 	}
 
@@ -712,6 +736,7 @@ func Min(a, b int) int {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -719,5 +744,6 @@ func Max(a, b int) int {
 	if a > b {
 		return a
 	}
+
 	return b
 }

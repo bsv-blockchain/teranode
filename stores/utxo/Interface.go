@@ -40,7 +40,6 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
-
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -245,7 +244,6 @@ func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint
 
 func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	return nil, nil
-
 }
 func (mu *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
@@ -260,20 +258,16 @@ func (mu *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*me
 
 func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx) ([]*Spend, error) {
 	return nil, nil
-
 }
 func (mu *MockUtxostore) UnSpend(ctx context.Context, spends []*Spend) error {
 	return nil
-
 }
 func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	return nil
-
 }
 
 func (mu *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error {
 	return nil
-
 }
 func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	for _, outpoint := range outpoints {

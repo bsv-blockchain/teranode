@@ -7,7 +7,6 @@ import (
 	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/errors"
-
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/types"
 	"github.com/cespare/xxhash"

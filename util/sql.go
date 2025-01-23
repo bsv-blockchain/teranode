@@ -73,6 +73,7 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 
 func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	var filename string
+
 	var err error
 
 	if storeURL.Scheme == "sqlitememory" {
@@ -84,6 +85,7 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 		}
 
 		dbName := storeURL.Path[1:]
+
 		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
 		if err != nil {
 			return nil, errors.NewServiceError("failed to get absolute path for sqlite DB", err)
@@ -99,6 +101,7 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 	logger.Infof("Using sqlite DB: %s", filename)
 
 	var db *usql.DB
+
 	db, err = usql.Open("sqlite", filename)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to open sqlite DB", err)

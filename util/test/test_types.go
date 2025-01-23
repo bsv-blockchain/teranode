@@ -4,7 +4,6 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

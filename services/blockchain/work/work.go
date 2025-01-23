@@ -19,7 +19,7 @@ func CalculateWork(prevWork *chainhash.Hash, nBits model.NBit) (*chainhash.Hash,
 
 	b := bt.ReverseBytes(newWork.Bytes())
 	hash := &chainhash.Hash{}
-	copy(hash[:], b[:])
+	copy(hash[:], b)
 
 	return hash, nil
 }

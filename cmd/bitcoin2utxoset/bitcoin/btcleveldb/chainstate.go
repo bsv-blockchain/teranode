@@ -3,13 +3,11 @@ package btcleveldb
 import "math" // math.Pow() in decompress_value()
 
 func Varint128Read(bytes []byte, offset int) ([]byte, int) { // take a byte array and return (byte array and number of bytes read)
-
 	// store bytes
 	result := []byte{} // empty byte slice
 
 	// loop through bytes
 	for _, v := range bytes[offset:] { // start reading from an offset
-
 		// store each byte as you go
 		result = append(result, v)
 
@@ -32,7 +30,6 @@ func Varint128Decode(bytes []byte) int64 { // takes a byte slice, returns an int
 	var n int64 = 0
 
 	for _, v := range bytes {
-
 		// 1. shift n left 7 bits (add some extra bits to work with)
 		//                             00000000
 		n <<= 7
@@ -59,7 +56,6 @@ func Varint128Decode(bytes []byte) int64 { // takes a byte slice, returns an int
 }
 
 func DecompressValue(x int64) int64 {
-
 	var n int64 // decompressed value
 
 	// Return value if it is zero (nothing to decompress)

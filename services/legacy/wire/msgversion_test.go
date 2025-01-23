@@ -26,6 +26,7 @@ func TestVersion(t *testing.T) {
 	me := NewNetAddress(tcpAddrMe, SFNodeNetwork)
 	tcpAddrYou := &net.TCPAddr{IP: net.ParseIP("192.168.0.1"), Port: 8333}
 	you := NewNetAddress(tcpAddrYou, SFNodeNetwork)
+
 	nonce, err := RandomUint64()
 	if err != nil {
 		t.Errorf("RandomUint64: error generating nonce: %v", err)
@@ -37,32 +38,39 @@ func TestVersion(t *testing.T) {
 		t.Errorf("NewMsgVersion: wrong protocol version - got %v, want %v",
 			msg.ProtocolVersion, pver)
 	}
+
 	if !reflect.DeepEqual(&msg.AddrMe, me) {
 		t.Errorf("NewMsgVersion: wrong me address - got %v, want %v",
 			spew.Sdump(&msg.AddrMe), spew.Sdump(me))
 	}
+
 	if !reflect.DeepEqual(&msg.AddrYou, you) {
 		t.Errorf("NewMsgVersion: wrong you address - got %v, want %v",
 			spew.Sdump(&msg.AddrYou), spew.Sdump(you))
 	}
+
 	if msg.Nonce != nonce {
 		t.Errorf("NewMsgVersion: wrong nonce - got %v, want %v",
 			msg.Nonce, nonce)
 	}
+
 	if msg.UserAgent != DefaultUserAgent {
 		t.Errorf("NewMsgVersion: wrong user agent - got %v, want %v",
 			msg.UserAgent, DefaultUserAgent)
 	}
+
 	if msg.LastBlock != lastBlock {
 		t.Errorf("NewMsgVersion: wrong last block - got %v, want %v",
 			msg.LastBlock, lastBlock)
 	}
+
 	if msg.DisableRelayTx {
 		t.Errorf("NewMsgVersion: disable relay tx is not false by "+
 			"default - got %v, want %v", msg.DisableRelayTx, false)
 	}
 
 	msg.AddUserAgent("myclient", "1.2.3", "optional", "comments")
+
 	customUserAgent := "myclient:1.2.3(optional; comments)/"
 	if msg.UserAgent != customUserAgent {
 		t.Errorf("AddUserAgent: wrong user agent - got %s, want %s",
@@ -70,6 +78,7 @@ func TestVersion(t *testing.T) {
 	}
 
 	msg.AddUserAgent(msg.UserAgent+"mygui", "3.4.5")
+
 	customUserAgent += "mygui:3.4.5/"
 	if msg.UserAgent != customUserAgent {
 		t.Errorf("AddUserAgent: wrong user agent - got %s, want %s",
@@ -82,15 +91,14 @@ func TestVersion(t *testing.T) {
 	if _, ok := err.(*MessageError); !ok {
 		t.Errorf("AddUserAgent: expected error not received "+
 			"- got %v, want %T", err, MessageError{})
-
 	}
 
 	// Version message should not have any services set by default.
 	if msg.Services != 0 {
 		t.Errorf("NewMsgVersion: wrong default services - got %v, want %v",
 			msg.Services, 0)
-
 	}
+
 	if msg.HasService(SFNodeNetwork) {
 		t.Errorf("HasService: SFNodeNetwork service is set")
 	}
@@ -109,6 +117,7 @@ func TestVersion(t *testing.T) {
 	// relay transactions flag 1 byte.
 	wantPayload := uint64(358)
 	maxPayload := msg.MaxPayloadLength(pver)
+
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
 			"protocol version %d - got %v, want %v", pver,
@@ -117,10 +126,12 @@ func TestVersion(t *testing.T) {
 
 	// Ensure adding the full service node flag works.
 	msg.AddService(SFNodeNetwork)
+
 	if msg.Services != SFNodeNetwork {
 		t.Errorf("AddService: wrong services - got %v, want %v",
 			msg.Services, SFNodeNetwork)
 	}
+
 	if !msg.HasService(SFNodeNetwork) {
 		t.Errorf("HasService: SFNodeNetwork service not set")
 	}
@@ -212,14 +223,17 @@ func TestVersionWire(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode the message to wire format.
 		var buf bytes.Buffer
+
 		err := test.in.BsvEncode(&buf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("BsvEncode #%d error %v", i, err)
 			continue
 		}
+
 		if !bytes.Equal(buf.Bytes(), test.buf) {
 			t.Errorf("BsvEncode #%d\n got: %s want: %s", i,
 				spew.Sdump(buf.Bytes()), spew.Sdump(test.buf))
@@ -228,12 +242,15 @@ func TestVersionWire(t *testing.T) {
 
 		// Decode the message from wire format.
 		var msg MsgVersion
+
 		rbuf := bytes.NewBuffer(test.buf)
+
 		err = msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.out) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.out))
@@ -268,6 +285,7 @@ func TestVersionWireErrors(t *testing.T) {
 
 	// Encode the new UA length as a varint.
 	var newUAVarIntBuf bytes.Buffer
+
 	err := WriteVarInt(&newUAVarIntBuf, pver, uint64(len(newUA)))
 	if err != nil {
 		t.Errorf("WriteVarInt: error %v", err)
@@ -322,9 +340,11 @@ func TestVersionWireErrors(t *testing.T) {
 	}
 
 	t.Logf("Running %d tests", len(tests))
+
 	for i, test := range tests {
 		// Encode to wire format.
 		w := newFixedWriter(test.max)
+
 		err := test.in.BsvEncode(w, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.writeErr) {
 			t.Errorf("BsvEncode #%d wrong error got: %v, want: %v",
@@ -344,7 +364,9 @@ func TestVersionWireErrors(t *testing.T) {
 
 		// Decode from wire format.
 		var msg MsgVersion
+
 		buf := bytes.NewBuffer(test.buf[0:test.max])
+
 		err = msg.Bsvdecode(buf, test.pver, test.enc)
 		if reflect.TypeOf(err) != reflect.TypeOf(test.readErr) {
 			t.Errorf("Bsvdecode #%d wrong error got: %v, want: %v",
@@ -457,12 +479,15 @@ func TestVersionOptionalFields(t *testing.T) {
 	for i, test := range tests {
 		// Decode the message from wire format.
 		var msg MsgVersion
+
 		rbuf := bytes.NewBuffer(test.buf)
+
 		err := msg.Bsvdecode(rbuf, test.pver, test.enc)
 		if err != nil {
 			t.Errorf("Bsvdecode #%d error %v", i, err)
 			continue
 		}
+
 		if !reflect.DeepEqual(&msg, test.msg) {
 			t.Errorf("Bsvdecode #%d\n got: %s want: %s", i,
 				spew.Sdump(msg), spew.Sdump(test.msg))

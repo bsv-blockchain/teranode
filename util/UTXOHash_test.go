@@ -5,13 +5,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var previousTxScript, _ = hex.DecodeString("76a914d687c76d6ee133c9cc42bd96e3947d8a84bdf60288ac")
@@ -52,6 +51,7 @@ func Test_getInputUtxoHash(t *testing.T) {
 				t.Errorf("GetInputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("GetInputUtxoHash() got = %v, want %v", got, tt.want)
 			}
@@ -91,11 +91,13 @@ func Test_getOutputUtxoHash(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			txid, _ := chainhash.NewHash(tt.args.txID)
+
 			got, err := UTXOHashFromOutput(txid, tt.args.output, tt.args.vOut)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetOutputUtxoHash() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("GetOutputUtxoHash() got = %v, want %v", got, tt.want)
 			}
@@ -107,6 +109,7 @@ func TestCollision(t *testing.T) {
 	// tx id 955c4de19e3428a2620891dad1f4f2f7e5948c6a61b1602372fee47370bb23c2
 	script, err := bscript.NewFromHexString("76a9146d6baa116674e3ccc2afef914145f0d020a0366088ac")
 	require.NoError(t, err)
+
 	input1 := &bt.Input{
 		PreviousTxSatoshis: 100000,
 		PreviousTxScript:   script,
@@ -120,6 +123,7 @@ func TestCollision(t *testing.T) {
 	// tx id 2c27c886af61c5e0be4e47cae793864870874ca067d34a7fe012b177a811ee09
 	script, err = bscript.NewFromHexString("76a9143cadb60136ecb6e9dde1c3d02d6642a78540c14b88ac")
 	require.NoError(t, err)
+
 	input2 := &bt.Input{
 		PreviousTxSatoshis: 100000,
 		PreviousTxScript:   script,

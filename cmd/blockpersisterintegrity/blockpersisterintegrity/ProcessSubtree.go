@@ -53,8 +53,10 @@ func (stp *SubtreeProcessor) ProcessSubtree(ctx context.Context, subtreeHash cha
 		n, _ := io.ReadFull(subtreeReader, buffer)
 		partialBuffer.Write(buffer[:n])
 
-		var btTx *bt.Tx
-		var bytesRead int
+		var (
+			btTx      *bt.Tx
+			bytesRead int
+		)
 
 		btTx, bytesRead, err = bt.NewTxFromStream(partialBuffer.Bytes())
 
@@ -73,6 +75,7 @@ func (stp *SubtreeProcessor) ProcessSubtree(ctx context.Context, subtreeHash cha
 		}
 
 		partialBuffer.Next(bytesRead)
+
 		i++
 
 		var txFees uint64

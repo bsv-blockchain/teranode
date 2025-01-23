@@ -35,22 +35,27 @@ func (m *MerkleBlock) calcHash(height, pos uint32) *chainhash.Hash {
 	}
 
 	var right *chainhash.Hash
+
 	left := m.calcHash(height-1, pos*2)
+
 	if pos*2+1 < m.calcTreeWidth(height-1) {
 		right = m.calcHash(height-1, pos*2+1)
 	} else {
 		right = left
 	}
+
 	return hashMerkleBranches(left, right)
 }
 
 func hashMerkleBranches(left *chainhash.Hash, right *chainhash.Hash) *chainhash.Hash {
 	// Concatenate the left and right nodes.
 	var hash [chainhash.HashSize * 2]byte
+
 	copy(hash[:chainhash.HashSize], left[:])
 	copy(hash[chainhash.HashSize:], right[:])
 
 	newHash := chainhash.DoubleHashH(hash[:])
+
 	return &newHash
 }
 
@@ -64,6 +69,7 @@ func (m *MerkleBlock) traverseAndBuild(height, pos uint32) {
 	for i := pos << height; i < (pos+1)<<height && i < m.numTx; i++ {
 		isParent |= m.matchedBits[i]
 	}
+
 	m.bits = append(m.bits, isParent)
 
 	// When the node is a leaf node or not a parent of a matched node,
@@ -95,13 +101,13 @@ func TxInSet(tx *chainhash.Hash, set []*chainhash.Hash) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 // NewMerkleBlockWithTxnSet returns a new *wire.MsgMerkleBlock containing a
 // partial merkle tree built using the list of transactions provided
 func NewMerkleBlockWithTxnSet(block *bsvutil.Block, txnSet []*chainhash.Hash) (*wire.MsgMerkleBlock, []uint32) {
-
 	numTx := uint32(len(block.Transactions()))
 	mBlock := MerkleBlock{
 		numTx:       numTx,
@@ -112,6 +118,7 @@ func NewMerkleBlockWithTxnSet(block *bsvutil.Block, txnSet []*chainhash.Hash) (*
 	// add all block transactions to merkle block and set bits for matching
 	// transactions
 	var matchedIndices []uint32
+
 	for txIndex, tx := range block.Transactions() {
 		if TxInSet(tx.Hash(), txnSet) {
 			mBlock.matchedBits = append(mBlock.matchedBits, 0x01)
@@ -119,6 +126,7 @@ func NewMerkleBlockWithTxnSet(block *bsvutil.Block, txnSet []*chainhash.Hash) (*
 		} else {
 			mBlock.matchedBits = append(mBlock.matchedBits, 0x00)
 		}
+
 		mBlock.allHashes = append(mBlock.allHashes, tx.Hash())
 	}
 
@@ -128,7 +136,6 @@ func NewMerkleBlockWithTxnSet(block *bsvutil.Block, txnSet []*chainhash.Hash) (*
 // calcBlock calculates the merkleBlock when created from either a TxnSet or
 // by a bloom.Filter
 func (m *MerkleBlock) calcBlock(block *bsvutil.Block) *wire.MsgMerkleBlock {
-
 	// Calculate the number of merkle branches (height) in the tree.
 	height := uint32(0)
 	for m.calcTreeWidth(height) > 1 {
@@ -148,6 +155,7 @@ func (m *MerkleBlock) calcBlock(block *bsvutil.Block) *wire.MsgMerkleBlock {
 	for _, hash := range m.finalHashes {
 		_ = msgMerkleBlock.AddTxHash(hash)
 	}
+
 	for i := uint32(0); i < uint32(len(m.bits)); i++ {
 		msgMerkleBlock.Flags[i/8] |= m.bits[i] << (i % 8)
 	}

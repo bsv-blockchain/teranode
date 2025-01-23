@@ -39,6 +39,7 @@ var (
 
 func TestOneTransaction(t *testing.T) {
 	var err error
+
 	subtrees := make([]*util.Subtree, 1)
 
 	subtrees[0], err = util.NewTree(1)
@@ -97,6 +98,7 @@ func TestTwoTransactions(t *testing.T) {
 	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
 	var err error
+
 	subtrees := make([]*util.Subtree, 1)
 	subtrees[0], err = util.NewTree(1)
 	require.NoError(t, err)

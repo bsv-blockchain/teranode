@@ -109,9 +109,7 @@ func New(
 			return
 		}
 
-		var absoluteQuorumTimeout time.Duration
-
-		absoluteQuorumTimeout = tSettings.SubtreeValidation.QuorumAbsoluteTimeout
+		var absoluteQuorumTimeout = tSettings.SubtreeValidation.QuorumAbsoluteTimeout
 
 		q, err = quorum.New(
 			u.logger,
