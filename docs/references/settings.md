@@ -1,24 +1,28 @@
 # ⚙️Settings
 
-All services accept settings allowing local and remote servers to have their own specific configuration.
+All services accept settings through a centralized Settings object that allows local and remote servers to have their own specific configuration.
 
 Please review the following documents for more information on how to deploy the settings:
 - [Developer Setup](../tutorials/developers/developerSetup.md)
 - [Test Setup](../howto/miners/docker/minersHowToConfigureTheNode.md)
 - [Production Setup](../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 
+## Configuration Files
+
 The settings are stored in 2 files:
 
 * `settings.conf` - Global settings
 * `settings_local.conf` - Local overridden settings
 
+## Configuration System
+
 The configuration system allows for a layered approach to settings. At its core, it works with a base setting. However, to cater to individualized or context-specific requirements, you can have context-dependent overrides.
 
 Here's how it prioritizes:
 
-1. `SETTING_NAME.context_name`: A context-specific override (highest priority).
-2. `SETTING_NAME.base`: A general override.
-3. `SETTING_NAME`: The base setting (lowest priority).
+1. `SETTING_NAME.context_name`: A context-specific override (highest priority)
+2. `SETTING_NAME.base`: A general override
+3. `SETTING_NAME`: The base setting (lowest priority)
 
 ### Example
 
@@ -29,9 +33,9 @@ The base setting might be:
 DATABASE_URL = "database-url-default.com"
 ```
 
-Bob, a developer, might have his own database for development purposes. So, for the context `dev.bob`, there might be an override:
+As an example, we might have a `newenvironment1` database for development purposes. So, for the context `dev.newenvironment1`, there might be an override:
 ```
-DATABASE_URL.dev.bob = "database-url-bob.com"
+DATABASE_URL.dev.newenvironment1 = "database-url-environment1"
 ```
 
 There might also be a generic development database URL, defined as:
@@ -39,95 +43,90 @@ There might also be a generic development database URL, defined as:
 DATABASE_URL.dev = "database-url-dev.com"
 ```
 
-When Bob runs the application in his development context (`dev.bob`):
+When the application is run against this development context (`dev.newenvironment1`):
 
-- The system first checks for `DATABASE_URL.dev.bob`. If it exists, it's used.
+- The system first checks for `DATABASE_URL.dev.newenvironment1`. If it exists, it's used.
 - If not, it falls back to the general development URL `DATABASE_URL.dev`.
 - If neither exists, it defaults to `DATABASE_URL`.
 
-For Bob, the resolution would be:
+For `newenvironment1`, the resolution would be:
 
-1. **First Preference:** `DATABASE_URL.dev.bob` -> "database-url-bob.com"
+1. **First Preference:** `DATABASE_URL.dev.newenvironment1` -> "database-url-dev.com"
 2. **Fallback:** `DATABASE_URL.dev` -> "database-url-dev.com"
 3. **Last Resort:** `DATABASE_URL` -> "database-url-default.com"
 
-Thus, with this approach, you have the flexibility to have a default setting, an optional general override, and further context-specific overrides. It's a hierarchical system that allows fine-grained control over configurations based on context.
+This approach provides flexibility to have a default setting, an optional general override, and further context-specific overrides. It's a hierarchical system that allows fine-grained control over configurations based on context.
 
----
+## Accessing Settings in Go
 
-### Accessing the Setttings from Go
+The settings are accessed through a centralized Settings object that is passed to services requiring configuration. Here's how to use it:
 
-The `gocore.Config()` offers various methods to retrieve settings from the configuration. Here's a guide on how to use them:
+### Initialization
 
-#### Initialization
-
-Before using the configuration methods, ensure you've initialized and retrieved the configuration instance:
+First, create a new Settings instance:
 
 ```go
-config := gocore.Config()
+settings := settings.NewSettings()
 ```
 
-#### Get
+This will load all configuration values from the settings files according to the priority system described above.
 
-Retrieve a string value for a given key. If the key is not found, it will return the provided default value (if any) or an empty string.
+### Accessing Settings
+
+Settings are organized into logical groups within the Settings struct. For example:
 
 ```go
-value, found := config.Get("someKey", "defaultValue")
+// Access Kafka settings
+kafkaHosts := settings.Kafka.Hosts
+kafkaPort := settings.Kafka.Port
+
+// Access Blockchain settings
+grpcAddress := settings.BlockChain.GRPCAddress
+maxRetries := settings.BlockChain.MaxRetries
+
+// Access Alert settings
+genesisKeys := settings.Alert.GenesisKeys
+p2pPort := settings.Alert.P2PPort
 ```
 
-#### GetMulti
+### Available Setting Groups
 
-Retrieve a slice of strings for a given key. Values should be separated by the provided separator.
+The Settings struct includes multiple setting groups:
 
+- Alert Settings (AlertSettings)
+- Asset Settings (AssetSettings)
+- Block Settings (BlockSettings)
+- BlockChain Settings (BlockChainSettings)
+- BlockValidation Settings (BlockValidationSettings)
+- Kafka Settings (KafkaSettings)
+- Redis Settings (RedisSettings)
+- Validator Settings (ValidatorSettings)
+- And more...
+
+Each group contains related configuration values specific to that component of the system.
+
+### Best Practices
+
+1. Always pass the Settings object as a dependency to services that need configuration:
 ```go
-values, found := config.GetMulti("someKey", ",", []string{"default1", "default2"})
-```
-
-#### GetInt
-
-Retrieve an integer value for a given key.
-
-```go
-intValue, found := config.GetInt("someKey", 42)
-```
-
-#### GetBool
-
-Retrieve a boolean value for a given key.
-
-```go
-boolValue := config.GetBool("someKey", true)
-```
-
-#### GetURL
-
-Retrieve a URL value for a given key. This method will also decrypt any encrypted tokens in the URL.
-
-```go
-urlValue, err, found := config.GetURL("someKey")
-if err != nil {
-	panic(err)
+func NewService(logger ulogger.Logger, settings *settings.Settings) *Service {
+    return &Service{
+        logger: logger,
+        settings: settings,
+        // ...
+    }
 }
-if !found {
-	panic("URL config not found")
-}
 ```
 
-#### GetAll
-
-Retrieve all configuration key-value pairs as a map.
-
+2. Access settings through the appropriate group rather than using direct key access:
 ```go
-allConfigs := config.GetAll()
+// Good
+maxRetries := settings.BlockChain.MaxRetries
+
+// Avoid (historical style, now deprecated)
+maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
 ```
 
----
+3. Use the type system to your advantage - settings are strongly typed within their respective groups.
 
-**Notes**:
-
-1. The `Get`, `GetInt`, `GetMulti`, and `GetBool` methods all support an optional default value which will be returned if the key is not found in the configuration.
-2. The `GetURL` method provides decryption for encrypted tokens in the URL, identified by the prefix `*EHE*`. If the URL is missing or invalid, an error will be returned.
-3. Each method caches its results, ensuring that subsequent calls are efficient.
-4. The configuration supports a context system. If a context is set (e.g., "dev.vicente"), the system will attempt to retrieve the setting specific to that context before falling back to a more general context or the base setting.
-
-Remember to always check the returned `found` boolean or handle potential errors (like in the `GetURL` method) to ensure the expected configuration value is indeed retrieved.
+**Note**: The old `gocore.Config()` approach with direct key access is deprecated. Always use the new Settings object for accessing configuration values.
