@@ -3,6 +3,8 @@ package tconfig
 import (
 	"flag"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -109,11 +111,18 @@ func (c *TConfig) Set(k string, v any) {
 // environment variables, from config files of different formats .env, .yaml, .json
 func (c *TConfig) initViper() {
 	if c.viper == nil {
-		configFile := flag.String("config-file", "", "Path to the configuration file")
-		skipSetup := flag.Bool("skip-setup", false, "Skip Setting up local system")
-		skipTeardown := flag.Bool("skip-teardown", false, "Skip Tearing down local system")
-		helpOnly := flag.Bool("help", false, "Print Help message")
-		flag.Parse()
+		localFlags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+		localFlags.Usage = func() {}     // Disable undesired printout usage of flag
+		localFlags.SetOutput(io.Discard) // Disable undesired printout usage of flag
+
+		tconfigFile := localFlags.String("tconfig-file", "", "Path to the test configuration file")
+		skipSetup := localFlags.Bool("skip-setup", false, "Skip Setting up local system")
+		skipTeardown := localFlags.Bool("skip-teardown", false, "Skip Tearing down local system")
+		helpOnly := localFlags.Bool("help", false, "Print Help message")
+
+		if err := localFlags.Parse(os.Args[1:]); err != nil {
+			fmt.Printf("WARNING parsing flags for tconfig : %v\n", err)
+		}
 
 		c.Suite.HelpOnly = *helpOnly
 
@@ -122,27 +131,27 @@ func (c *TConfig) initViper() {
 		c.viper.AutomaticEnv()
 		c.viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-		// If --config-file is specified, it has to be good config file
-		if *configFile != "" {
-			if c.isEnvFile(*configFile) {
+		// If --tconfig-file is specified, it has to be good config file
+		if *tconfigFile != "" {
+			if c.isEnvFile(*tconfigFile) {
 				// Viper transforms my.var to MY_VAR only for environment variables
 				// but not in .env fie. We use dotenv to load the .env file to environment variables
 				// To make this transformation works for .env file
 				// Note that dotenv does not override the environment variale, so it will
 				// not break the order of priority
-				if err := godotenv.Load(*configFile); err != nil {
+				if err := godotenv.Load(*tconfigFile); err != nil {
 					panic(err)
 				} else {
-					c.Suite.TConfigFile = *configFile
+					c.Suite.TConfigFile = *tconfigFile
 				}
 			} else {
-				c.viper.SetConfigFile(*configFile)
+				c.viper.SetConfigFile(*tconfigFile)
 				err := c.viper.ReadInConfig()
 
 				if err != nil {
 					panic(err)
 				} else {
-					c.Suite.TConfigFile = *configFile
+					c.Suite.TConfigFile = *tconfigFile
 				}
 			}
 		}

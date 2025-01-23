@@ -12,7 +12,7 @@ var testConfig TConfig
 
 // To run all test suites in this package with custom config :
 //
-//	SUITE_TESTID=OverrideFromCLI go test -v ./test/utils/tconfig/... -args --config-file=../example/tconfig/testabc.json
+//	SUITE_TESTID=OverrideFromCLI go test -v ./test/utils/tconfig/... -args --tconfig-file=../example/tconfig/testabc.json
 func TestMain(m *testing.M) {
 	if err := setup(); err != nil {
 		os.Exit(1)
