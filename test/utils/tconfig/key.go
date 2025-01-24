@@ -15,9 +15,10 @@ package tconfig
 
 const (
 	// Keys for suite config
-	KeySuiteTestID   = "suite.testid"
-	KeySuiteName     = "suite.name"
-	KeySuiteLogLevel = "suite.loglevel"
+	KeySuiteTestID     = "suite.testid"
+	KeySuiteName       = "suite.name"
+	KeySuiteLogLevel   = "suite.loglevel"
+	KeyInitBlockHeight = "suite.initblockheight"
 
 	// Keys for localsystem config
 	KeyLocalSystemComposes      = "localsystem.composes"

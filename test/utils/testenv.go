@@ -28,13 +28,14 @@ import (
 
 // Teranode test environment is a compose stack of 3 teranode instances.
 type TeranodeTestEnv struct {
-	TConfig tconfig.TConfig
-	Context context.Context
-	Compose tc.ComposeStack
-	Nodes   []TeranodeTestClient
-	Logger  ulogger.Logger
-	Cancel  context.CancelFunc
-	Daemon  daemon.Daemon
+	TConfig     tconfig.TConfig
+	Context     context.Context
+	Compose     tc.ComposeStack
+	Nodes       []TeranodeTestClient
+	LegacyNodes []SVNodeTestClient
+	Logger      ulogger.Logger
+	Cancel      context.CancelFunc
+	Daemon      daemon.Daemon
 }
 
 type TeranodeTestClient struct {
@@ -54,6 +55,11 @@ type TeranodeTestClient struct {
 	IPAddress           string
 	Settings            *settings.Settings
 	BlockChainDB        bcs.Store
+}
+
+type SVNodeTestClient struct {
+	Name      string
+	IPAddress string
 }
 
 const (
@@ -107,10 +113,14 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 		for key, val := range mapSettings {
 			settings := settings.NewSettings(val)
 			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
+			svNodeName := strings.ReplaceAll(nodeName, "tera", "sv")
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
 				SettingsContext: val,
 				Name:            nodeName,
 				Settings:        settings,
+			})
+			t.LegacyNodes = append(t.LegacyNodes, SVNodeTestClient{
+				Name: svNodeName,
 			})
 			t.Logger.Infof("Settings context: %s", envSettings[key])
 			t.Logger.Infof("Node name: %s", nodeName)
@@ -166,6 +176,31 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 }
 
 func (t *TeranodeTestEnv) GetContainerIPAddress(node *TeranodeTestClient) error {
+	if t.Compose != nil {
+		if t.Compose != nil {
+			service, err := t.Compose.ServiceContainer(t.Context, node.Name)
+			if err != nil {
+				return err
+			}
+
+			ipAddress, err := service.ContainerIP(t.Context)
+			if err != nil {
+				return err
+			}
+
+			node.IPAddress = ipAddress
+			t.Logger.Infof("Node %s IP address: %s", node.Name, ipAddress)
+
+			return nil
+		}
+
+		return nil
+	}
+
+	return nil
+}
+
+func (t *TeranodeTestEnv) GetLegacyContainerIPAddress(node *SVNodeTestClient) error {
 	if t.Compose != nil {
 		if t.Compose != nil {
 			service, err := t.Compose.ServiceContainer(t.Context, node.Name)

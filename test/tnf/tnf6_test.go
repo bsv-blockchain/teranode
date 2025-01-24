@@ -6,12 +6,15 @@
 package tnf
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/docker/go-connections/nat"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -38,12 +41,6 @@ func TestTNFTestSuite(t *testing.T) {
 }
 
 const (
-	NodeURL1 = "http://localhost:10090"
-	NodeURL2 = "http://localhost:12090"
-	NodeURL3 = "http://localhost:14090"
-)
-
-const (
 	miner1 = "/m1-eu/"
 	miner2 = "/m2-us/"
 	miner3 = "/m3-asia/"
@@ -56,17 +53,17 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	logger := cluster.Logger
 	settingsMap := suite.TConfig.Teranode.SettingsMap()
 
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("Recovered from panic: %v", r)
+	// defer func() {
+	// 	if r := recover(); r != nil {
+	// 		t.Errorf("Recovered from panic: %v", r)
 
-			_ = cluster.Compose.Down(cluster.Context)
-		}
-	}()
+	// 		_ = cluster.Compose.Down(cluster.Context)
+	// 	}
+	// }()
 
 	blockchainNode1 := cluster.Nodes[0].BlockchainClient
 	header1, meta1, _ := blockchainNode1.GetBestBlockHeader(ctx)
-	logger.Infof("Best block header on Node 1: %s", header1.Hash().String())
+	t.Logf("Best block header on Node 1: %s", header1.Hash().String())
 
 	chainWork1 := new(big.Int).SetBytes(meta1.ChainWork)
 	logger.Infof("Chainwork bytes on Node 1: %v", meta1.ChainWork)
@@ -96,7 +93,47 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	time.Sleep(2 * time.Second)
+	err := cluster.InitializeTeranodeTestClients()
+	if err != nil {
+		t.Errorf("Failed to initialize teranode test clients: %v", err)
+	}
+	time.Sleep(10 * time.Second)
+
+	port, ok := gocore.Config().GetInt("health_check_port", 8000)
+	if !ok {
+		suite.T().Fatalf("health_check_port not set in config")
+	}
+
+	ports := []int{port, port, port}
+
+	for index, port := range ports {
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+
+		suite.T().Logf("Waiting for node %d to be ready", index)
+
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 30*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	// wait for all blockchain nodes to be ready
+	for index, node := range suite.TeranodeTestEnv.Nodes {
+		suite.T().Logf("Sending initial RUN event to Blockchain %d", index)
+
+		err = helper.SendEventRun(suite.TeranodeTestEnv.Context, node.BlockchainClient, suite.TeranodeTestEnv.Logger)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	suite.T().Log("All nodes ready")
+
+	// blockchainNode0 := cluster.Nodes[0].BlockchainClient
+	blockchainNode1 = cluster.Nodes[1].BlockchainClient
 
 	blockchainNode1 = cluster.Nodes[0].BlockchainClient
 	header1, meta1, _ = blockchainNode1.GetBestBlockHeader(ctx)

@@ -6,7 +6,7 @@ x-teranode-base: &teranode-base
   networks:
     - teranode-network
   volumes:
-    - ./data/test:/app/data
+    - ./data/test/${TEST_ID:-default}:/app/data
 
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
@@ -16,7 +16,7 @@ x-aerospike-base: &aerospike-base
 
 networks:
   teranode-network:
-    name: teranode-network-test
+    name: teranode-network-test-${TEST_ID:-default}
 
 services:
   teranode-builder:
@@ -32,7 +32,7 @@ services:
     entrypoint: [ "pwd" ]
 
   postgres:
-    container_name: postgres-test
+    container_name: postgres-test-${TEST_ID:-default}
     image: postgres:latest
     networks:
       - teranode-network
@@ -44,7 +44,7 @@ services:
       - "7432:5432"
     volumes:
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/test/postgres:/var/lib/postgresql/data
+      - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -53,7 +53,7 @@ services:
       retries: 5
 
   kafka-shared:
-    container_name: kafka-shared-test
+    container_name: kafka-shared-test-${TEST_ID:-default}
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
@@ -72,10 +72,10 @@ services:
       - "49092:9092"
       - "49093:9093"
     volumes:
-      - ./data/test/kafka:/var/lib/kafka
+      - ./data/test/${TEST_ID:-default}/kafka:/var/lib/kafka
 
   kafka-console-shared:
-    container_name: kafka-console-shared
+    container_name: kafka-console-shared-${TEST_ID:-default}
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
       - teranode-network
@@ -97,33 +97,33 @@ services:
 
   aerospike-1:
     <<: *aerospike-base
-    container_name: aerospike-1-test
+    container_name: aerospike-1-test-${TEST_ID:-default}
     ports:
       - "13100:13100"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-1/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
 
   aerospike-2:
     <<: *aerospike-base
-    container_name: aerospike-2-test
+    container_name: aerospike-2-test-${TEST_ID:-default}
     ports:
       - "13200:13200"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-2/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
 
   aerospike-3:
     <<: *aerospike-base
-    container_name: aerospike-3-test
+    container_name: aerospike-3-test-${TEST_ID:-default}
     ports:
       - "13300:13300"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
-      - ./data/test/aerospike-3/data:/opt/aerospike/data
+      - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
 
-  node1:
-    container_name: node1
+  svnode1:
+    container_name: svnode1-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
     ports:
@@ -135,14 +135,14 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./config/bitcoin.conf:/data/bitcoin.conf
-      - ./node1-data:/data
+      - ./test/config/bitcoin.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/legacy/node1-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node2:18333", "-connect=node3:18333" ]
     networks:
     - teranode-network
 
-  node2:
-    container_name: node2
+  svnode2:
+    container_name: svnode2-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
     ports:
@@ -153,14 +153,14 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./config/bitcoin.conf:/data/bitcoin.conf
-      - ./node2-data:/data
+      - ./test/config/bitcoin.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/legacy/node2-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node3:18333" ]
     networks:
     - teranode-network
 
-  node3:
-    container_name: node3
+  svnode3:
+    container_name: svnode3-${TEST_ID:-default}
     image: bitcoinsv/bitcoin-sv:1.1.0
     platform: linux/amd64
     ports:
@@ -171,21 +171,21 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./config/bitcoin.conf:/data/bitcoin.conf
-      - ./node3-data:/data
+      - ./test/config/bitcoin.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/legacy/node3-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node2:18333" ]
     networks:
     - teranode-network
 
   teranode1:
     <<: *teranode-base
-    container_name: teranode1-test
+    container_name: teranode1-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-1
       - postgres
       - kafka-shared
-      - node1
+      - svnode1
     entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test.legacy}
@@ -199,20 +199,20 @@ services:
       - "11292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode1/txstore:/app/data/txstore
-      - ./data/test/teranode1/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode1/blockstore:/app/data/blockstore
-      - ./data/test/teranode1/external:/app/data/teranode1/external
+      - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode1/external:/app/data/teranode1/external
 
   teranode2:
     <<: *teranode-base
-    container_name: teranode2-test
+    container_name: teranode2-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-2
       - postgres
       - kafka-shared
-      - node1
+      - svnode1
     entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test.legacy}
@@ -226,20 +226,20 @@ services:
       - "13292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode2/txstore:/app/data/txstore
-      - ./data/test/teranode2/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode2/blockstore:/app/data/blockstore
-      - ./data/test/teranode2/external:/app/data/teranode2/external
+      - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode2/external:/app/data/teranode2/external
 
   teranode3:
     <<: *teranode-base
-    container_name: teranode3-test
+    container_name: teranode3-test-${TEST_ID:-default}
     image: teranode:latest
     depends_on:
       - aerospike-3
       - postgres
       - kafka-shared
-      - node1
+      - svnode1
     entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test.legacy}
@@ -256,7 +256,7 @@ services:
       - "15292:9292"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/test/teranode3/txstore:/app/data/txstore
-      - ./data/test/teranode3/subtreestore:/app/data/subtreestore
-      - ./data/test/teranode3/blockstore:/app/data/blockstore
-      - ./data/test/teranode3/external:/app/data/teranode3/external
+      - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
+      - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
+      - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
+      - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external

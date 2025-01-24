@@ -128,46 +128,48 @@ func (suite *TeranodeTestSuite) setupLocalTestEnv() {
 
 	suite.T().Log("All nodes ready")
 
-	height := uint32(101)
-	teranode1RPCEndpoint := suite.TeranodeTestEnv.Nodes[0].RPCURL
-	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
+	if suite.TConfig.Suite.InitBlockHeight > 0 {
+		height := suite.TConfig.Suite.InitBlockHeight
+		teranode1RPCEndpoint := suite.TeranodeTestEnv.Nodes[0].RPCURL
+		teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 
-	// Generate blocks
-	_, err = retry.Retry(
-		context.Background(),
-		suite.TeranodeTestEnv.Logger,
-		func() (string, error) {
-			return CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
-		},
-	)
-	if err != nil {
-		// we sometimes set an error saying the job was not found but strangely the test works even with this error
-		// suite.T().Fatal(err)
-		suite.T().Logf("Error generating blocks: %v", err)
-	}
+		// Generate blocks
+		_, err = retry.Retry(
+			context.Background(),
+			suite.TeranodeTestEnv.Logger,
+			func() (string, error) {
+				return CallRPC(teranode1RPCEndpoint, "generate", []interface{}{height})
+			},
+		)
+		if err != nil {
+			// we sometimes set an error saying the job was not found but strangely the test works even with this error
+			// suite.T().Fatal(err)
+			suite.T().Logf("Error generating blocks: %v", err)
+		}
 
-	NodeURL1 := suite.TeranodeTestEnv.Nodes[0].AssetURL
-	NodeURL2 := suite.TeranodeTestEnv.Nodes[1].AssetURL
-	NodeURL3 := suite.TeranodeTestEnv.Nodes[2].AssetURL
+		NodeURL1 := suite.TeranodeTestEnv.Nodes[0].AssetURL
+		NodeURL2 := suite.TeranodeTestEnv.Nodes[1].AssetURL
+		NodeURL3 := suite.TeranodeTestEnv.Nodes[2].AssetURL
 
-	// Add http to the url
-	NodeURL1 = "http://" + NodeURL1
-	NodeURL2 = "http://" + NodeURL2
-	NodeURL3 = "http://" + NodeURL3
+		// Add http to the url
+		NodeURL1 = "http://" + NodeURL1
+		NodeURL2 = "http://" + NodeURL2
+		NodeURL3 = "http://" + NodeURL3
 
-	err = WaitForBlockHeight(NodeURL1, height, 30)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+		err = WaitForBlockHeight(NodeURL1, height, 30)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 
-	err = WaitForBlockHeight(NodeURL2, height, 30)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
+		err = WaitForBlockHeight(NodeURL2, height, 30)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 
-	err = WaitForBlockHeight(NodeURL3, height, 30)
-	if err != nil {
-		suite.T().Fatal(err)
+		err = WaitForBlockHeight(NodeURL3, height, 30)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 	}
 
 	suite.T().Log("TeranodeTestEnv setup completed")

@@ -21,6 +21,9 @@ type ConfigSuite struct {
 	// TConfigFile hold the path to tconfig file
 	TConfigFile string `mapstructure:"tconfigfile" json:"tconfigfile" yaml:"tconfigfile"`
 
+	// InitBlockHeight tell the system to generate initial N blocks (uniquely works for regtest)
+	InitBlockHeight uint32 `mapstructure:"initblockheight" json:"initblockheight" yaml:"initblockheight"`
+
 	// HelpOnly tell the program to print help only then exit
 	HelpOnly bool `mapstructure:"helponly" json:"helponly" yaml:"helponly"`
 }
@@ -36,6 +39,9 @@ func LoadConfigSuite() TConfigLoader {
 
 		s.viper.SetDefault(KeySuiteLogLevel, "ERROR")
 		s.Suite.LogLevel = s.viper.GetString(KeySuiteLogLevel)
+
+		s.viper.SetDefault(KeyInitBlockHeight, uint32(101))
+		s.Suite.InitBlockHeight = s.viper.GetUint32(KeyInitBlockHeight)
 
 		return nil
 	}

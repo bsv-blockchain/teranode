@@ -3,7 +3,8 @@
     "testid": "ValueFromJSONFILE",
     "name": "ValueFromJSONFILE",
     "loglevel": "ValueFromJSONFILE",
-    "tconfigfile": "ValueFromJSONFILE"
+    "tconfigfile": "ValueFromJSONFILE",
+    "initblockheight": 103
   },
   "localsystem": {
     "composes": [
