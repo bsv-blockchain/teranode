@@ -85,7 +85,7 @@ type BlockAssembler struct {
 	blockchainSubscriptionCh chan *blockchain.Notification
 
 	// currentDifficulty stores the current mining difficulty target
-	currentDifficulty *model.NBit
+	currentDifficulty atomic.Pointer[model.NBit]
 
 	// defaultMiningNBits stores the default mining difficulty
 	defaultMiningNBits *model.NBit
@@ -418,10 +418,12 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
 
-	b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
+	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
+
+	b.currentDifficulty.Store(currentDifficulty)
 }
 
 // GetCurrentRunningState returns the current operational state.
@@ -470,10 +472,12 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		}
 	}
 
-	b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash())
+	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash())
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler] error getting next work required: %v", err)
 	}
+
+	b.currentDifficulty.Store(currentDifficulty)
 
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
@@ -698,10 +702,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		return nil, nil, err
 	}
 
+	currentDifficulty := b.currentDifficulty.Load()
 	if nBits == nil {
-		if b.currentDifficulty != nil {
+		if currentDifficulty != nil {
 			b.logger.Warnf("nextNbits is nil. Setting to current difficulty")
-			nBits = b.currentDifficulty
+
+			nBits = currentDifficulty
 		} else {
 			b.logger.Warnf("nextNbits and current difficulty are nil. Setting to pow limit bits")
 
@@ -713,10 +719,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 				return nil, nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
 			}
 
-			b.currentDifficulty = nBits
+			b.currentDifficulty.Store(nBits)
 		}
 	} else {
-		b.currentDifficulty = nBits
+		b.currentDifficulty.Store(nBits)
 	}
 	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	timeNow := uint32(time.Now().Unix())

@@ -9,6 +9,9 @@ message TError {
   string message = 2;
   bytes data = 3;
   string wrappedError = 4;
+  string file = 5;
+  int32 line = 6;
+  string function = 7;
 }
 
 enum ERR {
@@ -48,7 +51,8 @@ enum ERR {
   TX_MISSING_PARENT=34;
   TX_LOCK_TIME=35;
   TX_CONFLICTING=36;
-  TX_COINBASE_IMMATURE=37;
+  TX_UN_SPENDABLE=37;
+  TX_COINBASE_IMMATURE=38;
   TX_ERROR=39;
   // Service errors 40-49
   SERVICE_UNAVAILABLE=40;

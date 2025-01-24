@@ -177,19 +177,25 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
-	if _, ok := m.txs[*spend.TxID]; !ok {
+	txMemoryData, ok := m.txs[*spend.TxID]
+	if !ok {
 		return nil, errors.NewTxNotFoundError("%v not found", spend.TxID)
 	}
 
-	txSpend, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]
+	txSpend, ok := txMemoryData.utxoMap[*spend.UTXOHash]
 	if !ok {
 		return nil, errors.NewTxNotFoundError("%v not found", spend.TxID)
 	}
 
 	utxoStatus := utxo.CalculateUtxoStatus(txSpend, metaData.LockTime, m.blockHeight.Load())
 
+	// check utxo is spendable
+	if txMemoryData.utxoSpendableIn[spend.Vout] != 0 && txMemoryData.utxoSpendableIn[spend.Vout] > m.blockHeight.Load() {
+		utxoStatus = utxo.Status_UNSPENDABLE
+	}
+
 	// check if frozen
-	if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+	if txMemoryData.frozenMap[*spend.UTXOHash] {
 		utxoStatus = utxo.Status_FROZEN
 	}
 
@@ -224,7 +230,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 //   - UTXO is not frozen
 //   - UTXO is spendable (maturity/timelock)
 //   - UTXO is not already spent by different tx
-func (m *Memory) Spend(_ context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -303,22 +309,22 @@ func (m *Memory) Spend(_ context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 	}
 
 	if errorFound {
-		unSpendErr := m.unSpendUnlocked(spendsDone)
-		return spends, errors.NewTxInvalidError("spend failed: %v", unSpendErr)
+		unspendErr := m.unspendUnlocked(spendsDone)
+		return spends, errors.NewTxInvalidError("spend failed: %v", unspendErr)
 	}
 
 	return spends, nil
 }
 
-// UnSpend marks UTXOs as unspent by clearing their spending transaction ID.
-func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
+// Unspend marks UTXOs as unspent by clearing their spending transaction ID.
+func (m *Memory) Unspend(_ context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
-	return m.unSpendUnlocked(spends)
+	return m.unspendUnlocked(spends)
 }
 
-func (m *Memory) unSpendUnlocked(spends []*utxo.Spend) error {
+func (m *Memory) unspendUnlocked(spends []*utxo.Spend) error {
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)
@@ -486,6 +492,14 @@ func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *u
 	delete(m.txs[*oldUtxo.TxID].utxoMap, *oldUtxo.UTXOHash)
 	m.txs[*oldUtxo.TxID].utxoMap[*newUtxo.UTXOHash] = nil
 
+	return nil
+}
+
+func (m *Memory) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+
+func (m *Memory) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 

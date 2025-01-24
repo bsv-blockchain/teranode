@@ -189,7 +189,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 		return nil, err
 	}
 
-	if !util.IsExtended(tx, 0) { // block height is not used
+	if !tx.IsExtended() { // block height is not used
 		return nil, errors.NewTxInvalidError("tx is not extended")
 	}
 
@@ -463,21 +463,21 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		// finally add the transaction hash and fee to the subtree
-		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
-		if err != nil {
+		if err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes); err != nil {
 			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
 		}
 
 		// mark the transaction as conflicting if it is
 		if txMeta.Conflicting {
-			subtree.ConflictingNodes = append(subtree.ConflictingNodes, txHash)
+			if err = subtree.AddConflictingNode(txHash); err != nil {
+				return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add conflicting node to subtree", v.SubtreeHash.String(), err)
+			}
 		}
 
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 
-		err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
-		if err != nil {
+		if err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes); err != nil {
 			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
 		}
 	}

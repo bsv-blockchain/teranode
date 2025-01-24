@@ -151,7 +151,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxostore.Spend, error) {
 	spends, err := s.store.Spend(ctx, tx)
 	spendDetails := make([]string, len(spends))
 
@@ -165,15 +165,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 	return spends, err
 }
 
-func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
-	err := s.store.UnSpend(ctx, spends)
+func (s *Store) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsUnspendable ...bool) error {
+	err := s.store.Unspend(ctx, spends, false)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {
 		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
 	}
 
-	s.logger.Debugf("[UTXOStore][logger][UnSpend] spends: [%s], err: %v : %s",
+	s.logger.Debugf("[UTXOStore][logger][Unspend] spends: [%s], err: %v : %s",
 		strings.Join(spendDetails, ", "), err, caller())
 
 	return err
@@ -233,4 +233,12 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
 
 	return err
+}
+
+func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+
+func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	return nil
 }

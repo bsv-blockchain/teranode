@@ -1208,6 +1208,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 			},
 			CoinbaseTx: coinbaseTx,
 		}
+
 		blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 
 		for idx, subtree := range block.Subtrees {
@@ -1216,8 +1217,10 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 
 		_ = blockSubtreesMap
 
-		transactionMap, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap)
+		transactionMap, conflictingNodes, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap, len(block.Subtrees))
 		require.NoError(t, err)
+
+		_ = conflictingNodes
 
 		assert.Equal(t, 8, transactionMap.Length())
 
@@ -1238,7 +1241,7 @@ func BenchmarkAddNode(t *testing.B) {
 	startTime := time.Now()
 
 	for i, txHash := range txHashes {
-		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}) // nolint:gosec
 	}
 
 	err := g.Wait()

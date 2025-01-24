@@ -151,28 +151,7 @@ func (dst *DoubleSpendTester) verifyBlockByHash(t *testing.T, expectedBlock *mod
 		"Block hash mismatch at hash %s", hash)
 }
 
-func (dst *DoubleSpendTester) verifyNotConflicting(t *testing.T, subtreeHash *chainhash.Hash) {
-	latestSubtreeBytes, err := dst.subtreeStore.Get(dst.ctx, subtreeHash[:], options.WithFileExtension("subtree"))
-	require.NoError(t, err, "Failed to get subtree")
-
-	latestSubtree, err := util.NewSubtreeFromBytes(latestSubtreeBytes)
-	require.NoError(t, err, "Failed to parse subtree bytes")
-
-	require.Len(t, latestSubtree.ConflictingNodes, 0, "Unexpected number of conflicting nodes in subtree")
-
-	for _, node := range latestSubtree.Nodes {
-		if node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-			// coinbase placeholder is not in the store
-			continue
-		}
-
-		readTx, err := dst.utxoStore.Get(dst.ctx, &node.Hash)
-		require.NoError(t, err, "Failed to get transaction %s", node.Hash.String())
-		assert.False(t, readTx.Conflicting, "Expected transaction %s to not be marked as conflicting", node.Hash.String())
-	}
-}
-
-func (dst *DoubleSpendTester) verifyConflicting(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts []chainhash.Hash) {
+func (dst *DoubleSpendTester) verifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts []chainhash.Hash) {
 	latestSubtreeBytes, err := dst.subtreeStore.Get(dst.ctx, subtreeHash[:], options.WithFileExtension("subtree"))
 	require.NoError(t, err, "Failed to get subtree")
 
@@ -183,12 +162,16 @@ func (dst *DoubleSpendTester) verifyConflicting(t *testing.T, subtreeHash *chain
 		"Unexpected number of conflicting nodes in subtree")
 
 	for i, conflict := range expectedConflicts {
-		readTx, err := dst.utxoStore.Get(dst.ctx, &conflict)
-		require.NoError(t, err, "Failed to get transaction %s", conflict.String())
-		assert.True(t, readTx.Conflicting, "Expected transaction %s to be marked as conflicting", conflict.String())
-
 		assert.Equal(t, conflict.String(), latestSubtree.ConflictingNodes[i].String(),
 			"Conflicting node mismatch at index %d", i)
+	}
+}
+
+func (dst *DoubleSpendTester) verifyConflictingInUtxoStore(t *testing.T, expectedConflicts []chainhash.Hash, conflictValue bool) {
+	for _, conflict := range expectedConflicts {
+		readTx, err := dst.utxoStore.Get(dst.ctx, &conflict)
+		require.NoError(t, err, "Failed to get transaction %s", conflict.String())
+		assert.Equal(t, conflictValue, readTx.Conflicting, "Expected transaction %s to be marked as conflicting", conflict.String())
 	}
 }
 

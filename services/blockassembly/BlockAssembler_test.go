@@ -557,6 +557,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
+
 		assert.NotNil(t, miningCandidate)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
@@ -669,6 +670,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
+
 		assert.NotNil(t, miningCandidate)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
@@ -774,6 +776,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 		_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.Error(t, err)
+
 		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())
 	})
 }

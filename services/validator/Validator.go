@@ -288,15 +288,42 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		Child                                                  -> spent -> tx meta -> stored -> block assembly
 	*/
 
+	var (
+		tErr       *errors.Error
+		utxoMapErr error
+	)
+
 	// this will reverse the spends if there is an error
-	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
-	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
-		if errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxConflicting) {
-			if validationOptions.createConflicting {
-				// process this transaction as a conflicting tx
-				if txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, true); err != nil {
-					return txMetaData, err
+		if errors.Is(err, errors.ErrTxInvalid) && validationOptions.createConflicting {
+			saveAsConflicting := false
+
+			var spendErrs *errors.Error
+
+			for _, spend := range spentUtxos {
+				if spend.Err != nil && (errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting)) {
+					saveAsConflicting = true
+
+					var spendErr *errors.Error
+					if errors.As(spend.Err, &spendErr) {
+						if spendErrs == nil {
+							spendErrs = errors.New(spendErr.Code(), spendErr.Message())
+						} else {
+							spendErrs = errors.New(spendErrs.Code(), spendErrs.Message(), spendErr)
+						}
+					}
+				}
+			}
+
+			if spendErrs != nil {
+				if errors.As(err, &tErr) {
+					tErr.SetWrappedErr(spendErrs)
+				}
+			}
+
+			if saveAsConflicting {
+				if txMetaData, utxoMapErr = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, true); utxoMapErr != nil {
+					return txMetaData, utxoMapErr
 				}
 
 				// We successfully added the tx to the utxo store as a conflicting tx,
@@ -458,9 +485,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	if err != nil {
 		traceSpan.RecordError(err)
 
-		// TODO check the specific errors of each spend and return a more specific error
-
-		return nil, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
+		return spends, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
 	}
 
 	return spends, nil
@@ -504,7 +529,7 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 	defer reverseUtxoSpan.Finish()
 
 	for retries := 0; retries < 3; retries++ {
-		if errReset := v.utxoStore.UnSpend(ctx, spentUtxos); errReset != nil {
+		if errReset := v.utxoStore.Unspend(ctx, spentUtxos); errReset != nil {
 			if retries < 2 {
 				backoff := time.Duration(2^retries) * time.Second
 				v.logger.Errorf("error resetting utxos, retrying in %s: %v", backoff.String(), errReset)
@@ -569,7 +594,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !util.IsExtended(tx, blockHeight) {
+	if !tx.IsExtended() {
 		err := v.extendTransaction(ctx, tx)
 		if err != nil {
 			// error is already wrapped in our errors package

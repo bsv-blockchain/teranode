@@ -403,12 +403,12 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	return t.utxoStore.Spend(ctx, tx)
 }
 
-func (t *TxMetaCache) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
-	return t.utxoStore.UnSpend(ctx, spends)
+func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+	return t.utxoStore.Unspend(ctx, spends, flagAsUnspendable...)
 }
 
 func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
@@ -445,6 +445,14 @@ func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtx
 	}
 
 	return t.Delete(ctx, utxo.TxID)
+}
+
+func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+
+func (t *TxMetaCache) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	return nil
 }
 
 func (t *TxMetaCache) SetBlockHeight(height uint32) error {

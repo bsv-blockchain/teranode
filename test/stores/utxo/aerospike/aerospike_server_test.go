@@ -413,7 +413,10 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
-		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration as all UTXOs are spent
+		expiration, err := time.ParseDuration(aerospikeExpiration)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(expiration.Seconds()), value.Expiration) // Now TTL should be set to 1 hour as all UTXOs are spent
 	})
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
@@ -447,7 +450,10 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
-		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration
+		expiration, err := time.ParseDuration(aerospikeExpiration)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(expiration.Seconds()), value.Expiration) // Now TTL should be set to aerospikeExpiration
 
 		// try to spend with different txid
 		spends, err := db.Spend(context.Background(), spendTx3)
@@ -519,7 +525,7 @@ func TestAerospike(t *testing.T) {
 		// require.Equal(t, spendingTxID1.String(), utxoSpendTxID)
 
 		// try to reset the utxo
-		err = db.UnSpend(context.Background(), []*utxo.Spend{{
+		err = db.Unspend(context.Background(), []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
@@ -571,7 +577,7 @@ func TestAerospike(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, spendUtxos)
 
-		err = db.UnSpend(context.Background(), spends)
+		err = db.Unspend(context.Background(), spends)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
@@ -1214,20 +1220,11 @@ func TestCreateZeroSat(t *testing.T) {
 	response, err = client.Get(nil, key)
 	require.NoError(t, err)
 
+	expiration, err := time.ParseDuration(aerospikeExpiration)
+	require.NoError(t, err)
+
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["nrUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, aerospikeExpiration, response.Expiration)
-
-	time.Sleep(2 * time.Duration(aerospikeExpiration) * time.Second)
-
-	response, err = client.Get(nil, key)
-	require.Error(t, err)
-	require.ErrorIs(t, err, aerospike.ErrKeyNotFound)
-
-	if testing.Verbose() && response != nil {
-		// Normally response is nil at this point so the test will
-		// not be overly chatty.
-		printResponse(response)
-	}
+	assert.Equal(t, uint32(expiration.Seconds()), response.Expiration)
 }

@@ -66,7 +66,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 )
 
-// UnSpend operations handle reverting spent UTXOs back to an unspent state.
+// Unspend operations handle reverting spent UTXOs back to an unspent state.
 // This is primarily used during blockchain reorganizations to handle
 // transaction rollbacks.
 //
@@ -81,7 +81,7 @@ import (
 //   4. Manages external storage TTL
 //   5. Updates metrics
 
-// UnSpend reverts spent UTXOs to unspent state.
+// Unspend reverts spent UTXOs to unspent state.
 // Parameters:
 //   - ctx: Context for cancellation
 //   - spends: Array of UTXOs to unspend
@@ -96,17 +96,17 @@ import (
 //   - Uses Lua scripts for atomic operations
 //   - Handles concurrent unspend operations
 //   - Coordinates with external storage
-func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
-	return s.unSpend(ctx, spends)
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) (err error) {
+	return s.unspend(ctx, spends, flagAsUnspendable...)
 }
 
-// unSpend implements the core unspend logic.
+// unspend implements the core unspend logic.
 // For each UTXO:
 //  1. Checks context cancellation
 //  2. Logs operation details
 //  3. Executes Lua script
 //  4. Handles response
-func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
+func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) (err error) {
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
@@ -124,7 +124,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, txID)
 
-				if err = s.unSpendLua(spend); err != nil {
+				if err = s.unspendLua(spend); err != nil {
 					// just return the raw error, should already be wrapped
 					return err
 				}
@@ -135,7 +135,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return nil
 }
 
-// unSpendLua executes the Lua script for a single UTXO unspend.
+// unspendLua executes the Lua script for a single UTXO unspend.
 // The operation:
 //  1. Calculates key and offset
 //  2. Executes Lua script
@@ -151,7 +151,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 // Metrics:
 //   - prometheusUtxoMapReset: Successful unspends
 //   - prometheusUtxoMapErrors: Failed operations
-func (s *Store) unSpendLua(spend *utxo.Spend) error {
+func (s *Store) unspendLua(spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
 	// nolint gosec
@@ -165,7 +165,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
-	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unSpend",
+	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)

@@ -111,7 +111,7 @@ end
 --  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
 --                   |_|
 --
-local function unSpend____VERSION___(keys, args)
+local function unspend____VERSION___(keys, args)
     local tx_key = keys[1]
     local offset = tonumber(args[1])
     local utxoHash = args[2]
@@ -484,7 +484,7 @@ local function reassign____VERSION___(keys, args)
 end
 
 redis.register_function('reassign____VERSION___', reassign____VERSION___)
-redis.register_function('unSpend____VERSION___', unSpend____VERSION___)
+redis.register_function('unspend____VERSION___', unspend____VERSION___)
 redis.register_function('unfreeze____VERSION___', unfreeze____VERSION___)
 redis.register_function('freeze____VERSION___', freeze____VERSION___)
 redis.register_function('spendMulti____VERSION___', spendMulti____VERSION___)

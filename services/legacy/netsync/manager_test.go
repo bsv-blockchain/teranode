@@ -455,7 +455,7 @@ func xTestBlockchainSync(t *testing.T) {
 	}
 
 	// Address is an anyone-can-spend P2SH script
-	address, scriptSig, err := GenerateAnyoneCanSpendAddress(&chainParams)
+	address, scriptSig, err := GenerateAnyoneCanspendAddress(&chainParams)
 	if err != nil {
 		t.Fatalf("Error constructing P2SH address: %v", err)
 	}

@@ -72,7 +72,7 @@ func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend, block
 	return nil
 }
 
-func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+func (ns *NullStore) Unspend(ctx context.Context, spends []*utxostore.Spend) error {
 	// fmt.Printf("MoveForwardBlock(%s)\n", hash.String())
 	return nil
 }

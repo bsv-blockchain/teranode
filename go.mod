@@ -4,7 +4,7 @@ go 1.22.6
 
 toolchain go1.23.0
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.12
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.16
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
@@ -19,7 +19,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoin-sv/alert-system v0.1.8
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta1
-	github.com/bitcoin-sv/go-sdk v1.1.7
+	github.com/bitcoin-sv/go-sdk v1.1.17
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
@@ -79,7 +79,7 @@ require (
 	golang.org/x/text v0.17.0 // indirect
 	golang.org/x/time v0.6.0
 	google.golang.org/grpc v1.66.0
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/protobuf v1.36.1
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.29.3
 	k8s.io/apimachinery v0.30.1

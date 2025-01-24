@@ -70,7 +70,7 @@ Delete(ctx context.Context, hash *chainhash.Hash) error
 GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)
 GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error
-UnSpend(ctx context.Context, spends []*Spend) error
+Unspend(ctx context.Context, spends []*Spend) error
 SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
 PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
@@ -91,7 +91,7 @@ GetMedianBlockTime() uint32
 - `Get`: Retrieves UTXO metadata.
 - `Delete`: Deletes a UTXO entry.
 - `Spend`: Marks UTXOs as spent.
-- `UnSpend`: Reverses the spent status of UTXOs.
+- `Unspend`: Reverses the spent status of UTXOs.
 - `BatchDecorate`: Decorates a batch of unresolved metadata.
 - `FreezeUTXOs`: Freezes specified UTXOs.
 - `UnFreezeUTXOs`: Unfreezes specified UTXOs.

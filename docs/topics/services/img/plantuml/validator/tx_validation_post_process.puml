@@ -34,7 +34,7 @@ alt if TX is valid
         Validator -> BlockAssembly: Store()
         alt if error in block assembler store
             Validator -> UTXOStore: Delete() # reverseTxMetaStore
-            Validator -> UTXOStore: UnSpend() # reverseSpends
+            Validator -> UTXOStore: Unspend() # reverseSpends
             Validator --> Server: Return error
         end
     end

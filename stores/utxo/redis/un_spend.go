@@ -8,8 +8,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 )
 
-func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
-	unSpendFn := fmt.Sprintf("unspend_%s", s.version)
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+	unspendFn := fmt.Sprintf("unspend_%s", s.version)
 
 	for i, spend := range spends {
 		select {
@@ -32,7 +32,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 
 				cmd := s.client.Do(ctx,
 					"FCALL",
-					unSpendFn,               // function name
+					unspendFn,               // function name
 					1,                       // number of key args
 					spend.TxID.String(),     // key[1]
 					spend.Vout,              // args[1] - offset

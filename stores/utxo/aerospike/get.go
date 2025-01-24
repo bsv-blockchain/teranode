@@ -147,6 +147,9 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	var (
 		err          error
 		spendingTxID *chainhash.Hash
+		spendableIn  int
+		frozen       bool
+		conflicting  bool
 	)
 
 	if value != nil {
@@ -172,14 +175,55 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 				}
 			}
 		}
+
+		utxoSpendableInBin, found := value.Bins["utxoSpendableIn"]
+		if found {
+			utxoSpendableIn, ok := utxoSpendableInBin.(map[interface{}]interface{})
+			if !ok {
+				return nil, errors.NewProcessingError("invalid utxoSpendableIn", nil)
+			}
+
+			spendableInIfc := utxoSpendableIn[int(spend.Vout)]
+			if spendableInIfc != nil {
+				spendableIn, ok = spendableInIfc.(int)
+				if !ok {
+					return nil, errors.NewProcessingError("invalid utxoSpendableIn", nil)
+				}
+			}
+		}
+
+		frozenBin, found := value.Bins["frozen"]
+		if found {
+			frozen, ok = frozenBin.(bool)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid frozen", nil)
+			}
+		}
+
+		conflictingBin, found := value.Bins["conflicting"]
+		if found {
+			conflicting, ok = conflictingBin.(bool)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid conflicting", nil)
+			}
+		}
 	}
 
 	utxoStatus := utxo.CalculateUtxoStatus2(spendingTxID)
 
+	// check utxo is spendable
+	if spendableIn != 0 && spendableIn > int(s.blockHeight.Load()) {
+		utxoStatus = utxo.Status_UNSPENDABLE
+	}
+
 	// check if frozen
-	if spendingTxID != nil && spendingTxID.IsEqual((*chainhash.Hash)(frozenUTXOBytes)) {
+	if frozen || (spendingTxID != nil && spendingTxID.IsEqual((*chainhash.Hash)(frozenUTXOBytes))) {
 		utxoStatus = utxo.Status_FROZEN
 		spendingTxID = nil
+	}
+
+	if conflicting {
+		utxoStatus = utxo.Status_CONFLICTING
 	}
 
 	return &utxo.SpendResponse{

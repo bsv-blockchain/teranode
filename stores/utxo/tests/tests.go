@@ -114,7 +114,7 @@ func Restore(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	// try to reset the utxo
-	err = db.UnSpend(ctx, spends)
+	err = db.Unspend(ctx, spends, false)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, testSpend0.TxID)
@@ -209,12 +209,12 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	// should return an error, does not exist anymore
-	resp, err := db.GetSpend(ctx, testSpend0)
+	_, err = db.GetSpend(ctx, testSpend0)
 	require.Error(t, err)
 
-	resp, err = db.GetSpend(ctx, testSpend1)
+	resp, err := db.GetSpend(ctx, testSpend1)
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore.Status_OK), resp.Status)
+	require.Equal(t, int(utxostore.Status_UNSPENDABLE), resp.Status)
 	require.Nil(t, resp.SpendingTxID)
 
 	// try to spend the old utxo, should fail
@@ -317,7 +317,7 @@ func Benchmark(b *testing.B, db utxostore.Store) {
 			b.Fatal(err)
 		}
 
-		err = db.UnSpend(ctx, spends)
+		err = db.Unspend(ctx, spends)
 		if err != nil {
 			b.Fatal(err)
 		}

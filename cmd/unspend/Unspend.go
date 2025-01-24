@@ -37,13 +37,13 @@ func Unspend(txid string) {
 		os.Exit(1)
 	}
 
-	if err = unSpendTransaction(ctx, logger, utxoStore, txHash); err != nil {
+	if err = unspendTransaction(ctx, logger, utxoStore, txHash); err != nil {
 		fmt.Printf("error unspending tx: %s\n", err)
 		os.Exit(1)
 	}
 }
 
-func unSpendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Store, txHash *chainhash.Hash) (err error) {
+func unspendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Store, txHash *chainhash.Hash) (err error) {
 	logger.Infof("Un-spending tx %s", txHash.String())
 
 	txMeta, err := utxoStore.Get(ctx, txHash)
@@ -63,12 +63,12 @@ func unSpendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore ut
 
 	tx := txMeta.Tx
 
-	if !util.IsExtended(tx, 0) {
+	if !tx.IsExtended() {
 		return errors.NewProcessingError("tx is not an extended tx")
 	}
 
 	// check the parent txs	and undo the spends
-	unSpends := make([]*utxostore.Spend, len(tx.Inputs))
+	unspends := make([]*utxostore.Spend, len(tx.Inputs))
 
 	for idx, input := range tx.Inputs {
 		parentHash := input.PreviousTxIDChainHash()
@@ -87,7 +87,7 @@ func unSpendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore ut
 			return errors.NewProcessingError("error getting utxo hash: %s", err)
 		}
 
-		unSpends[idx] = &utxostore.Spend{
+		unspends[idx] = &utxostore.Spend{
 			TxID:     parentHash,
 			Vout:     input.PreviousTxOutIndex,
 			UTXOHash: utxoHash,
@@ -114,7 +114,7 @@ func unSpendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore ut
 
 		if spendResponse != nil && spendResponse.SpendingTxID != nil {
 			// recursively un-spend this output spending tx
-			if err = unSpendTransaction(ctx, logger, utxoStore, spendResponse.SpendingTxID); err != nil {
+			if err = unspendTransaction(ctx, logger, utxoStore, spendResponse.SpendingTxID); err != nil {
 				return errors.NewProcessingError("error un-spending spending tx: %s\n", err)
 			}
 		}
@@ -123,9 +123,9 @@ func unSpendTransaction(ctx context.Context, logger ulogger.Logger, utxoStore ut
 	// all parents are still there, so we can safely un-spend and delete the tx
 
 	// undo the spend
-	logger.Infof("-- Un-spending %d utxos for %s", len(unSpends), txHash.String())
+	logger.Infof("-- Un-spending %d utxos for %s", len(unspends), txHash.String())
 
-	if err = utxoStore.UnSpend(context.TODO(), unSpends); err != nil {
+	if err = utxoStore.Unspend(context.TODO(), unspends, false); err != nil {
 		return errors.NewProcessingError("error un-spending tx: %s\n", err)
 	}
 

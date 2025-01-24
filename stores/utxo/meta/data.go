@@ -46,6 +46,9 @@ type Data struct {
 
 	// Conflicting is a flag indicating if the transaction is conflicting
 	Conflicting bool `json:"conflicting"`
+
+	// Unspendable is a flag indicating if the transaction is not spendable
+	Unspendable bool `json:"unspendable"`
 }
 
 // PreviousOutput represents an input's previous output information.
@@ -83,6 +86,7 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	d.IsCoinbase = ((*dataBytes)[16] & 0b01) == 0b01
 	d.Frozen = ((*dataBytes)[16] & 0b10) == 0b10
 	d.Conflicting = ((*dataBytes)[16] & 0b100) == 0b100
+	d.Unspendable = ((*dataBytes)[16] & 0b1000) == 0b1000
 
 	parentTxHashesLen := binary.LittleEndian.Uint64((*dataBytes)[17:25])
 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
@@ -115,6 +119,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	d.IsCoinbase = dataBytes[16]&0b01 == 0b01
 	d.Frozen = dataBytes[16]&0b10 == 0b10
 	d.Conflicting = dataBytes[16]&0b100 == 0b100
+	d.Unspendable = dataBytes[16]&0b1000 == 0b1000
 
 	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[17:25])
 	buf := bytes.NewReader(dataBytes[25:])
@@ -189,6 +194,10 @@ func (d *Data) Bytes() []byte {
 		buf[16] |= 0b100
 	}
 
+	if d.Unspendable {
+		buf[16] |= 0b1000
+	}
+
 	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
 
 	for _, parentTxHash := range d.ParentTxHashes {
@@ -235,6 +244,10 @@ func (d *Data) MetaBytes() []byte {
 		buf[16] |= 0b100
 	}
 
+	if d.Unspendable {
+		buf[16] |= 0b1000
+	}
+
 	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
 
 	for _, parentTxHash := range d.ParentTxHashes {
@@ -252,7 +265,7 @@ func (d *Data) String() string {
 		return "nil"
 	}
 
-	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, IsFrozen: %t, IsConflicting: %t, LockTime: %d}",
+	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, IsFrozen: %t, IsConflicting: %t, IsUnspendable: %t, LockTime: %d}",
 		func() string {
 			if d.Tx == nil {
 				return "nil"
@@ -267,5 +280,6 @@ func (d *Data) String() string {
 		d.IsCoinbase,
 		d.Frozen,
 		d.Conflicting,
+		d.Unspendable,
 		d.LockTime)
 }

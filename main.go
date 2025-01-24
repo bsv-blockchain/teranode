@@ -41,9 +41,11 @@ func main() {
 	case "blaster.run":
 		// txblaster.Init()
 		txblaster.Start()
+
 		return
 	case "miner.run":
 		miner.Start()
+
 		return
 	case "teranode-cli":
 		teranodecli.Start(os.Args[1:], version, commit)

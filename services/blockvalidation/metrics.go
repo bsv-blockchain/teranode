@@ -129,7 +129,7 @@ func _initPrometheusMetrics() {
 	//		Help:      "Duration of set tx meta queue channel wait",
 	//		Buckets:   util.MetricsBucketsMilliSeconds,
 	//	},
-	//)
+	// )
 	//
 	// prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
 	//	prometheus.HistogramOpts{
@@ -138,7 +138,7 @@ func _initPrometheusMetrics() {
 	//		Help:      "Duration of set tx meta from queue",
 	//		Buckets:   util.MetricsBucketsMilliSeconds,
 	//	},
-	//)
+	// )
 
 	prometheusBlockValidationValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
@@ -194,7 +194,7 @@ func _initPrometheusMetrics() {
 	//		Name:      "set_tx_mined_local",
 	//		Help:      "Number of tx mined local sets",
 	//	},
-	//)
+	// )
 
 	prometheusBlockValidationSetMinedMulti = promauto.NewCounter(
 		prometheus.CounterOpts{

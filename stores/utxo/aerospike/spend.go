@@ -132,7 +132,7 @@ type batchIncrement struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -196,10 +196,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 
 	if errorFound {
 		// revert the successfully spent utxos
-		unSpendErr := s.UnSpend(ctx, spentSpends)
+		unspendErr := s.Unspend(ctx, spentSpends)
 
 		// return the first error found
-		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode)", unSpendErr)
+		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode)", unspendErr)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))

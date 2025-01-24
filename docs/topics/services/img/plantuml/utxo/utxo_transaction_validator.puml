@@ -24,7 +24,7 @@ deactivate UTXOStore
 == Unspend UTXO ==
 
 
-TXValidator -> UTXOStore: UnSpend(ctx, spentUtxos)
+TXValidator -> UTXOStore: Unspend(ctx, spentUtxos)
 activate UTXOStore
 
 UTXOStore --> TXValidator: Confirmation of Unspend

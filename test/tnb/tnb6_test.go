@@ -20,7 +20,7 @@ Test Coverage:
        - Ensure spent UTXOs are marked as spent in the UTXO set
 
     3. UTXO State Management:
-       - Test UnSpend functionality to revert UTXO state
+       - Test Unspend functionality to revert UTXO state
        - Verify UTXO state consistency across operations
 
 Required Settings:

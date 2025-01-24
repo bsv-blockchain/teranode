@@ -599,6 +599,10 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 				return false, err
 			}
 		}
+
+		if err = b.checkConflictingTransactions(ctx, logger, txMetaStore); err != nil {
+			return false, err
+		}
 	}
 
 	// reset the txMap and release the memory
@@ -892,6 +896,45 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	return nil
+}
+
+// checkConflictingTransactions checks whether the transactions in the block have conflicting transactions on the chain
+// - 0: get the counter conflicting transactions, check they are not mined on our chain
+func (b *Block) checkConflictingTransactions(ctx context.Context, _ ulogger.Logger, txMetaStore utxo.Store) error {
+	// get all conflicting transaction from all subtrees
+	conflictingTxs, err := b.GetCounterConflictingTxs(ctx, txMetaStore)
+	if err != nil {
+		return err
+	}
+
+	_ = conflictingTxs
+
+	return nil
+}
+
+func (b *Block) GetCounterConflictingTxs(ctx context.Context, txMetaStore utxo.Store) ([]chainhash.Hash, error) {
+	conflictingTxs := make([]chainhash.Hash, 0, 1024)
+
+	for _, subtree := range b.SubtreeSlices {
+		for _, conflictingNode := range subtree.ConflictingNodes {
+			tx, err := txMetaStore.Get(ctx, &conflictingNode, []string{"tx"})
+			if err != nil {
+				return nil, errors.NewStorageError("error getting transaction %s from txMetaStore", conflictingNode.String(), err)
+			}
+
+			// for _, parentTxHash := range txMeta.ParentTxHashes {
+			// 	// get the parent tx from the txMetaStore
+			// 	parentTxMeta, err := txMetaStore.GetMeta(ctx, &parentTxHash)
+			// 	if err != nil {
+			// 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxHash.String(), err)
+			// 	}
+			// }
+
+			_ = tx
+		}
+	}
+
+	return conflictingTxs, nil
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {

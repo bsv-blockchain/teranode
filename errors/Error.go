@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	reflect "reflect"
+	"runtime"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -16,6 +17,9 @@ import (
 type Error struct {
 	code       ERR
 	message    string
+	file       string
+	line       int
+	function   string
 	wrappedErr error
 	data       ErrDataI
 }
@@ -125,6 +129,28 @@ func (e *Error) As(target interface{}) bool {
 	return false
 }
 
+func (e *Error) SetWrappedErr(err error) {
+	if e == nil {
+		return
+	}
+
+	// find the last wrapper error in the chain and set the new error as the wrapped error
+	var lastWrappedErr *Error
+
+	lastErr := e
+
+	for lastErr.wrappedErr != nil {
+		if errors.As(lastErr.wrappedErr, &lastWrappedErr) {
+			lastErr = lastWrappedErr
+		} else {
+			// this will set lastErr.wrappedErr to nil
+			lastErr = NewError(lastWrappedErr.Error())
+		}
+	}
+
+	lastErr.wrappedErr = err
+}
+
 func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
@@ -208,11 +234,18 @@ func New(code ERR, message string, params ...interface{}) *Error {
 		message = err.Error()
 	}
 
+	pc, file, line, _ := runtime.Caller(2)
+	fn := runtime.FuncForPC(pc)
+	parts := strings.Split(fn.Name(), "/")
+
 	// Check if the code exists in the ErrorConstants enum
 	if _, ok := ERR_name[int32(code)]; !ok {
 		returnErr := &Error{
-			code:    code,
-			message: "invalid error code",
+			code:     code,
+			message:  "invalid error code",
+			file:     file,
+			line:     line,
+			function: parts[len(parts)-1],
 		}
 		if wErr != nil {
 			returnErr.wrappedErr = wErr
@@ -222,10 +255,13 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	returnErr := &Error{
-		code:    code,
-		message: message,
-		// WrappedErr: wErr,
+		code:     code,
+		message:  message,
+		file:     file,
+		line:     line,
+		function: parts[len(parts)-1],
 	}
+
 	if wErr != nil {
 		returnErr.wrappedErr = wErr
 	}
@@ -259,22 +295,35 @@ func WrapGRPC(err error) error {
 		var details protoadapt.MessageV1
 		if castedErr.data != nil {
 			details, pbError = anypb.New(&TError{
-				Code:    castedErr.code,
-				Message: castedErr.message,
-				Data:    castedErr.data.EncodeErrorData(),
+				Code:     castedErr.code,
+				Message:  castedErr.message,
+				Data:     castedErr.data.EncodeErrorData(),
+				File:     castedErr.file,
+				Line:     int32(castedErr.line), // nolint:gosec
+				Function: castedErr.function,
 			})
 		} else {
 			details, pbError = anypb.New(&TError{
-				Code:    castedErr.code,
-				Message: castedErr.message,
+				Code:     castedErr.code,
+				Message:  castedErr.message,
+				File:     castedErr.file,
+				Line:     int32(castedErr.line), // nolint:gosec
+				Function: castedErr.function,
 			})
 		}
 
 		if pbError != nil {
+			pc, file, line, _ := runtime.Caller(1)
+			fn := runtime.FuncForPC(pc)
+			parts := strings.Split(fn.Name(), "/")
+
 			err2 := &Error{
 				// TODO: add grpc construction error type
 				code:       ERR_ERROR,
 				message:    "error serializing TError to protobuf Any",
+				file:       file,
+				line:       line,
+				function:   parts[len(parts)-1],
 				wrappedErr: err,
 			}
 
@@ -293,22 +342,35 @@ func WrapGRPC(err error) error {
 
 					if err.data != nil {
 						details, pbError = anypb.New(&TError{
-							Code:    err.code,
-							Message: err.message,
-							Data:    err.data.EncodeErrorData(),
+							Code:     err.code,
+							Message:  err.message,
+							Data:     err.data.EncodeErrorData(),
+							File:     err.file,
+							Line:     int32(err.line), // nolint:gosec
+							Function: err.function,
 						})
 					} else {
 						details, pbError = anypb.New(&TError{
-							Code:    err.code,
-							Message: err.message,
+							Code:     err.code,
+							Message:  err.message,
+							File:     err.file,
+							Line:     int32(err.line), // nolint:gosec
+							Function: err.function,
 						})
 					}
 
 					if pbError != nil {
+						pc, file, line, _ := runtime.Caller(1)
+						fn := runtime.FuncForPC(pc)
+						parts := strings.Split(fn.Name(), "/")
+
 						err2 := &Error{
 							// TODO: add grpc construction error type
 							code:       ERR_ERROR,
 							message:    "error serializing TError to protobuf Any",
+							file:       file,
+							line:       line,
+							function:   parts[len(parts)-1],
 							wrappedErr: err,
 						}
 
@@ -318,9 +380,16 @@ func WrapGRPC(err error) error {
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.wrappedErr
 				} else {
+					pc, file, line, _ := runtime.Caller(1)
+					fn := runtime.FuncForPC(pc)
+					parts := strings.Split(fn.Name(), "/")
+
 					details, _ := anypb.New(&TError{
-						Code:    ERR_ERROR,
-						Message: err.Error(),
+						Code:     ERR_ERROR,
+						Message:  err.Error(),
+						File:     file,
+						Line:     int32(line), // nolint:gosec
+						Function: parts[len(parts)-1],
 					})
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = nil
@@ -335,10 +404,17 @@ func WrapGRPC(err error) error {
 		st, detailsErr := st.WithDetails(wrappedErrDetails...)
 
 		if detailsErr != nil {
+			pc, file, line, _ := runtime.Caller(1)
+			fn := runtime.FuncForPC(pc)
+			parts := strings.Split(fn.Name(), "/")
+
 			err2 := &Error{
 				// TODO: add grpc construction error type
 				code:       ERR_ERROR,
 				message:    "error adding details to the error's gRPC status",
+				file:       file,
+				line:       line,
+				function:   parts[len(parts)-1],
 				wrappedErr: err,
 			}
 
@@ -421,6 +497,11 @@ func UnwrapGRPC(err error) *Error {
 					currErr.data = data
 				}
 			}
+
+			// Set file, line and function information from the TError
+			currErr.file = customDetails.File
+			currErr.line = int(customDetails.Line)
+			currErr.function = customDetails.Function
 
 			// if we moved up higher in the hierarchy
 			if prevErr != nil {
@@ -513,4 +594,28 @@ func As(err error, target any) bool {
 func isGRPCWrappedError(err error) bool {
 	_, ok := status.FromError(err)
 	return ok
+}
+
+// Format implements fmt.Formatter for custom formatting
+func (e *Error) Format(f fmt.State, c rune) {
+	if c == 'v' && (f.Flag('+') || f.Flag('#')) {
+		fmt.Fprintf(f, "%v\n", e)
+		e.writeVerbose(f)
+
+		return
+	}
+
+	fmt.Fprint(f, e.Error())
+}
+
+func (e *Error) writeVerbose(f fmt.State) {
+	fmt.Fprintf(f, "- %s%s() %s:%d [%d] %s\n", "", e.function, e.file, e.line, e.code, e.message)
+
+	if e.wrappedErr != nil {
+		if werr, ok := e.wrappedErr.(*Error); ok && werr.Code() != ERR_UNKNOWN {
+			werr.writeVerbose(f)
+		} else {
+			fmt.Fprintf(f, "- %v\n", e.wrappedErr)
+		}
+	}
 }

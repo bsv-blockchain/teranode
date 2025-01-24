@@ -129,8 +129,8 @@ github.com/bitcoin-sv/alert-system v0.1.8 h1:33lKQpoMj938WQHZMhsBuHuPB4+lr+H3sLe
 github.com/bitcoin-sv/alert-system v0.1.8/go.mod h1:HvaJhS+JSYGdkWf7txMm2T+AL1EHY+g21h8wzzE0xbU=
 github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta1 h1:7fINuoIx8H2m7lckVDvkvFP3oI8VvqZA7je6gPB/QjA=
 github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta1/go.mod h1:3KwV36iPgNEEbvv/Yvc8D+BNgoHraqG4U1c26BDWdhY=
-github.com/bitcoin-sv/go-sdk v1.1.7 h1:JbtaYCGUsHM7HTelLKSJp1NuYiG/xSNOdexjJ6w577A=
-github.com/bitcoin-sv/go-sdk v1.1.7/go.mod h1:NOAkJLbjqKOLuxJmb9ABG86ExTZp4HS8+iygiDIUps4=
+github.com/bitcoin-sv/go-sdk v1.1.17 h1:AMMAR4RP5ucq2AdVZcmHFQKwRBB7jrTJocxQDfDDeqE=
+github.com/bitcoin-sv/go-sdk v1.1.17/go.mod h1:3CsNdEDBwB+SIv6UBcJPC9bTvPqxQvg3GULt7wsuL58=
 github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1 h1:UaJa5AUB3PikMarj80fWG3Vje14n67d/Bm/i9wpu1SM=
 github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1/go.mod h1:ru0qxOIvJoDh2ot1ngGnmMMTtDBE6X5CNVDgNkYMCWA=
 github.com/bitcoin-sv/testcontainers-redis-go v0.2.2 h1:SYDPNkORqUv68/JkV0TeC16bMDkaMkee5KNiF3PkQBQ=
@@ -838,8 +838,8 @@ github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYr
 github.com/openzipkin/zipkin-go v0.1.1/go.mod h1:NtoC/o8u3JlF1lSlyPNswIbeQH9bJTmOf0Erfk+hxe8=
 github.com/ordishs/go-bitcoin v1.0.86 h1:OuLnaOfzCe/dHFlCredPFSJKQLOQIuUuuJj/faPtJnE=
 github.com/ordishs/go-bitcoin v1.0.86/go.mod h1:O3lqD8unDlwLXTmQTT4F5x/Gl3xgP4IgMQDFxTmi9V4=
-github.com/ordishs/go-bt/v2 v2.2.12 h1:gdvc/HLbvnGSYACoDGAyDWGsGTowrndDeFAtE7SEcIU=
-github.com/ordishs/go-bt/v2 v2.2.12/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
+github.com/ordishs/go-bt/v2 v2.2.16 h1:EDuAG9E1J26WBlQavbY0AOueQuBlwBg7rc0qflvMZ7c=
+github.com/ordishs/go-bt/v2 v2.2.16/go.mod h1:rU4UYTJ/ViM0BM8K0Ec3pRYzBv8ndu/UiehW3WAfRW4=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
 github.com/ordishs/go-utils v1.0.51/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
 github.com/ordishs/gocore v1.0.77 h1:HnwpJRhdtNYmY+bWufEz0JEgxETw5EHV882QJ/+QMws=
@@ -1422,8 +1422,8 @@ google.golang.org/protobuf v1.23.1-0.20200526195155-81db48ad09cc/go.mod h1:EGpAD
 google.golang.org/protobuf v1.25.0/go.mod h1:9JNX74DMeImyA3h4bdi1ymwjUzf21/xIlbajtzgsN7c=
 google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
 google.golang.org/protobuf v1.33.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
-google.golang.org/protobuf v1.34.2 h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=
-google.golang.org/protobuf v1.34.2/go.mod h1:qYOHts0dSfpeUzUFpOMr/WGzszTmLH+DiWniOlNbLDw=
+google.golang.org/protobuf v1.36.1 h1:yBPeRvTftaleIgM3PZ/WBIZ7XM/eEYAaEyCwvyjq/gk=
+google.golang.org/protobuf v1.36.1/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
 gopkg.in/DataDog/dd-trace-go.v1 v1.67.0 h1:3Cb46zyKIlEWac21tvDF2O4KyMlOHQxrQkyiaUpdwM0=
 gopkg.in/DataDog/dd-trace-go.v1 v1.67.0/go.mod h1:6DdiJPKOeJfZyd/IUGCAd5elY8qPGkztK6wbYYsMjag=
 gopkg.in/airbrake/gobrake.v2 v2.0.9/go.mod h1:/h5ZAUhDkGaJfjzjKLSjv6zCL6O0LLBxU4K+aSYdM/U=

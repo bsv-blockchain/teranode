@@ -206,7 +206,7 @@ func TestSpend(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestUnSpend(t *testing.T) {
+func TestUnspend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -233,7 +233,7 @@ func TestUnSpend(t *testing.T) {
 	require.NoError(t, err)
 
 	// Unspend the utxo
-	err = store.UnSpend(ctx, []*utxo.Spend{spend})
+	err = store.Unspend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
@@ -388,7 +388,7 @@ func TestTombstoneAfterSpend(t *testing.T) {
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
 
-func TestTombstoneAfterUnSpend(t *testing.T) {
+func TestTombstoneAfterUnspend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -412,7 +412,7 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
-	err = store.UnSpend(ctx, []*utxo.Spend{spend0})
+	err = store.Unspend(ctx, []*utxo.Spend{spend0})
 	require.NoError(t, err)
 
 	time.Sleep(1100 * time.Millisecond)

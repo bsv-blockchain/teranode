@@ -72,11 +72,11 @@ func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, o
 	return &meta.Data{}, nil
 }
 
-func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 
-func (m *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
+func (m *NullStore) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsUnspendable ...bool) error {
 	return nil
 }
 
@@ -97,5 +97,13 @@ func (m *NullStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 }
 
 func (m *NullStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+	return nil
+}
+
+func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+
+func (m *NullStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }

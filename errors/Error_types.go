@@ -34,6 +34,7 @@ var (
 	ErrTxMissingParent            = New(ERR_TX_MISSING_PARENT, "missing parent tx")
 	ErrTxLockTime                 = New(ERR_TX_LOCK_TIME, "Bad tx lock time")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
+	ErrTxUnspendable              = New(ERR_TX_UN_SPENDABLE, "tx un-spendable")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
@@ -127,6 +128,9 @@ func NewTxLockTimeError(message string, params ...interface{}) *Error {
 }
 func NewTxConflictingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CONFLICTING, message, params...)
+}
+func NewTxUnspendableError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_UN_SPENDABLE, message, params...)
 }
 func NewTxCoinbaseImmatureError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_COINBASE_IMMATURE, message, params...)

@@ -9,7 +9,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	spendFn := fmt.Sprintf("spend_%s", s.version)
 
 	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
@@ -147,9 +147,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
 	}
 
 	if errorFound {
-		unSpendErr := s.UnSpend(ctx, spentSpends)
+		unspendErr := s.Unspend(ctx, spentSpends)
 
-		return spends, errors.NewTxInvalidError("Error(s) found spending utxos", unSpendErr)
+		return spends, errors.NewTxInvalidError("Error(s) found spending utxos", unspendErr)
 	}
 
 	return spends, nil

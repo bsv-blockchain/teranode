@@ -42,7 +42,7 @@ It handles the core functionalities of the UTXO Store:
 * **Get**: Retrieve a specific UTXO.
 * **GetMeta**: Retrieve a specific UTXO meta data.
 * **Create**: Add new UTXOs to the store.
-* **Spend/UnSpend**: Mark UTXOs as spent or reverse such markings, respectively.
+* **Spend/Unspend**: Mark UTXOs as spent or reverse such markings, respectively.
 * **Delete**: Remove UTXOs from the store.
 * **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
 * **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
@@ -445,7 +445,7 @@ UTXO Store Package Structure (stores/utxo)
 │   │       ├── Get                 # Retrieves specific UTXO data
 │   │       ├── Create              # Adds new UTXOs to the store
 │   │       ├── Spend               # Marks UTXOs as spent
-│   │       ├── UnSpend             # Reverses the spent status of UTXOs
+│   │       ├── Unspend             # Reverses the spent status of UTXOs
 │   │       ├── SetMinedMulti       # Sets multiple transactions as mined
 │   │       ├── SetMined            # Sets a transaction as mined
 │   │       └── Delete              # Removes UTXOs from the store

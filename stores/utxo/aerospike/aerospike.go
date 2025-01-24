@@ -90,6 +90,9 @@ var (
 		"utxos",
 		"parentTxHashes",
 		"blockIDs",
+		"utxoSpendableIn",
+		"frozen",
+		"conflicting",
 	}
 )
 

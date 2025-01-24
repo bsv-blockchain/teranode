@@ -23,22 +23,29 @@ package validator
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bitcoin-sv/teranode/util/test"
+	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
@@ -451,4 +458,68 @@ func Benchmark_validateInternal(b *testing.B) {
 		err = v.validateTransaction(context.Background(), tx, 740975, &Options{})
 		require.NoError(b, err)
 	}
+}
+
+func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948afcca(t *testing.T) {
+	parentTx, err := bt.NewTxFromString("0100000001c323b444df62c6d1290d6be7a7db120a914c2c52ba330dcef240291e5251dc68010000006b48304502202b72aba30dd51ab93939397932ba7db51a728ab395cddfff161220f53959e03e022100cda87f332e80184c2e28eedb42b2334248e9a0ef90bb676b8504e449dcac924d012102786409cdbb55392b04e55d32d3f0c6964193b61dc537cc75f565c6535f4a9c5affffffff0101000000000000000000000000")
+	require.NoError(t, err)
+
+	script, err := hex.DecodeString("76a914bd29edb61cd56669749a8cad8debff14391f848f88ac")
+	require.NoError(t, err)
+
+	parentTx.Inputs[0].PreviousTxScript = bscript.NewFromBytes(script)
+	parentTx.Inputs[0].PreviousTxSatoshis = 100_000_000
+
+	require.True(t, parentTx.IsExtended())
+
+	tx, err := bt.NewTxFromString("010000000165ad3fbf66422ec03e83850f2fdb7a6f8f8b099cf517e723a4d817c72bf7e638000000000151ffffffff0101000000000000001976a914ffca5cf550ad617598d10342b78317c2a563b77888ac00000000")
+	require.NoError(t, err)
+	assert.Equal(t, "a1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948afcca", tx.TxID())
+
+	assert.False(t, tx.IsExtended())
+
+	ctx := context.Background()
+
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err = container.Terminate(ctx)
+		require.NoError(t, err)
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/test?set=test&expiration=1m&externalStore=file://./data/externalStore", host, port)
+	aeroURL, err := url.Parse(aerospikeContainerURL)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	// teranode db client
+	var db *teranode_aerospike.Store
+	db, err = teranode_aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
+	require.NoError(t, err)
+
+	db.SetExternalStore(memory.New())
+
+	_, err = db.Create(ctx, parentTx, 500_000)
+	require.NoError(t, err)
+
+	previousOutput := &meta.PreviousOutput{
+		PreviousTxID: *parentTx.TxIDChainHash(),
+		Vout:         0,
+	}
+
+	err = db.PreviousOutputsDecorate(ctx, []*meta.PreviousOutput{previousOutput})
+	require.NoError(t, err)
+
+	tx.Inputs[0].PreviousTxSatoshis = previousOutput.Satoshis
+	tx.Inputs[0].PreviousTxScript = bscript.NewFromBytes(previousOutput.LockingScript)
+
+	assert.True(t, tx.IsExtended())
 }

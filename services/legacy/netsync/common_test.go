@@ -228,10 +228,10 @@ func NewMockPeerNotifier() *MockPeerNotifier {
 	}
 }
 
-// GenerateAnyoneCanSpendAddress generates a P2SH address with an OP_TRUE in the
+// GenerateAnyoneCanspendAddress generates a P2SH address with an OP_TRUE in the
 // redeem script, so it can be trivially spent. Returns the scriptSig as well for
 // convenience.
-func GenerateAnyoneCanSpendAddress(chainParams *chaincfg.Params) (bsvutil.Address, []byte, error) {
+func GenerateAnyoneCanspendAddress(chainParams *chaincfg.Params) (bsvutil.Address, []byte, error) {
 	redeemScript := []byte{txscript.OP_TRUE}
 
 	scriptSig, err := txscript.NewScriptBuilder().AddData(redeemScript).Script()

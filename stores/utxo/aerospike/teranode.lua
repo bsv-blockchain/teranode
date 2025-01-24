@@ -41,6 +41,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
         return "ERROR:UTXO not found for offset " .. offset
     end
 
+    -- Check if the utxo is spendable, this is used by the alert system
     local utxoSpendableIn = rec['utxoSpendableIn']
     if utxoSpendableIn and utxoSpendableIn[offset] and utxoSpendableIn[offset] < currentBlockHeight then
         return "FROZEN:UTXO is not spendable until block " .. utxoSpendableIn[offset]
@@ -188,7 +189,7 @@ end
 --  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
 --                   |_|
 --
-function unSpend(rec, offset, utxoHash)
+function unspend(rec, offset, utxoHash)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end

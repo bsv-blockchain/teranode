@@ -1166,10 +1166,10 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 			availableUtxos := res.GetNumberOfUtxos()
 
 			if availableUtxos < threshold && !alreadyNotified {
-				c.logger.Warnf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
+				c.logger.Warnf("*Spending Threshold Warning - %s*\nspendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold))
 
 				if channel != "" {
-					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nSpendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)), c.settings.Coinbase.SlackToken); err != nil {
+					if err := postMessageToSlack(channel, fmt.Sprintf("*Spending Threshold Warning - %s*\nspendable utxos (%s) has fallen below threshold of %s", clientName, comma(availableUtxos), comma(threshold)), c.settings.Coinbase.SlackToken); err != nil {
 						c.logger.Warnf("could not post to slack: %v", err)
 					}
 				}

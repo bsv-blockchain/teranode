@@ -1029,7 +1029,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 }
 
 func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
-	cd := ba.blockAssembler.currentDifficulty
+	cd := ba.blockAssembler.currentDifficulty.Load()
 	dif := cd.CalculateDifficulty()
 	f, _ := dif.Float64()
 

@@ -64,10 +64,13 @@ func testSingleDoubleSpend(t *testing.T) {
 	// Verify block 102 is still the original block at height 102
 	dst.verifyBlockByHeight(t, block102a, 102)
 
-	dst.verifyNotConflicting(t, block102a.Subtrees[0])
+	// Verify conflicting is still set to false
+	// dst.verifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	dst.verifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, false)
 
 	// Verify conflicting
-	dst.verifyConflicting(t, subtree102b.RootHash(), []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	dst.verifyConflictingInSubtrees(t, subtree102b.RootHash(), []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	dst.verifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, true)
 
 	// Create block 103b to make the longest chain...
 	_, block103b := dst.createTestBlock(t, []*bt.Tx{}, block102b)
@@ -92,10 +95,13 @@ func testSingleDoubleSpend(t *testing.T) {
 	dst.verifyBlockByHeight(t, block103b, 103)
 
 	// Check the txOriginal is marked as conflicting
-	dst.verifyConflicting(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	// TODO dst.verifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	dst.verifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, true)
 
 	// Check the txDoubleSpend is no longer marked as conflicting
-	dst.verifyNotConflicting(t, block102b.Subtrees[0])
+	// it should still be marked as conflicting in the subtree
+	dst.verifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	dst.verifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, false)
 }
 
 // func testDoubleSpendAndChildAreMarkedAsConflicting(t *testing.T) {

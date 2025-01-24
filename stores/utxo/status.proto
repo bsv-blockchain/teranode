@@ -20,4 +20,6 @@ enum Status {
   FROZEN = 5;
   // Status_CONFLICTING indicates the UTXO is in conflict with another UTXO and not spendable
   CONFLICTING = 6;
+  // Status_UNSPENDABLE indicates the UTXO is not spendable
+  UNSPENDABLE = 7;
 }

@@ -73,9 +73,9 @@ type Spend struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting"}
+	MetaFields = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting", "unspendable"}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
-	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting"}
+	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting", "unspendable"}
 )
 
 // UnresolvedMetaData represents a transaction's metadata that needs to be resolved.
@@ -172,11 +172,11 @@ type Store interface {
 	// Blockchain specific functions
 
 	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx) ([]*Spend, error)
+	Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error)
 
-	// UnSpend reverses a previous spend operation, marking UTXOs as unspent.
+	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
-	UnSpend(ctx context.Context, spends []*Spend) error
+	Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error
 
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
@@ -202,6 +202,12 @@ type Store interface {
 	// ReAssignUTXO reassigns a UTXO to a new transaction output.
 	// The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
 	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
+
+	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
+	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
+
+	// SetUnspendable marks transactions as unspendable or spendable.
+	SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
 	// internal state functions
 
@@ -256,10 +262,10 @@ func (mu *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*me
 	return nil, nil
 }
 
-func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx) ([]*Spend, error) {
+func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error) {
 	return nil, nil
 }
-func (mu *MockUtxostore) UnSpend(ctx context.Context, spends []*Spend) error {
+func (mu *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error {
 	return nil
 }
 func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
@@ -287,6 +293,13 @@ func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSe
 }
 
 func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error {
+	return nil
+}
+
+func (mu *MockUtxostore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+func (mu *MockUtxostore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	return nil
 }
 

@@ -28,7 +28,7 @@ func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	buckets, err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16)
+	buckets, _, err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")

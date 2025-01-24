@@ -832,11 +832,11 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Store(0)
 
 	for _, subtree := range stp.chainedSubtrees {
-		stp.txCount.Add(uint64(subtree.Length()))
+		stp.txCount.Add(uint64(subtree.Length())) // nolint:gosec
 	}
 
-	stp.txCount.Add(uint64(stp.currentSubtree.Length()))
-	stp.txCount.Add(uint64(stp.queue.length()))
+	stp.txCount.Add(uint64(stp.currentSubtree.Length())) // nolint:gosec
+	stp.txCount.Add(uint64(stp.queue.length()))          // nolint:gosec
 }
 
 // moveBackBlock processes a block during downward chain movement.
@@ -1186,20 +1186,32 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	// clear the transaction ids from all the subtrees of the block that are left over
-	var transactionMap util.TxMap
+	var (
+		transactionMap   util.TxMap
+		conflictingNodes []chainhash.Hash
+	)
 
 	if len(blockSubtreesMap) > 0 {
 		mapStartTime := time.Now()
 
 		stp.logger.Debugf("[moveForwardBlock][%s] processing subtrees into transaction map", block.String())
 
-		if transactionMap, err = stp.CreateTransactionMap(ctx, blockSubtreesMap); err != nil {
+		if transactionMap, conflictingNodes, err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees)); err != nil {
 			// TODO revert the created utxos
 			return errors.NewProcessingError("[moveForwardBlock][%s] error creating transaction map", block.String(), err)
 		}
 
 		stp.logger.Debugf("[moveForwardBlock][%s] processing subtrees into transaction map DONE in %s: %d", block.String(), time.Since(mapStartTime).String(), transactionMap.Length())
 	}
+
+	// process conflicting txs
+	if len(conflictingNodes) > 0 {
+		if err = utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes); err != nil {
+			return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+		}
+	}
+
+	_ = conflictingNodes
 
 	// reset the current subtree
 	currentSubtree := stp.currentSubtree
@@ -1370,7 +1382,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 					stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
 				}
 			} else {
-				if err = deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*subtree.Size()+nodeIdx)); err != nil {
+				if err = deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*subtree.Size()+nodeIdx)); err != nil { // nolint:gosec
 					stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
 				} else {
 					_ = stp.addNode(node, false)
@@ -1530,7 +1542,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 // Returns:
 //   - util.TxMap: Created transaction map
 //   - error: Any error encountered during map creation
-func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int) (util.TxMap, error) {
+func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int, totalSubtreesInBlock int) (util.TxMap, []chainhash.Hash, error) {
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
@@ -1543,11 +1555,13 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	mapSize := len(blockSubtreesMap) * stp.currentItemsPerFile // TODO fix this assumption, should be gleaned from the block
 	transactionMap := util.NewSplitSwissMap(mapSize)
 
+	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrentSubtreeReads)
 
 	// get all the subtrees from the block that we have not yet cleaned out
-	for subtreeHash := range blockSubtreesMap {
+	for subtreeHash, subtreeIdx := range blockSubtreesMap {
 		st := subtreeHash
 
 		g.Go(func() error {
@@ -1559,7 +1573,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 			}
 
 			// TODO add metrics about how many txs we are reading per second
-			txHashBuckets, err := DeserializeHashesFromReaderIntoBuckets(subtreeReader, transactionMap.Buckets())
+			txHashBuckets, conflictingNodes, err := DeserializeHashesFromReaderIntoBuckets(subtreeReader, transactionMap.Buckets())
 			if err != nil {
 				return errors.NewProcessingError("error deserializing subtree: %s", st.String(), err)
 			}
@@ -1580,19 +1594,34 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 				return errors.NewProcessingError("error putting hashes into transaction map", err)
 			}
 
+			conflictingNodesPerSubtree[subtreeIdx] = conflictingNodes
+
 			return nil
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, errors.NewProcessingError("error getting subtrees", err)
+		return nil, nil, errors.NewProcessingError("error getting subtrees", err)
+	}
+
+	conflictingNodesPerSubtreeCount := 0
+	for _, subtreeConflictingNodes := range conflictingNodesPerSubtree {
+		conflictingNodesPerSubtreeCount += len(subtreeConflictingNodes)
+	}
+
+	conflictingNodes := make([]chainhash.Hash, 0, conflictingNodesPerSubtreeCount)
+
+	for _, subtreeConflictingNodes := range conflictingNodesPerSubtree {
+		if subtreeConflictingNodes != nil {
+			conflictingNodes = append(conflictingNodes, subtreeConflictingNodes...)
+		}
 	}
 
 	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
-	return transactionMap, nil
+	return transactionMap, conflictingNodes, nil
 }
 
 // DeserializeHashesFromReaderIntoBuckets deserializes transaction hashes from a reader into buckets.
@@ -1604,7 +1633,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 // Returns:
 //   - map[uint16][][32]byte: Map of bucketed hash arrays
 //   - error: Any error encountered during deserialization
-func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][][32]byte, err error) {
+func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][][32]byte, conflictingNodes []chainhash.Hash, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.NewProcessingError("recovered in DeserializeHashesFromReaderIntoBuckets: %v", r)
@@ -1614,13 +1643,13 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
 
 	if _, err = buf.Discard(48); err != nil { // skip headers
-		return nil, errors.NewProcessingError("unable to read header", err)
+		return nil, nil, errors.NewProcessingError("unable to read header", err)
 	}
 
 	// read number of leaves
 	bytes8 := make([]byte, 8)
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
-		return nil, errors.NewProcessingError("unable to read number of leaves", err)
+		return nil, nil, errors.NewProcessingError("unable to read number of leaves", err)
 	}
 
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
@@ -1638,12 +1667,32 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 	for i := uint64(0); i < numLeaves; i++ {
 		// read all the node data in 1 go
 		if _, err = io.ReadFull(buf, bytes48); err != nil {
-			return nil, errors.NewProcessingError("unable to read node", err)
+			return nil, nil, errors.NewProcessingError("unable to read node", err)
 		}
 
 		bucket = util.Bytes2Uint16Buckets([32]byte(bytes48[:32]), nBuckets)
 		hashes[bucket] = append(hashes[bucket], [32]byte(bytes48[:32]))
 	}
 
-	return hashes, nil
+	conflictingNodes = make([]chainhash.Hash, 0, 1024)
+
+	// read conflicting txs
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return nil, nil, errors.NewProcessingError("unable to read number of conflicting txs", err)
+	}
+
+	numConflicting := binary.LittleEndian.Uint64(bytes8)
+
+	if numConflicting > 0 {
+		bytes32 := make([]byte, 32)
+		for i := uint64(0); i < numConflicting; i++ {
+			if _, err = io.ReadFull(buf, bytes32); err != nil {
+				return nil, nil, errors.NewProcessingError("unable to read node", err)
+			}
+
+			conflictingNodes = append(conflictingNodes, chainhash.Hash(bytes32))
+		}
+	}
+
+	return hashes, conflictingNodes, nil
 }

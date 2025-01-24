@@ -432,7 +432,7 @@ func TestRedis(t *testing.T) {
 		require.Equal(t, spendTx.TxIDChainHash().String(), utxo[64:])
 
 		// try to reset the utxo
-		err = store.UnSpend(ctx, spends)
+		err = store.Unspend(ctx, spends)
 		require.NoError(t, err)
 
 		value, err = redis.HGetAll(ctx, tx2.TxIDChainHash().String()).Result()

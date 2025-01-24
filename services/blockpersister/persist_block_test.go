@@ -115,11 +115,11 @@ func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 
-func (m *MockStore) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
+func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
 	return nil
 }
 
@@ -152,6 +152,14 @@ func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 }
 
 func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+	return nil
+}
+
+func (m *MockStore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+
+func (m *MockStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 

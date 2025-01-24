@@ -58,7 +58,7 @@ func CalculateUtxoStatus2(spendingTxID *chainhash.Hash) Status {
 //   - []*chainhash.Hash: UTXO hashes for each output
 //   - error: Any error encountered during processing
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
-	if !util.IsExtended(tx, blockHeight) && !tx.IsCoinbase() {
+	if !tx.IsExtended() && !tx.IsCoinbase() {
 		return 0, nil, errors.NewProcessingError("tx is not extended")
 	}
 

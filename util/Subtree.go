@@ -211,6 +211,37 @@ func (st *Subtree) AddCoinbaseNode() error {
 	return nil
 }
 
+func (st *Subtree) AddConflictingNode(newConflictingNode chainhash.Hash) error {
+	if st.ConflictingNodes == nil {
+		st.ConflictingNodes = make([]chainhash.Hash, 0, 1)
+	}
+
+	// check the conflicting node is actually in the subtree
+	found := false
+
+	for _, n := range st.Nodes {
+		if n.Hash.Equal(newConflictingNode) {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return errors.NewSubtreeError("conflicting node is not in the subtree")
+	}
+
+	// check whether the conflicting node has already been added
+	for _, conflictingNode := range st.ConflictingNodes {
+		if conflictingNode.Equal(newConflictingNode) {
+			return nil
+		}
+	}
+
+	st.ConflictingNodes = append(st.ConflictingNodes, newConflictingNode)
+
+	return nil
+}
+
 func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return errors.NewSubtreeError("subtree is full")

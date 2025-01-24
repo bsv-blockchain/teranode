@@ -29,7 +29,7 @@ const (
 	aerospikePort       = 3000        // 3800
 	aerospikeNamespace  = "test"      // test
 	aerospikeSet        = "test"      // utxo-test
-	aerospikeExpiration = uint32(1)
+	aerospikeExpiration = "1s"
 )
 
 var (
@@ -119,7 +119,7 @@ func initAerospike(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store,
 	client, aeroErr := uaerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
 
-	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
