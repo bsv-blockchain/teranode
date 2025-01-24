@@ -1,0 +1,47 @@
+# docker-compose file to test and play with the shared volume
+# The shared-data is mount to two different path to two containers
+# Change in one container will make change to other
+# And the TStore Service will read all the filesystem remotely
+#
+# HOWTO
+#
+#    From the root project, build and run
+#
+#        docker-compose -f test/utils/cmd/tstore/docker-compose.yml build
+#        docker-compose -f test/utils/cmd/tstore/docker-compose.yml up -d
+#
+#    To access the app directory to test
+#        docker exec -it testcontainer bash
+#
+#    From this container, create files, directories, then test to call the grpc service to see changes.
+#    Example grpcurl command
+#
+#        grpcurl -plaintext "localhost:50051" list tstore.TStore
+#        grpcurl -plaintext -d '{ "filePath": "example.txt" }' "127.0.0.1:50051" tstore.TStore.ReadFile | jq -r '.content' | base64 --decode
+#        grpcurl -plaintext -d '{ "srcPath": "foo.txt", "destPath": "foo/example.txt" }' "127.0.0.1:50051" tstore.TStore.Copy
+#        grpcurl -plaintext -d '{ "rootPath": "data" , "recursive" : true }' "127.0.0.1:50051" tstore.TStore.Glob
+services:
+  tstoreservice:
+    container_name: tstoreservice
+    build:
+      context: ../../../..
+      dockerfile: test/utils/cmd/tstore/Dockerfile
+    image: tstore
+    environment:
+      LOCALSYSTEM_TSTOREURL: ":50051"
+      LOCALSYSTEM_TSTOREROOTDIR: /data/test
+    ports:
+      - "50051:50051"
+    volumes:
+      - shared-data:/data/test
+
+  testcontainer:
+    container_name: testcontainer
+    image: ubuntu:22.04
+    command: tail -f /dev/null
+    working_dir: /app/data
+    volumes:
+      - shared-data:/app/data
+
+volumes:
+  shared-data:

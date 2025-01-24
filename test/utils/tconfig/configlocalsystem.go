@@ -8,8 +8,18 @@ type ConfigLocalSystem struct {
 	// accordingly to the compose files
 	Composes []string `mapstructure:"composes" json:"composes" yaml:"composes"`
 
+	// TStoreURL is URL in format host:port for the TStore service
+	TStoreURL string `mapstructure:"tstoreurl" json:"tstoreurl" yaml:"tstoreurl"`
+
+	// TStoreRootDir is the root dir to setup for the TStore service
+	// The directory has to exist at initialization of the TStore service
+	TStoreRootDir string `mapstructure:"tstorerootdir" json:"tstorerootdir" yaml:"tstorerootdir"`
+
 	// DataDir configure the base path to store/share test data on local system.
 	// This is considered as the 'master' directory, all test data path are to be customize inside it
+	// TODO :
+	//    This config is to be removed once the TStore service is in place. All test data directory
+	//    will be used with relative path. The root part is managed by TStore service.
 	DataDir string `mapstructure:"datadir" json:"datadir" yaml:"datadir"`
 
 	// SkipSetup is used to force the test engine to skip setting up the local system
@@ -34,6 +44,12 @@ func LoadConfigLocalSystem() TConfigLoader {
 
 		s.viper.SetDefault(KeyLocalSystemSkipTeardown, false)
 		s.LocalSystem.SkipTeardown = s.viper.GetBool(KeyLocalSystemSkipTeardown)
+
+		s.viper.SetDefault(KeyLocalSystemTStoreURL, ":50051")
+		s.LocalSystem.TStoreURL = s.viper.GetString(KeyLocalSystemTStoreURL)
+
+		s.viper.SetDefault(KeyLocalSystemTStoreRootDir, "/data/test")
+		s.LocalSystem.TStoreRootDir = s.viper.GetString(KeyLocalSystemTStoreRootDir)
 
 		s.viper.SetDefault(KeyLocalSystemDataDir, "../../data/test")
 		s.LocalSystem.DataDir = s.viper.GetString(KeyLocalSystemDataDir)

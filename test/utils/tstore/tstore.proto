@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package tstore;
+
+option go_package = "./tstore";
+
+// TStore implement a service running on a container that have shared volume with other services
+// TStore help to investigate the file being written to the shared storage in order to make some
+// checking for tests.
+//
+// TStore is used only for the purpose of testing
+//
+// How to generate go files
+//
+// Download, install protoc and add its bin directory to the path
+//     https://github.com/protocolbuffers/protobuf/releases
+// Install go plugin for protoc
+//     GOFLAGS='-mod=mod' go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+//     GOFLAGS='-mod=mod' go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+// From the parent of this directory, generate proto files :
+//     rm -f tstore/tstore.pb.go tstore/tstore_grpc.pb.go && protoc --go_out=. --go-grpc_out=. tstore/tstore.proto
+service TStore {
+  // ReadFile read a file and return its binary content
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+
+  // Copies a file from srcPath to destPath
+  rpc Copy(CopyRequest) returns (CopyResponse);
+
+  // Globs files under the rootPath.
+  rpc Glob(GlobRequest) returns (GlobResponse);
+}
+
+// Request message for the ReadFile service.
+message ReadFileRequest {
+  string filePath = 1; // The file path (relative).
+}
+
+// Response message for the ReadFile service.
+message ReadFileResponse {
+  bytes content = 1;  // The content of the file (protobuf limit to 2^32 bytes)
+}
+
+// Request message for the Copy service.
+message CopyRequest {
+  string srcPath = 1;  // The source file path (relative).
+  string destPath = 2; // The destination file path (relative).
+}
+
+// Response message for the Copy service.
+message CopyResponse {
+  bool ok = 1;        // Indicates whether the operation was successful.
+}
+
+// Request message for the Glob service.
+message GlobRequest {
+  string rootPath = 1; // The root directory path (relative).
+  bool recursive = 2;  // Glob recursively
+}
+
+// Response message for the Glob service.
+message GlobResponse {
+  repeated string paths = 1; // List of globbed relative paths.
+}

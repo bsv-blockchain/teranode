@@ -20,10 +20,12 @@ const (
 	KeySuiteLogLevel = "suite.loglevel"
 
 	// Keys for localsystem config
-	KeyLocalSystemComposes     = "localsystem.composes"
-	KeyLocalSystemDataDir      = "localsystem.datadir"
-	KeyLocalSystemSkipSetup    = "localsystem.skipsetup"
-	KeyLocalSystemSkipTeardown = "localsystem.skipteardown"
+	KeyLocalSystemComposes      = "localsystem.composes"
+	KeyLocalSystemTStoreURL     = "localsystem.tstoreurl"
+	KeyLocalSystemTStoreRootDir = "localsystem.tstorerootdir"
+	KeyLocalSystemDataDir       = "localsystem.datadir"
+	KeyLocalSystemSkipSetup     = "localsystem.skipsetup"
+	KeyLocalSystemSkipTeardown  = "localsystem.skipteardown"
 
 	// Keys for Teranodes setup
 	KeyTeranodeContexts = "teranode.contexts"
