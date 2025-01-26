@@ -27,7 +27,6 @@ package tna
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -115,9 +114,6 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 	var minedBlockBytes []byte
 	minedBlockBytes, err = helper.MineBlock(ctx, testEnv.Nodes[0].Settings, testEnv.Nodes[0].BlockassemblyClient, logger)
 	require.NoError(t, err, "Failed to mine block")
-
-	// Allow time for block propagation and notifications
-	time.Sleep(5 * time.Second)
 
 	// Verify that all receiving nodes got the block notification
 	mu.Lock()
