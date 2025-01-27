@@ -1,3 +1,4 @@
+// Package alert implements the Bitcoin SV alert system server and related functionality.
 package alert
 
 import (

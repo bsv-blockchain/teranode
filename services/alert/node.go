@@ -1,3 +1,4 @@
+// Package alert implements the Bitcoin SV alert system server and related functionality.
 package alert
 
 import (
@@ -19,14 +20,25 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// Node implements the node interface for interacting with the Bitcoin network.
 type Node struct {
-	logger              ulogger.Logger
-	blockchainClient    blockchain.ClientI
-	utxoStore           utxo.Store
+	// logger handles logging operations
+	logger ulogger.Logger
+
+	// blockchainClient provides access to blockchain operations
+	blockchainClient blockchain.ClientI
+
+	// utxoStore manages UTXO operations
+	utxoStore utxo.Store
+
+	// blockassemblyClient handles block assembly operations
 	blockassemblyClient *blockassembly.Client
-	settings            *settings.Settings
+
+	// settings contains node configuration
+	settings *settings.Settings
 }
 
+// NewNodeConfig creates a new Node instance with the provided dependencies.
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store,
 	blockassemblyClient *blockassembly.Client, tSettings *settings.Settings) config.NodeInterface {
 	return &Node{
@@ -38,6 +50,7 @@ func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, u
 	}
 }
 
+// BestBlockHash returns the hash of the best block in the main chain.
 func (n *Node) BestBlockHash(ctx context.Context) (string, error) {
 	bestBlockHeader, _, err := n.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -47,18 +60,22 @@ func (n *Node) BestBlockHash(ctx context.Context) (string, error) {
 	return bestBlockHeader.Hash().String(), nil
 }
 
+// GetRPCHost returns the RPC host address.
 func (n *Node) GetRPCHost() string {
 	return ""
 }
 
+// GetRPCPassword returns the RPC password.
 func (n *Node) GetRPCPassword() string {
 	return ""
 }
 
+// GetRPCUser returns the RPC username.
 func (n *Node) GetRPCUser() string {
 	return ""
 }
 
+// InvalidateBlock marks a block as invalid by its hash.
 func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 	blockHash, err := chainhash.NewHashFromStr(blockHashStr)
 	if err != nil {

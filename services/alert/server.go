@@ -1,3 +1,4 @@
+// Package alert implements the Bitcoin SV alert system server and related functionality.
 package alert
 
 import (
@@ -30,25 +31,37 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Server type carries the logger within it
+// Server represents the main alert system server structure.
 type Server struct {
+	// UnimplementedAlertAPIServer is embedded for forward compatibility with the alert API
 	alert_api.UnimplementedAlertAPIServer
-	logger   ulogger.Logger
+
+	// logger handles all logging operations
+	logger ulogger.Logger
+
+	// settings contains the server configuration settings
 	settings *settings.Settings
-	stats    *gocore.Stat
 
-	// other services
-	blockchainClient    blockchain.ClientI
-	utxoStore           utxo.Store
-	blockassemblyClient *blockassembly.Client // blockassembly does not have an interface yet
+	// stats tracks server statistics
+	stats *gocore.Stat
 
-	// alert system specific configuration
+	// blockchainClient provides access to blockchain operations
+	blockchainClient blockchain.ClientI
+
+	// utxoStore manages UTXO operations
+	utxoStore utxo.Store
+
+	// blockassemblyClient handles block assembly operations
+	blockassemblyClient *blockassembly.Client
+
+	// appConfig contains alert system specific configuration
 	appConfig *config.Config
+
+	// p2pServer manages peer-to-peer communication
 	p2pServer *p2p.Server
-	// webServer *webserver.Server
 }
 
-// New will return a server instance with the logger stored within it
+// New creates and returns a new Server instance with the provided dependencies.
 func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server {
 	initPrometheusMetrics()
 
@@ -62,6 +75,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient b
 	}
 }
 
+// Health performs health checks on the server and its dependencies.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -92,6 +106,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// HealthGRPC implements the gRPC health check endpoint.
 func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(s.stats),
@@ -109,6 +124,7 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.H
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the server by loading configuration.
 func (s *Server) Init(ctx context.Context) (err error) {
 	// Load the alert system configuration
 	if err = s.loadConfig(ctx, models.BaseModels, false); err != nil {
@@ -118,7 +134,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// Start function
+// Start begins the server operation and blocks until shutdown.
 func (s *Server) Start(ctx context.Context) (err error) {
 	// Ensure we have the genesis alert in the database
 	if err = models.CreateGenesisAlert(
@@ -154,6 +170,7 @@ func (s *Server) Start(ctx context.Context) (err error) {
 	return nil
 }
 
+// Stop gracefully shuts down the server.
 func (s *Server) Stop(ctx context.Context) error {
 	s.appConfig.CloseAll(ctx)
 
@@ -165,7 +182,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-// LoadDependencies will load the configuration and services
+// loadConfig loads the server configuration and initializes required services.
 // models is a list of models to auto-migrate when the datastore is created
 // if testing is true, the node will be mocked
 func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error) {

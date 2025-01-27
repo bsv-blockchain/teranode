@@ -1,3 +1,4 @@
+// Package alert_api defines the gRPC service interface for the Bitcoin SV Alert System.
 syntax = "proto3";
 
 option go_package = "./;alert_api";
@@ -7,14 +8,22 @@ package alert_api;
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
+// AlertAPI service provides methods for interacting with the Alert System.
 service AlertAPI {
-  // Health returns the health of the API.
+  // HealthGRPC checks the health status of the Alert System service.
+  // It accepts an empty request and returns a HealthResponse containing
+  // the current health status of the service.
   rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
 }
 
-// swagger:model HealthResponse
+// HealthResponse represents the health check response from the Alert System service.
 message HealthResponse {
+  // ok indicates whether the service is healthy (true) or unhealthy (false)
   bool ok = 1;
+
+  // details provides additional information about the health status
   string details = 2;
+
+  // timestamp indicates when the health check was performed
   google.protobuf.Timestamp timestamp = 3;
 }
