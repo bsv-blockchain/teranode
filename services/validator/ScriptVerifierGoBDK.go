@@ -75,6 +75,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		MaxPubKeysPerMultiSig:        uint64(po.MaxPubKeysPerMultisigPolicy),
 		MaxStackMemoryUsageConsensus: uint64(po.MaxStackMemoryUsageConsensus),
 		MaxStackMemoryUsagePolicy:    uint64(po.MaxStackMemoryUsagePolicy),
+		GenesisActivationHeight:      pa.GenesisActivationHeight,
 	}
 	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
 		return nil

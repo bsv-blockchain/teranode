@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoin-sv/alert-system v0.1.8
-	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta1
+	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta2
 	github.com/bitcoin-sv/go-sdk v1.1.17
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
@@ -60,7 +60,7 @@ require (
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.34.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.30.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
@@ -71,12 +71,12 @@ require (
 	go.opentelemetry.io/otel/sdk v1.30.0
 	go.opentelemetry.io/otel/trace v1.30.0 // indirect
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.26.0
+	golang.org/x/crypto v0.31.0
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
-	golang.org/x/sync v0.8.0
+	golang.org/x/sync v0.10.0
 	golang.org/x/sys v0.29.0
-	golang.org/x/term v0.23.0
-	golang.org/x/text v0.17.0 // indirect
+	golang.org/x/term v0.27.0
+	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.6.0
 	google.golang.org/grpc v1.66.0
 	google.golang.org/protobuf v1.36.1
