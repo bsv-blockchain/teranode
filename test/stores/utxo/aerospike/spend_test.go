@@ -9,6 +9,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -248,5 +249,64 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
 		assert.Equal(t, 6, rec.Bins["nrRecords"])
+	})
+}
+
+func TestStore_Unspend(t *testing.T) {
+	_, db, ctx, deferFn := initAerospike(t)
+	defer deferFn()
+
+	t.Run("Successfully unspend a spent tx", func(t *testing.T) {
+		// Clean up any existing data
+		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+
+		// Create a tx
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		// Spend the tx
+		spends, err := db.Spend(ctx, spendTx)
+		require.NoError(t, err)
+		require.Len(t, spends, 1)
+
+		// Unspend the tx
+		err = db.Unspend(ctx, spends)
+		require.NoError(t, err)
+
+		// Verify we can now spend it again with a different tx
+		spends, err = db.Spend(ctx, spendTx2)
+		require.NoError(t, err)
+		require.Len(t, spends, 1)
+	})
+
+	t.Run("Unspend a non-spent tx", func(t *testing.T) {
+		// Clean up any existing data
+		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+
+		// Create a tx
+		_, err := db.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		utxoHash, err := util.UTXOHashFromOutput(
+			tx.TxIDChainHash(),
+			tx.Outputs[0],
+			0,
+		)
+		require.NoError(t, err)
+
+		// Try to unspend a tx that hasn't been spent
+		err = db.Unspend(ctx, []*utxo.Spend{
+			{
+				TxID:     tx.TxIDChainHash(),
+				Vout:     0,
+				UTXOHash: utxoHash,
+			},
+		})
+		require.NoError(t, err)
+
+		// Verify we can still spend it
+		spends, err := db.Spend(ctx, spendTx)
+		require.NoError(t, err)
+		require.Len(t, spends, 1)
 	})
 }
