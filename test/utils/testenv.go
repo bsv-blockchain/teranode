@@ -53,6 +53,7 @@ type TeranodeTestClient struct {
 	AssetURL            string
 	RPCURL              string
 	IPAddress           string
+	SVNodeIPAddress     string
 	Settings            *settings.Settings
 	BlockChainDB        bcs.Store
 }
@@ -122,9 +123,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 			t.LegacyNodes = append(t.LegacyNodes, SVNodeTestClient{
 				Name: svNodeName,
 			})
-			t.Logger.Infof("Settings context: %s", envSettings[key])
-			t.Logger.Infof("Node name: %s", nodeName)
-			t.Logger.Infof("Node settings: %s", t.Nodes[len(t.Nodes)-1].Settings)
+
 			os.Setenv("SETTINGS_CONTEXT", "")
 		}
 	}
@@ -136,10 +135,15 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
+		svNode := &t.LegacyNodes[i]
 		t.Logger.Infof("Initializing node %s", node.Name)
 		t.Logger.Infof("Settings context: %s", node.SettingsContext)
 
 		if err := t.GetContainerIPAddress(node); err != nil {
+			return err
+		}
+
+		if err := t.GetLegacyContainerIPAddress(svNode); err != nil {
 			return err
 		}
 
@@ -189,7 +193,6 @@ func (t *TeranodeTestEnv) GetContainerIPAddress(node *TeranodeTestClient) error 
 			}
 
 			node.IPAddress = ipAddress
-			t.Logger.Infof("Node %s IP address: %s", node.Name, ipAddress)
 
 			return nil
 		}
@@ -214,7 +217,6 @@ func (t *TeranodeTestEnv) GetLegacyContainerIPAddress(node *SVNodeTestClient) er
 			}
 
 			node.IPAddress = ipAddress
-			t.Logger.Infof("Node %s IP address: %s", node.Name, ipAddress)
 
 			return nil
 		}

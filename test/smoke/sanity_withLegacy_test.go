@@ -5,11 +5,12 @@
 // $ cd test/smoke/
 // $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldSyncWithLegacyWhenInitialBlocksAreGeneratedOnLegacy$" -tags test_functional
 // $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldSyncWithLegacy$" -tags test_functional
-// $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldBanLegacyNodes$" -tags test_functional
+// $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldAllowBanLegacyAndTeranodePeers$" -tags test_functional
 
 package smoke
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -169,27 +170,57 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyAndTeranodePeers
 	t.Logf("Block height after mining: %d\n", height)
 	assert.Equal(t, testHeight+101, height, "Height should match with initial generated blocks")
 
-	// Define legacy nodes
-	// svnode1 := suite.TeranodeTestEnv.LegacyNodes[0]
-	svnode2 := suite.TeranodeTestEnv.LegacyNodes[1]
-	// svnode3 := suite.TeranodeTestEnv.LegacyNodes[2]
-
 	// Get IP addresses of legacy nodes
-	// svnode1Address := suite.TeranodeTestEnv.GetLegacyContainerIPAddress(&svnode1)
-	svnode2Address := suite.TeranodeTestEnv.GetLegacyContainerIPAddress(&svnode2)
-	// svnode3Address := suite.TeranodeTestEnv.GetLegacyContainerIPAddress(&svnode3)
+	svnode1 := suite.TeranodeTestEnv.LegacyNodes[0]
+	t.Logf("Legacy node: %s\n", svnode1.Name)
+
+	svnode1Address := suite.TeranodeTestEnv.GetLegacyContainerIPAddress(&svnode1)
+
+	t.Logf("Legacy node IP address: %s\n", svnode1Address)
 
 	node1 := suite.TeranodeTestEnv.Nodes[0]
 	node2 := suite.TeranodeTestEnv.Nodes[1]
 	node3 := suite.TeranodeTestEnv.Nodes[2]
 
-	// All nodes should ban legacy node
-	_, err = helper.CallRPC(node1.RPCURL, "setban", []interface{}{svnode2Address, "add", 180, false})
+	// All Teranodes should ban a legacy node
+	_, err = helper.CallRPC("http://"+node1.RPCURL, "setban", []interface{}{svnode1.IPAddress, "add", 180, false})
 	require.NoError(t, err)
 
-	_, err = helper.CallRPC(node2.RPCURL, "setban", []interface{}{svnode2Address, "add", 180, false})
+	_, err = helper.CallRPC("http://"+node2.RPCURL, "setban", []interface{}{svnode1.IPAddress, "add", 180, false})
 	require.NoError(t, err)
 
-	_, err = helper.CallRPC(node3.RPCURL, "setban", []interface{}{svnode2Address, "add", 180, false})
+	_, err = helper.CallRPC("http://"+node3.RPCURL, "setban", []interface{}{svnode1.IPAddress, "add", 180, false})
 	require.NoError(t, err)
+
+	_, err = helper.CallRPC(legacySyncURL, "generate", []interface{}{1})
+	assert.NoError(t, err, "Failed to generate blocks")
+
+	var (
+		bestBlockOnSVNode1   helper.BestBlockHashResp
+		bestBlockOnTeranode1 helper.BestBlockHashResp
+	)
+
+	// get best block hash from svnode1
+	resp, err := helper.CallRPC(legacySyncURL, "getbestblockhash", []interface{}{})
+	require.NoError(t, err, "Failed to get block hash")
+
+	errJSON := json.Unmarshal([]byte(resp), &bestBlockOnSVNode1)
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("Best block hash: %s", bestBlockOnSVNode1.Result)
+
+	// get best block hash from teranode1
+	resp, err = helper.CallRPC("http://"+node1.RPCURL, "getbestblockhash", []interface{}{})
+	require.NoError(t, err, "Failed to get block hash")
+
+	errJSON = json.Unmarshal([]byte(resp), &bestBlockOnTeranode1)
+
+	require.NoError(t, errJSON, "JSON decoding error")
+
+	t.Logf("Best block hash: %s", bestBlockOnTeranode1.Result)
+
+	assert.NotEqual(t, bestBlockOnSVNode1.Result, bestBlockOnTeranode1.Result, "Best block hash should not match")
 }
