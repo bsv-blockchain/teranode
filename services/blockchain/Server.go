@@ -178,15 +178,29 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
 	}
 
-	if stateStr == "" { // if no state is stored, set the default state
-		b.logger.Infof("[Blockchain](Init) Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
+	if stateStr == "" { // if no state is stored in the blockchain store
+		// check if initializeNodeInState is set, if so, set the FSM to that state and store it
+		if b.settings.BlockChain.InitializeNodeInState != "" {
+			b.logger.Infof("[Blockchain](Init) Initializing node in state: %v", b.settings.BlockChain.InitializeNodeInState)
 
-		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
-		if err != nil {
-			// TODO: just logging now, consider adding retry
-			b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+			// set the FSM to the initializeNodeInState
+			b.finiteStateMachine.SetState(b.settings.BlockChain.InitializeNodeInState)
+
+			// store the initializeNodeInState in the blockchain store
+			err = b.store.SetFSMState(ctx, b.settings.BlockChain.InitializeNodeInState)
+			if err != nil {
+				b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+			}
+		} else { // if initializeNodeInState is not set, store the FSM's default state in the blockchain store
+			b.logger.Infof("[Blockchain](Init) Blockchain db doesn't have previous FSM state, and initializeNodeInState is not set, storing FSM's default state: %v", b.finiteStateMachine.Current())
+
+			// store the FSM's default state in the blockchain store
+			err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
+			if err != nil {
+				b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+			}
 		}
-	} else { // if there is a state stored, set the FSM to that state
+	} else { // if there is a state stored in the blockchain store, set the FSM to that state
 		b.logger.Infof("[Blockchain](Init) Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
 		b.finiteStateMachine.SetState(stateStr)
 	}
@@ -1192,6 +1206,18 @@ func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targe
 	return nil
 }
 
+// WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
+func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// If the FSM is not initialized, we need to wait
+	// or if the FSM is in the IDLE state, we need to wait
+	for b.finiteStateMachine.Current() == "" || b.finiteStateMachine.Current() == blockchain_api.FSMStateType_IDLE.String() {
+		b.logger.Debugf("Waiting 1 second for FSM to transition from IDLE state, currently at: %v", b.finiteStateMachine.Current())
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // SendFSMEvent sends an event to the finite state machine.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
@@ -1289,6 +1315,31 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 		// unable to send the event, no need to update the state.
 		return nil, err
 	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the Idle state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_IDLE.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_STOP,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) SetFSMState(ctx context.Context, req *blockchain_api.SetFSMStateRequest) (*emptypb.Empty, error) {
+	b.finiteStateMachine.SetState(req.State.String())
 
 	return &emptypb.Empty{}, nil
 }

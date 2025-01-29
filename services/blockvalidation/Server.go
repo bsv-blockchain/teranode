@@ -536,6 +536,14 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 // and HTTP/gRPC servers. It begins processing blocks and handling validation
 // requests.
 func (u *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	// start blocks kafka consumer
 	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 

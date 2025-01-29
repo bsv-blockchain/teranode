@@ -219,6 +219,10 @@ func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ FSM
 	return nil
 }
 
+func (c LocalClient) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
+	return nil
+}
+
 func (c LocalClient) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	// TODO: Fix me, this is a temporary solution
 	return FSMStateRUNNING
@@ -233,7 +237,11 @@ func (c LocalClient) Run(ctx context.Context, source string) error {
 	return nil
 }
 
-func (c LocalClient) Mine(ctx context.Context) error {
+func (c LocalClient) Idle(ctx context.Context) error {
+	return nil
+}
+
+func (c LocalClient) SetFSMState(ctx context.Context, state FSMStateType) error {
 	return nil
 }
 
@@ -241,19 +249,7 @@ func (c LocalClient) CatchUpBlocks(ctx context.Context) error {
 	return nil
 }
 
-func (c LocalClient) CatchUpTransactions(ctx context.Context) error {
-	return nil
-}
-
-func (c LocalClient) Restore(ctx context.Context) error {
-	return nil
-}
-
 func (c LocalClient) LegacySync(ctx context.Context) error {
-	return nil
-}
-
-func (c LocalClient) Unavailable(ctx context.Context) error {
 	return nil
 }
 

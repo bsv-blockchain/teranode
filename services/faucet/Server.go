@@ -106,6 +106,16 @@ func (f *Faucet) Init(ctx context.Context) error {
 }
 
 func (f *Faucet) Start(ctx context.Context) error {
+	var err error
+
+	// Blocks until the FSM transitions from the IDLE state
+	err = f.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		f.logger.Errorf("[Faucet Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	addr := f.settings.Faucet.HTTPListenAddress
 	if addr == "" {
 		return errors.NewConfigurationError("faucet_httpListenAddress is required")
@@ -127,8 +137,6 @@ func (f *Faucet) Start(ctx context.Context) error {
 			f.logger.Errorf("[Faucet] %s service shutdown error: %s", mode, err)
 		}
 	}()
-
-	var err error
 
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTP listening on %s", addr))

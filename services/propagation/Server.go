@@ -195,6 +195,14 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 // Returns:
 //   - error: error if server fails to start
 func (ps *PropagationServer) Start(ctx context.Context) (err error) {
+	// Blocks until the FSM transitions from the IDLE state
+	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	ipv6Addresses := ps.settings.Propagation.IPv6Addresses
 	if ipv6Addresses != "" {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)

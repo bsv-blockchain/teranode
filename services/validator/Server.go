@@ -170,21 +170,15 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - error: Any startup errors
 func (v *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		v.logger.Errorf("[Validator] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		// currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		// if err != nil {
-		// 	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-		// 	return err
-		// }
-		// for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
-		// 	v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
-		// 	time.Sleep(1 * time.Second) // Wait and check again in 1 second
-		// 	currentState, err = v.blockchainClient.GetFSMCurrentState(ctx)
-		// 	if err != nil {
-		// 		v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-		// 		return err
-		// 	}
-		// }
 		data, err := NewTxValidationDataFromBytes(msg.Value)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()

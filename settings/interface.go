@@ -146,15 +146,16 @@ type BlockSettings struct {
 }
 
 type BlockChainSettings struct {
-	GRPCAddress          string
-	GRPCListenAddress    string
-	HTTPListenAddress    string
-	MaxRetries           int
-	RetrySleep           int
-	StoreURL             *url.URL
-	FSMStateRestore      bool
-	FSMStateChangeDelay  time.Duration // used by tests to delay the state change and have time to capture the state
-	StoreDBTimeoutMillis int
+	GRPCAddress           string
+	GRPCListenAddress     string
+	HTTPListenAddress     string
+	MaxRetries            int
+	RetrySleep            int
+	StoreURL              *url.URL
+	FSMStateRestore       bool
+	FSMStateChangeDelay   time.Duration // used by tests to delay the state change and have time to capture the state
+	StoreDBTimeoutMillis  int
+	InitializeNodeInState string
 }
 
 type BlockAssemblySettings struct {

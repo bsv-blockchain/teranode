@@ -118,6 +118,14 @@ func (s *Server) Start(ctx context.Context) error {
 		ch  chan *blockchain.Notification
 	)
 
+	// Blocks until the FSM transitions from the IDLE state
+	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		s.logger.Errorf("[UTXOPersister Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	if s.blockchainClient == nil {
 		ch = make(chan *blockchain.Notification) // Create a dummy channel
 	} else {

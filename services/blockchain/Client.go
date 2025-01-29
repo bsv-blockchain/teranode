@@ -882,6 +882,15 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 	return nil
 }
 
+// WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
+func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	if _, err := c.client.WaitUntilFSMTransitionFromIdleState(ctx, &emptypb.Empty{}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // GetFSMCurrentStateForE2ETestMode retrieves the current FSM state for end-to-end testing.
 func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	ctx := context.Background()
@@ -965,6 +974,36 @@ func (c *Client) LegacySync(ctx context.Context) error {
 	c.logger.Infof("[Blockchain Client] Sending Legacy Sync event")
 
 	_, err := c.client.LegacySync(ctx, &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) Idle(ctx context.Context) error {
+	currentState := c.fmsState.Load()
+	if currentState != nil {
+		// check whether the current state is the same as the target state
+		if *currentState == FSMStateIDLE {
+			return nil
+		}
+	}
+
+	c.logger.Infof("[Blockchain Client] Sending IDLE event")
+
+	_, err := c.client.Idle(ctx, &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) SetFSMState(ctx context.Context, state FSMStateType) error {
+	_, err := c.client.SetFSMState(ctx, &blockchain_api.SetFSMStateRequest{
+		State: state,
+	})
 	if err != nil {
 		return err
 	}

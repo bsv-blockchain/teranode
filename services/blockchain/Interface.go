@@ -110,10 +110,13 @@ type ClientI interface {
 	GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
 	IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error)
 	WaitForFSMtoTransitionToGivenState(context.Context, FSMStateType) error
+	WaitUntilFSMTransitionFromIdleState(ctx context.Context) error
 	GetFSMCurrentStateForE2ETestMode() FSMStateType
 	Run(ctx context.Context, source string) error
 	CatchUpBlocks(ctx context.Context) error
 	LegacySync(ctx context.Context) error
+	Idle(ctx context.Context) error
+	SetFSMState(ctx context.Context, state FSMStateType) error
 
 	// Legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
@@ -281,28 +284,25 @@ func (s *MockBlockchain) IsFSMCurrentState(_ context.Context, state FSMStateType
 func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
 	panic("not implemented")
 }
+func (s *MockBlockchain) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
+	panic("not implemented")
+}
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")
 }
 func (s *MockBlockchain) Run(ctx context.Context, source string) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Mine(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *MockBlockchain) CatchUpTransactions(ctx context.Context) error {
-	panic("not implemented")
-}
 func (s *MockBlockchain) CatchUpBlocks(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *MockBlockchain) Restore(ctx context.Context) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) LegacySync(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Unavailable(ctx context.Context) error {
+func (s *MockBlockchain) Idle(ctx context.Context) error {
+	panic("not implemented")
+}
+func (s *MockBlockchain) SetFSMState(ctx context.Context, state FSMStateType) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {

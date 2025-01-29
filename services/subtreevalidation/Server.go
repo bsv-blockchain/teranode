@@ -214,6 +214,14 @@ func (u *Server) SetUutxoStore(s utxo.Store) {
 // Start initializes and starts the server components including Kafka consumers
 // and gRPC server. It blocks until the context is canceled or an error occurs.
 func (u *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		u.logger.Errorf("[Subtree Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	// start kafka consumers
 	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
 	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))

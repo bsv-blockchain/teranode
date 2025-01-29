@@ -216,10 +216,18 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	s.logger.Infof("[Legacy Server] Starting...")
 
 	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
-	err := s.blockchainClient.LegacySync(ctx)
+	err = s.blockchainClient.LegacySync(ctx)
 	if err != nil {
 		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
 	}

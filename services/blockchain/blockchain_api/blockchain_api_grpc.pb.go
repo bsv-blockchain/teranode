@@ -23,48 +23,49 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BlockchainAPI_HealthGRPC_FullMethodName                      = "/blockchain_api.BlockchainAPI/HealthGRPC"
-	BlockchainAPI_AddBlock_FullMethodName                        = "/blockchain_api.BlockchainAPI/AddBlock"
-	BlockchainAPI_GetBlock_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetBlock"
-	BlockchainAPI_GetBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlocks"
-	BlockchainAPI_GetBlockByHeight_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
-	BlockchainAPI_GetBlockStats_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockStats"
-	BlockchainAPI_GetBlockGraphData_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
-	BlockchainAPI_GetLastNBlocks_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
-	BlockchainAPI_GetSuitableBlock_FullMethodName                = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
-	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
-	BlockchainAPI_GetNextWorkRequired_FullMethodName             = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
-	BlockchainAPI_GetBlockExists_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlockExists"
-	BlockchainAPI_GetBlockHeaders_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
-	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
-	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName       = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
-	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
-	BlockchainAPI_GetBlockHeaderIDs_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
-	BlockchainAPI_GetBestBlockHeader_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
-	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName      = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
-	BlockchainAPI_GetBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlockHeader"
-	BlockchainAPI_InvalidateBlock_FullMethodName                 = "/blockchain_api.BlockchainAPI/InvalidateBlock"
-	BlockchainAPI_RevalidateBlock_FullMethodName                 = "/blockchain_api.BlockchainAPI/RevalidateBlock"
-	BlockchainAPI_Subscribe_FullMethodName                       = "/blockchain_api.BlockchainAPI/Subscribe"
-	BlockchainAPI_SendNotification_FullMethodName                = "/blockchain_api.BlockchainAPI/SendNotification"
-	BlockchainAPI_GetState_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetState"
-	BlockchainAPI_SetState_FullMethodName                        = "/blockchain_api.BlockchainAPI/SetState"
-	BlockchainAPI_SetBlockMinedSet_FullMethodName                = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
-	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
-	BlockchainAPI_SetBlockSubtreesSet_FullMethodName             = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
-	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
-	BlockchainAPI_SendFSMEvent_FullMethodName                    = "/blockchain_api.BlockchainAPI/SendFSMEvent"
-	BlockchainAPI_GetFSMCurrentState_FullMethodName              = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
-	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
-	BlockchainAPI_Run_FullMethodName                             = "/blockchain_api.BlockchainAPI/Run"
-	BlockchainAPI_CatchUpTransactions_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpTransactions"
-	BlockchainAPI_CatchUpBlocks_FullMethodName                   = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
-	BlockchainAPI_Restore_FullMethodName                         = "/blockchain_api.BlockchainAPI/Restore"
-	BlockchainAPI_LegacySync_FullMethodName                      = "/blockchain_api.BlockchainAPI/LegacySync"
-	BlockchainAPI_Unavailable_FullMethodName                     = "/blockchain_api.BlockchainAPI/Unavailable"
-	BlockchainAPI_GetBlockLocator_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlockLocator"
-	BlockchainAPI_LocateBlockHeaders_FullMethodName              = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
-	BlockchainAPI_GetBestHeightAndTime_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
+	BlockchainAPI_HealthGRPC_FullMethodName                          = "/blockchain_api.BlockchainAPI/HealthGRPC"
+	BlockchainAPI_AddBlock_FullMethodName                            = "/blockchain_api.BlockchainAPI/AddBlock"
+	BlockchainAPI_GetBlock_FullMethodName                            = "/blockchain_api.BlockchainAPI/GetBlock"
+	BlockchainAPI_GetBlocks_FullMethodName                           = "/blockchain_api.BlockchainAPI/GetBlocks"
+	BlockchainAPI_GetBlockByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
+	BlockchainAPI_GetBlockStats_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockStats"
+	BlockchainAPI_GetBlockGraphData_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
+	BlockchainAPI_GetLastNBlocks_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
+	BlockchainAPI_GetSuitableBlock_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
+	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName              = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
+	BlockchainAPI_GetNextWorkRequired_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
+	BlockchainAPI_GetBlockExists_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockExists"
+	BlockchainAPI_GetBlockHeaders_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
+	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
+	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
+	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_GetBestBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
+	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
+	BlockchainAPI_GetBlockHeader_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockHeader"
+	BlockchainAPI_InvalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/InvalidateBlock"
+	BlockchainAPI_RevalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/RevalidateBlock"
+	BlockchainAPI_Subscribe_FullMethodName                           = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_SendNotification_FullMethodName                    = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetState_FullMethodName                            = "/blockchain_api.BlockchainAPI/GetState"
+	BlockchainAPI_SetState_FullMethodName                            = "/blockchain_api.BlockchainAPI/SetState"
+	BlockchainAPI_SetBlockMinedSet_FullMethodName                    = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
+	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
+	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
+	BlockchainAPI_SendFSMEvent_FullMethodName                        = "/blockchain_api.BlockchainAPI/SendFSMEvent"
+	BlockchainAPI_GetFSMCurrentState_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
+	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName     = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
+	BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName = "/blockchain_api.BlockchainAPI/WaitUntilFSMTransitionFromIdleState"
+	BlockchainAPI_Run_FullMethodName                                 = "/blockchain_api.BlockchainAPI/Run"
+	BlockchainAPI_CatchUpBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
+	BlockchainAPI_LegacySync_FullMethodName                          = "/blockchain_api.BlockchainAPI/LegacySync"
+	BlockchainAPI_Idle_FullMethodName                                = "/blockchain_api.BlockchainAPI/Idle"
+	BlockchainAPI_SetFSMState_FullMethodName                         = "/blockchain_api.BlockchainAPI/SetFSMState"
+	BlockchainAPI_GetFSMState_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetFSMState"
+	BlockchainAPI_GetBlockLocator_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockLocator"
+	BlockchainAPI_LocateBlockHeaders_FullMethodName                  = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
+	BlockchainAPI_GetBestHeightAndTime_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -140,18 +141,20 @@ type BlockchainAPIClient interface {
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
 	WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
+	WaitUntilFSMTransitionFromIdleState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Run transitions the blockchain service to running state.
 	Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// CatchUpTransactions initiates transaction catch-up process.
-	CatchUpTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// CatchUpBlocks initiates block catch-up process.
 	CatchUpBlocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// Restore initiates blockchain restoration process.
-	Restore(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// LegacySync initiates legacy synchronization process.
 	LegacySync(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// Unavailable marks the service as unavailable.
-	Unavailable(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Idle marks the service as idle.
+	Idle(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// SetFSMState sets the FSM state.
+	SetFSMState(ctx context.Context, in *SetFSMStateRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetFSMState retrieves the FSM state.
+	GetFSMState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetBlockLocator retrieves a block locator for chain synchronization.
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
 	// LocateBlockHeaders finds block headers using a locator.
@@ -507,20 +510,20 @@ func (c *blockchainAPIClient) WaitFSMToTransitionToGivenState(ctx context.Contex
 	return out, nil
 }
 
-func (c *blockchainAPIClient) Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Run_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *blockchainAPIClient) CatchUpTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_CatchUpTransactions_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_Run_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -537,16 +540,6 @@ func (c *blockchainAPIClient) CatchUpBlocks(ctx context.Context, in *emptypb.Emp
 	return out, nil
 }
 
-func (c *blockchainAPIClient) Restore(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Restore_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockchainAPIClient) LegacySync(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -557,10 +550,30 @@ func (c *blockchainAPIClient) LegacySync(ctx context.Context, in *emptypb.Empty,
 	return out, nil
 }
 
-func (c *blockchainAPIClient) Unavailable(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) Idle(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Unavailable_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_Idle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) SetFSMState(ctx context.Context, in *SetFSMStateRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetFSMState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetFSMState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFSMStateResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetFSMState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -670,18 +683,20 @@ type BlockchainAPIServer interface {
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	// WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
 	WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error)
+	// WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
+	WaitUntilFSMTransitionFromIdleState(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	// Run transitions the blockchain service to running state.
 	Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	// CatchUpTransactions initiates transaction catch-up process.
-	CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	// CatchUpBlocks initiates block catch-up process.
 	CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	// Restore initiates blockchain restoration process.
-	Restore(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	// LegacySync initiates legacy synchronization process.
 	LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	// Unavailable marks the service as unavailable.
-	Unavailable(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+	// Idle marks the service as idle.
+	Idle(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+	// SetFSMState sets the FSM state.
+	SetFSMState(context.Context, *SetFSMStateRequest) (*emptypb.Empty, error)
+	// GetFSMState retrieves the FSM state.
+	GetFSMState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	// GetBlockLocator retrieves a block locator for chain synchronization.
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
 	// LocateBlockHeaders finds block headers using a locator.
@@ -797,23 +812,26 @@ func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emp
 func (UnimplementedBlockchainAPIServer) WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WaitFSMToTransitionToGivenState not implemented")
 }
+func (UnimplementedBlockchainAPIServer) WaitUntilFSMTransitionFromIdleState(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WaitUntilFSMTransitionFromIdleState not implemented")
+}
 func (UnimplementedBlockchainAPIServer) Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Run not implemented")
-}
-func (UnimplementedBlockchainAPIServer) CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CatchUpTransactions not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CatchUpBlocks not implemented")
 }
-func (UnimplementedBlockchainAPIServer) Restore(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Restore not implemented")
-}
 func (UnimplementedBlockchainAPIServer) LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LegacySync not implemented")
 }
-func (UnimplementedBlockchainAPIServer) Unavailable(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Unavailable not implemented")
+func (UnimplementedBlockchainAPIServer) Idle(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Idle not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetFSMState(context.Context, *SetFSMStateRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetFSMState not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetFSMState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFSMState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
@@ -1432,6 +1450,24 @@ func _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler(srv interface{}, ctx
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_WaitUntilFSMTransitionFromIdleState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).WaitUntilFSMTransitionFromIdleState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).WaitUntilFSMTransitionFromIdleState(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_Run_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1446,24 +1482,6 @@ func _BlockchainAPI_Run_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).Run(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockchainAPI_CatchUpTransactions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).CatchUpTransactions(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_CatchUpTransactions_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).CatchUpTransactions(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1486,24 +1504,6 @@ func _BlockchainAPI_CatchUpBlocks_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_Restore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).Restore(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_Restore_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).Restore(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockchainAPI_LegacySync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1522,20 +1522,56 @@ func _BlockchainAPI_LegacySync_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_Unavailable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _BlockchainAPI_Idle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockchainAPIServer).Unavailable(ctx, in)
+		return srv.(BlockchainAPIServer).Idle(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockchainAPI_Unavailable_FullMethodName,
+		FullMethod: BlockchainAPI_Idle_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).Unavailable(ctx, req.(*emptypb.Empty))
+		return srv.(BlockchainAPIServer).Idle(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_SetFSMState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetFSMStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetFSMState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetFSMState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetFSMState(ctx, req.(*SetFSMStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetFSMState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetFSMState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetFSMState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetFSMState(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1730,28 +1766,32 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler,
 		},
 		{
-			MethodName: "Run",
-			Handler:    _BlockchainAPI_Run_Handler,
+			MethodName: "WaitUntilFSMTransitionFromIdleState",
+			Handler:    _BlockchainAPI_WaitUntilFSMTransitionFromIdleState_Handler,
 		},
 		{
-			MethodName: "CatchUpTransactions",
-			Handler:    _BlockchainAPI_CatchUpTransactions_Handler,
+			MethodName: "Run",
+			Handler:    _BlockchainAPI_Run_Handler,
 		},
 		{
 			MethodName: "CatchUpBlocks",
 			Handler:    _BlockchainAPI_CatchUpBlocks_Handler,
 		},
 		{
-			MethodName: "Restore",
-			Handler:    _BlockchainAPI_Restore_Handler,
-		},
-		{
 			MethodName: "LegacySync",
 			Handler:    _BlockchainAPI_LegacySync_Handler,
 		},
 		{
-			MethodName: "Unavailable",
-			Handler:    _BlockchainAPI_Unavailable_Handler,
+			MethodName: "Idle",
+			Handler:    _BlockchainAPI_Idle_Handler,
+		},
+		{
+			MethodName: "SetFSMState",
+			Handler:    _BlockchainAPI_SetFSMState_Handler,
+		},
+		{
+			MethodName: "GetFSMState",
+			Handler:    _BlockchainAPI_GetFSMState_Handler,
 		},
 		{
 			MethodName: "GetBlockLocator",

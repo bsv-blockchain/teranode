@@ -74,3 +74,5 @@ scripts/k8s/testing/image_name.tmp
 /custom_template.tmpl
 
 node*-data
+
+teranode-cli

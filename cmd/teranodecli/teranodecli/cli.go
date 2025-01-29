@@ -13,11 +13,13 @@ import (
 	"github.com/bitcoin-sv/teranode/cmd/blockchainstatus"
 	"github.com/bitcoin-sv/teranode/cmd/chainintegrity"
 	"github.com/bitcoin-sv/teranode/cmd/filereader"
+	"github.com/bitcoin-sv/teranode/cmd/getfsmstate"
 	"github.com/bitcoin-sv/teranode/cmd/propagation_blaster"
 	"github.com/bitcoin-sv/teranode/cmd/recovertx"
 	"github.com/bitcoin-sv/teranode/cmd/s3_blaster"
 	"github.com/bitcoin-sv/teranode/cmd/s3inventoryintegrity"
 	"github.com/bitcoin-sv/teranode/cmd/seeder"
+	"github.com/bitcoin-sv/teranode/cmd/setfsmstate"
 	cmdSettings "github.com/bitcoin-sv/teranode/cmd/settings"
 	"github.com/bitcoin-sv/teranode/cmd/txblockidcheck"
 	"github.com/bitcoin-sv/teranode/cmd/unspend"
@@ -43,6 +45,8 @@ var commandHelp = map[string]string{
 	"seeder":               "Seeder",
 	"bitcoin2utxoset":      "Bitcoin 2 Utxoset",
 	"settings":             "Settings",
+	"getfsmstate":          "Get the current FSM State",
+	"setfsmstate":          "Set the FSM State",
 }
 
 var dangerousCommands = map[string]bool{
@@ -335,6 +339,23 @@ func Start(args []string, version, commit string) {
 
 			bitcoin2utxoset.Bitcoin2Utxoset(*blockchainDir, *outputDir, *skipHeaders, *skipUTXOs,
 				*blockHashStr, *previousBlockHashStr, *blockHeightUint, *dumpRecords)
+
+			return nil
+		}
+	case "getfsmstate":
+		cmd.Execute = func(args []string) error {
+			getfsmstate.GetFSMState()
+			return nil
+		}
+	case "setfsmstate":
+		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state")
+
+		cmd.Execute = func(args []string) error {
+			if *targetFsmState == "" {
+				return errors.NewProcessingError("target fsm state is required")
+			}
+
+			setfsmstate.SetFSMState(*targetFsmState)
 
 			return nil
 		}

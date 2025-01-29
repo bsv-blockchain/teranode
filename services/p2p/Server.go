@@ -226,6 +226,16 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	var err error
+
+	// Blocks until the FSM transitions from the IDLE state
+	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		s.logger.Errorf("[P2P Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	s.logger.Infof("[Start] P2P service starting")
 
 	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
@@ -267,8 +277,6 @@ func (s *Server) Start(ctx context.Context) error {
 	s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-
-	var err error
 
 	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, s.settings, "p2p")
 	if err != nil {

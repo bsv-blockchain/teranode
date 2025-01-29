@@ -140,6 +140,14 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		u.logger.Errorf("[Block Persister Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	blockPersisterHTTPListenAddress := u.settings.Block.PersisterHTTPListenAddress
 
 	if blockPersisterHTTPListenAddress == "" {

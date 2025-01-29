@@ -367,22 +367,16 @@ func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, e
 func (s *mockStore) Run(ctx context.Context, source string) error {
 	panic("not implemented")
 }
-func (s *mockStore) Mine(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *mockStore) CatchUpTransactions(ctx context.Context) error {
+func (s *mockStore) Idle(ctx context.Context) error {
 	panic("not implemented")
 }
 func (s *mockStore) CatchUpBlocks(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *mockStore) Restore(ctx context.Context) error {
-	panic("not implemented")
-}
 func (s *mockStore) LegacySync(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *mockStore) Unavailable(ctx context.Context) error {
+func (s *mockStore) SetFSMState(ctx context.Context, state blockchain.FSMStateType) error {
 	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain.FSMStateType, error) {
@@ -394,7 +388,9 @@ func (s *mockStore) IsFSMCurrentState(ctx context.Context, state blockchain.FSMS
 func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain.FSMStateType) error {
 	panic("not implemented")
 }
-
+func (s *mockStore) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
+	panic("not implemented")
+}
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
 	panic("not implemented")
 }

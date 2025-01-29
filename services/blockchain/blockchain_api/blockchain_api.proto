@@ -113,23 +113,26 @@ service BlockchainAPI {
   // WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
   rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
 
+  // WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
+  rpc WaitUntilFSMTransitionFromIdleState(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
   // Run transitions the blockchain service to running state.
   rpc Run(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
-  // CatchUpTransactions initiates transaction catch-up process.
-  rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
   // CatchUpBlocks initiates block catch-up process.
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
-  // Restore initiates blockchain restoration process.
-  rpc Restore(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
   // LegacySync initiates legacy synchronization process.
   rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
-  // Unavailable marks the service as unavailable.
-  rpc Unavailable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  // Idle marks the service as idle.
+  rpc Idle(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // SetFSMState sets the FSM state.
+  rpc SetFSMState(SetFSMStateRequest) returns (google.protobuf.Empty) {}
+
+  // GetFSMState retrieves the FSM state.
+  rpc GetFSMState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
   // Legacy sync methods
 
@@ -420,12 +423,18 @@ message SendFSMEventRequest {
   FSMEventType event = 1;  // FSM event to trigger
 }
 
-// FSMEventType defines possible events in the blockchain FSM.
+// swagger:model SetFSMStateRequest
+message SetFSMStateRequest {
+  FSMStateType state = 1;
+}
+
+
+// swagger:enum FSMEventType
 enum FSMEventType {
-  STOP = 0;           // Stop the blockchain service
-  RUN = 1;            // Start normal operation
-  CATCHUPBLOCKS = 2;  // Start catching up missing blocks
-  LEGACYSYNC = 3;     // Start legacy sync mode
+  STOP = 0;
+  RUN = 1;
+  CATCHUPBLOCKS = 2;  
+  LEGACYSYNC = 3;
 }
 
 // FSMStateType defines possible states of the blockchain FSM.

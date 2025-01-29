@@ -111,6 +111,14 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
+	// Blocks until the FSM transitions from the IDLE state
+	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		s.logger.Errorf("[Coinbase Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
 	if err := s.coinbase.peerSync.Start(ctx); err != nil {
 		return err
 	}
