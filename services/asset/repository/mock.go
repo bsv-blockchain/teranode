@@ -136,6 +136,16 @@ func (m *Mock) GetBlockHeaders(_ context.Context, hash *chainhash.Hash, numberOf
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
 
+func (m *Mock) GetBlockHeadersToCommonAncestor(_ context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(hasTarget, blockLocatorHashes)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}
+
 func (m *Mock) GetBlockHeadersFromHeight(_ context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(height, limit)
 
@@ -242,4 +252,8 @@ func (m *Mock) GetBlockHeader(_ context.Context, hash *chainhash.Hash) (*model.B
 	}
 
 	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
+func (m *Mock) GetBlockLocator(_ context.Context, _ *chainhash.Hash, _ uint32) ([]*chainhash.Hash, error) {
+	return nil, nil
 }

@@ -37,7 +37,7 @@ func TestSQLLocateBlockHeaders(t *testing.T) {
 		blockLocator = append(blockLocator, blocks[i].Header)
 	}
 
-	locator := []*chainhash.Hash{blocks[9].Hash()}
+	locator := []*chainhash.Hash{blocks[blockCount-1].Hash()}
 	lastLocator := blocks[0].Hash()
 	expectedBlocks := reverseSlice(blockLocator)
 

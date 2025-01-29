@@ -39,6 +39,7 @@ type Interface interface {
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)
 	GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error)
 	GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
@@ -50,6 +51,7 @@ type Interface interface {
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
+	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
 }
 
 // Repository provides access to blockchain data storage and retrieval operations.
@@ -352,6 +354,10 @@ func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Has
 	return blockHeaders, blockHeaderMetas, nil
 }
 
+func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hasTarget, blockLocatorHashes)
+}
+
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 //
 // Parameters:
@@ -548,4 +554,26 @@ func (repo *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHea
 	}
 
 	return header, meta, nil
+}
+
+// GetBlockLocator retrieves a sequence of block hashes at exponentially increasing distances
+// back from the provided block hash or the best block if no hash is specified.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHeaderHash: Starting block hash (nil for best block)
+//   - height: Block height to start from
+//
+// Returns:
+//   - []*chainhash.Hash: Array of block hashes forming the locator
+//   - error: Any error encountered during retrieval
+func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error) {
+	repo.logger.Debugf("[Repository] GetBlockLocator from hash: %v", blockHeaderHash)
+
+	locator, err := repo.BlockchainClient.GetBlockLocator(ctx, blockHeaderHash, height)
+	if err != nil {
+		return nil, err
+	}
+
+	return locator, nil
 }

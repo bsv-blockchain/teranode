@@ -280,6 +280,9 @@ func (s *mockStore) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, nu
 func (s *mockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	return s.block, nil
 }
+func (s *mockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error) {
+	return s.block, nil
+}
 func (s *mockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	panic("not implemented")
 }
@@ -311,6 +314,9 @@ func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	panic("not implemented")
 }
 func (s *mockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	panic("not implemented")
+}
+func (s *mockStore) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	panic("not implemented")
 }
 func (s *mockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {

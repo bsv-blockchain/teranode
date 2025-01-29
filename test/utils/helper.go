@@ -380,7 +380,26 @@ func CreateAndSendTx(ctx context.Context, node TeranodeTestClient) (chainhash.Ha
 
 	coinbaseClient := node.CoinbaseClient
 
-	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	timeout := time.After(5 * time.Second)
+
+	var (
+		faucetTx *bt.Tx
+		err      error
+	)
+
+loop:
+	for faucetTx == nil || err != nil {
+		select {
+		case <-timeout:
+			break loop
+		default:
+			faucetTx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+			if err != nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to request funds", err)
 	}
@@ -904,7 +923,7 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
 	defer cancel()
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {

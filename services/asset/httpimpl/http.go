@@ -193,6 +193,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
 	apiGroup.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
 
+	apiGroup.GET("/headers_to_common_ancestor/:hash", h.GetBlockHeadersToCommonAncestor(BINARY_STREAM))
+	apiGroup.GET("/headers_to_common_ancestor/:hash/hex", h.GetBlockHeadersToCommonAncestor(HEX))
+	apiGroup.GET("/headers_to_common_ancestor/:hash/json", h.GetBlockHeadersToCommonAncestor(JSON))
+
 	apiGroup.GET("/header/:hash", h.GetBlockHeader(BINARY_STREAM))
 	apiGroup.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
 	apiGroup.GET("/header/:hash/json", h.GetBlockHeader(JSON))

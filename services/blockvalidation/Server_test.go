@@ -17,10 +17,12 @@ package blockvalidation
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -43,7 +45,7 @@ import (
 var (
 	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000")
 
-	txIds = []string{
+	txIDs = []string{
 		"8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87", // Coinbase
 		"fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4",
 		"6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4",
@@ -193,22 +195,22 @@ func TestMerkleRoot(t *testing.T) {
 	err = subtrees[0].AddCoinbaseNode()
 	require.NoError(t, err)
 
-	hash1, err := chainhash.NewHashFromStr(txIds[1])
+	hash1, err := chainhash.NewHashFromStr(txIDs[1])
 	require.NoError(t, err)
 	err = subtrees[0].AddNode(*hash1, 1, 0)
 	require.NoError(t, err)
 
-	hash2, err := chainhash.NewHashFromStr(txIds[2])
+	hash2, err := chainhash.NewHashFromStr(txIDs[2])
 	require.NoError(t, err)
 	err = subtrees[1].AddNode(*hash2, 1, 0)
 	require.NoError(t, err)
 
-	hash3, err := chainhash.NewHashFromStr(txIds[3])
+	hash3, err := chainhash.NewHashFromStr(txIDs[3])
 	require.NoError(t, err)
 	err = subtrees[1].AddNode(*hash3, 1, 0)
 	require.NoError(t, err)
 
-	assert.Equal(t, txIds[0], coinbaseTx.TxID())
+	assert.Equal(t, txIDs[0], coinbaseTx.TxID())
 
 	prevBlockHash, err := chainhash.NewHashFromStr(prevBlockHashStr)
 	if err != nil {
@@ -272,7 +274,7 @@ func TestTtlCache(t *testing.T) {
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
 	)
 
-	for _, txID := range txIds {
+	for _, txID := range txIDs {
 		hash, _ := chainhash.NewHashFromStr(txID)
 		cache.Set(*hash, true, 1*time.Second)
 	}
@@ -393,4 +395,186 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 
 	// should have put something on the catchup channel
 	assert.Len(t, s.catchupCh, 1)
+}
+
+func TestServer_catchupGetBlocks(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	settings := test.CreateBaseTestSettings()
+	settings.BlockValidation.CatchupConcurrency = 1
+
+	baseURL := "http://test.com"
+
+	t.Run("successful catchup with multiple blocks", func(t *testing.T) {
+		// Setup
+		mockBlockchainStore := blockchain_store.NewMockStore()
+		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
+		require.NoError(t, err)
+
+		server := &Server{
+			logger:           logger,
+			settings:         settings,
+			blockchainClient: mockBlockchainClient,
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+		}
+
+		// Create a chain of test blocks
+		blocks := createTestBlockChain(t, 200)
+		lastBlock := blocks[len(blocks)-1]
+
+		// Mark first 50 blocks as existing
+		for i := 0; i < 50; i++ {
+			_, _, err := mockBlockchainStore.StoreBlock(ctx, blocks[i], "")
+			require.NoError(t, err)
+		}
+
+		headers := make([]byte, 0)
+
+		for _, block := range blocks[1:] {
+			headerBytes := block.Header.Bytes()
+			headers = append(headerBytes, headers...)
+		}
+
+		// Setup HTTP mocks
+		httpmock.Activate()
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Header.HashPrevBlock.String()),
+			httpmock.NewBytesResponder(200, headers))
+
+		// Execute
+		catchupBlockHeaders, err := server.catchupGetBlocks(ctx, lastBlock, baseURL)
+		require.NoError(t, err)
+
+		// Assert
+		assert.NotNil(t, catchupBlockHeaders)
+		assert.Equal(t, 151, len(catchupBlockHeaders))
+	})
+
+	t.Run("catchup when target block already exists", func(t *testing.T) {
+		// Setup
+		mockBlockchainStore := blockchain_store.NewMockStore()
+		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
+		require.NoError(t, err)
+
+		server := &Server{
+			logger:           logger,
+			settings:         settings,
+			blockchainClient: mockBlockchainClient,
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+		}
+
+		block := createTestBlock(t)
+
+		// Pre-set block as existing
+		err = server.blockValidation.SetBlockExists(block.Hash())
+		require.NoError(t, err)
+
+		// Execute
+		catchupBlockHeaders, err := server.catchupGetBlocks(ctx, block, baseURL)
+		require.NoError(t, err)
+
+		// Assert
+		assert.Nil(t, catchupBlockHeaders)
+	})
+
+	t.Run("error when getting block headers", func(t *testing.T) {
+		// Setup
+		mockBlockchainStore := blockchain_store.NewMockStore()
+		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
+		require.NoError(t, err)
+
+		server := &Server{
+			logger:           logger,
+			settings:         settings,
+			blockchainClient: mockBlockchainClient,
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+		}
+
+		// Create a chain of test blocks
+		blocks := createTestBlockChain(t, 3)
+		lastBlock := blocks[len(blocks)-1]
+
+		for _, block := range blocks[:len(blocks)-1] {
+			_, _, err = mockBlockchainStore.StoreBlock(ctx, block, "")
+			require.NoError(t, err)
+		}
+
+		// Setup HTTP mock with error
+		httpmock.Activate()
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Header.HashPrevBlock.String()),
+			httpmock.NewErrorResponder(errors.New(errors.ERR_NETWORK_ERROR, "network error")))
+
+		// Execute
+		catchupBlockHeaders, err := server.catchupGetBlocks(ctx, lastBlock, baseURL)
+		require.Error(t, err)
+
+		// Assert
+		assert.Contains(t, err.Error(), "network error")
+		assert.Nil(t, catchupBlockHeaders)
+	})
+}
+
+// Helper functions
+
+func createTestBlock(t *testing.T) *model.Block {
+	t.Helper()
+
+	nBits, err := model.NewNBitFromSlice([]byte{0x1b, 0x04, 0x86, 0x4c})
+	require.NoError(t, err)
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+		Bits:           *nBits,
+		Nonce:          2083236893,
+	}
+
+	block := &model.Block{
+		Header: header,
+	}
+
+	return block
+}
+
+func createTestBlockChain(t *testing.T, numBlocks int) []*model.Block {
+	t.Helper()
+
+	nBits, err := model.NewNBitFromSlice([]byte{0x1b, 0x04, 0x86, 0x4c})
+	require.NoError(t, err)
+
+	blocks := make([]*model.Block, numBlocks)
+	prevHash := &chainhash.Hash{}
+
+	for i := 0; i < numBlocks; i++ {
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *nBits,
+			Nonce:          uint32(2083236893 + i), // nolint:gosec
+		}
+
+		block := &model.Block{
+			Header: header,
+			Height: uint32(i), // nolint:gosec
+		}
+
+		blocks[i] = block
+
+		// Update prevHash for next block
+		prevHash, err = chainhash.NewHash(header.Hash().CloneBytes())
+		require.NoError(t, err)
+	}
+
+	return blocks
 }

@@ -66,10 +66,23 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		t.Errorf("Failed to create address: %v", err)
 	}
 
-	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
-	if err != nil {
-		t.Errorf("Failed to request funds: %v", err)
+	var tx *bt.Tx
+
+	timeout := time.After(10 * time.Second)
+
+loop:
+	for tx == nil || err != nil {
+		select {
+		case <-timeout:
+			break loop
+		default:
+			tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+			if err != nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}
+	require.NoError(t, err, "Failed to request funds: %v", err)
 
 	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 

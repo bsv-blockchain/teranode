@@ -969,13 +969,28 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	return blocks, nil
 }
 
-func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseURL string) ([]*model.BlockHeader, error) {
+func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, height uint32, baseURL string) ([]*model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s?n=200", baseURL, hash.String()))
+	bestBlockHeader, bestBlockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get best block", hash.String(), err)
+	}
+
+	locatorHashes, err := u.blockchainClient.GetBlockLocator(ctx, bestBlockHeader.Hash(), bestBlockMeta.Height)
+	if err != nil {
+		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block locator", hash.String(), err)
+	}
+
+	blockLocatorStr := ""
+	for _, locatorHash := range locatorHashes {
+		blockLocatorStr += locatorHash.String()
+	}
+
+	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers_to_common_ancestor/%s?block_locator_hashes=%s", baseURL, hash.String(), blockLocatorStr))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
 	}
@@ -995,88 +1010,24 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 	return blockHeaders, nil
 }
 
-func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "catchup",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationCatchup),
-		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL),
+		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", blockUpTo.Hash().String(), baseURL),
 	)
 	defer deferFn()
 
-	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockValidation.GetBlockExists(ctx, fromBlock.Hash())
+	catchupBlockHeaders, err := u.catchupGetBlocks(ctx, blockUpTo, baseURL)
 	if err != nil {
-		return errors.NewServiceError("[catchup][%s] failed to check if block exists", fromBlock.Hash().String(), err)
+		return err
 	}
 
-	if exists {
+	if catchupBlockHeaders == nil {
 		return nil
 	}
 
-	catchupBlockHeaders := []*model.BlockHeader{fromBlock.Header}
-
-	fromBlockHeaderHash := fromBlock.Header.HashPrevBlock
-
-	var blockHeaders []*model.BlockHeader
-LOOP:
-	for {
-		u.logger.Debugf("[catchup][%s] getting block headers for catchup from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
-		blockHeaders, err = u.getBlockHeaders(ctx, fromBlockHeaderHash, baseURL)
-		if err != nil {
-			return err
-		}
-
-		if len(blockHeaders) == 0 {
-			return errors.NewServiceError("[catchup][%s] failed to get block headers from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
-		}
-
-		for _, blockHeader := range blockHeaders {
-			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
-			blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
-				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
-
-			if blockBeingFinalized {
-				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish: %v - %v", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
-				retries := 0
-				for {
-					blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
-						u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
-
-					if !blockBeingFinalized {
-						break
-					}
-
-					if (retries % 10) == 0 {
-						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v - bloom filters %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
-					}
-
-					time.Sleep(1 * time.Second)
-					retries++
-				}
-				u.logger.Infof("[catchup][%s] parent block is done being validated", fromBlock.Hash().String())
-			}
-
-			exists, err = u.blockValidation.GetBlockExists(ctx, blockHeader.Hash())
-			if err != nil {
-				return errors.NewServiceError("[catchup][%s] failed to check if parent block exists", fromBlock.Hash().String(), err)
-			}
-
-			if exists {
-				break LOOP
-			}
-			u.logger.Warnf("[catchup][%s] parent block does not exist [%s]", fromBlock.Hash().String(), blockHeader.String())
-
-			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
-
-			fromBlockHeaderHash = blockHeader.HashPrevBlock
-			// TODO: check if its only useful for a chain with different genesis block?
-			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
-				return errors.NewProcessingError("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
-			}
-		}
-	}
-
-	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", fromBlock.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", blockUpTo.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
 	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
 
@@ -1090,7 +1041,7 @@ LOOP:
 		slices.Reverse(catchupBlockHeaders)
 		batches := getBlockBatchGets(catchupBlockHeaders, 100)
 
-		u.logger.Debugf("[catchup][%s] getting %d batches", fromBlock.Hash().String(), len(batches))
+		u.logger.Debugf("[catchup][%s] getting %d batches", blockUpTo.Hash().String(), len(batches))
 
 		blockCount := 0
 		i := 0
@@ -1100,7 +1051,7 @@ LOOP:
 		for _, batch := range batches {
 			batch := batch
 			i++
-			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", fromBlock.Hash().String(), i, batch.size, batch.hash.String())
+			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", blockUpTo.Hash().String(), i, batch.size, batch.hash.String())
 
 			size.Add(batch.size)
 
@@ -1108,15 +1059,11 @@ LOOP:
 			if err != nil {
 				// TODO
 				// we aren't waiting for the func to finish so we never catch this error and log it
-				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
-				return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
-			}
-			//nolint
-			if uint32(len(blocks)) != batch.size {
-				u.logger.Warnf("[catchup][%s] got %d blocks, expected %d", fromBlock.Hash().String(), len(blocks), batch.size)
+				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
+				return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
 			}
 
-			u.logger.Debugf("[catchup][%s] got %d blocks from %s", fromBlock.Hash().String(), len(blocks), batch.hash.String())
+			u.logger.Debugf("[catchup][%s] got %d blocks from %s", blockUpTo.Hash().String(), len(blocks), batch.hash.String())
 
 			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
 			slices.Reverse(blocks)
@@ -1127,7 +1074,7 @@ LOOP:
 			}
 		}
 
-		u.logger.Infof("[catchup][%s] added %d blocks for validating", fromBlock.Hash().String(), blockCount)
+		u.logger.Infof("[catchup][%s] added %d blocks for validating", blockUpTo.Hash().String(), blockCount)
 
 		// close the channel to signal that all blocks have been processed
 		close(validateBlocksChan)
@@ -1145,15 +1092,103 @@ LOOP:
 		// error is returned from validate block:
 
 		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
-			return errors.NewServiceError("[catchup][%s]grep  [%s]", fromBlock.Hash().String(), block.String(), err)
+			return errors.NewServiceError("[catchup][%s]grep  [%s]", blockUpTo.Hash().String(), block.String(), err)
 		}
 
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
 
-	u.logger.Infof("[catchup][%s] done validating catchup blocks", fromBlock.Hash().String())
+	u.logger.Infof("[catchup][%s] done validating catchup blocks", blockUpTo.Hash().String())
 
 	return nil
+}
+
+func (u *Server) catchupGetBlocks(ctx context.Context, blockUpTo *model.Block, baseURL string) ([]*model.BlockHeader, error) {
+	// first check whether this block already exists, which would mean we caught up from another peer
+	exists, err := u.blockValidation.GetBlockExists(ctx, blockUpTo.Hash())
+	if err != nil {
+		return nil, errors.NewServiceError("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
+	}
+
+	if exists {
+		return nil, nil
+	}
+
+	catchupBlockHeaders := []*model.BlockHeader{blockUpTo.Header}
+
+	blockHeaderHashUpTo := blockUpTo.Header.HashPrevBlock
+	blockHeaderHeightUpTo := blockUpTo.Height
+
+	var blockHeaders []*model.BlockHeader
+LOOP:
+	for {
+		u.logger.Debugf("[catchup][%s] getting block headers for catchup up to [%s]", blockUpTo.Hash().String(), blockHeaderHashUpTo.String())
+		blockHeaders, err = u.getBlockHeaders(ctx, blockHeaderHashUpTo, blockHeaderHeightUpTo, baseURL)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(blockHeaders) == 0 {
+			return nil, errors.NewServiceError("[catchup][%s] failed to get block headers up to [%s]", blockUpTo.Hash().String(), blockHeaderHashUpTo.String())
+		}
+
+		for _, blockHeader := range blockHeaders {
+			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
+			exists := u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo)
+			if exists {
+				break LOOP
+			}
+
+			u.logger.Warnf("[catchup][%s] parent block does not exist [%s]", blockUpTo.Hash().String(), blockHeader.String())
+
+			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
+
+			blockHeaderHashUpTo = blockHeader.HashPrevBlock
+			// TODO: check if its only useful for a chain with different genesis block?
+			if blockHeaderHashUpTo.IsEqual(&chainhash.Hash{}) {
+				return nil, errors.NewProcessingError("[catchup][%s] failed to find parent block header, last was: %s", blockUpTo.Hash().String(), blockHeader.String())
+			}
+		}
+	}
+
+	return catchupBlockHeaders, nil
+}
+
+func (u *Server) parentExistsAndIsValidated(ctx context.Context, blockHeader *model.BlockHeader, blockUpTo *model.Block) bool {
+	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+		u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+	if blockBeingFinalized {
+		u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish: %v - %v", blockUpTo.Hash().String(), blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+
+		retries := 0
+
+		for {
+			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+			if !blockBeingFinalized {
+				break
+			}
+
+			if (retries % 10) == 0 {
+				u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v - bloom filters %v", blockUpTo.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+			}
+
+			time.Sleep(1 * time.Second)
+
+			retries++
+		}
+
+		u.logger.Infof("[catchup][%s] parent block is done being validated", blockUpTo.Hash().String())
+	}
+
+	exists, err := u.blockValidation.GetBlockExists(ctx, blockHeader.Hash())
+	if err != nil {
+		u.logger.Errorf("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
+	}
+
+	return exists
 }
 
 type blockBatchGet struct {

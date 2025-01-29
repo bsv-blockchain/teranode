@@ -44,28 +44,22 @@ func TestFsmTestSuite(t *testing.T) {
 // Check if the 2nd node catches up with the 1st node
 // The test captures the intermediate states of the 2nd node and checks if the node wa in the catch-up state
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
-	ctx := context.Background()
 	t := suite.T()
 	framework := suite.TeranodeTestEnv
-	logger := framework.Logger
-	blockchainNode0 := framework.Nodes[0].BlockchainClient
-	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
-	var (
-		mu sync.Mutex
-	)
+	t.Logf("Starting test - shutdown teranode2")
 
 	err := framework.StopNode("teranode2")
 	if err != nil {
 		t.Errorf("Failed to stop node: %v", err)
 	}
 
+	ctx := context.Background()
+	logger := framework.Logger
+
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 5)
-
-		if err != nil {
-			t.Errorf("Failed to create and send raw txs: %v", err)
-		}
+		require.NoError(t, err)
 
 		logger.Infof("Hashes: %v", hashes)
 
@@ -105,8 +99,9 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		}
 	}
 
-	blockchainNode1 = framework.Nodes[1].BlockchainClient
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
+	blockchainNode0 := framework.Nodes[0].BlockchainClient
+	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
 	// wait for node 2 block validator to catch up
 	wait := func() {
@@ -129,19 +124,20 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 				// This is configured using the fsm_state_change_delay setting
 				state := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
 
-				mu.Lock()
 				if _, exists := stateSet[state]; !exists {
 					framework.Logger.Infof("New unique state: %v", state)
 
 					stateSet[state] = struct{}{}
 				}
-				mu.Unlock()
 
 				if state == blockchain_api.FSMStateType_RUNNING {
 					if _, exists := stateSet[blockchain_api.FSMStateType_CATCHINGBLOCKS]; exists {
 						// take a note of the best block header of node 0 (teranode1)
 						blockHeaderNode0, _, err := blockchainNode0.GetBestBlockHeader(ctx)
-						require.NoError(t, err)
+						if err != nil {
+							framework.Logger.Errorf("Failed to get best block header: %v", err)
+							continue
+						}
 
 						// check if the block of node 0 (teranode1) is synced to node 1 (teranode2)
 						_, err = blockchainNode1.GetBlockExists(ctx, blockHeaderNode0.Hash())
@@ -151,11 +147,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 					}
 				}
 
-				time.Sleep(10 * time.Millisecond) // this is increasing of NOT capturing the CATCHINGUP state if block validation is fast
+				time.Sleep(10 * time.Millisecond) // this is increasing risk of NOT capturing the CATCHINGUP state if block validation is fast
 			}
 		}
 	}
 	wait()
+
+	framework.Logger.Infof("Wait over")
 
 	stateFound := false
 
@@ -170,7 +168,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
-	assert.True(t, stateFound, "State 3 (CATCHINGBLOCKS) was not captured")
+	assert.True(t, stateFound, "State 3 (CATCHINGBLOCKS) was not captured %v", stateSet)
 }
 
 /* Description */

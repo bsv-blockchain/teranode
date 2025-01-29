@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	utxo_memory "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -87,20 +90,16 @@ func Test_GetBlock(t *testing.T) {
 
 	context := context.Background()
 	request := &blockchain_api.GetBlockRequest{
-		Hash: []byte{1},
+		Hash: []byte{2},
 	}
 
 	block, err := ctx.server.GetBlock(context, request)
 	require.Error(t, err)
 	require.Empty(t, block)
-
-	// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-	// unwrappedErr := errors.UnwrapGRPC(err)
-	// // require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
-	// require.True(t, unwrappedErr.Is(errors.ErrBlockNotFound))
+	require.True(t, errors.Is(err, errors.ErrBlockNotFound))
 
 	requestHeight := &blockchain_api.GetBlockByHeightRequest{
-		Height: 1,
+		Height: 2,
 	}
 
 	block, err = ctx.server.GetBlockByHeight(context, requestHeight)
@@ -144,11 +143,18 @@ func setup(t *testing.T) *testContext {
 
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
-	store := mockStore{}
+
+	// Create SQLite store
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
-	server, err := New(context.Background(), logger, tSettings, &store, nil)
+	store, err := sql.New(logger, storeURL, tSettings)
+	require.NoError(t, err)
+
+	server, err := New(context.Background(), logger, tSettings, store, nil)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
@@ -225,8 +231,10 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
-	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+	nBits, _ := model.NewNBitFromString("1d00ffff") // Use mainnet genesis block bits
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	hashPrevBlock := tSettings.ChainCfgParams.GenesisHash
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
@@ -254,7 +262,8 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 		CoinbaseTx:       coinbase,
 		TransactionCount: 2,
 		Subtrees:         subtreeHashes,
-		Height:           0,
+		Height:           1, // Start at height 1 since genesis is height 0
+		ID:               1,
 	}
 
 	return block
@@ -265,7 +274,7 @@ func Test_getBlockLocator(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("block 0", func(t *testing.T) {
-		store := newMockStore(nil)
+		store := blockchain_store.NewMockStore()
 		block := &model.Block{
 			Height: 0,
 			Header: &model.BlockHeader{
@@ -277,7 +286,8 @@ func Test_getBlockLocator(t *testing.T) {
 				Nonce:          0,
 			},
 		}
-		store.getBlockByHeight[0] = block
+		_, _, err := store.StoreBlock(ctx, block, "")
+		require.NoError(t, err)
 
 		locator, err := getBlockLocator(ctx, store, nil, 0)
 		require.NoError(t, err)
@@ -287,9 +297,10 @@ func Test_getBlockLocator(t *testing.T) {
 	})
 
 	t.Run("blocks", func(t *testing.T) {
-		store := newMockStore(nil)
+		store := blockchain_store.NewMockStore()
+
 		for i := uint32(0); i <= 1024; i++ {
-			store.getBlockByHeight[i] = &model.Block{
+			block := &model.Block{
 				Height: i,
 				Header: &model.BlockHeader{
 					Version:        i,
@@ -300,9 +311,11 @@ func Test_getBlockLocator(t *testing.T) {
 					Nonce:          i,
 				},
 			}
+			_, _, err := store.StoreBlock(ctx, block, "")
+			require.NoError(t, err)
 		}
 
-		locator, err := getBlockLocator(ctx, store, store.getBlockByHeight[1024].Hash(), 1024)
+		locator, err := getBlockLocator(ctx, store, store.BlockByHeight[1024].Hash(), 1024)
 		require.NoError(t, err)
 
 		assert.Len(t, locator, 21)
@@ -332,7 +345,147 @@ func Test_getBlockLocator(t *testing.T) {
 		}
 
 		for locatorIdx, locatorHash := range locator {
-			assert.Equal(t, store.getBlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
+			assert.Equal(t, store.BlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
 		}
 	})
+}
+
+func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	headers := make([]*model.BlockHeader, 0, 150)
+
+	// Get genesis block hash from chain params
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	for i := 0; i < 150; i++ {
+		// Create a unique merkle root for each block
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		// Create a unique block for each iteration
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix()),          // nolint:gosec
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff}, // Set proper bits from mainnet genesis block
+				Nonce:          uint32(i),                          // nolint:gosec
+			},
+			CoinbaseTx:       bt.NewTx(),
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1), // nolint:gosec
+			ID:               uint32(i + 1), // nolint:gosec
+		}
+
+		header := block.Header
+		headers = append(headers, header)
+
+		// Store the block before updating prevHash
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+
+		prevHash = header.Hash()
+	}
+
+	tests := []struct {
+		name          string
+		targetHash    *chainhash.Hash
+		locatorHashes []*chainhash.Hash
+		expectedLen   int
+		expectError   bool
+		errorType     string
+	}{
+		{
+			name:          "common ancestor found in first batch",
+			targetHash:    headers[99].Hash(),
+			locatorHashes: []*chainhash.Hash{headers[50].Hash()},
+			expectedLen:   50,
+			expectError:   false,
+		},
+		{
+			name:          "common ancestor found in second batch",
+			targetHash:    headers[149].Hash(),
+			locatorHashes: []*chainhash.Hash{headers[20].Hash()},
+			expectedLen:   130,
+			expectError:   false,
+		},
+		{
+			name:          "no common ancestor found",
+			targetHash:    headers[149].Hash(),
+			locatorHashes: []*chainhash.Hash{new(chainhash.Hash)},
+			expectError:   true,
+			errorType:     "common ancestor hash not found",
+		},
+		{
+			name:          "empty locator hashes",
+			targetHash:    headers[99].Hash(),
+			locatorHashes: nil,
+			expectError:   true,
+			errorType:     "common ancestor hash not found",
+		},
+		{
+			name:          "verify last header in locator hashes",
+			targetHash:    headers[99].Hash(),
+			locatorHashes: []*chainhash.Hash{headers[50].Hash(), headers[40].Hash(), headers[30].Hash()},
+			expectedLen:   50,
+			expectError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers, metas, err := getBlockHeadersToCommonAncestor(
+				context.Background(),
+				ctx.server.store,
+				tt.targetHash,
+				tt.locatorHashes,
+			)
+
+			if tt.expectError {
+				require.Error(t, err)
+
+				if tt.errorType != "" {
+					require.Contains(t, err.Error(), tt.errorType)
+				}
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedLen, len(headers))
+			require.Equal(t, tt.expectedLen, len(metas))
+
+			// Verify headers are in correct order
+			for i := 0; i < len(headers)-1; i++ {
+				require.Equal(t, headers[i].HashPrevBlock, headers[i+1].Hash())
+			}
+
+			// Verify heights are sequential
+			for i := 0; i < len(metas)-1; i++ {
+				require.Equal(t, metas[i].Height, metas[i+1].Height+1)
+			}
+
+			// Verify the last header in the list is in locatorHashes
+			if !tt.expectError && len(headers) > 0 && len(tt.locatorHashes) > 0 {
+				lastHeader := headers[len(headers)-1]
+				lastHeaderHash := lastHeader.Hash()
+				found := false
+
+				for _, locatorHash := range tt.locatorHashes {
+					if locatorHash.IsEqual(lastHeaderHash) {
+						found = true
+						break
+					}
+				}
+
+				require.True(t, found, "Last header hash should be in locator hashes")
+			}
+		})
+	}
 }

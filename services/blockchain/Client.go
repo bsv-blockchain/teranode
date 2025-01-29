@@ -492,6 +492,23 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	return c.returnBlockHeaders(resp)
 }
 
+func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	locatorBytes := make([][]byte, 0, len(blockLocatorHashes))
+	for _, hash := range blockLocatorHashes {
+		locatorBytes = append(locatorBytes, hash.CloneBytes())
+	}
+
+	resp, err := c.client.GetBlockHeadersToCommonAncestor(ctx, &blockchain_api.GetBlockHeadersToCommonAncestorRequest{
+		TargetHash:         hashTarget.CloneBytes(),
+		BlockLocatorHashes: locatorBytes,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.returnBlockHeaders(resp)
+}
+
 // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeadersFromTill(ctx, &blockchain_api.GetBlockHeadersFromTillRequest{

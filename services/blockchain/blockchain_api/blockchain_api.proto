@@ -50,6 +50,7 @@ service BlockchainAPI {
 
   // GetBlockHeaders retrieves headers for multiple blocks.
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+  rpc GetBlockHeadersToCommonAncestor(GetBlockHeadersToCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 
   // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
   rpc GetBlockHeadersFromTill(GetBlockHeadersFromTillRequest) returns (GetBlockHeadersResponse) {}
@@ -227,6 +228,14 @@ message GetBlockHeadersRequest {
   bytes startHash = 1;           // Starting block hash
   uint64 numberOfHeaders = 2;    // Number of headers to retrieve
 }
+
+// swagger:model GetBlockHeadersToCommonAncestorRequest
+message GetBlockHeadersToCommonAncestorRequest {
+  bytes targetHash = 1;
+  repeated bytes blockLocatorHashes = 2;
+}
+
+// swagger:model GetBlockHeadersResponse
 
 // GetBlockHeadersResponse contains multiple block headers and their metadata.
 message GetBlockHeadersResponse {
