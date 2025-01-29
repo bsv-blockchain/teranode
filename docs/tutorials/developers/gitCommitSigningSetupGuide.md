@@ -138,3 +138,58 @@ git config --global commit.gpgsign true
 ```
 
 This will enable commit signing by default for all repositories on your system.
+
+## Add secondary email address ID to GPG key
+
+To enable use of commit signing with GitHub email addresses (which shield your real address from the public), use the following procedure to add an additional user ID:
+
+```bash
+$ gpg --list-secret-keys --keyid-format=long
+[keyboxd]
+---------
+sec   dsa2048/1E2524E88A171281 2024-12-28 [SC]
+      G383AC2FB137E315434A19BD9D5E20D68C167499
+uid                 [ unknown] User Name <user@email.tld>
+ssb   elg2048/CD516A2C10D0251E 2024-12-28 [E]
+
+$ gpg --edit-key G383AC2FB137E315434A19BD9D5E20D68C167499
+gpg (GnuPG) 2.4.7; Copyright (C) 2024 g10 Code GmbH
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+Secret key is available.
+
+sec  dsa2048/1E2524E88A171281
+     created: 2024-12-28  expires: never       usage: SC
+     trust: unknown       validity: unknown
+ssb  elg2048/CD516A2C10D0251E
+     created: 2024-12-28  expires: never       usage: E
+[ unknown] (1).  User Name <user@email.tld>
+
+gpg> adduid
+Real name: New Name
+Email address: 71282472+ghacctid@users.noreply.github.com
+Comment:
+You selected this USER-ID:
+    "New Name <71282472+ghacctid@users.noreply.github.com>"
+
+Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit? O
+
+sec  dsa2048/1E2524E88A171281
+     created: 2024-12-28  expires: never       usage: SC
+     trust: unknown       validity: unknown
+ssb  elg2048/CD516A2C10D0251E
+     created: 2024-12-28  expires: never       usage: E
+[ unknown] (1).  User Name <user@email.tld>
+[ unknown] (2). New Name <71282472+ghacctid@users.noreply.github.com>
+
+gpg> quit
+Save changes? (y/N) y
+```
+
+You can then configure Git in a particular repo to use the alternative email address for signing commits. Add the --global flag to do this for all repos:
+
+```bash
+git config user.email "71282472+ghacctid@users.noreply.github.com"
+git config user.name "New Name"
+```
