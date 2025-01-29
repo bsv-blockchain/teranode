@@ -193,3 +193,5 @@ You can then configure Git in a particular repo to use the alternative email add
 git config user.email "71282472+ghacctid@users.noreply.github.com"
 git config user.name "New Name"
 ```
+
+You will need to delete a previously installed GPG key within GitHub, re-export an ASCII public key using the gpg program (see Setup instructions, Step 5), and then import the new public key into your GitHub user settings. It should then display both the original and alternate email address.
