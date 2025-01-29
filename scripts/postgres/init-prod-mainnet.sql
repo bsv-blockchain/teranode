@@ -1,34 +1,33 @@
 
-CREATE ROLE coinbase1 LOGIN
-  PASSWORD 'coinbase1'
+CREATE ROLE "coinbase-prod-mainnet-1" LOGIN
+  PASSWORD 'coinbase-prod-mainnet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase1 to postgresuser;
+grant "coinbase-prod-mainnet-1" to postgresuser;
 CREATE
-DATABASE coinbase1
-  WITH OWNER = coinbase1
+DATABASE "coinbase-prod-mainnet-1"
+  WITH OWNER = "coinbase-prod-mainnet-1"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE coinbase2 LOGIN
-  PASSWORD 'coinbase2'
+CREATE ROLE "coinbase-prod-mainnet-2" LOGIN
+  PASSWORD 'coinbase-prod-mainnet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase2 to postgresuser;
+grant "coinbase-prod-mainnet-2" to postgresuser;
 CREATE
-DATABASE coinbase2
-  WITH OWNER = coinbase2
+DATABASE "coinbase-prod-mainnet-2"
+  WITH OWNER = "coinbase-prod-mainnet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE coinbase3 LOGIN
-  PASSWORD 'coinbase3'
+CREATE ROLE "coinbase-prod-mainnet-3" LOGIN
+  PASSWORD 'coinbase-prod-mainnet-3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant coinbase3 to postgresuser;
+grant "coinbase-prod-mainnet-3" to postgresuser;
 CREATE
-DATABASE coinbase3
-  WITH OWNER = coinbase3
+DATABASE "coinbase-prod-mainnet-3"
+  WITH OWNER = "coinbase-prod-mainnet-3"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
-
 
 CREATE ROLE "prod-mainnet-1" LOGIN
   PASSWORD 'prod-mainnet-1'
@@ -51,11 +50,12 @@ DATABASE "prod-mainnet-2"
   CONNECTION LIMIT = -1;
 
 CREATE ROLE "prod-mainnet-3" LOGIN
-    PASSWORD 'prod-mainnet-3'
-    NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+  PASSWORD 'prod-mainnet-3'
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
 grant "prod-mainnet-3" to postgresuser;
 CREATE
-    DATABASE "prod-mainnet-3"
-    WITH OWNER = "prod-mainnet-3"
-    ENCODING = 'UTF8'
-    CONNECTION LIMIT = -1;
+DATABASE "prod-mainnet-3"
+  WITH OWNER = "prod-mainnet-3"
+  ENCODING = 'UTF8'
+  CONNECTION LIMIT = -1;
+
