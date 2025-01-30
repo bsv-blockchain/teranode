@@ -23,8 +23,6 @@ USER appuser
 
 WORKDIR /app
 
-COPY --from=0 /go/bin/dlv .
-
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/p2pBootstrap .
