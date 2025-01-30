@@ -5,7 +5,8 @@
 // $ cd test/smoke/
 // $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldSyncWithLegacyWhenInitialBlocksAreGeneratedOnLegacy$" -tags test_functional
 // $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldSyncWithLegacy$" -tags test_functional
-// $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldAllowBanLegacyAndTeranodePeers$" -tags test_functional
+// $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldAllowBanLegacyPeers$" -tags test_functional
+// $ go test -v -run "^TestSanitywithLegacyTestSuite$/TestShouldAllowBanTeranodePeers$" -tags test_functional
 
 package smoke
 
@@ -44,6 +45,7 @@ func TestSanitywithLegacyTestSuite(t *testing.T) {
 						"docker.teranode2.test.legacy",
 						"docker.teranode3.test.legacy",
 					},
+					tconfig.KeyIsLegacyTest: true,
 				},
 			),
 		},
@@ -122,7 +124,7 @@ func (suite *SanitywithLegacyTestSuite) TestShouldSyncWithLegacy() {
 	assert.Equal(t, testHeight+101, height, "Height should match with initial generated blocks")
 }
 
-func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyAndTeranodePeers() {
+func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyPeers() {
 	t := suite.T()
 	url := "http://" + suite.TeranodeTestEnv.Nodes[0].AssetURL
 
@@ -200,6 +202,11 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyAndTeranodePeers
 		bestBlockOnTeranode1 helper.BestBlockHashResp
 	)
 
+	err = helper.WaitForBlockHeight(url, testHeight+102, 60*time.Second)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
 	// get best block hash from svnode1
 	resp, err := helper.CallRPC(legacySyncURL, "getbestblockhash", []interface{}{})
 	require.NoError(t, err, "Failed to get block hash")
@@ -223,4 +230,104 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyAndTeranodePeers
 	t.Logf("Best block hash: %s", bestBlockOnTeranode1.Result)
 
 	assert.NotEqual(t, bestBlockOnSVNode1.Result, bestBlockOnTeranode1.Result, "Best block hash should not match")
+}
+
+func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanTeranodePeers() {
+	t := suite.T()
+	url := "http://" + suite.TeranodeTestEnv.Nodes[0].AssetURL
+
+	height, _ := helper.GetBlockHeight(url)
+	t.Logf("Block height before mining: %d\n", height)
+
+	assert.Equal(t, testHeight, height, "Height should match with initial generated blocks")
+
+	cluster := suite.TeranodeTestEnv
+	if err := cluster.StopNode("teranode1"); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
+
+	_, err := helper.CallRPC(legacySyncURL, "generate", []interface{}{101})
+	assert.NoError(t, err, "Failed to generate blocks")
+
+	time.Sleep(20 * time.Second)
+
+	if err := cluster.StartNode("teranode1"); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
+
+	ports := []int{8000}
+
+	for index, port := range ports {
+		mappedPort, err := suite.TeranodeTestEnv.GetMappedPort(fmt.Sprintf("teranode%d", index+1), nat.Port(fmt.Sprintf("%d/tcp", port)))
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+
+		suite.T().Logf("Waiting for node %d to be ready", index)
+
+		err = helper.WaitForHealthLiveness(mappedPort.Int(), 60*time.Second)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	}
+
+	err = helper.WaitForBlockHeight(url, testHeight+101, 60*time.Second)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	height, _ = helper.GetBlockHeight(url)
+	t.Logf("Block height after mining: %d\n", height)
+	assert.Equal(t, testHeight+101, height, "Height should match with initial generated blocks")
+
+	// Get IP addresses of legacy nodes
+	svnode1 := suite.TeranodeTestEnv.LegacyNodes[0]
+	t.Logf("Legacy node: %s\n", svnode1.Name)
+
+	svnode1Address := suite.TeranodeTestEnv.GetLegacyContainerIPAddress(&svnode1)
+
+	t.Logf("Legacy node IP address: %s\n", svnode1Address)
+
+	node1 := suite.TeranodeTestEnv.Nodes[0]
+	node2 := suite.TeranodeTestEnv.Nodes[1]
+	node3 := suite.TeranodeTestEnv.Nodes[2]
+
+	// All Teranodes should ban another Teranode node
+	_, err = helper.CallRPC("http://"+node1.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
+	require.NoError(t, err)
+
+	_, err = helper.CallRPC("http://"+node3.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
+	require.NoError(t, err)
+
+	_, err = helper.CallRPC("http://"+node1.RPCURL, "generate", []interface{}{1})
+	assert.NoError(t, err, "Failed to generate blocks")
+
+	var (
+		bestBlockOnTeranode2 helper.BestBlockHashResp
+		bestBlockOnTeranode1 helper.BestBlockHashResp
+	)
+
+	// get best block hash from node2
+	resp, err := helper.CallRPC("http://"+node2.RPCURL, "getbestblockhash", []interface{}{})
+	require.NoError(t, err, "Failed to get block hash")
+
+	errJSON := json.Unmarshal([]byte(resp), &bestBlockOnTeranode2)
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("Best block hash: %s", bestBlockOnTeranode2.Result)
+
+	// get best block hash from teranode1
+	resp, err = helper.CallRPC("http://"+node1.RPCURL, "getbestblockhash", []interface{}{})
+	require.NoError(t, err, "Failed to get block hash")
+
+	errJSON = json.Unmarshal([]byte(resp), &bestBlockOnTeranode1)
+
+	require.NoError(t, errJSON, "JSON decoding error")
+
+	t.Logf("Best block hash: %s", bestBlockOnTeranode1.Result)
+
+	assert.NotEqual(t, bestBlockOnTeranode2.Result, bestBlockOnTeranode1.Result, "Best block hash should not match")
 }
