@@ -1,0 +1,54 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : GetMiningInfoCmd()
+activate RPC
+
+
+
+RPC -> Blockchain : GetBestBlockHeader(ctx)
+activate Blockchain
+
+alt Block Info Retrieval Fails
+    Blockchain --> RPC : Return error
+    RPC -> Client : Return error
+else Block Info Retrieval Succeeds
+    Blockchain --> RPC : Return header and metadata
+    deactivate Blockchain
+
+    RPC -> RPC : Calculate network hash rate
+    note right
+        Hash rate calculation:
+        networkHashPS = (difficulty * 2^32) / blockTime
+    end note
+
+    RPC -> Client : Return mining info
+    note right
+        Response fields:
+        - blocks: Current block height
+        - currentblocksize: Latest block size
+        - currentblocktx: Latest block tx count
+        - difficulty: Current difficulty
+        - errors: Error messages (if any)
+        - networkhashps: Estimated network hash rate
+        - chain: Network name (main/test/regtest)
+
+        Example:
+        {
+          "blocks": 868496,
+          "currentblocksize": 1000000,
+          "currentblocktx": 2000,
+          "difficulty": 97415240192.16,
+          "errors": "",
+          "networkhashps": 7.088e+17,
+          "chain": "main"
+        }
+    end note
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

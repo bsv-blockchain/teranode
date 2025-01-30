@@ -1,0 +1,59 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Chain Hash Parser" as Parser
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : GetBlockHeaderCmd(hash, verbose)
+activate RPC
+
+
+RPC -> Parser : NewHashFromStr(hash)
+activate Parser
+alt Invalid Hash Format
+    Parser --> RPC : Return error
+    RPC -> Client : Return rpcDecodeHexError
+else Valid Hash
+    Parser --> RPC : Return parsed hash
+    deactivate Parser
+
+    RPC -> Blockchain : GetBlockHeader(ctx, hash)
+    activate Blockchain
+
+    alt Block Not Found
+        Blockchain --> RPC : Return error
+        RPC -> Client : Return error
+    else Block Found
+        Blockchain --> RPC : Return header and metadata
+        deactivate Blockchain
+
+        alt verbose = false
+            RPC -> Client : Return hex-encoded header
+            note right
+                Response fields:
+                - Hex-encoded serialized header data
+            end note
+        else verbose = true
+            RPC -> RPC : Calculate difficulty from bits
+            RPC -> Client : Return JSON response
+            note right
+                Response fields:
+                - hash: Block hash
+                - version: Block version
+                - versionHex: Version in hex
+                - previoushash: Previous block hash
+                - merkleroot: Merkle root hash
+                - time: Block timestamp
+                - bits: Target bits
+                - nonce: Nonce value
+                - difficulty: Calculated difficulty
+                - height: Block height
+            end note
+        end
+    end
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

@@ -1,0 +1,53 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Chain Hash Parser" as Parser
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : ReconsiderBlockCmd(blockhash)
+activate RPC
+
+
+RPC -> Parser : NewHashFromStr(blockhash)
+activate Parser
+
+alt Invalid Hash Format
+    Parser --> RPC : Return error
+    RPC -> Client : Return rpcDecodeHexError
+    note right
+        Error response:
+        - Code: ErrRPCDecodeHexString
+        - Message: "Argument must be hexadecimal string"
+    end note
+else Valid Hash
+    Parser --> RPC : Return parsed hash
+    deactivate Parser
+
+    RPC -> Blockchain : RevalidateBlock(ctx, hash)
+    activate Blockchain
+
+    alt Revalidation Fails
+        Blockchain --> RPC : Return error
+        RPC -> Client : Return error
+    else Revalidation Succeeds
+        Blockchain --> RPC : Return nil
+        deactivate Blockchain
+
+        RPC -> Client : Return nil
+        note right
+            Response fields:
+            - Returns nil on success
+
+            Effects:
+            - Removes invalid status from block
+            - Descendants become eligible for inclusion
+            - May trigger chain reorganization
+            - Block must still pass all consensus rules
+        end note
+    end
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

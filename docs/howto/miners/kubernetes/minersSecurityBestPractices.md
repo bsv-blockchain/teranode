@@ -1,6 +1,6 @@
 # Security Best Practices
 
-Last Modified: 18-Dec-2024
+Last modified: 29-January-2025
 
 ## Firewall Configuration
 

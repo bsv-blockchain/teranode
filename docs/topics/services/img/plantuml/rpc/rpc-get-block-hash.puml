@@ -1,0 +1,42 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : GetBlockHashCmd(index)
+activate RPC
+
+note right
+    Traces:
+    - Parent: RPCStat
+    - Histogram: prometheusHandleGetBlockHash
+    - Log: "[handleGetBlockHash] called"
+end note
+
+RPC -> Blockchain : GetBlockByHeight(ctx, index)
+activate Blockchain
+note right
+    Input parameter:
+    - index: uint32 (block height)
+end note
+
+alt If Block Retrieval Fails
+    Blockchain --> RPC : Return error
+    RPC -> Client : Return error
+else If Block Retrieval Succeeds
+    Blockchain --> RPC : Return block
+    deactivate Blockchain
+
+    RPC -> RPC : Extract block hash
+    RPC -> Client : Return block hash string
+    note right
+        Response fields:
+        - String containing the hex-encoded block hash
+        Example: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    end note
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
