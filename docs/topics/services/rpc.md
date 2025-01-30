@@ -615,7 +615,6 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 
 5. **Transaction Broadcasting**:
   - Calls a method (`d.SendTransaction`) on the distributor to send the transaction to the network.
-  - This method likely involves network operations, where the transaction is relayed to peers or a blockchain node.
   - If broadcasting fails, it returns an error indicating that the transaction was rejected along with a message detailing the reason (e.g., network errors, validation failures on the network side).
 
 6. **Success Response**:

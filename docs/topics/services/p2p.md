@@ -259,6 +259,70 @@ As a sequence:
 4. If there's a WebSocket error or the client disconnects, the client is added to the `deadClientCh` queue, which leads to its removal from the active client channels.
 
 
+### 2.7. Ban Management System
+
+The P2P service includes a ban management system that allows nodes to maintain a list of banned peers and handle ban-related events across the network.
+
+![p2p_ban_system.svg](img/plantuml/p2p/p2p_ban_system.svg)
+
+#### 2.7.1. Ban List Management
+
+The ban system consists of two main components:
+1. **BanList**: A thread-safe data structure that maintains banned IP addresses and subnets
+2. **BanChan**: A channel that broadcasts ban-related events to system components
+
+The ban list supports:
+- Individual IP addresses
+- Entire subnets using CIDR notation
+- Temporary bans with expiration times
+- Persistent storage of bans in a database
+
+#### 2.7.2. Ban Operations
+
+1. **Adding a Ban**:
+
+```json
+  {
+      "jsonrpc": "1.0",
+      "method": "setban",
+      "params": [
+         "192.168.0.6", // IP/Subnet to ban
+         "add", // Command
+         86400, // Ban duration in seconds (24 hours)
+         false // Absolute time flag
+      ]
+   }
+```
+
+2. **Removing a Ban**:
+
+```json
+  {
+      "jsonrpc": "1.0",
+      "method": "setban",
+      "params": [
+         "192.168.0.6", // IP/Subnet to unban
+         "remove" // Command
+      ]
+   }
+```
+
+#### 2.7.3. Ban Event Handling
+
+When a ban event occurs:
+1. The ban is added to the persistent storage
+2. A ban event is broadcast through the ban channel
+3. The P2P service checks current connections against the ban
+4. Any matching connections are terminated
+5. Future connection attempts from banned IPs are rejected
+
+#### 2.7.4. Configuration
+
+Ban-related settings in the configuration:
+- `banlist_db`: Database connection string for ban storage
+- `ban_default_duration`: Default duration for bans (24 hours if not specified)
+- `ban_max_entries`: Maximum number of banned entries to maintain
+
 
 
 ## 3. Technology
