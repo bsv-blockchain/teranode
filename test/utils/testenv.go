@@ -143,8 +143,10 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 			return err
 		}
 
-		if err := t.GetLegacyContainerIPAddress(svNode); err != nil {
-			return err
+		if t.TConfig.Suite.IsLegacyTest {
+			if err := t.GetLegacyContainerIPAddress(svNode); err != nil {
+				return err
+			}
 		}
 
 		if err := t.setupCoinbaseClient(node); err != nil {

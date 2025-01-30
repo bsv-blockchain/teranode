@@ -19,6 +19,7 @@ const (
 	KeySuiteName       = "suite.name"
 	KeySuiteLogLevel   = "suite.loglevel"
 	KeyInitBlockHeight = "suite.initblockheight"
+	KeyIsLegacyTest    = "suite.islegacytest"
 
 	// Keys for localsystem config
 	KeyLocalSystemComposes      = "localsystem.composes"

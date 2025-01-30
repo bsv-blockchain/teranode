@@ -24,6 +24,9 @@ type ConfigSuite struct {
 	// InitBlockHeight tell the system to generate initial N blocks (uniquely works for regtest)
 	InitBlockHeight uint32 `mapstructure:"initblockheight" json:"initblockheight" yaml:"initblockheight"`
 
+	// IsLegacyTest tell if the test includes svnodes or not
+	IsLegacyTest bool `mapstructure:"islegacytest" json:"islegacytest" yaml:"islegacytest"`
+
 	// HelpOnly tell the program to print help only then exit
 	HelpOnly bool `mapstructure:"helponly" json:"helponly" yaml:"helponly"`
 }
@@ -42,6 +45,9 @@ func LoadConfigSuite() TConfigLoader {
 
 		s.viper.SetDefault(KeyInitBlockHeight, uint32(101))
 		s.Suite.InitBlockHeight = s.viper.GetUint32(KeyInitBlockHeight)
+
+		s.viper.SetDefault(KeyIsLegacyTest, false)
+		s.Suite.IsLegacyTest = s.viper.GetBool(KeyIsLegacyTest)
 
 		return nil
 	}
