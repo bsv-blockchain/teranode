@@ -4,6 +4,7 @@ suite:
     loglevel: ValueFromYAMLFILE
     tconfigfile: ValueFromYAMLFILE
     initblockheight: 104
+    islegacytest: true
 localsystem:
     composes:
         - Value1FromYAMLFILE

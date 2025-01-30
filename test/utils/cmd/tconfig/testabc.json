@@ -4,7 +4,8 @@
     "name": "ValueFromJSONFILE",
     "loglevel": "ValueFromJSONFILE",
     "tconfigfile": "ValueFromJSONFILE",
-    "initblockheight": 103
+    "initblockheight": 103,
+    "islegacytest": true
   },
   "localsystem": {
     "composes": [
@@ -22,4 +23,3 @@
     ]
   }
 }
-
