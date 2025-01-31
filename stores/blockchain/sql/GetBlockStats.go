@@ -2,17 +2,25 @@ package sql
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockStats")
 	defer deferFn()
 
-	q := `
+	tweak := "X'00'"
+
+	if s.GetDBEngine() == util.Postgres {
+		tweak = "'\\x00'::bytea"
+	}
+
+	q := fmt.Sprintf(`
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
 			 id
@@ -43,10 +51,10 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			COALESCE(avg(tx_count), 0),
 			COALESCE(min(block_time), 0),
 			COALESCE(max(block_time), 0),
-			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), '\x00'::bytea)
+			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), %s)
 		FROM ChainBlocks
 		WHERE id > 0
-	`
+	`, tweak)
 
 	blockStats := &model.BlockStats{}
 
