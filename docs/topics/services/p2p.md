@@ -279,33 +279,7 @@ The ban list supports:
 
 #### 2.7.2. Ban Operations
 
-1. **Adding a Ban**:
-
-```json
-  {
-      "jsonrpc": "1.0",
-      "method": "setban",
-      "params": [
-         "192.168.0.6", // IP/Subnet to ban
-         "add", // Command
-         86400, // Ban duration in seconds (24 hours)
-         false // Absolute time flag
-      ]
-   }
-```
-
-2. **Removing a Ban**:
-
-```json
-  {
-      "jsonrpc": "1.0",
-      "method": "setban",
-      "params": [
-         "192.168.0.6", // IP/Subnet to unban
-         "remove" // Command
-      ]
-   }
-```
+While the banList is maintained by the P2P service, the ban operations are managed by the RPC Server. The RPC server receives request to add / remove peers, notifying the P2P service to update the ban list.
 
 #### 2.7.3. Ban Event Handling
 
