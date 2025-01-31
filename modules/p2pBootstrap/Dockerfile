@@ -16,14 +16,12 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 # Build the Go libraries of the project
 RUN go build .
 
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-3fed05f
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
 
 RUN adduser --disabled-password --gecos '' appuser
 USER appuser
 
 WORKDIR /app
-
-COPY --from=0 /go/bin/dlv .
 
 COPY --from=0 /app/settings.conf .
 COPY --from=0 /app/settings_local.conf .

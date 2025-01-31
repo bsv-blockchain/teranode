@@ -13,20 +13,20 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                       *p2p.P2PNode
-    logger                        ulogger.Logger
-    settings                      *settings.Settings
-    bitcoinProtocolID             string
-    blockchainClient              blockchain.ClientI
-    blockValidationClient         *blockvalidation.Client
-    AssetHTTPAddressURL           string
-    e                             *echo.Echo
-    notificationCh                chan *notificationMsg
-    rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI
-    subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI
-    blocksKafkaProducerClient     kafka.KafkaAsyncProducerI
-    banList                       *BanList
-    banChan                       chan BanEvent
+    P2PNode                       *p2p.P2PNode              // The P2P network node instance
+    logger                        ulogger.Logger            // Logger instance for the server
+    settings                      *settings.Settings        // Configuration settings
+    bitcoinProtocolID             string                    // Bitcoin protocol identifier
+    blockchainClient              blockchain.ClientI        // Client for blockchain interactions
+    blockValidationClient         *blockvalidation.Client   // Client for block validation
+    AssetHTTPAddressURL           string                    // HTTP address URL for assets
+    e                             *echo.Echo                // Echo server instance
+    notificationCh                chan *notificationMsg     // Channel for notifications
+    rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
+    subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
+    blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
+    banList                       *BanList                  // List of banned peers
+    banChan                       chan BanEvent             // Channel for ban events
 }
 ```
 
@@ -43,7 +43,14 @@ The server manages several key components, each serving a specific purpose in th
 The server initializes through the NewServer function:
 
 ```go
-func NewServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI, subtreeKafkaProducerClient kafka.KafkaAsyncProducerI, blocksKafkaProducerClient kafka.KafkaAsyncProducerI) (*Server, error)
+func NewServer(	ctx context.Context,
+    logger ulogger.Logger,
+    tSettings *settings.Settings,
+    blockchainClient blockchain.ClientI,
+    rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
+    blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
+) (*Server, error)
 ```
 
 This function establishes the server with required settings and dependencies, including:
@@ -106,6 +113,7 @@ It manages the orderly shutdown of all server components and connections.
 - `handleBlockTopic`: Handles incoming block messages.
 - `handleSubtreeTopic`: Handles incoming subtree messages.
 - `handleMiningOnTopic`: Handles incoming mining-on messages.
+- `handleBanEvent`: Handles banning and unbanning events.
 
 ## Key Processes
 
@@ -123,12 +131,28 @@ The server uses Kafka producers and consumers for efficient distribution of bloc
 
 ## Configuration
 
-The P2P Server uses various configuration values from `gocore.Config()`, including:
+The following settings can be configured for the p2p service:
 
-- P2P network configuration (IP, port, topics, etc.)
-- Kafka configuration for various message types
-- HTTP/HTTPS server configuration
-- Security settings
+- `p2p_ip`: Specifies the IP address for the P2P service to bind to.
+- `p2p_port`: Defines the port number on which the P2P service listens.
+- `p2p_topic_prefix`: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
+- `p2p_block_topic`: The topic name used for block-related messages in the P2P network.
+- `p2p_subtree_topic`: Specifies the topic for subtree-related messages within the P2P network.
+- `p2p_bestblock_topic`: Defines the topic for broadcasting the best block information among peers.
+- `p2p_mining_on_topic`: The topic used for messages related to the start of mining a new block.
+- `p2p_rejected_tx_topic`: Specifies the topic for broadcasting information about rejected transactions.
+- `p2p_shared_key`: A shared key for securing P2P communications, required for private network configurations.
+- `p2p_dht_use_private`: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
+- `p2p_optimise_retries`: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
+- `p2p_static_peers`: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
+- `p2p_private_key`: The private key for the P2P node, used for secure communications within the network.
+- `p2p_httpListenAddress`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
+- `p2p_grpcListenAddress`: Specifies the gRPC listen address for the P2P service.
+- `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
+- `server_certFile` and `server_keyFile`: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
+- `p2p_ban_default_duration`: Specifies the default duration for peer bans (defaults to 24 hours if not set).
+- `p2p_ban_persist_path`: Defines the path where ban list information is stored persistently.
+- `p2p_ban_max_entries`: Sets the maximum number of entries allowed in the ban list to prevent memory exhaustion.
 
 ## Dependencies
 
@@ -152,11 +176,3 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
-
-## Metrics and Monitoring
-
-While not explicitly shown in the provided code, the server likely initializes Prometheus metrics for monitoring various aspects of its operation, as indicated by the `initPrometheusMetrics()` call in the `NewServer` function.
-
-## Extensibility
-
-The server is designed to be extensible, with separate handlers for different types of messages (blocks, subtrees, mining-on notifications). New message types can be added by implementing additional handler functions and subscribing to new topics.

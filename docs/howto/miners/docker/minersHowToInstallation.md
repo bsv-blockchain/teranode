@@ -334,6 +334,8 @@ Example output:
    - **Port**: Exposed on port **8090** of the asset container.
    - **Access URL**: http://localhost:8090/viewer
 
+Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
+
 
 **Step 9: Interact with Teranode**
 

@@ -1,0 +1,65 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+participant "Block to JSON Converter" as Converter
+
+Client -> RPC : GetBlockByHeightCmd(height, verbosity)
+activate RPC
+
+RPC -> Blockchain : GetBlockByHeight(ctx, height)
+activate Blockchain
+Blockchain --> RPC : return block or error
+deactivate Blockchain
+
+alt If Block Retrieval Fails
+    RPC -> Client : Return error
+else If Block Retrieval Succeeds
+    RPC -> Converter : blockToJSON(block, verbosity)
+    activate Converter
+
+    alt verbosity = 0
+        Converter --> RPC : Return hex-encoded block data
+        note right
+            Response fields:
+            - Hex-encoded serialized block data
+        end note
+    else verbosity = 1 or 2
+        Converter -> Blockchain : Get best block header
+        activate Blockchain
+        Blockchain --> Converter : Return header and metadata
+        deactivate Blockchain
+
+        Converter -> Blockchain : Get next block
+        activate Blockchain
+        Blockchain --> Converter : Return next block
+        deactivate Blockchain
+
+        Converter --> RPC : Return formatted JSON response
+        note right
+            Response fields:
+            - hash: Block hash
+            - confirmations: Number of confirmations
+            - size: Block size in bytes
+            - height: Block height
+            - version: Block version
+            - versionHex: Block version in hexadecimal
+            - merkleroot: Merkle root hash
+            - time: Block timestamp
+            - nonce: Block nonce
+            - bits: Target difficulty bits
+            - difficulty: Calculated difficulty
+            - previousblockhash: Hash of previous block
+            - nextblockhash: Hash of next block
+            - tx: Array of transaction IDs (v1) or full tx data (v2)
+        end note
+    end
+    deactivate Converter
+
+    RPC -> Client : Return block data
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

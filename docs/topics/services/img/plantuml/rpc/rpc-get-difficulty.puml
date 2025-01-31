@@ -1,0 +1,33 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Block Assembly Client" as BlockAssembly
+
+Client -> RPC : GetDifficultyCmd()
+activate RPC
+
+
+RPC -> BlockAssembly : GetCurrentDifficulty(ctx)
+activate BlockAssembly
+
+alt Difficulty Retrieval Fails
+    BlockAssembly --> RPC : Return error
+    RPC -> Client : Return error
+else Difficulty Retrieval Succeeds
+    BlockAssembly --> RPC : Return difficulty
+    deactivate BlockAssembly
+
+    RPC -> Client : Return difficulty value
+    note right
+        Response fields:
+        - difficulty: Float64 value representing current
+          network difficulty as a multiple of the minimum
+          difficulty
+        Example: 157543.3661989932
+    end note
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

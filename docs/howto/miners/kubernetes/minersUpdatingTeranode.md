@@ -1,5 +1,9 @@
 # Updating Teranode to a New Version - Kubernetes Operator
 
+Last modified: 29-January-2025
+
+-----
+
 
 With the BSVA Catalog installation method, updates are typically handled automatically for minor releases. However, for major version updates or to change the update policy, follow these steps:
 

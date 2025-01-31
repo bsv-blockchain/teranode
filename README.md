@@ -47,21 +47,19 @@
 1. [Installation Guide](docs/howto/miners/docker/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](docs/howto/miners/docker/minersHowToStopStartDockerTeranode.md)
 3. [Configuration Guide](docs/howto/miners/docker/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](docs/howto/miners/docker/minersHowToSyncTheNode.md)
-5. [Update Procedures](docs/howto/miners/docker/minersUpdatingTeranode.md)
-6. [Troubleshooting Guide](docs/howto/miners/docker/minersHowToTroubleshooting.md)
-7. [Security Best Practices](docs/howto/miners/docker/minersSecurityBestPractices.md)
+4. [Update Procedures](docs/howto/miners/docker/minersUpdatingTeranode.md)
+5. [Troubleshooting Guide](docs/howto/miners/docker/minersHowToTroubleshooting.md)
+6. [Security Best Practices](docs/howto/miners/docker/minersSecurityBestPractices.md)
 
 #### Kubernetes Deployment
 
 1. [Installation with Kubernetes Operator](docs/howto/miners/kubernetes/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](docs/howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode.md)
 3. [Configuration Guide](docs/howto/miners/kubernetes/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](docs/howto/miners/kubernetes/minersHowToSyncTheNode.md)
-5. [Update Procedures](docs/howto/miners/kubernetes/minersUpdatingTeranode.md)
-6. [Backup Procedures](docs/howto/miners/kubernetes/minersHowToBackup.md)
-7. [Troubleshooting Guide](docs/howto/miners/kubernetes/minersHowToTroubleshooting.md)
-8. [Security Best Practices](docs/howto/miners/kubernetes/minersSecurityBestPractices.md)
+4. [Update Procedures](docs/howto/miners/kubernetes/minersUpdatingTeranode.md)
+5. [Backup Procedures](docs/howto/miners/kubernetes/minersHowToBackup.md)
+6. [Troubleshooting Guide](docs/howto/miners/kubernetes/minersHowToTroubleshooting.md)
+7. [Security Best Practices](docs/howto/miners/kubernetes/minersSecurityBestPractices.md)
 
 
 ### Common Tasks
@@ -71,6 +69,7 @@
 3. [Managing Disk Space](docs/howto/miners/minersManagingDiskSpace.md)
 4. [Aerospike Configuration Considerations](docs/howto/miners/minersHowToAerospikeTuning.md)
 5. [How To Reset Teranode](docs/howto/miners/minersHowToResetTeranode.md)
+6. [Blockchain Synchronization](docs/howto/miners/minersHowToSyncTheNode.md)
 
 -----
 

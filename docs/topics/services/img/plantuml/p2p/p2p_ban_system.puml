@@ -1,0 +1,45 @@
+@startuml
+participant "RPC Interface" as RPC
+participant "P2P Server" as Server
+database "BanList" as BanList
+queue "BanChan" as BanChan
+collections "Connected Peers" as Peers
+database "Database" as DB
+
+== Adding a Ban ==
+RPC -> Server: setban command
+activate Server
+Server -> BanList: Add(ip, duration)
+activate BanList
+
+BanList -> DB: Save ban entry
+BanList -> BanChan: Publish ban event
+deactivate BanList
+
+BanChan -> Server: Handle ban event
+activate Server
+loop for each connected peer
+    Server -> Peers: Check peer IP
+    alt IP matches ban
+        Server -> Peers: Disconnect peer
+    end
+end
+deactivate Server
+
+== Checking Connection ==
+Peers -> Server: New connection attempt
+activate Server
+Server -> BanList: IsBanned(ip)
+activate BanList
+alt IP is banned
+    BanList --> Server: true
+    Server -> Peers: Reject connection
+else IP not banned
+    BanList --> Server: false
+    Server -> Peers: Accept connection
+end
+deactivate BanList
+deactivate Server
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

@@ -7,26 +7,37 @@ There are 2 primary ways to interact with the node, using the RPC Server, and us
 
 ## Teranode RPC HTTP API
 
-
-
 The Teranode RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods:
 
+### Block-related Methods
+1. `getbestblockhash`: Returns the hash of the best (tip) block
+2. `getblock`: Retrieves a block by its hash
+3. `getblockbyheight`: Retrieves a block by its height
+4. `getblockhash`: Returns the hash of a block at specified height
+5. `getblockheader`: Returns information about a block's header
+6. `getblockchaininfo`: Returns information about the blockchain
+7. `invalidateblock`: Marks a block as invalid
+8. `reconsiderblock`: Removes invalidity status of a block
 
+### Mining-related Methods
+1. `getdifficulty`: Returns the current network difficulty
+2. `getmininginfo`: Returns mining-related information
+3. `getminingcandidate`: Obtain a mining candidate
+4. `submitminingsolution`: Submits a new mining solution
+5. `generate`: Generates new blocks
 
-**Supported Methods**
+### Transaction-related Methods
+1. `createrawtransaction`: Creates a raw transaction
+2. `sendrawtransaction`: Submits a raw transaction to the network
 
-1. `createrawtransaction`: Creates a raw transaction.
-2. `generate`: Generates new blocks.
-3. `getbestblockhash`: Returns the hash of the best (tip) block in the longest blockchain.
-4. `getblock`: Retrieves a block by its hash.
-5. `getblockchaininfo`: Returns information about the blockchain.
-6. `getinfo`: Returns information about the node.
-7. `getpeerinfo`: Returns information about connected peers.
-8. `getminingcandidate`: Obtain a mining candidate from the node.
-9. `sendrawtransaction`: Submits a raw transaction to the network.
-10. `submitminingsolution`: Submits a new mining solution.
-11. `stop`: Stops the Teranode server.
-12. `version`: Returns version information about the RPC server.
+### Network-related Methods
+1. `getinfo`: Returns information about the node
+2. `getpeerinfo`: Returns information about connected peers
+3. `setban`: Manages banned IP addresses/subnets
+
+### Server Control Methods
+1. `stop`: Stops the Teranode server
+2. `version`: Returns version information
 
 
 **Authentication**

@@ -1,5 +1,54 @@
 # RPC Server Reference Documentation
 
+
+## Index
+
+- [Overview](#overview)
+- [Types](#types)
+   - [RPCServer](#rpcserver)
+- [Functions](#functions)
+   - [NewServer](#newserver)
+- [Methods](#methods)
+   - [Start](#start)
+   - [Stop](#stop)
+   - [Init](#init)
+   - [Health](#health)
+   - [checkAuth](#checkauth)
+   - [jsonRPCRead](#jsonrpcread)
+- [RPC Handlers](#rpc-handlers)
+- [Configuration](#configuration)
+- [Authentication](#authentication)
+- [General Format](#general-format)
+- [Supported RPC Commands](#supported-rpc-commands)
+   - [createrawtransaction](#createrawtransaction)
+   - [generate](#generate)
+   - [getbestblockhash](#getbestblockhash)
+   - [getblock](#getblock)
+   - [getblockbyheight](#getblockbyheight)
+   - [getblockhash](#getblockhash)
+   - [getblockheader](#getblockheader)
+   - [getdifficulty](#getdifficulty)
+   - [getmininginfo](#getmininginfo)
+   - [sendrawtransaction](#sendrawtransaction)
+   - [getminingcandidate](#getminingcandidate)
+   - [submitminingsolution](#submitminingsolution)
+   - [getblockchaininfo](#getblockchaininfo)
+   - [getinfo](#getinfo)
+   - [getpeerinfo](#getpeerinfo)
+   - [invalidateblock](#invalidateblock)
+   - [reconsiderblock](#reconsiderblock)
+   - [setban](#setban)
+   - [stop](#stop)
+   - [version](#version)
+- [Error Handling](#error-handling)
+- [Rate Limiting](#rate-limiting)
+- [Version Compatibility](#version-compatibility)
+- [Concurrency](#concurrency)
+- [Extensibility](#extensibility)
+- [Limitations](#limitations)
+- [Security](#security)
+
+
 ## Overview
 
 The RPC Server provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections.
@@ -304,6 +353,200 @@ Returns information about a block.
 }
 ```
 
+
+### getblockbyheight
+
+Returns information about a block at the specified height.
+
+**Parameters:**
+1. `height` (numeric, required) - The height of the block
+2. `verbosity` (numeric, optional, default=1) - 0 for hex-encoded data, 1 for a json object, 2 for json object with transaction data
+
+**Returns:**
+- If verbosity is 0: `string` - hex-encoded block data
+- If verbosity is 1 or 2: `object` - JSON object with block information
+
+**Example Request:**
+```json
+{
+   "jsonrpc": "1.0",
+   "id": "curltest",
+   "method": "getblockbyheight",
+   "params": [2]
+}
+```
+
+**Example Response:**
+```json
+{
+   "result":
+    {
+       "hash": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
+       "height": 2,
+       "version": 1,
+       "versionHex": "00000001",
+       "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+       "time": 1231006505,
+       "nonce": 2083236893,
+       "bits": "1d00ffff",
+       "difficulty": 1,
+       "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+    },
+   "error": null,
+   "id": "curltest"
+}
+```
+
+### getblockhash
+
+Returns the hash of block at the specified height in the blockchain.
+
+**Parameters:**
+1. `height` (numeric, required) - The height of the block
+
+**Returns:**
+- `string` - The block hash
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getblockhash",
+    "params": [2]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### getblockheader
+
+Returns information about a block header.
+
+**Parameters:**
+1. `hash` (string, required) - The block hash
+2. `verbose` (boolean, optional, default=true) - true for a json object, false for the hex-encoded data
+
+**Returns:**
+- If verbose=false: `string` - hex-encoded block header
+- If verbose=true: `object` - JSON object with header information
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getblockheader",
+    "params": [
+        "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
+        true
+    ]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": {
+        "hash": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
+        "version": 1,
+        "versionHex": "00000001",
+        "previoushash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "time": 1231006505,
+        "nonce": 2083236893,
+        "bits": "1d00ffff",
+        "difficulty": 1,
+        "height": 1000
+    },
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### getdifficulty
+
+Returns the proof-of-work difficulty as a multiple of the minimum difficulty.
+
+**Parameters:** none
+
+**Returns:**
+- `number` - The current difficulty
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getdifficulty",
+    "params": []
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": 21448277761059.71,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### getmininginfo
+
+Returns a json object containing mining-related information.
+
+**Parameters:** none
+
+**Returns:**
+```json
+{
+    "blocks": number,           // The current block count
+    "currentblocksize": number, // The last block size
+    "currentblocktx": number,   // The last block transaction count
+    "difficulty": number,       // The current difficulty
+    "errors": "string",        // Current errors
+    "networkhashps": number,   // The estimated network hashes per second
+    "chain": "string"          // Current network name (main, test, regtest)
+}
+```
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getmininginfo",
+    "params": []
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": {
+        "blocks": 750000,
+        "currentblocksize": 1000000,
+        "currentblocktx": 2000,
+        "difficulty": 21448277761059.71,
+        "errors": "",
+        "networkhashps": 7.088e+17,
+        "chain": "main"
+    },
+    "error": null,
+    "id": "curltest"
+}
+```
+
+
+
 ### sendrawtransaction
 
 Submits a raw transaction to the network.
@@ -594,6 +837,98 @@ Returns data about each connected network node.
 }
 ```
 
+
+### invalidateblock
+
+Permanently marks a block as invalid, as if it violated a consensus rule.
+
+**Parameters:**
+1. `blockhash` (string, required) - The hash of the block to mark as invalid
+
+**Returns:**
+- `null` on success
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "invalidateblock",
+    "params": ["000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc"]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": null,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### reconsiderblock
+
+Removes invalidity status of a block and its descendants, reconsidering them for activation.
+
+**Parameters:**
+1. `blockhash` (string, required) - The hash of the block to reconsider
+
+**Returns:**
+- `null` on success
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "reconsiderblock",
+    "params": ["000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc"]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": null,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### setban
+
+Attempts to add or remove an IP/Subnet from the banned list.
+
+**Parameters:**
+1. `subnet` (string, required) - The IP/Subnet with an optional netmask (default is /32 = single IP)
+2. `command` (string, required) - 'add' to add a ban, 'remove' to remove a ban
+3. `bantime` (numeric, optional) - Time in seconds how long the ban is in effect, 0 or empty means using the default time of 24h
+4. `absolute` (boolean, optional) - If set, the bantime must be an absolute timestamp in seconds since epoch
+
+**Returns:**
+- `null` on success
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "setban",
+    "params": ["192.168.0.6", "add", 86400]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": null,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+
 ### stop
 
 Safely shuts down the node.
@@ -659,6 +994,8 @@ Returns the server version information.
     "id": "curltest"
 }
 ```
+
+
 
 
 ## Error Handling

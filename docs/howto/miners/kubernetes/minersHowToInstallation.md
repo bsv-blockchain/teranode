@@ -378,6 +378,7 @@ _Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be 
 - **Port**: Exposed on port **8090** of the asset container.
 - **Access URL**: http://localhost:8090/viewer
 
+Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
 **Step 10: Monitoring and Logging**
 
