@@ -173,7 +173,7 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	resp, err := s.client.HealthGRPC(ctx, &blockassembly_api.EmptyMessage{})
-	if !resp.Ok || err != nil {
+	if err != nil || (resp != nil && !resp.Ok) {
 		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)
 	}
 
