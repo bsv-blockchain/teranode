@@ -43,7 +43,7 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			COALESCE(avg(tx_count), 0),
 			COALESCE(min(block_time), 0),
 			COALESCE(max(block_time), 0),
-			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), X'00')
+			COALESCE((SELECT chain_work FROM blocks WHERE id > 0 ORDER BY chain_work DESC, id ASC LIMIT 1), '\x00'::bytea)
 		FROM ChainBlocks
 		WHERE id > 0
 	`
