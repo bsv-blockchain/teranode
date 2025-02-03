@@ -776,10 +776,28 @@ func SendTXsWithDistributorV2(ctx context.Context, node TeranodeTestClient, logg
 		return false, errors.NewProcessingError("Failed to create address", err)
 	}
 
-	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	var tx *bt.Tx
+
+	timeout := time.After(10 * time.Second)
+
+loop:
+	for tx == nil || err != nil {
+		select {
+		case <-timeout:
+			break loop
+		default:
+			tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+			if err != nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to request funds", err)
 	}
+
+	fmt.Printf("Request funds Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
