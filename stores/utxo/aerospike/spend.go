@@ -149,9 +149,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		mu sync.Mutex
 		g  = errgroup.Group{}
 
-		spentSpends = make([]*utxo.Spend, 0, len(spends))
-		errSpent    *errors.UtxoSpentErrData
-		errorFound  bool
+		spentSpends     = make([]*utxo.Spend, 0, len(spends))
+		errSpent        *errors.UtxoSpentErrData
+		errorFound      bool
+		txAlreadyExists bool
 	)
 
 	for idx, spend := range spends {
@@ -170,13 +171,34 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			})
 
 			// this waits for the batch to be sent and the response to be received from the batch operation
-			spends[idx].Err = <-errCh
-			if spends[idx].Err != nil {
-				errorFound = true
+			err = <-errCh
 
-				if errors.As(spends[idx].Err, &errSpent) {
+			if err != nil && errors.Is(err, errors.ErrTxNotFound) {
+				// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
+				// the utxo store. We can check whether the tx already exists, which means it has been validated and
+				// blessed. In this case we can just return early.
+				if txAlreadyExists {
+					// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
+					err = nil
+				} else if _, err = s.Get(ctx, tx.TxIDChainHash()); err == nil {
+					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
+
+					err = nil
+					txAlreadyExists = true
+				}
+			}
+
+			if err != nil {
+				errorFound = true
+				spends[idx].Err = err
+
+				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
+
+				if errors.As(err, &errSpent) {
 					spends[idx].ConflictingTxID = &errSpent.SpendingTxHash
 				}
+
+				s.logger.Errorf("error in aerospike spend (batched mode) %s: %v\n", spends[idx].TxID.String(), spends[idx].Err)
 
 				// don't stop processing the rest of the batch, we want to see all errors
 				return nil
@@ -198,8 +220,20 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
 
-		// return the first error found
-		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode)", unspendErr)
+		spendErrors := make([]error, 0, len(spends))
+		conflictingSpends := make([]*chainhash.Hash, 0, len(spends))
+
+		for _, spend := range spends {
+			if spend.Err != nil {
+				spendErrors = append(spendErrors, spend.Err)
+
+				if errors.As(spend.Err, &errSpent) {
+					conflictingSpends = append(conflictingSpends, spend.ConflictingTxID)
+				}
+			}
+		}
+
+		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode) %v -> conflicting txs %v", spendErrors, conflictingSpends, unspendErr)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))

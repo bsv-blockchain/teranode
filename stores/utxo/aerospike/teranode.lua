@@ -57,6 +57,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
         
+        
         if bytes_equal(existingSpendingTxID, spendingTxID) then
             return 'OK'
         elseif frozen(existingSpendingTxID) then
