@@ -1,6 +1,6 @@
 # 🗂️️ State Management in Teranode
 
-Last Modified: 10-December-2024
+Last Modified: 3-February-2025
 
 ## Table of Contents
 
