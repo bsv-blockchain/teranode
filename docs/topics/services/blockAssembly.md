@@ -221,33 +221,83 @@ The service needs to "move up" the block. By this, we mean the process to identi
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
 
-
 It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.
 
+#### Fork Detection and Assessment
+The Block Assembly service implements real-time fork detection through the following mechanisms:
 
-The process typically involves reverting transactions in the current chain's blocks (starting from the fork point) and then processing the transactions from the newly discovered blocks.
+- **Real-time Block Monitoring**: Implemented via `blockchainSubscriptionCh` in the Block Assembler, which continuously monitors for new blocks and chain updates.
+
+- **Fork Detection Criteria**: The Block Assembly service uses three main criteria to detect and handle forks:
+
+1. **Chain Height Tracking**:
+    - Maintains current blockchain height through `bestBlockHeight`
+    - Compares incoming block heights with current chain tip
+    - Used to determine if incoming blocks represent a longer chain
+
+2. **Block Hash Verification**:
+    - Uses `HashPrevBlock` to verify block connectivity
+    - Ensures each block properly references its predecessor
+    - Helps identify where chains diverge
+
+3. **Reorganization Size Protection**:
+    - Monitors the size of potential chain reorganizations
+    - If a reorganization would require moving more than 5 blocks either backwards or forwards
+    - AND the current chain height is greater than 1000 blocks
+    - Triggers a full reset of the block assembler as a safety measure against deep reorganizations
+
+The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
+
+#### Chain Selection and Reorganization Process
 
 
-In this context, `BlockAssembler` is tasked with ensuring that the local version of the blockchain reflects the most widely accepted version of the chain within the network.
+During a reorganization, the `BlockAssembler` performs two key operations:
+1. Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred
+2. Applies transactions from the new chain's blocks, ensuring the node switches to the stronger chain
+
+
+The service automatically manages chain selection through:
+
+1. **Best Chain Detection**:
+    - Continuously monitors for new best block headers
+    - Compares incoming blocks against current chain tip
+    - Automatically triggers reorganization when a better chain is detected
+
+2. **Chain Selection Process**:
+    - Accepts the chain with the most accumulated proof of work
+    - Performs a safety check on reorganization depth:
+        - If the reorganization involves more than 5 blocks in either direction
+        - And the current chain height is greater than 1000
+        - The block assembler will reset rather than attempt the reorganization
+    - Block validation and transaction verification are handled by other services, not the Block Assembly
+
+3. **Chain Switching Process**:
+    - Identifies common ancestor between competing chains
+    - Rolls back the current chain to a common point with the competing (and stronger) chain
+    - Applies new blocks from the competing chain
+    - Updates UTXO set and transaction pools accordingly
+
+
 
 ![block_assembly_reorg.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_reorg.svg)
 
-**Handle Reorg**:
-- `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
-   - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
-   - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
-   - **Getting Reorg Blocks**:
-     - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
-        - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network’s consensus chain.
-        - `header` is the new block header that triggered the reorg.
-        - This involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
-   - **Performing Reorg in Subtree Processor**:
-     - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
-        - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
-        - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
-        - It involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+The following diagram illustrates how the Block Assembly service handles a chain reorganization:
 
-Note - Should proposed blocks by other nodes include a transaction that Teranode considers a double-spend based on First-Seen rule, Teranode will not build on top of such a block. The only exception is if a second block is built on top of this one, essentially confirming that the other nodes applied the first-seen rule to the transaction this node identified as double-spend.
+- `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
+    - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
+    - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
+    - **Getting Reorg Blocks**:
+        - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
+            - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
+            - `header` is the new block header that triggered the reorg.
+            - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
+    - **Performing Reorg in Subtree Processor**:
+        - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
+            - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
+            - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
+            - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+
+Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will not build on top of such blocks. The only exception occurs when a second block is built on top of the disputed block, indicating that the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment.
 
 
 ### 3.6. Resetting the Block Assembly
