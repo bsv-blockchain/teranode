@@ -517,7 +517,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
 	}
 
 	chunks := b.chunks
@@ -869,7 +869,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
 	}
 
 	chunks := b.chunks
@@ -1137,7 +1137,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
 	}
 
 	chunks := b.chunks
