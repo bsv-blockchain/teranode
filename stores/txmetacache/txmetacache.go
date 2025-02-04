@@ -233,6 +233,11 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	for _, data := range hashes {
 		if data.Data != nil {
 			data.Data.Tx = nil
+
+			if len(data.Data.ParentTxHashes) > 48 {
+				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.ParentTxHashes))
+			}
+
 			if err := t.SetCache(&data.Hash, data.Data); err != nil {
 				if errors.Is(err, errors.ErrProcessing) {
 					t.logger.Debugf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)

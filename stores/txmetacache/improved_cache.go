@@ -503,7 +503,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return errors.NewProcessingError("too big key or value")
+		return errors.NewProcessingError("[bucketTrimmed.Set]too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
 	}
 
 	var kvLenBuf [4]byte
@@ -855,7 +855,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return errors.NewProcessingError("too big key or value")
+		return errors.NewProcessingError("[bucketPreallocated.Set]too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
 	}
 
 	var kvLenBuf [4]byte
@@ -1123,7 +1123,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return errors.NewProcessingError("too big key or value")
+		return errors.NewProcessingError("[bucketUnallocated.Set] too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
 	}
 
 	var kvLenBuf [4]byte
