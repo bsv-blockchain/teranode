@@ -7,7 +7,7 @@ import "github.com/bitcoin-sv/teranode/ulogger"
 /*
 These const values are suitable for a production machine that needs to manage 1m TPS
 */
-const BucketsCount = 8
+const BucketsCount = 8 * 1024
 const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
 
 func LogCacheSize() {
