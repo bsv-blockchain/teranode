@@ -61,11 +61,20 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 	missed, err := u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched)
 	if err != nil {
+		u.logger.Errorf("[ValidateSubtreeInternal][%s] failed to get tx meta from store: %s", subtreeHash.String(), err)
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
 
 	if missed > 0 {
-		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
+		for i := 0; i < len(txHashes); i++ {
+			if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+				continue
+			}
+
+			u.logger.Errorf("[ValidateSubtreeInternal][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
+		}
+
+		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
 	}
 
 	storer := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], "subtree")

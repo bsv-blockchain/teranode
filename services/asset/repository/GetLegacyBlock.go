@@ -207,7 +207,15 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 	}
 
 	if missed > 0 {
-		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore][%s] missing tx meta", subtreeHash.String())
+		for i := 0; i < len(txHashes); i++ {
+			if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+				continue
+			}
+
+			repo.logger.Errorf("[writeTransactionsViaSubtreeStore][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
+		}
+
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
