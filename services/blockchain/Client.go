@@ -901,6 +901,8 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 
 // WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
 func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	c.logger.Infof("[Blockchain Client] Waiting for FSM to transition from the IDLE state")
+
 	if _, err := c.client.WaitUntilFSMTransitionFromIdleState(ctx, &emptypb.Empty{}); err != nil {
 		return err
 	}
