@@ -32,6 +32,11 @@ func SetFSMState(targetFsmState string) {
 		targetState = blockchain.FSMStateLEGACYSYNCING
 	default:
 		fmt.Println("Error: invalid fsm state")
+		fmt.Println("\nAccepted FSM States:")
+		fmt.Println("  running         - The node is running normally.")
+		fmt.Println("  idle            - The node is idle, awaiting instructions.")
+		fmt.Println("  catchingblocks  - The node is catching up by processing incoming blocks.")
+		fmt.Println("  legacysyncing   - The node is syncing using the legacy method.")
 		os.Exit(1)
 	}
 

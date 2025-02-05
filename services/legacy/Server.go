@@ -224,13 +224,19 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.logger.Infof("[Legacy Server] Starting...")
-
-	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
-	err = s.blockchainClient.LegacySync(ctx)
+	// Check if we are in legacy sync
+	legacySyncState, err := s.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
 	if err != nil {
-		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
+		s.logger.Errorf("[Legacy Server] Failed to check if we are in legacy sync: %s", err)
+		return err
 	}
+
+	if !legacySyncState {
+		s.logger.Infof("[Legacy Server] Not in legacy sync, skipping")
+		return nil
+	}
+
+	s.logger.Infof("[Legacy Server] Starting...")
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	s.server.Start()
