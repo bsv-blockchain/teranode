@@ -8,9 +8,10 @@ env:
   REPO: teranode
   ECR_REGION: eu-north-1
   SETTINGS_CONTEXT_DEFAULT: "default_context"
+  USE_ECR_IMAGE: true
 
 jobs:
-  build-image:
+  pull-image:
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -27,13 +28,20 @@ jobs:
           aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
 
-      - name: Build Docker Image
-        run: docker compose -f docker-compose.e2etest.yml build
+      - name: Pull Docker Image from ECR (if USE_ECR_IMAGE=true)
+        if: env.USE_ECR_IMAGE == 'true'
+        run: |
+          IMAGE_TAG=latest
+          docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:$IMAGE_TAG
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:$IMAGE_TAG teranode:latest
 
   run-tests:
-    needs: build-image
+    needs: pull-image
     runs-on: teranode-runner
     strategy:
       matrix:
@@ -199,6 +207,7 @@ jobs:
           aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - uses: actions/setup-go@v5
@@ -209,6 +218,8 @@ jobs:
       - name: Run Test
         run: |
           go clean -testcache
+          docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:latest
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:latest teranode:latest
           cd ${{ matrix.test_config.test_dir }} && \
           go test -v -run "^${{ matrix.test_config.test_suite }}$/${{ matrix.test_config.test_func }}$" -tags ${{ matrix.test_config.test_tags }}
         env:

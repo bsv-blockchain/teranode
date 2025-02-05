@@ -135,7 +135,6 @@ services:
   teranode1:
     <<: *teranode-base
     container_name: teranode1-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-1
       - postgres
@@ -164,11 +163,11 @@ services:
       - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
       - ./data/test/${TEST_ID:-default}/teranode1/external:/app/data/teranode1/external
+      - ./wait.sh:/app/wait.sh
 
   teranode2:
     <<: *teranode-base
     container_name: teranode2-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-2
       - postgres
@@ -197,11 +196,11 @@ services:
       - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
       - ./data/test/${TEST_ID:-default}/teranode2/external:/app/data/teranode2/external
+      - ./wait.sh:/app/wait.sh
 
   teranode3:
     <<: *teranode-base
     container_name: teranode3-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-3
       - postgres
@@ -233,3 +232,4 @@ services:
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
       - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external
+      - ./wait.sh:/app/wait.sh
