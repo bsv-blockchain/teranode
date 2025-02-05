@@ -6,15 +6,32 @@
 
 ```go
 type Server struct {
-    ctx              context.Context
-    logger           ulogger.Logger
-    settings         *settings.Settings
-    blockStore       blob.Store
-    subtreeStore     blob.Store
-    utxoStore        utxo.Store
-    stats            *gocore.Stat
+    // ctx is the context for controlling server lifecycle
+    ctx context.Context
+
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // settings contains configuration settings for the server
+    settings *settings.Settings
+
+    // blockStore provides storage for blocks
+    blockStore blob.Store
+
+    // subtreeStore provides storage for block subtrees
+    subtreeStore blob.Store
+
+    // utxoStore provides storage for UTXO data
+    utxoStore utxo.Store
+
+    // stats tracks server statistics
+    stats *gocore.Stat
+
+    // blockchainClient interfaces with the blockchain
     blockchainClient blockchain.ClientI
-    state            *state.State
+
+    // state manages the persister's internal state
+    state *state.State
 }
 ```
 
@@ -26,7 +43,16 @@ The `Server` type is the main structure for the Block Persister Service. It cont
 
 #### New
 ```go
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockStore blob.Store, subtreeStore blob.Store, utxoStore utxo.Store, blockchainClient blockchain.ClientI, opts ...func(*Server)) *Server
+func New(
+	ctx context.Context,
+	logger ulogger.Logger,
+	tSettings *settings.Settings,
+	blockStore blob.Store,
+	subtreeStore blob.Store,
+	utxoStore utxo.Store,
+	blockchainClient blockchain.ClientI,
+	opts ...func(*Server)
+) *Server
 ```
 
 Creates a new instance of the `Server` with optional configuration functions.
@@ -65,6 +91,13 @@ Starts the Block Persister Service, including:
 - HTTP blob store server (if configured)
 - Block processing loop
 - State management
+
+
+#### Stop
+
+```go
+go func (u *Server) Stop(ctx context.Context) error
+```
 
 ### Block Processing
 
@@ -174,3 +207,8 @@ The service implements two types of health checks:
 - Store availability checks
 - Blockchain client status
 - FSM state validation
+
+## Other Resources
+
+- [Block Persister](../../topics/services/blockPersister.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

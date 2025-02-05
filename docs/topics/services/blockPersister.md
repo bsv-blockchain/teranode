@@ -44,22 +44,41 @@ The Block Persister files are optionally post-processed by the UTXO Persister, w
 
 ![block_persister_init.svg](img/plantuml/blockpersister/block_persister_init.svg)
 
-- The service starts by initializing a connection to the subtree store and subscribing to the new block notifications from Kafka.
-- Additionally, it subscribes to internally generated subtree notifications.
+The service initializes through the following sequence:
+
+1. Loads configuration settings
+2. Initializes state management
+3. Establishes connection with blockchain client
+4. Waits for FSM transition from IDLE state
+5. Starts block processing loop
 
 ### 2.2 Receiving and Processing a new Block Notification
 
-
-- The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service.
-- The Block Persister service creates a new file for the block.
-- It then creates a new file for each subtree, including the number of transactions in the subtree, and the decorated transactions (as UTXO meta data).
-- Additionally, 2 files are created for the block: a `UTXO Deletions` and a `UTXO Additions`.
-  - The UTXO Deletions file contains the UTXOs spent in the current block. This is basically a list of removed Txs (inputs).
-  - The UTXO Additions file contains the UTXOs added to the current block. This is basically a list of added Txs (outputs), including the Coinbase Tx.
-
 ![block_persister_receive_new_blocks.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks.svg)
 
-Going into more detail, the Block Persister service iterates each subtree (with some level of concurrency), decorating the transactions (with their UTXO meta data) in batches for each subtree. For each subtree, the service creates a subtree file that contains the transactions decorated with their utxo metadata.
+The service processes blocks through a polling mechanism:
+
+1. **Block Discovery**
+  - Retrieves last persisted block height from the Blockchain
+  - Determines if new blocks need processing based on `BlockPersisterPersistAge`. `BlockPersisterPersistAge` defines how many blocks behind the current tip the persister should stay. i.e. the service intentionally stays `BlockPersisterPersistAge` blocks behind the tip. This helps to avoid reorgs and ensures block finality.
+
+2. **Processing Flow**
+  - Retrieves the next block to process
+  - Converts block to bytes
+  - Persists block data to storage
+  - Creates and stores the associated files:
+    - Block file (.block)
+    - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (as UTXO meta data).
+    - UTXO additions (.utxo-additions), containing the UTXOs spent in the block. This represent a list of removed Txs (inputs)
+    - UTXO deletions (.utxo-deletions), containing the UTXOs added to the block. This represents a list of added Txs (outputs), including the Coinbase Tx.
+  - Updates the local state with the new block height
+
+3. **Sleep Mechanisms**
+  - On error: the services sleeps for a 1-minute period
+  - If no new blocks: The service sleeps for a configurable period if time (`BlockPersisterPersistSleep`)
+
+
+In more detail:
 
 ![block_persister_receive_new_blocks_subtrees.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg)
 
@@ -119,22 +138,27 @@ type UTXODeletion struct {
 2. **Bitcoin SV (BSV) Libraries:**
   - **Data Models and Utilities:** For handling BSV blockchain data structures and operations, including transaction and block processing.
 
-3. **Apache Kafka:**
-  - **Distributed Messaging:** Used for consuming block notifications and producing messages related to subtree processing.
-
-4. **Storage Libraries:**
+3. **Storage Libraries:**
   - **Blob Store:** For retrieving the subtree blobs.
   - **UTXO Store:** To access and store transaction metadata.
   - **File Storage:** For saving the decorated block files.
 
-5. **Configuration and Logging:**
+4. **Configuration and Logging:**
   - **Dynamic Configuration:** For managing service settings, including Kafka broker URLs and worker configurations.
   - **Logging:** For monitoring service operations, error handling, and debugging.
 
 
 ## 5. Directory Structure and Main Files
 
-The Block Persister service is located in the `services/blockpersister` directory. All logic can be found on the `Server.go` file.
+The Block Persister service is located in the `services/blockpersister` directory.
+
+
+```
+services/blockpersister/
+├── state/          # State management
+├── server.go       # Main service implementation
+└── metrics.go      # Prometheus metrics
+```
 
 ## 6. How to run
 
@@ -149,15 +173,22 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 7. Configuration options (settings flags)
 
-The `blockpersister` service utilizes specific `gocore` settings for configuration, each serving a distinct purpose in the service's operation:
+The Block Persister service uses the following configuration settings:
 
-1. **blockstore**
-  - **Purpose:** Defines the URL for the persistence layer storing block files.
-  - **Usage:** Initializes the blob store component for data storage during the server setup.
+| Setting Name                              | Type     | Description                                                       | Default                                  |
+|-------------------------------------------|----------|-------------------------------------------------------------------|------------------------------------------|
+| `blockpersister_stateFile`                | string   | Path to state file for tracking persisted blocks                  | "file://./data/blockpersister_state.txt" |
+| `blockpersister_httpListenAddress`        | string   | HTTP listener address for blob store server                       | ":8083"                                  |
+| `blockpersister_persistAge`               | int      | Number of blocks to stay behind the tip (controls block finality) | 100                                      |
+| `blockpersister_persistSleep`             | duration | Sleep duration between polling attempts when no blocks available  | 1 minute                                 |
+| `blockpersister_concurrency`              | int      | Concurrency level for block processing                            | 8                                        |
+| `blockpersister_batchMissingTransactions` | bool     | Whether to batch missing transaction requests                     | true                                     |
+| `blockpersister_skipUTXODelete`           | bool     | Whether to skip UTXO deletion operations                          | false                                    |
 
-2. **kafka_blocksFinalConfig**
-  - **Purpose:** Provides Kafka configuration details for receiving block data.
-  - **Usage:** Configures and initiates a Kafka listener to process incoming blocks when the service starts.
+
+The `BlockPersisterPersistAge` setting is particularly important as it determines how many blocks behind the tip the persister stays. For example:
+- If set to 100 (default), only blocks that are at least 100 blocks deep will be persisted
+- This helps avoid reorgs by ensuring blocks are sufficiently confirmed
 
 
 ## 8. Other Resources

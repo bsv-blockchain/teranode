@@ -1,64 +1,34 @@
-@startuml
-participant "Blockchain Service" as Blockchain
-participant "Kafka" as Kafka
+@startuml block_persister_subtree_processing
 participant "Block Persister Service" as BlockPersister
+participant "Blockchain Service" as Blockchain
 database "UTXO Store" as TMS
-database "Substree Store" as SubtreeStore
+database "Subtree Store" as SubtreeStore
 database "File Storage" as FileStorage
 
-Blockchain -> Kafka: Emit Kafka Block Notification
-Kafka -> BlockPersister: Notify Block Received
-BlockPersister -> BlockPersister: blocksFinalHandler(ctx, _, blockBytes)
+BlockPersister -> BlockPersister: Process Block
 activate BlockPersister
-BlockPersister -> BlockPersister: persistBlock(ctx, hash, blockBytes)
-activate BlockPersister
-BlockPersister -> BlockPersister: Create UTXODiff for block
-BlockPersister -> BlockPersister: Add coinbase utxos to the UTXODiff
 
+BlockPersister -> FileStorage: Create Block File (.block)
 
-BlockPersister -> BlockPersister: Create file for block
-BlockPersister -> BlockPersister: Write block header to block file (.block)
-BlockPersister -> FileStorage: Persist block file (.block) to storage
+loop for each Subtree
+    BlockPersister -> SubtreeStore: Get Subtree Data
+    SubtreeStore --> BlockPersister: Subtree Data
 
-loop for each Subtree in the Block
-    BlockPersister -> BlockPersister: processSubtree(ctx, subtreeHash)
-    activate BlockPersister
-    BlockPersister -> BlockPersister: Create file for subtree
-    BlockPersister -> SubtreeStore: Get Subtree from Subtree Store
-    loop for each 1000s Tx in Subtree
-        BlockPersister -> TMS : MetaBatchDecorate Tx batch
-        TMS --> BlockPersister
+    loop for Transaction Batches
+        BlockPersister -> TMS: Get Transaction Metadata
+        TMS --> BlockPersister: UTXO Metadata
+
+        BlockPersister -> BlockPersister: Process Transaction Batch
     end
 
-    BlockPersister -> BlockPersister: Write number of txs in the subtree to subtree file
-    loop for each UTXO Meta in Subtree
-        alt Coinbase Tx
-           BlockPersister -> TMS: Write Coinbase Tx to subtree fil
-        else
-            BlockPersister -> TMS: Write UTXO Meta to subtree file
-            BlockPersister -> TMS: Process UTXO Meta in UTXODiff
-        end
-
-        TMS --> BlockPersister
-    end
-
-    BlockPersister -> BlockPersister: Write number of txs in the subtree to subtree file
-
-    BlockPersister -> FileStorage: Persist subtree file (.subtree) to storage
-
-    deactivate BlockPersister
+    BlockPersister -> FileStorage: Store Subtree File (.subtree)
 end
 
-BlockPersister -> FileStorage: Compute and Persist UTXO Deletions file  (.utxo-deletions) to storage
-
-BlockPersister -> FileStorage: Compute and Persist UTXO Additions file  (.utxo-additions) to storage
-
-
+BlockPersister -> BlockPersister: Calculate UTXO Changes
+BlockPersister -> FileStorage: Store UTXO Additions (.utxo-additions)
+BlockPersister -> FileStorage: Store UTXO Deletions (.utxo-deletions)
 
 deactivate BlockPersister
-deactivate BlockPersister
-
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
-
 @enduml

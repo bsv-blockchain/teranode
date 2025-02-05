@@ -1,19 +1,21 @@
-@startuml
+@startuml block_persister_init
 participant "Block Persister" as BlockPersister
 participant "Blockchain Service" as Blockchain
-participant "Kafka Service" as Kafka
+participant "State Management" as State
 
-BlockPersister -> BlockPersister: Load Configuration
+BlockPersister -> BlockPersister: Load Settings
 BlockPersister --> BlockPersister: Configuration Data
 
-BlockPersister -> Blockchain: Initialize Blockchain Service
-Blockchain --> BlockPersister: Blockchain Service Instance
+BlockPersister -> State: Initialize State Management
+State --> BlockPersister: State Instance
 
-BlockPersister -> Kafka: Subscribe to Kafka Listeners
-Kafka --> BlockPersister: Listen to Block Notifications
+BlockPersister -> Blockchain: Initialize Blockchain Client
+Blockchain --> BlockPersister: Blockchain Client Instance
 
-note left of Kafka: Listeners for\nBlock Notifications
+BlockPersister -> Blockchain: Wait for FSM Transition from IDLE
+Blockchain --> BlockPersister: FSM Running
+
+note right of BlockPersister: Initialize Block Processing Loop
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
-
 @enduml

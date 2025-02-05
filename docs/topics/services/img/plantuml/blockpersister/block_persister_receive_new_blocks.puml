@@ -1,34 +1,36 @@
-@startuml
-participant "Blockchain Service" as Blockchain
-participant "Kafka" as Kafka
+@startuml block_persister_process_blocks
 participant "Block Persister Service" as BlockPersister
+participant "Blockchain Service" as Blockchain
+participant "State Management" as State
 database "File Storage" as FileStorage
 
-Blockchain -> Kafka: Emit Kafka Block Notification
-Kafka -> BlockPersister: Notify Block Received
-BlockPersister -> BlockPersister: blocksFinalHandler(ctx, _, blockBytes)
-activate BlockPersister
-BlockPersister -> BlockPersister: persistBlock(ctx, hash, blockBytes)
-activate BlockPersister
-BlockPersister -> BlockPersister: Create UTXODiff for block
+loop Processing Loop
+    BlockPersister -> State: Get Last Persisted Height
+    State --> BlockPersister: Last Height
 
+    BlockPersister -> Blockchain: Get Best Block Header
+    Blockchain --> BlockPersister: Best Block Meta
 
-BlockPersister -> BlockPersister: Create file for block
-BlockPersister -> BlockPersister: Write block header to block file (.block)
-BlockPersister -> FileStorage: Persist block file (.block) to storage
+    alt Need to Process Next Block
+        BlockPersister -> Blockchain: Get Block at Height+1
+        Blockchain --> BlockPersister: Block Data
 
-loop for each Subtree in the Block
-    BlockPersister -> FileStorage: Create subtree file (.subtree)
+        BlockPersister -> BlockPersister: Get Block Bytes
+        BlockPersister -> BlockPersister: Persist Block
+
+        BlockPersister -> FileStorage: Store Block File (.block)
+
+        loop for each Subtree in the Block
+            BlockPersister -> FileStorage: Store Subtree File (.subtree)
+        end
+
+        BlockPersister -> FileStorage: Store UTXO Files\n(.utxo-additions, .utxo-deletions)
+
+        BlockPersister -> State: Update Last Persisted Height
+    else No New Blocks
+        BlockPersister -> BlockPersister: Sleep for Configured Duration
+    end
 end
 
-BlockPersister -> FileStorage: Create UTXO Deletions file  (.utxo-deletions)
-
-BlockPersister -> FileStorage: Create UTXO Additions file (.utxo-additions)
-deactivate BlockPersister
-
-
-
-
 left footer Last Modified On: %date("dd-MMM-yyyy")
-
 @enduml
