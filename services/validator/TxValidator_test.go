@@ -22,6 +22,7 @@ Usage:
 package validator
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -30,9 +31,12 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
+	// helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -199,4 +203,121 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script size in bytes is greater than 2"))
+func Test_MinFeePolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		opReturnSize int
+		expectError  bool
+		fee          uint64
+	}{
+		{
+			name:         "very small op_return 100 bytes, no fees",
+			opReturnSize: 100,
+			expectError:  true,
+			fee:          0,
+		},
+		{
+			name:         "very small op_return 100 bytes, fee 1 sat",
+			opReturnSize: 100,
+			expectError:  false,
+			fee:          1,
+		},
+		{
+			name:         "small op_return 800 bytes, fee 0 sat",
+			opReturnSize: 800,
+			expectError:  true,
+			fee:          0,
+		},
+		{
+			name:         "medium op_return 1300 bytes, fee 1 sat",
+			opReturnSize: 1300,
+			expectError:  false,
+			fee:          1,
+		},
+		{
+			name:         "large op_return 1700 bytes, fee 1 sat",
+			opReturnSize: 1700,
+			expectError:  false,
+			fee:          1,
+		},
+		{
+			name:         "large op_return 1700 bytes, no fees",
+			opReturnSize: 1700,
+			expectError:  true,
+			fee:          0,
+		},
+		{
+			name:         "large op_return 2100 bytes, fee 1 sat",
+			opReturnSize: 2100,
+			expectError:  true,
+			fee:          1,
+		},
+		{
+			name:         "large op_return 2100 bytes, fee 2 sat",
+			opReturnSize: 2100,
+			expectError:  false,
+			fee:          2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings()
+
+			coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+
+			coinbaseTx, err := bt.NewTxFromString(coinbaseHex)
+			require.NoError(t, err)
+
+			output := coinbaseTx.Outputs[0]
+
+			utxo := &bt.UTXO{
+				TxIDHash:      coinbaseTx.TxIDChainHash(),
+				Vout:          0,
+				LockingScript: output.LockingScript,
+				Satoshis:      output.Satoshis,
+			}
+
+			tx := bt.NewTx()
+
+			err = tx.FromUTXOs(utxo)
+			require.NoError(t, err)
+
+			var inputSatoshis uint64 = 1666666668
+			outputSatoshis := inputSatoshis - tt.fee
+
+			err = tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", outputSatoshis)
+			require.NoError(t, err)
+
+			// Add OP_RETURN output with test case size
+			data := make([]byte, tt.opReturnSize)
+			for i := range data {
+				data[i] = byte(i % 256)
+			}
+
+			err = tx.AddOpReturnOutput(data)
+			require.NoError(t, err)
+
+			privateKey, err := wif.DecodeWIF("L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q")
+			require.NoError(t, err)
+
+			err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey.PrivKey})
+			require.NoError(t, err)
+
+			// Log transaction details for debugging
+			t.Logf("Test case: %s", tt.name)
+			t.Logf("Total Transaction size: %d bytes", tx.Size())
+
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err = txValidator.ValidateTransaction(tx, 10000000, &Options{})
+
+			if tt.expectError {
+				if assert.Error(t, err) {
+					assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction fee"))
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

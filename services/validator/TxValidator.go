@@ -272,6 +272,15 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 }
 
 func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
+
+	actualFeePaid := tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
+
+	minRequiredFee := tv.settings.Policy.GetMinMiningTxFee() * 1e8
+
+	if float64(actualFeePaid) < minRequiredFee {
+		return errors.NewTxInvalidError("transaction fee is too low")
+	}
+
 	feesOK, err := tx.IsFeePaidEnough(feeQuote)
 	if err != nil {
 		return err
