@@ -174,3 +174,11 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
+  create_manifest:
+    needs: [ build_amd64, build_arm64, get_tag ]
+    uses: ./.github/workflows/gke_manifest.yaml
+    secrets: inherit
+    with:
+      region: eu-north-1
+      repo: teranode
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
