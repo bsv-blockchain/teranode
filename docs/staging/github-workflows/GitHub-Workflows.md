@@ -66,7 +66,7 @@ The `gke_tests.yaml` GitHub workflow is designed to be invoked through a workflo
 - **Steps**:
     - **Checkout**: Checks out the source code at the full depth to ensure better relevancy of reporting and to support tools that require complete git history.
     - **Set up Go**: Sets up Go environment with specified version `1.21.0` using the `actions/setup-go@v5` action.
-    - **Run Go tests**: Executes long-running Go tests using `make longtests`. This likely includes integration and other extensive testing procedures.
+    - **Run Go tests**: Executes long-running Go tests using `make longtests`. This includes integration and other extensive testing procedures.
 
 ##### 2. `sonarqube`
 - **Purpose**: Runs a SonarQube scan to analyze the code quality and detect bugs, vulnerabilities, and code smells.
