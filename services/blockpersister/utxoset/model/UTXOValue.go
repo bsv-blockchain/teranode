@@ -9,12 +9,17 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 )
 
+// UTXOValue represents the value and script data for a UTXO.
 type UTXOValue struct {
-	Value    uint64
+	// Value represents the amount in satoshis
+	Value uint64
+	// Locktime represents the transaction locktime
 	Locktime uint32
-	Script   []byte
+	// Script contains the locking script
+	Script []byte
 }
 
+// NewUTXOValue creates a new UTXOValue with the specified parameters.
 func NewUTXOValue(value uint64, locktime uint32, script []byte) *UTXOValue {
 	return &UTXOValue{
 		Value:    value,
@@ -23,6 +28,7 @@ func NewUTXOValue(value uint64, locktime uint32, script []byte) *UTXOValue {
 	}
 }
 
+// NewUTXOValueFromBytes creates a UTXOValue from a byte slice.
 func NewUTXOValueFromBytes(b []byte) *UTXOValue {
 	u := new(UTXOValue)
 
@@ -37,6 +43,7 @@ func NewUTXOValueFromBytes(b []byte) *UTXOValue {
 	return u
 }
 
+// NewUTXOValueFromReader creates a UTXOValue by reading from an io.Reader.
 func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	// Read the marker
 	marker := make([]byte, 1)
@@ -91,6 +98,7 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	return u, nil
 }
 
+// Bytes returns the byte representation of the UTXOValue.
 func (u *UTXOValue) Bytes() []byte {
 	if u == nil {
 		return nil
@@ -113,6 +121,7 @@ func (u *UTXOValue) Bytes() []byte {
 	return b
 }
 
+// Write writes the UTXOValue to an io.Writer.
 func (u *UTXOValue) Write(w io.Writer) error {
 	if u == nil {
 		if _, err := w.Write([]byte{0x00}); err != nil {
@@ -149,10 +158,12 @@ func (u *UTXOValue) Write(w io.Writer) error {
 	return nil
 }
 
+// Equal compares this UTXOValue with another for equality.
 func (u *UTXOValue) Equal(other *UTXOValue) bool {
 	return u.Value == other.Value && u.Locktime == other.Locktime && bytes.Equal(u.Script, other.Script)
 }
 
+// String returns a string representation of the UTXOValue.
 func (u *UTXOValue) String() string {
 	return fmt.Sprintf("%10d / %8d - %x", u.Value, u.Locktime, u.Script)
 }

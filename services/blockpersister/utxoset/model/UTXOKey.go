@@ -9,13 +9,15 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// UTXOKey represents a bitcoin transaction output.
+// UTXOKey represents a bitcoin transaction output identifier, consisting of a transaction ID and output index.
 type UTXOKey struct {
-	TxID  chainhash.Hash
+	// TxID is the transaction identifier
+	TxID chainhash.Hash
+	// Index is the output index in the transaction
 	Index uint32
 }
 
-// NewUTXOKey creates a new Outpoint.
+// NewUTXOKey creates a new UTXOKey with the specified transaction ID and index.
 func NewUTXOKey(txID chainhash.Hash, index uint32) UTXOKey {
 	return UTXOKey{
 		TxID:  txID,
@@ -23,6 +25,8 @@ func NewUTXOKey(txID chainhash.Hash, index uint32) UTXOKey {
 	}
 }
 
+// Hash generates a hash value for the UTXOKey modulo the provided value.
+// Used for internal map distribution.
 func (k UTXOKey) Hash(mod uint16) uint16 {
 	return (uint16(k.TxID[0])<<8 | uint16(k.TxID[1])) % mod
 }
@@ -58,6 +62,7 @@ func (k *UTXOKey) Bytes() []byte {
 	return serialized
 }
 
+// NewUTXOKeyFromReader creates a UTXOKey by reading from an io.Reader.
 func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 	o := new(UTXOKey)
 
@@ -72,6 +77,7 @@ func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 	return o, nil
 }
 
+// Write writes the UTXOKey to an io.Writer.
 func (k *UTXOKey) Write(w io.Writer) error {
 	var n int
 
@@ -98,6 +104,7 @@ func (k *UTXOKey) String() string {
 	return fmt.Sprintf("%v:%8d", k.TxID, k.Index)
 }
 
+// Equal compares this UTXOKey with another for equality.
 func (k *UTXOKey) Equal(other UTXOKey) bool {
 	return k.TxID.IsEqual(&other.TxID) && k.Index == other.Index
 }

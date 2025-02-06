@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -8,29 +9,54 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics variables for monitoring block persister operations
+//
 //nolint:unused //TODO: enable these later
 var (
-	prometheusBlockPersisterValidateSubtree           prometheus.Histogram
-	prometheusBlockPersisterValidateSubtreeRetry      prometheus.Counter
-	prometheusBlockPersisterValidateSubtreeHandler    prometheus.Histogram
-	prometheusBlockPersisterPersistBlock              prometheus.Histogram
-	prometheusBlockPersisterBlessMissingTransaction   prometheus.Histogram
-	prometheusBlockPersisterSetTXMetaCacheKafka       prometheus.Histogram
-	prometheusBlockPersisterDelTXMetaCacheKafka       prometheus.Histogram
+	// prometheusBlockPersisterValidateSubtree tracks subtree validation duration
+	prometheusBlockPersisterValidateSubtree prometheus.Histogram
+
+	// prometheusBlockPersisterValidateSubtreeRetry counts subtree validation retries
+	prometheusBlockPersisterValidateSubtreeRetry prometheus.Counter
+
+	// prometheusBlockPersisterValidateSubtreeHandler tracks subtree handler duration
+	prometheusBlockPersisterValidateSubtreeHandler prometheus.Histogram
+
+	// prometheusBlockPersisterPersistBlock tracks block persistence duration
+	prometheusBlockPersisterPersistBlock prometheus.Histogram
+
+	// prometheusBlockPersisterBlessMissingTransaction tracks missing transaction blessing duration
+	prometheusBlockPersisterBlessMissingTransaction prometheus.Histogram
+
+	// prometheusBlockPersisterSetTXMetaCacheKafka tracks Kafka tx meta cache set duration
+	prometheusBlockPersisterSetTXMetaCacheKafka prometheus.Histogram
+
+	// prometheusBlockPersisterDelTXMetaCacheKafka tracks Kafka tx meta cache delete duration
+	prometheusBlockPersisterDelTXMetaCacheKafka prometheus.Histogram
+
+	// prometheusBlockPersisterSetTXMetaCacheKafkaErrors counts Kafka tx meta cache set errors
 	prometheusBlockPersisterSetTXMetaCacheKafkaErrors prometheus.Counter
-	prometheusBlockPersisterBlocks                    prometheus.Histogram
-	prometheusBlockPersisterSubtrees                  prometheus.Histogram
-	prometheusBlockPersisterSubtreeBatch              prometheus.Histogram
+
+	// prometheusBlockPersisterBlocks tracks block processing duration
+	prometheusBlockPersisterBlocks prometheus.Histogram
+
+	// prometheusBlockPersisterSubtrees tracks subtree processing duration
+	prometheusBlockPersisterSubtrees prometheus.Histogram
+
+	// prometheusBlockPersisterSubtreeBatch tracks subtree batch processing duration
+	prometheusBlockPersisterSubtreeBatch prometheus.Histogram
 )
 
 var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics once
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the internal implementation of metrics initialization
 func _initPrometheusMetrics() {
 	prometheusBlockPersisterValidateSubtree = promauto.NewHistogram(
 		prometheus.HistogramOpts{

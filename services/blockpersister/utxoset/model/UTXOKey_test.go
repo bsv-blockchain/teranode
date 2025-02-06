@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewUTXOKey validates the creation of new UTXO keys
+
 func TestNewUTXOKey(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
@@ -21,6 +23,7 @@ func TestNewUTXOKey(t *testing.T) {
 	assert.Equal(t, uint32(1), key.Index)
 }
 
+// TestNewUTXOKeyFromBytes validates byte serialization and deserialization of UTXO keys
 func TestNewUTXOKeyFromBytes(t *testing.T) {
 	// Create a valid byte slice
 	hashBytes, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -45,6 +48,7 @@ func TestNewUTXOKeyFromBytes(t *testing.T) {
 	require.Error(t, err, "Expected error for invalid slice length, got none")
 }
 
+// TestUTXOKeyBytes validates the byte representation of UTXO keys
 func TestUTXOKeyBytes(t *testing.T) {
 	// Create a valid byte slice
 	hash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -62,6 +66,7 @@ func TestUTXOKeyBytes(t *testing.T) {
 	assert.Equal(t, expected, result, "Bytes() failed, expected %x, got %x", expected, result)
 }
 
+// TestSameUTXOKeyBytes validates consistency of byte representations for identical keys
 func TestSameUTXOKeyBytes(t *testing.T) {
 	// Create a valid byte slice
 	hash1, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -89,6 +94,7 @@ func TestSameUTXOKeyBytes(t *testing.T) {
 	assert.NotEqual(t, b1, b3, "Expected byte slices to be different")
 }
 
+// TestUTXOKeyString validates string representation of UTXO keys
 func TestUTXOKeyString(t *testing.T) {
 	hash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
@@ -101,6 +107,7 @@ func TestUTXOKeyString(t *testing.T) {
 	}
 }
 
+// TestUTXOKeyAsKey validates usage of UTXOKey as a map key
 func TestUTXOKeyAsKey(t *testing.T) {
 	m := make(map[model.UTXOKey]int)
 	assert.Len(t, m, 0, "Expected length 0")
@@ -139,6 +146,7 @@ func TestUTXOKeyAsKey(t *testing.T) {
 	assert.Len(t, m, 1, "Expected length 1")
 }
 
+// TestUTXOKeyEqual validates equality comparison of UTXO keys
 func TestUTXOKeyEqual(t *testing.T) {
 	hash1, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
@@ -153,6 +161,7 @@ func TestUTXOKeyEqual(t *testing.T) {
 	assert.True(t, key1.Equal(key2))
 }
 
+// TestNewUTXOKeyFromReader validates reading UTXO keys from an io.Reader
 func TestNewUTXOKeyFromReader(t *testing.T) {
 	hash1, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)

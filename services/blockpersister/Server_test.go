@@ -35,6 +35,7 @@ var (
 	bitsStr          = "1b04864c"
 )
 
+// TestOneTransaction validates the processing of a single transaction block
 func TestOneTransaction(t *testing.T) {
 	var err error
 
@@ -89,6 +90,7 @@ func TestOneTransaction(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestTwoTransactions validates the processing of a block with two transactions
 func TestTwoTransactions(t *testing.T) {
 	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff07044c86041b0147ffffffff0100f2052a01000000434104ad3b4c6ee28cb0c438c87b4efe1c36e1e54c10efc690f24c2c02446def863c50e9bf482647727b415aa81b45d0f7aa42c2cb445e4d08f18b49c027b58b6b4041ac00000000")
 	coinbaseTxID, _ := chainhash.NewHashFromStr("de2c2e8628ab837ceff3de0217083d9d5feb71f758a5d083ada0b33a36e1b30e")
@@ -154,6 +156,7 @@ func TestTwoTransactions(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestMerkleRoot validates the merkle root calculation functionality
 func TestMerkleRoot(t *testing.T) {
 	var err error
 
@@ -241,6 +244,7 @@ func TestMerkleRoot(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestTtlCache validates the TTL cache functionality
 func TestTtlCache(t *testing.T) {
 	cache := ttlcache.New[chainhash.Hash, bool](
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
@@ -257,6 +261,7 @@ func TestTtlCache(t *testing.T) {
 	assert.Equal(t, 0, cache.Len())
 }
 
+// TestSetInitialState validates the initial state setting functionality
 func TestSetInitialState(t *testing.T) {
 	hash, _ := chainhash.NewHashFromStr(txIds[0])
 	tSettings := test.CreateBaseTestSettings()

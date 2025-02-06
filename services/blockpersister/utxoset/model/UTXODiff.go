@@ -9,12 +9,17 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// UTXODiff tracks changes to the UTXO set within a block
 // UTXODiff is a map of UTXOs.
 type UTXODiff struct {
-	logger    ulogger.Logger
-	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
-	Added     UTXOMap
-	Removed   UTXOMap
+	// logger provides logging functionality
+	logger ulogger.Logger
+	// BlockHash is the hash of the block this diff belongs to
+	BlockHash chainhash.Hash
+	// Added contains newly created UTXOs
+	Added UTXOMap
+	// Removed contains spent UTXOs
+	Removed UTXOMap
 }
 
 // NewUTXOMap creates a new UTXODiff.
@@ -35,6 +40,9 @@ func (ud *UTXODiff) Add(txID chainhash.Hash, index uint32, value uint64, locktim
 	ud.Added.Put(uk, uv)
 }
 
+// Delete removes a UTXO from the set
+// If the UTXO exists in Added, it's removed from there
+// Otherwise, it's added to Removed
 func (ud *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
 	uk := NewUTXOKey(txID, index)
 
@@ -45,6 +53,10 @@ func (ud *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
 	}
 }
 
+// ProcessTx processes a transaction, updating the diff accordingly
+// For non-coinbase transactions:
+// - Marks inputs as spent (adds to Removed)
+// - Adds outputs as new UTXOs (adds to Added)
 func (ud *UTXODiff) ProcessTx(tx *bt.Tx) {
 	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {

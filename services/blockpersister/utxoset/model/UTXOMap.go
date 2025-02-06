@@ -9,16 +9,19 @@ import (
 
 // UTXOMap represents a bitcoin transaction outpoint, i.e. the transaction ID and the output index.
 // It is used as a key in the UTXOMap and is hashable.
+// UTXOMap provides thread-safe storage for UTXOs
 type UTXOMap struct {
 	genericMap[UTXOKey, *UTXOValue]
 }
 
+// newUTXOMap creates a new UTXOMap instance.
 func newUTXOMap() UTXOMap {
 	return UTXOMap{
 		NewSplitSwissMap[UTXOKey, *UTXOValue](1024),
 	}
 }
 
+// Read reads UTXOMap data from an io.Reader.
 func (um *UTXOMap) Read(r io.Reader) error {
 	// Read the number of UTXOs
 	var num uint32
@@ -43,6 +46,7 @@ func (um *UTXOMap) Read(r io.Reader) error {
 	return nil
 }
 
+// Write writes UTXOMap data to an io.Writer.
 func (um *UTXOMap) Write(w io.Writer) error {
 	// Write the number of UTXOs
 	num := uint32(um.Length())

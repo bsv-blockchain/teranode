@@ -12,6 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewUTXODiffFromReader validates the creation and manipulation of UTXO diffs
+// Tests:
+// - Creating a new UTXO diff
+// - Adding and removing UTXOs
+// - Serialization and deserialization
+// - Comparison of original and deserialized diffs
 func TestNewUTXODiffFromReader(t *testing.T) {
 	// Create a valid byte slice
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
@@ -58,6 +64,11 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 	assert.Equal(t, ud1.Removed.Length(), ud2.Removed.Length())
 }
 
+// TestNewUTXODiffFromReaderWithProcessTx validates UTXO diff processing with transactions
+// Tests:
+// - Processing transactions with multiple inputs and outputs
+// - Verifying correct UTXO additions and removals
+// - Serialization and deserialization of processed diffs
 func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 

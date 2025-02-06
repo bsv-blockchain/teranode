@@ -11,6 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewUTXOSetFromReader validates the creation of UTXO sets from a reader
+// Tests reading and writing UTXO sets, including:
+// - Creation of a new set
+// - Adding UTXOs
+// - Serialization and deserialization
+// - Comparison of original and deserialized sets
 func TestNewUTXOSetFromReader(t *testing.T) {
 	// Create a valid byte slice
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})

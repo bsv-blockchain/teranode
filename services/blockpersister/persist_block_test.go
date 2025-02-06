@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -35,11 +36,13 @@ func newReadCloserFromBytes(data []byte) io.ReadCloser {
 	return noOpCloser{Reader: bytes.NewReader(data)}
 }
 
+// MockStore implements a mock storage interface for testing
 type MockStore struct {
 	txs      []*bt.Tx
 	subtrees []*util.Subtree
 }
 
+// newMockStore creates a new mock store with the given transactions
 func newMockStore(txs []*bt.Tx) (*MockStore, error) {
 	subtree, err := util.NewTreeByLeafCount(4)
 	if err != nil {
@@ -163,6 +166,10 @@ func (m *MockStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Has
 	return nil
 }
 
+// TestBlock validates the block persistence functionality by:
+// - Creating a test block from mainnet block 100,000
+// - Processing and validating its transactions
+// - Ensuring proper storage and retrieval
 func TestBlock(t *testing.T) {
 	initPrometheusMetrics()
 

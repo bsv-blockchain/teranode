@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -18,17 +19,34 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// Server type carries the logger within it
+// Server represents the main block persister service that handles block storage and processing.
 type Server struct {
-	ctx              context.Context
-	logger           ulogger.Logger
-	settings         *settings.Settings
-	blockStore       blob.Store
-	subtreeStore     blob.Store
-	utxoStore        utxo.Store
-	stats            *gocore.Stat
+	// ctx is the context for controlling server lifecycle
+	ctx context.Context
+
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains configuration settings for the server
+	settings *settings.Settings
+
+	// blockStore provides storage for blocks
+	blockStore blob.Store
+
+	// subtreeStore provides storage for block subtrees
+	subtreeStore blob.Store
+
+	// utxoStore provides storage for UTXO data
+	utxoStore utxo.Store
+
+	// stats tracks server statistics
+	stats *gocore.Stat
+
+	// blockchainClient interfaces with the blockchain
 	blockchainClient blockchain.ClientI
-	state            *state.State
+
+	// state manages the persister's internal state
+	state *state.State
 }
 
 // WithSetInitialState is an optional configuration function that sets the initial state
@@ -41,6 +59,7 @@ func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
 	}
 }
 
+// New creates a new block persister server instance with the provided dependencies.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -74,6 +93,9 @@ func New(
 	return u
 }
 
+// Health performs health checks on the server and its dependencies.
+// If checkLiveness is true, only liveness checks are performed.
+// Returns HTTP status code, status message, and any error encountered.
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -108,13 +130,15 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// Init initializes the server, setting up any required resources.
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
 
 	return nil
 }
 
-// getNextBlockToProcess returns the next block to process
+// getNextBlockToProcess retrieves the next block that needs to be processed
+// based on the current state and configuration.
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
 	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
 	if err != nil {
@@ -138,7 +162,7 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 	return nil, nil
 }
 
-// Start function
+// Start begins the block processing loop and runs until the context is cancelled.
 func (u *Server) Start(ctx context.Context) error {
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
@@ -227,6 +251,7 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the server.
 func (u *Server) Stop(_ context.Context) error {
 	return nil
 }

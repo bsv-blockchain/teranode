@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -16,6 +17,14 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// ProcessSubtree processes a subtree of transactions, validating and storing them.
+// Parameters:
+//   - pCtx: parent context for the operation
+//   - subtreeHash: hash of the subtree to process
+//   - coinbaseTx: the coinbase transaction for this subtree
+//   - utxoDiff: the UTXO set differences to track changes
+//
+// Returns an error if processing fails.
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
 	ctx, _, deferFn := tracing.StartTracing(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
@@ -87,6 +96,15 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	return nil
 }
 
+// WriteTxs writes a series of transactions to storage and processes their UTXO changes.
+// Parameters:
+//   - ctx: context for the operation
+//   - logger: logger for recording operations
+//   - writer: destination for writing transaction data
+//   - txMetaSlice: slice of transaction metadata to write
+//   - utxoDiff: UTXO set to track changes (can be nil)
+//
+// Returns an error if writing fails.
 func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXOSet) error {
 	// Write the number of txs in the subtree
 	//      this makes it impossible to stream directly from S3 to the client

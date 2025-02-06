@@ -16,12 +16,22 @@ import (
 
 const maxInt = int(^uint(0) >> 1)
 
+// State manages the persistence of block processing state
 type State struct {
-	logger   ulogger.Logger
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// filePath is the path to the state file
 	filePath string
+
+	// fileLock provides synchronization for file operations
 	fileLock sync.Mutex
 }
 
+// New creates a new State instance
+// Parameters:
+//   - logger: for logging operations
+//   - blocksFilePath: path to the state file
 func New(logger ulogger.Logger, blocksFilePath string) *State {
 	return &State{
 		logger:   logger,
@@ -29,6 +39,10 @@ func New(logger ulogger.Logger, blocksFilePath string) *State {
 	}
 }
 
+// GetLastPersistedBlockHeight retrieves the height of the last persisted block
+// Returns:
+//   - uint32: the block height
+//   - error: any error encountered
 func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 	s.fileLock.Lock()
 	defer s.fileLock.Unlock()
@@ -119,7 +133,13 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 	return uint32(height), nil // nolint:gosec
 }
 
-// addBlock safely appends a block's height and hash to the blocks file
+// AddBlock records a new block in the state file.
+// It safely appends a block's height and hash to the blocks file.
+// Parameters:
+//   - height: block height
+//   - hash: block hash as string
+//
+// Returns error if the operation fails
 func (s *State) AddBlock(height uint32, hash string) error {
 	s.fileLock.Lock()
 	defer s.fileLock.Unlock()
@@ -159,6 +179,14 @@ func (s *State) AddBlock(height uint32, hash string) error {
 	return nil
 }
 
+// lockFile implements file locking for concurrent access
+// Parameters:
+//   - file: file to lock
+//   - lockType: type of lock to acquire
+//
+// Returns:
+//   - func(): unlock function
+//   - error: any error encountered
 func (s *State) lockFile(file *os.File, lockType int) (func(), error) {
 	// Get shared lock on the file
 	fd := file.Fd()

@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -14,6 +15,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// processTxMetaUsingStore retrieves transaction metadata from storage for a batch of transactions.
+// Parameters:
+//   - ctx: context for the operation
+//   - txHashes: slice of transaction hashes to process
+//   - txMetaSlice: slice to store retrieved transaction metadata
+//   - batched: whether to use batch processing
+//
+// Returns:
+//   - int: number of transactions that couldn't be found
+//   - error: any error encountered during processing
 func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, batched bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")

@@ -1,3 +1,4 @@
+// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
 package blockpersister
 
 import (
@@ -12,6 +13,19 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// persistBlock stores a block and its associated data to persistent storage.
+// Parameters:
+//   - ctx: context for the operation
+//   - hash: hash of the block to persist
+//   - blockBytes: raw bytes of the block
+//
+// The function handles:
+//   - Creating a new block from bytes
+//   - Processing all subtrees in the block
+//   - Managing UTXO set differences
+//   - Writing block data to storage
+//
+// Returns an error if any part of the persistence process fails.
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "persistBlock",
 		tracing.WithHistogram(prometheusBlockPersisterPersistBlock),

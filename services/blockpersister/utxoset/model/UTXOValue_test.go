@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewUTXOValue validates the creation of new UTXO values
+// Tests basic value assignment and retrieval
 func TestNewUTXOValue(t *testing.T) {
 	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -21,6 +23,8 @@ func TestNewUTXOValue(t *testing.T) {
 	assert.Equal(t, 5, len(utxo.Script))
 }
 
+// TestEqual validates the equality comparison functionality of UTXO values
+// Ensures that equal values are correctly identified and different values are distinguished
 func TestEqual(t *testing.T) {
 	script1 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 	script2 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
@@ -35,6 +39,8 @@ func TestEqual(t *testing.T) {
 	assert.False(t, utxo1.Equal(utxo3))
 }
 
+// TestNewUTXOValueFromBytes validates the serialization and deserialization of UTXO values
+// Ensures that UTXO values can be correctly converted to and from bytes
 func TestNewUTXOValueFromBytes(t *testing.T) {
 	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -47,6 +53,8 @@ func TestNewUTXOValueFromBytes(t *testing.T) {
 	assert.Equal(t, utxo, utxo2)
 }
 
+// TestNewUTXOValueFromReader validates reading UTXO values from an io.Reader
+// Tests both single and multiple value reading scenarios
 func TestNewUTXOValueFromReader(t *testing.T) {
 	script1 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 	script2 := []byte{0x05, 0x06, 0x07, 0x08, 0x09}

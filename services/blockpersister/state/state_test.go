@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestGetLastBlockHeightEmptyFile validates behavior when reading from an empty state file
 func TestGetLastBlockHeightEmptyFile(t *testing.T) {
 	store := New(ulogger.NewVerboseTestLogger(t), t.TempDir()+"/blocks.dat")
 
@@ -15,6 +16,7 @@ func TestGetLastBlockHeightEmptyFile(t *testing.T) {
 	require.Zero(t, height)
 }
 
+// TestGetLastBlockHeight validates the block height tracking functionality
 func TestGetLastBlockHeight(t *testing.T) {
 	store := New(ulogger.NewVerboseTestLogger(t), t.TempDir()+"/blocks.dat")
 

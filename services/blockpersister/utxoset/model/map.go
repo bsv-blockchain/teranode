@@ -10,12 +10,26 @@ import (
 
 // genericMap is an interface that defines the methods that a map must implement
 type genericMap[K comparable, V any] interface {
+	// Put stores a value V for key K
 	Put(K, V)
+
+	// Get retrieves a value V for key K, returns (value, exists)
 	Get(K) (V, bool)
+
+	// Delete removes the entry for key K, returns true if the key existed
 	Delete(K) bool
+
+	// Iter iterates over all entries, calling cb for each.
+	// If cb returns true, iteration stops
 	Iter(cb func(K, V) (stop bool))
+
+	// Exists checks if a key exists in the map
 	Exists(K) bool
-	Length() int // TODO remove the need for this method
+
+	// Length returns the number of entries in the map
+	Length() int
+
+	// IsEqual compares this map with another using the provided comparison function
 	IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string)
 }
 
@@ -30,6 +44,7 @@ type comparableAndHashable interface {
 	hashable   // This is a custom interface defined above
 }
 
+// splitMap implements a sharded map for better concurrency
 type splitMap[K comparableAndHashable, V any] struct {
 	m           map[uint16]genericMap[K, V]
 	nrOfBuckets uint16
