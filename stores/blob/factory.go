@@ -1,3 +1,4 @@
+// Package blob provides blob storage functionality with various storage backend implementations.
 package blob
 
 import (
@@ -18,6 +19,16 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
+// NewStore creates a new blob store based on the provided URL scheme and options.
+// It supports various storage backends including null, memory, file, http, s3, and lustre.
+// Parameters:
+//   - logger: Logger instance for store operations
+//   - storeURL: URL containing the store configuration
+//   - opts: Optional store configuration options
+//
+// Returns:
+//   - Store: The configured blob store instance
+//   - error: Any error that occurred during store creation
 func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
 	switch storeURL.Scheme {
 	case "null":
@@ -74,6 +85,16 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	return
 }
 
+// createTTLStore wraps a store with TTL capabilities using a local cache.
+// Parameters:
+//   - storeURL: URL containing TTL store configuration
+//   - logger: Logger instance for TTL operations
+//   - opts: Store options
+//   - store: The base store to wrap
+//
+// Returns:
+//   - Store: The TTL-enabled store instance
+//   - error: Any error that occurred during creation
 func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
 	localTTLStorePath := storeURL.Query().Get("localTTLStorePath")
 
@@ -103,6 +124,15 @@ func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.Sto
 	return store, nil
 }
 
+// createBatchedStore wraps a store with batching capabilities.
+// Parameters:
+//   - storeURL: URL containing batch configuration
+//   - store: The base store to wrap
+//   - logger: Logger instance for batch operations
+//
+// Returns:
+//   - Store: The batched store instance
+//   - error: Any error that occurred during creation
 func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (Store, error) {
 	sizeInBytes := int64(4 * 1024 * 1024)
 

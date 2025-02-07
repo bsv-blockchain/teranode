@@ -23,7 +23,7 @@ func TestTECBlk2TestSuite(t *testing.T) {
 					tconfig.KeyLocalSystemComposes: []string{
 						"../../docker-compose.yml",
 						"../../docker-compose.aerospike.override.yml",
-						"../../docker-compose.e2etest.yml",
+						"../docker-compose.e2etest.yml",
 						"../docker-compose.utxo.override.yml",
 					},
 					tconfig.KeyTeranodeContexts: []string{

@@ -36,7 +36,7 @@ type ConfigLocalSystem struct {
 // LoadConfigLocalSystem return the loader to load the ConfigLocalSystem
 func LoadConfigLocalSystem() TConfigLoader {
 	return func(s *TConfig) error {
-		s.viper.SetDefault(KeyLocalSystemComposes, []string{"../../docker-compose.e2etest.yml"})
+		s.viper.SetDefault(KeyLocalSystemComposes, []string{"../docker-compose.e2etest.yml"})
 		s.LocalSystem.Composes = s.viper.GetStringSlice(KeyLocalSystemComposes)
 
 		s.viper.SetDefault(KeyLocalSystemSkipSetup, false)

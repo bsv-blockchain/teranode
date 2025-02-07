@@ -1,3 +1,4 @@
+// Package blob provides blob storage functionality with various storage backend implementations.
 package blob
 
 import (
@@ -10,11 +11,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// ConcurrentBlob provides thread-safe access to blob storage operations.
 type ConcurrentBlob[K chainhash.Hash] struct {
+	// blobStore is the underlying blob storage implementation
 	blobStore Store
-	options   []blob_options.FileOption
-	mu        sync.RWMutex
-	wg        map[K]*sync.WaitGroup
+	// options contains the file options to use when storing blobs
+	options []blob_options.FileOption
+	// mu provides mutual exclusion for concurrent operations
+	mu sync.RWMutex
+	// wg tracks ongoing blob operations by key
+	wg map[K]*sync.WaitGroup
 }
 
 // NewConcurrentBlob creates a new ConcurrentBlob instance
@@ -28,6 +34,18 @@ func NewConcurrentBlob[K chainhash.Hash](blobStore Store, options ...blob_option
 	}
 }
 
+// Get retrieves a blob from the store. If the blob doesn't exist, it will be fetched
+// using the provided getBlobReader function and stored in the blob store before being returned.
+// The operation is thread-safe and ensures only one fetch operation occurs at a time for each key.
+//
+// Parameters:
+//   - ctx: The context for the operation
+//   - key: The key identifying the blob
+//   - getBlobReader: A function that returns an io.ReadCloser for fetching the blob
+//
+// Returns:
+//   - io.ReadCloser: A reader for the blob data
+//   - error: Any error that occurred during the operation
 func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func() (io.ReadCloser, error)) (io.ReadCloser, error) {
 	var (
 		found bool

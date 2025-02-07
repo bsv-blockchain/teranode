@@ -117,11 +117,11 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	resp, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
-	if err != nil || (resp != nil && !resp.Ok) {
-		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)
+	if err != nil || !resp.GetOk() {
+		return http.StatusFailedDependency, resp.GetDetails(), errors.UnwrapGRPC(err)
 	}
 
-	return http.StatusOK, resp.Details, nil
+	return http.StatusOK, resp.GetDetails(), nil
 }
 
 // BlockFound notifies the validation service about a newly discovered block.

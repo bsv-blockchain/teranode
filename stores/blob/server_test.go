@@ -1,3 +1,4 @@
+// Package blob provides blob storage functionality with various storage backend implementations.
 package blob
 
 import (

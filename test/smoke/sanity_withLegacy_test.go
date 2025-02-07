@@ -38,7 +38,7 @@ func TestSanitywithLegacyTestSuite(t *testing.T) {
 				map[string]any{
 					tconfig.KeyInitBlockHeight: testHeight,
 					tconfig.KeyLocalSystemComposes: []string{
-						"../../docker-compose.e2etest.legacy.yml",
+						"../docker-compose.e2etest.legacy.yml",
 					},
 					tconfig.KeyTeranodeContexts: []string{
 						"docker.teranode1.test.legacy",

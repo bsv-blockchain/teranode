@@ -151,7 +151,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
 		errSpent        *errors.UtxoSpentErrData
-		errorFound      bool
 		txAlreadyExists bool
 	)
 
@@ -174,22 +173,27 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			err = <-errCh
 
 			if err != nil && errors.Is(err, errors.ErrTxNotFound) {
+				mu.Lock()
+				exists := txAlreadyExists
+				mu.Unlock()
 				// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
 				// the utxo store. We can check whether the tx already exists, which means it has been validated and
 				// blessed. In this case we can just return early.
-				if txAlreadyExists {
+				if exists {
 					// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
 					err = nil
 				} else if _, err = s.Get(ctx, tx.TxIDChainHash()); err == nil {
 					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
 
 					err = nil
+
+					mu.Lock()
 					txAlreadyExists = true
+					mu.Unlock()
 				}
 			}
 
 			if err != nil {
-				errorFound = true
 				spends[idx].Err = err
 
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
@@ -216,7 +220,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		return nil, errors.NewError("error in aerospike spend (batched mode)", err)
 	}
 
-	if errorFound {
+	if len(spends) != len(spentSpends) { // there must have been failures
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
 
@@ -416,6 +420,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					case LuaSpent:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
+
+							if res.SpendingTxID == nil {
+								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] missing spending tx id in response", txID.String())
+								continue
+							}
+
 							batch[idx].errCh <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.SpendingTxID)
 						}
 					case LuaError:
