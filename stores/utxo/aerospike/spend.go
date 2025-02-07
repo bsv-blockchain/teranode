@@ -416,6 +416,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					case LuaSpent:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
+
+							if res.SpendingTxID == nil {
+								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] missing spending tx id in response", txID.String())
+								continue
+							}
+
 							batch[idx].errCh <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.SpendingTxID)
 						}
 					case LuaError:

@@ -583,7 +583,7 @@ func As(err error, target any) bool {
 			return true
 		}
 
-		if castedErr.wrappedErr != nil {
+		if castedErr != nil && castedErr.wrappedErr != nil {
 			return errors.As(castedErr.wrappedErr, target)
 		}
 	}
