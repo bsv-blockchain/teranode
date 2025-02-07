@@ -1,3 +1,4 @@
+// Package lustre provides a multi-layered blob storage implementation with local caching and S3 backup.
 package lustre
 
 import (
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+// s3Store defines the interface required for S3 storage operations.
 type s3Store interface {
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
@@ -30,12 +32,21 @@ type s3Store interface {
 	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 }
 
+// Lustre implements a three-layer blob storage system:
+// 1. Primary local storage
+// 2. Persistent local storage
+// 3. S3 backup storage
 type Lustre struct {
-	path          string
-	logger        ulogger.Logger
-	options       *options.Options
+	// path is the primary local storage directory
+	path string
+	// logger provides logging capabilities
+	logger ulogger.Logger
+	// options contains the storage configuration options
+	options *options.Options
+	// persistSubDir is the directory for persistent storage
 	persistSubDir string
-	s3Client      s3Store
+	// s3Client handles S3 storage operations
+	s3Client s3Store
 }
 
 /**
@@ -45,6 +56,15 @@ type Lustre struct {
 * No background TTL cleanup as per File store
 * The only way to expire a file is by calling SetTTL explicitly with TTL = 0
 * Has 3 layers, files in primary path, files in 'S3 persist' path and S3
+* Parameters:
+*   - logger: Logger instance for operations
+*   - s3Url: S3 storage configuration URL
+*   - dir: Primary local storage directory
+*   - persistDir: Persistent storage directory
+*   - opts: Optional storage configuration options
+* Returns:
+*   - *Lustre: The configured Lustre instance
+*   - error: Any error that occurred during creation
  */
 func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, opts ...options.StoreOption) (*Lustre, error) {
 	logger = logger.New("lustre")
@@ -89,6 +109,17 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 	return NewLustreStore(logger, s3Client, dir, persistDir, opts...)
 }
 
+// NewLustreStore creates a new Lustre store with a pre-configured S3 client.
+// Parameters:
+//   - logger: Logger instance for operations
+//   - s3Client: Configured S3 client
+//   - dir: Primary local storage directory
+//   - persistDir: Persistent storage directory
+//   - opts: Optional storage configuration options
+//
+// Returns:
+//   - *Lustre: The configured Lustre instance
+//   - error: Any error that occurred during creation
 func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persistDir string, opts ...options.StoreOption) (*Lustre, error) {
 	logger = logger.New("lustre")
 
@@ -115,6 +146,7 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 	return lustreStore, nil
 }
 
+// Health checks the health of all storage layers.
 func (s *Lustre) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	var issues []string
 
@@ -143,6 +175,12 @@ func (s *Lustre) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, "Lustre blob Store healthy", nil
 }
 
+// checkDirectoryPermissions verifies directory access permissions.
+// Parameters:
+//   - path: Directory path to check
+//
+// Returns:
+//   - error: Any error that occurred during verification
 func checkDirectoryPermissions(path string) error {
 	// Check if directory exists
 	info, err := os.Stat(path)
@@ -175,6 +213,13 @@ func checkDirectoryPermissions(path string) error {
 	return nil
 }
 
+// checkS3Connection verifies S3 connectivity.
+// Parameters:
+//   - ctx: Context for the operation
+//   - s3Client: S3 client to check
+//
+// Returns:
+//   - error: Any error that occurred during verification
 func checkS3Connection(ctx context.Context, s3Client s3Store) error {
 	// Create a context with a timeout
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -194,10 +239,12 @@ func checkS3Connection(ctx context.Context, s3Client s3Store) error {
 	return nil
 }
 
+// Close releases any resources held by the store.
 func (s *Lustre) Close(_ context.Context) error {
 	return nil
 }
 
+// SetFromReader stores a blob from a reader.
 func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
@@ -255,6 +302,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	return nil
 }
 
+// Set stores a blob.
 func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
 	s.logger.Debugf("[Lustre]  Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
@@ -303,6 +351,7 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	return nil
 }
 
+// SetTTL sets or removes TTL for a blob.
 func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.FileOption) error {
 	merged := options.MergeOptions(s.options, opts)
 
@@ -363,6 +412,7 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 	return os.Rename(persistedFilename, filename)
 }
 
+// GetTTL retrieves the TTL status of a blob.
 func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOption) (time.Duration, error) {
 	merged := options.MergeOptions(s.options, opts)
 
@@ -400,6 +450,7 @@ func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 	return 0, nil
 }
 
+// GetIoReader provides a reader for blob data.
 func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	merged := options.MergeOptions(s.options, opts)
 
@@ -466,6 +517,7 @@ func (s *Lustre) openFile(basePath string, hash []byte, merged *options.Options)
 	return f, filename, nil
 }
 
+// Get retrieves a blob's data.
 func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[Lustre]  Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
@@ -510,6 +562,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOptio
 	return b, nil
 }
 
+// GetHead retrieves the first n bytes of a blob.
 func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
@@ -552,6 +605,7 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 	return b[:nrOfBytes], nil
 }
 
+// Exists checks if a blob exists in any storage layer.
 func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
 	merged := options.MergeOptions(s.options, opts)
 
@@ -601,6 +655,7 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.FileOpti
 	return true, nil
 }
 
+// Del removes a blob from all storage layers.
 func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
 	s.logger.Debugf("[Lustre] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 
@@ -627,6 +682,14 @@ func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	return nil
 }
 
+// getFilenameForSet determines the appropriate filename for storing a blob.
+// Parameters:
+//   - hash: The blob's hash
+//   - opts: Storage options
+//
+// Returns:
+//   - string: The constructed filename
+//   - error: Any error that occurred during construction
 func (s *Lustre) getFilenameForSet(hash []byte, opts []options.FileOption) (string, error) {
 	basePath := s.path
 

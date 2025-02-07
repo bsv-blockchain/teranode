@@ -1,3 +1,4 @@
+// Package blob provides blob storage functionality with various storage backend implementations.
 package blob
 
 import (
@@ -23,6 +24,15 @@ type HTTPBlobServer struct {
 	logger ulogger.Logger
 }
 
+// NewHTTPBlobServer creates a new HTTP blob server instance.
+// Parameters:
+//   - logger: Logger instance for server operations
+//   - storeURL: URL containing the store configuration
+//   - opts: Optional store configuration options
+//
+// Returns:
+//   - *HTTPBlobServer: The configured server instance
+//   - error: Any error that occurred during creation
 func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error) {
 	store, err := NewStore(logger, storeURL, opts...)
 	if err != nil {
@@ -35,6 +45,13 @@ func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options
 	}, nil
 }
 
+// Start begins serving HTTP requests on the specified address.
+// Parameters:
+//   - ctx: Context for server lifecycle
+//   - addr: Address to listen on
+//
+// Returns:
+//   - error: Any error that occurred during server startup
 func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 	s.logger.Infof("Starting HTTP blob server on %s", addr)
 
@@ -61,6 +78,8 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 	return srv.ListenAndServe()
 }
 
+// ServeHTTP handles HTTP requests to the blob server.
+// Implements http.Handler interface.
 func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		s.handleHealth(w, r)
@@ -85,6 +104,7 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleHealth processes health check requests.
 func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status, msg, err := s.store.Health(r.Context(), false)
 	if err != nil {
@@ -97,6 +117,7 @@ func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(msg))
 }
 
+// handleExists processes blob existence check requests.
 func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -117,6 +138,7 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 	}
 }
 
+// handleGet processes blob retrieval requests.
 func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -147,6 +169,7 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 	_, _ = io.Copy(w, rc)
 }
 
+// handleRangeRequest processes partial content requests.
 func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, opts ...options.FileOption) {
 	rangeHeader := r.Header.Get("Range")
 
@@ -185,6 +208,14 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(rangeData)
 }
 
+// parseRange parses the Range header from HTTP requests.
+// Parameters:
+//   - rangeHeader: The Range header value
+//
+// Returns:
+//   - start: Starting byte position
+//   - end: Ending byte position
+//   - error: Any error that occurred during parsing
 func parseRange(rangeHeader string) (int, int, error) {
 	if !strings.HasPrefix(rangeHeader, "bytes=") {
 		return 0, 0, errors.NewInvalidArgumentError("invalid range header format")
@@ -213,6 +244,7 @@ func parseRange(rangeHeader string) (int, int, error) {
 	return start, end + 1, nil
 }
 
+// handleSet processes blob storage requests.
 func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -235,6 +267,7 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	w.WriteHeader(http.StatusCreated)
 }
 
+// handleSetTTL processes TTL setting requests.
 func (s *HTTPBlobServer) handleSetTTL(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -264,6 +297,7 @@ func (s *HTTPBlobServer) handleSetTTL(w http.ResponseWriter, r *http.Request, op
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleDelete processes blob deletion requests.
 func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -280,6 +314,13 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getKeyFromPath extracts the blob key from the request path.
+// Parameters:
+//   - path: The request path
+//
+// Returns:
+//   - []byte: Decoded key
+//   - error: Any error that occurred during extraction
 func getKeyFromPath(path string) ([]byte, error) {
 	// Assuming the path is in the format "/blob/{key}"
 	encodedKey := path[6:]
