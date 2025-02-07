@@ -54,11 +54,11 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	res, err := s.apiClient.HealthGRPC(ctx, &subtreevalidation_api.EmptyMessage{})
-	if !res.Ok || err != nil {
-		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)
+	if !res.GetOk() || err != nil {
+		return http.StatusFailedDependency, res.GetDetails(), errors.UnwrapGRPC(err)
 	}
 
-	return http.StatusOK, res.Details, nil
+	return http.StatusOK, res.GetDetails(), nil
 }
 
 func (s *Client) CheckSubtreeFromBlock(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {

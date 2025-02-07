@@ -189,17 +189,11 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	resp, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
-
-	switch {
-	case err != nil:
-		return http.StatusFailedDependency, "", errors.UnwrapGRPC(err)
-	case resp == nil:
-		return http.StatusFailedDependency, "", errors.NewServiceError("blockchain service is not healthy")
-	case !resp.Ok:
-		return http.StatusFailedDependency, resp.Details, errors.NewServiceError("blockchain service is not healthy")
+	if err != nil || !resp.GetOk() {
+		return http.StatusFailedDependency, resp.GetDetails(), errors.UnwrapGRPC(err)
 	}
 
-	return http.StatusOK, resp.Details, nil
+	return http.StatusOK, resp.GetDetails(), nil
 }
 
 // AddBlock sends a request to add a new block to the blockchain.
