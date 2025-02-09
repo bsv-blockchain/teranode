@@ -47,7 +47,7 @@ services:
     expose:
       - "5432"
     volumes:
-      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
@@ -107,7 +107,7 @@ services:
     expose:
       - "13100"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
 
   aerospike-2:
@@ -118,7 +118,7 @@ services:
     expose:
       - "13200"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
 
   aerospike-3:
@@ -129,7 +129,7 @@ services:
     expose:
       - "13300"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
 
   teranode1:
@@ -158,7 +158,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ../settings_local.conf:/app/settings_local.conf
       - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
@@ -191,7 +191,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ../settings_local.conf:/app/settings_local.conf
       - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
@@ -227,7 +227,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ../settings_local.conf:/app/settings_local.conf
       - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
