@@ -361,20 +361,40 @@ install-lint:
 	brew install golangci-lint
 	brew install staticcheck
 
-# lint will only check the files that have been changed in the current branch compared to master, including unstaged/untracked changes
+
+# lint will check the changed files in the current branch compared to master, including commits and unstaged/untracked changes
+# It will show new linting errors/warnings, by updating local copy of origin/master with the latest state of the remote master branch.
 .PHONY: lint
 lint:
 	git fetch origin master
 	golangci-lint run ./... --new-from-rev origin/master
 
-# lint-new will only check your unstaged/untracked changes, or fallback to check last commit if no changes in checkout
+# lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
+# It is useful for quickly checking that your current, uncommitted work doesn’t introduce new lint errors.
 .PHONY: lint-new
 lint-new:
 	golangci-lint run ./... --new
 
+# lint-full will check all files in the project
+# It will show all lint errors and warnings.
 .PHONY: lint-full
 lint-full:
 	golangci-lint run ./...
+
+# lint-full-changed-dirs will check the files that have been added/modified in the current branch compared to base master, including unstaged/untracked changes
+# It will show all lint errors and warnings.
+.PHONY: lint-full-changed-dirs
+lint-full-changed-dirs:
+	@base_commit=$$(git merge-base master HEAD); \
+	echo "Using base commit $$base_commit for diffing"; \
+	changed_dirs=$$(git diff --name-only $$base_commit HEAD | grep '\.go$$' | xargs -I{} dirname {} | sort -u); \
+	if [ -z "$$changed_dirs" ]; then \
+	  echo "No changed Go files found."; \
+	else \
+	  echo "Linting packages in the following directories:"; \
+	  echo "$$changed_dirs"; \
+	  golangci-lint run $$changed_dirs; \
+	fi
 
 .PHONY: install
 install:

@@ -224,8 +224,6 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.logger.Infof("[Legacy Server] Starting...")
-
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	s.server.Start()
 	s.logger.Infof("[Legacy Server] Internal server started")
