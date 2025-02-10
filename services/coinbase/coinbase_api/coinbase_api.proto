@@ -13,6 +13,7 @@ service CoinbaseAPI {
   rpc RequestFunds(RequestFundsRequest) returns (RequestFundsResponse) {}
   rpc DistributeTransaction(DistributeTransactionRequest) returns (DistributeTransactionResponse) {}
   rpc GetBalance(google.protobuf.Empty) returns (GetBalanceResponse) {}
+  rpc SetMalformedUTXOConfig(SetMalformedUTXOConfigRequest) returns (google.protobuf.Empty) {}
 }
 
 // swagger:model HealthResponse
@@ -57,4 +58,10 @@ message DistributeTransactionResponse {
 message GetBalanceResponse {
   uint64 number_of_utxos = 1;
   uint64 total_satoshis = 2;
+}
+
+// swagger:model SetMalformedUTXOConfigRequest
+message SetMalformedUTXOConfigRequest {
+  int32 percentage = 1;
+  int32 type = 2;
 }

@@ -100,3 +100,16 @@ func (c *Client) GetBalance(ctx context.Context) (uint64, uint64, error) {
 
 	return res.NumberOfUtxos, res.TotalSatoshis, nil
 }
+
+func (c *Client) SetMalformedUTXOConfig(ctx context.Context, percentage int32, malformationType MalformationType) error {
+	_, err := c.client.SetMalformedUTXOConfig(ctx, &coinbase_api.SetMalformedUTXOConfigRequest{
+		Percentage: percentage,
+		Type:       int32(malformationType),
+	})
+
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}

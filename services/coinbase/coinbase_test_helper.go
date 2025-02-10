@@ -26,31 +26,6 @@ type TestSubtrees struct {
 	Subtrees      []*util.Subtree
 }
 
-// MalformedUTXOConfig specifies how to generate malformed UTXOs during the splitting phase
-type MalformedUTXOConfig struct {
-	// Percentage of UTXOs that should be malformed (0-100)
-	Percentage int
-	// Type of malformation to apply
-	Type MalformationType
-}
-
-// MalformationType specifies how to malform the UTXO
-type MalformationType int
-
-// NOTE:
-// We are not able to modify the locking script to be invalid, as this is deemed invalid when genereating transaction in splitUtxo
-// So following malformations are not possible:
-// 1. EmptyLockingScript
-// 2. InvalidLockingScript
-// 3. OversizedLockingScript
-// 4. NonStandardScript
-// We are also not able to make satoshis amount negative.
-
-const (
-	// ZeroSatoshis sets the satoshi amount to 0
-	ZeroSatoshis MalformationType = iota
-)
-
 // MalformOutput applies the specified malformation to a transaction output
 func MalformOutput(output *bt.Output, malformType MalformationType) {
 	if malformType == ZeroSatoshis {

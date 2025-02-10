@@ -3,7 +3,7 @@
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags test_functional
+// $ go test -v -run "^TestZeroSatoshisTestSuite$/TestZeroSatoshisOutput$" -tags test_functional
 
 package smoke
 
@@ -21,25 +21,23 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
-type SanityTestSuite struct {
+type ZeroSatoshisTestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func TestSanityTestSuite(t *testing.T) {
-	suite.Run(t, &SanityTestSuite{})
+func TestZeroSatoshisTestSuite(t *testing.T) {
+	suite.Run(t, &ZeroSatoshisTestSuite{})
 }
 
-func (suite *SanityTestSuite) TestShouldAllowFairTx() {
+func (suite *ZeroSatoshisTestSuite) TestZeroSatoshisOutput() {
 	t := suite.T()
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
-	logger := testEnv.Logger
-	url := "http://" + testEnv.Nodes[0].AssetURL
+	//logger := testEnv.Logger
 
 	txDistributor := testEnv.Nodes[0].DistributorClient
 
@@ -95,12 +93,12 @@ loop:
 	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	// print tx outputs
-	for _, output := range tx.Outputs {
-		t.Logf("Output: %s %d", output.LockingScript, output.Satoshis)
-	}
+	// for _, output := range tx.Outputs {
+	// 	t.Logf("Output: %s %d", output.LockingScript, output.Satoshis)
+	// }
 
 	// check tx is malformed
-	require.Equal(t, tx.Outputs[0].Satoshis, uint64(0), "Transaction output satoshis should be 0")
+	require.Equal(t, uint64(0), tx.Outputs[0].Satoshis, "Transaction output satoshis should be 0")
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
@@ -135,66 +133,9 @@ loop:
 
 	// send the transaction. We expect this to fail if the tx is malformed
 	_, err = txDistributor.SendTransaction(ctx, newTx)
-	if err != nil {
-		t.Errorf("Failed to send new transaction: %v", err)
-	}
+	require.Error(t, err, "Transaction should be rejected")
+	require.Contains(t, err.Error(), "transaction fee is too low")
 
 	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
 
-	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-
-	delay := testEnv.Nodes[0].Settings.BlockAssembly.DoubleSpendWindow
-	if delay != 0 {
-		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
-	}
-
-	height, _ := helper.GetBlockHeight(url)
-	t.Logf("Block height before mining: %d\n", height)
-
-	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
-
-	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL
-	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
-	// Generate blocks
-	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{101})
-	// wait for the blocks to be generated
-	time.Sleep(5 * time.Second)
-	require.NoError(t, err, "Failed to generate blocks: %v", err)
-
-	blockStore := testEnv.Nodes[0].Blockstore
-	blockchainClient := testEnv.Nodes[0].BlockchainClient
-	bl := false
-	targetHeight := height + 1
-
-	for i := 0; i < 5; i++ {
-		err := helper.WaitForBlockHeight(url, targetHeight, 60)
-		if err != nil {
-			t.Errorf("Failed to wait for block height: %v", err)
-		}
-
-		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-		if err != nil {
-			t.Errorf("Failed to get block headers: %v", err)
-		}
-
-		t.Logf("Testing on Best block header: %v", header[0].Hash())
-
-		t.Logf("Testing on Best block meta: %v", meta[0].Height)
-		t.Logf("Testing on BlockstoreURL: %v", testEnv.Nodes[0].BlockstoreURL)
-
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
-		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
-		}
-
-		if bl {
-			break
-		}
-
-		targetHeight++
-	}
-
-	assert.Equal(t, true, bl, "Test Tx not found in block")
 }

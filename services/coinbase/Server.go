@@ -217,3 +217,19 @@ func (s *Server) GetBalance(ctx context.Context, _ *emptypb.Empty) (*coinbase_ap
 
 	return balance, nil
 }
+
+func (s *Server) SetMalformedUTXOConfig(ctx context.Context, req *coinbase_api.SetMalformedUTXOConfigRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SetMalformedUTXOConfig",
+		tracing.WithParentStat(s.stats),
+		tracing.WithHistogram(prometheusSetMalformedUTXOConfig),
+		tracing.WithLogMessage(s.logger, "[SetMalformedUTXOConfig] called"),
+	)
+	defer deferFn()
+
+	err := s.coinbase.SetMalformedUTXOConfig(ctx, req.Percentage, MalformationType(req.Type))
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}

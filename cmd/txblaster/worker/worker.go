@@ -205,8 +205,14 @@ func NewWorker(
 	}, nil
 }
 
-func (w *Worker) Init(ctx context.Context) (err error) {
+func (w *Worker) Init(ctx context.Context, spamRate int32, malformationType coinbase.MalformationType) (err error) {
 	w.startTime = time.Now()
+
+	if spamRate > 0 {
+		if err := w.coinbaseClient.SetMalformedUTXOConfig(ctx, spamRate, malformationType); err != nil {
+			return errors.NewServiceError("error setting malformed utxo config", err)
+		}
+	}
 
 	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString, true)
 	if err != nil {

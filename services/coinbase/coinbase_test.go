@@ -268,10 +268,8 @@ func Test_MalformedUTXOs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Configure 100% of UTXOs to be malformed
-	coinbase.malformedConfig = &MalformedUTXOConfig{
-		Percentage: 100,
-		Type:       ZeroSatoshis,
-	}
+	err = coinbase.SetMalformedUTXOConfig(ctx, 100, ZeroSatoshis)
+	require.NoError(t, err)
 
 	err = coinbase.createTables(ctx)
 	require.NoError(t, err)
@@ -525,11 +523,9 @@ func Test_RequestFundsMalformed(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Configure 100% of UTXOs to be malformed with the current type
-			coinbase.malformedConfig = &MalformedUTXOConfig{
-				Percentage: 100,
-				Type:       tc.malformType,
-			}
+			// Configure 100% of UTXOs to be malformed
+			err = coinbase.SetMalformedUTXOConfig(ctx, 100, ZeroSatoshis)
+			require.NoError(t, err)
 
 			// Generate and store a block with malformed UTXOs
 			block, err := GenerateTestBlock(blockHeight, 2048, 1024, 500, prevHash)

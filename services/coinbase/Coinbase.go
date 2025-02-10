@@ -43,6 +43,31 @@ type processBlockCatchup struct {
 	baseURL string
 }
 
+// MalformedUTXOConfig specifies how to generate malformed UTXOs during the splitting phase
+type MalformedUTXOConfig struct {
+	// Percentage of UTXOs that should be malformed (0-100)
+	Percentage int32
+	// Type of malformation to apply
+	Type MalformationType
+}
+
+// MalformationType specifies how to malform the UTXO
+type MalformationType int32
+
+// NOTE:
+// We are not able to modify the locking script to be invalid, as this is deemed invalid when genereating transaction in splitUtxo
+// So following malformations are not possible:
+// 1. EmptyLockingScript
+// 2. InvalidLockingScript
+// 3. OversizedLockingScript
+// 4. NonStandardScript
+// We are also not able to make satoshis amount negative.
+
+const (
+	// ZeroSatoshis sets the satoshi amount to 0
+	ZeroSatoshis MalformationType = iota
+)
+
 type Coinbase struct {
 	db               *usql.DB
 	settings         *settings.Settings
@@ -700,10 +725,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 	amountRemaining := utxo.Satoshis
 
 	// Calculate how many outputs should be malformed
-	malformedCount := 0
+	malformedCount := int32(0)
 
 	if c.malformedConfig != nil && c.malformedConfig.Percentage > 0 {
-		totalOutputs := int(amountRemaining / splitSatoshis) //nolint:gosec // G115: integer overflow conversion int -> uint32
+		totalOutputs := int32(amountRemaining / splitSatoshis) //nolint:gosec // G115: integer overflow conversion int -> uint32
 		if amountRemaining%splitSatoshis > 0 {
 			totalOutputs++
 		}
@@ -711,7 +736,7 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 		malformedCount = (totalOutputs * c.malformedConfig.Percentage) / 100
 	}
 
-	outputCount := 0
+	outputCount := int32(0)
 
 	for amountRemaining > splitSatoshis {
 		select {
@@ -763,6 +788,15 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 
 	// Insert the spendable utxos....
 	return c.insertSpendableUTXOs(ctx, tx)
+}
+
+func (c *Coinbase) SetMalformedUTXOConfig(ctx context.Context, percentage int32, malformationType MalformationType) error {
+	c.malformedConfig = &MalformedUTXOConfig{
+		Percentage: percentage,
+		Type:       malformationType,
+	}
+
+	return nil
 }
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error) {

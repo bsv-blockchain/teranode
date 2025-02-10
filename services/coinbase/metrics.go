@@ -9,10 +9,11 @@ import (
 )
 
 var (
-	prometheusHealth                prometheus.Counter
-	prometheusRequestFunds          prometheus.Histogram
-	prometheusDistributeTransaction prometheus.Histogram
-	prometheusGetBalance            prometheus.Histogram
+	prometheusHealth                 prometheus.Counter
+	prometheusRequestFunds           prometheus.Histogram
+	prometheusDistributeTransaction  prometheus.Histogram
+	prometheusGetBalance             prometheus.Histogram
+	prometheusSetMalformedUTXOConfig prometheus.Histogram
 )
 
 var (
@@ -59,6 +60,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "coinbase",
 			Name:      "get_balance",
 			Help:      "Histogram of calls to the GetBalance endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSetMalformedUTXOConfig = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "coinbase",
+			Name:      "set_malformed_utxo_config",
+			Help:      "Histogram of calls to the SetMalformedUTXOConfig endpoint",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
