@@ -27,7 +27,7 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 4. Propagating the transactions to the `Subtree Validation` and `Block Assembly` service (if the Tx is passed), or notify the `P2P` service (if the tx is rejected).
 
 The Validator, as a component, is instantiated as part of any service requiring to validate transactions.
-However, the Validator can also be started as a service, allowing to interact with it via gRPC, fRPC or Kafka. This setup is not recommended, given its performance overhead.
+However, the Validator can also be started as a service, allowing to interact with it via gRPC or Kafka. This setup is not recommended, given its performance overhead.
 
 ![Tx_Validator_Container_Diagram.png](img%2FTx_Validator_Container_Diagram.png)
 
@@ -62,9 +62,8 @@ Should the node require to start the validator as an independent service, the `s
 3. Return the outcome (success or error).
 
 * **`Start` Function**:
-1. Optionally, set up an fRPC server if the configuration exists.
-2. Start a goroutine to manage new and dead subscriptions.
-3. Start the gRPC server and handle any errors.
+1. Start a goroutine to manage new and dead subscriptions.
+2. Start the gRPC server and handle any errors.
 
 ### 2.2. Receiving Transaction Validation Requests
 
@@ -289,19 +288,17 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 
 1. **Go (Golang)**: The programming language used for the entire codebase.
 
-2. **gRPC**: Google's Remote Procedure Call system, used here for server-client communication. It enables the server to expose specific methods that clients can call remotely.
+2. **gRPC**: Google's Remote Procedure Call system, used here for server-client communication. It enables the server to expose specific methods that clients can call remotely. This is only used if the component is started as a service.
 
-3. **fRPC**: These are alternative RPC frameworks to gRPC. fRPC is a framework for creating RPC servers and clients.
+3. **Kafka (by Apache)**: A distributed streaming platform (optionally) used here for message handling. Kafka is used for distributing transaction validation data to the block assembly.
 
-4. **Kafka (by Apache)**: A distributed streaming platform (optionally) used here for message handling. Kafka is used for distributing transaction validation data to the block assembly.
+4. **Sarama**: A Go library for Apache Kafka.
 
-5. **Sarama**: A Go library for Apache Kafka.
+5. **Go-Bitcoin**: A Go library that provides utilities and tools for working with Bitcoin, including transaction parsing and manipulation.
 
-6. **Go-Bitcoin**: A Go library that provides utilities and tools for working with Bitcoin, including transaction parsing and manipulation.
+6. **LibSV**: Another Go library for Bitcoin SV, used for transaction-related operations.
 
-7. **LibSV**: Another Go library for Bitcoin SV, used for transaction-related operations.
-
-8. **Other Utilities and Libraries**:
+7. **Other Utilities and Libraries**:
   - `sync/atomic`, `strings`, `strconv`, `time`, `io`, `net/url`, `os`, `bytes`, and other standard Go packages for various utility functions.
   - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
   - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
