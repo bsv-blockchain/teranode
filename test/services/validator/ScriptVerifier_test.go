@@ -99,7 +99,7 @@ func testVerifyExtendMultiRoutines(t *testing.T, txsBin [][]byte) {
 	// verify the scripts of all the transactions in parallel
 	for _, txBin := range txsBin {
 		g.Go(func() error {
-			return bdkscript.VerifyExtend(txBin, 725267)
+			return bdkscript.VerifyExtend(txBin, 725267, true)
 		})
 	}
 
@@ -114,7 +114,7 @@ func testVerifyExtendSequential(t *testing.T, txsBin [][]byte) {
 
 	// verify the scripts of all the transactions in parallel
 	for _, txBin := range txsBin {
-		err := bdkscript.VerifyExtend(txBin, 725267)
+		err := bdkscript.VerifyExtend(txBin, 725267, true)
 		require.NoError(t, err)
 	}
 }
@@ -125,7 +125,7 @@ func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter
 	// verify the scripts of all the transactions in parallel
 	for _, tx := range txs {
 		g.Go(func() error {
-			return verifier.VerifyScript(tx, 725267)
+			return verifier.VerifyScript(tx, 725267, true)
 		})
 	}
 
@@ -135,7 +135,7 @@ func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter
 
 func testBlockSequential(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
 	for _, tx := range txs {
-		err := verifier.VerifyScript(tx, 725267)
+		err := verifier.VerifyScript(tx, 725267, true)
 		require.NoError(t, err)
 	}
 }

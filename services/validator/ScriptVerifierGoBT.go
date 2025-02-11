@@ -64,7 +64,7 @@ type scriptVerifierGoBt struct {
 // Special Cases:
 //   - Handles negative shift amount errors for historical compatibility
 //   - Provides special handling for blocks before height 800,000
-func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
+func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed

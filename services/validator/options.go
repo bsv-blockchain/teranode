@@ -24,6 +24,10 @@ type Options struct {
 	// createConflicting determines whether to allow conflicting transactions
 	// this is done when validating transaction from a block that has been mined
 	createConflicting bool
+
+	// disableConsensus determine the consensus parameter to execute script interpreter
+	// By default it is false, meaning the consensus is true
+	disableConsensus bool
 }
 
 // Option defines a function type for setting options

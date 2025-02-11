@@ -117,7 +117,7 @@ type scriptVerifierGoBDK struct {
 //   - error: Any script verification errors encountered
 //
 // Note: Empty scripts and special cases are handled with appropriate logging
-func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error {
+func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) error {
 	txID := tx.TxID()
 	if _, has := v.whiteList[txID]; has {
 		return nil
@@ -125,7 +125,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) error 
 
 	eTxBytes := tx.ExtendedBytes()
 
-	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1)
+	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1, consensus)
 	if err != nil {
 		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)
 		v.logger.Warnf(errorLogMsg)

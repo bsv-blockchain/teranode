@@ -31,7 +31,6 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
-	// helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/wif"
@@ -76,7 +75,7 @@ func TestScriptVerifierGoBt(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -85,7 +84,7 @@ func TestScriptVerifierGoSDK(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -96,7 +95,7 @@ func Test_Tx(t *testing.T) {
 	tx, _ := bt.NewTxFromString(txHex)
 
 	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-	err := scriptInterpreter.VerifyScript(tx, 720899)
+	err := scriptInterpreter.VerifyScript(tx, 720899, true)
 	require.NoError(t, err)
 
 	txBytes := tx.ExtendedBytes()
@@ -111,7 +110,7 @@ func Test_Tx(t *testing.T) {
 
 	assert.Equal(t, hex.EncodeToString(tx.Bytes()), hex.EncodeToString(txE.Bytes()))
 
-	err = scriptInterpreter.VerifyScript(txE, 729000)
+	err = scriptInterpreter.VerifyScript(txE, 729000, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, tx.TxID(), txE.TxID())
@@ -145,7 +144,7 @@ func BenchmarkVerifyTransactionGoBt(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
 		}
 	})
 }
@@ -159,7 +158,7 @@ func BenchmarkVerifyTransactionGoSDK(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
 		}
 	})
 }
@@ -173,7 +172,7 @@ func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
 		}
 	})
 }
@@ -190,17 +189,13 @@ func TestMaxTxSizePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
 }
 
-// TODO: this test needs changing when the script validation is fixed (#1981)
 func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
-	tSettings.Policy.MaxOpsPerScriptPolicy = 1       // insanely low
-	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
-	tSettings.ChainCfgParams.GenesisActivationHeight = 100
+	tSettings.Policy.MaxOpsPerScriptPolicy = 1 // insanely low
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-
-	err := txValidator.ValidateTransaction(largeTx, 620539, &Options{})
-	assert.NoError(t, err)
+	err := txValidator.ValidateTransaction(largeTx, 720808, &Options{disableConsensus: true})
+	assert.Error(t, err)
 }
 
 func Test_MinFeePolicy(t *testing.T) {

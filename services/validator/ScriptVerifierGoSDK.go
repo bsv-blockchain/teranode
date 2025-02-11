@@ -73,7 +73,7 @@ type scriptVerifierGoSDK struct {
 //
 // Note: Contains special handling for negative shift amount errors
 // which are bypassed for historical compatibility
-func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
+func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed

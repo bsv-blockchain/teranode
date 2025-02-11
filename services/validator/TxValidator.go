@@ -62,7 +62,7 @@ type TxScriptInterpreter interface {
 	// Logger return the encapsulated logger
 
 	// VerifyScript implement the method to verify a script for a transaction
-	VerifyScript(tx *bt.Tx, blockHeight uint32) error
+	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) error
 }
 
 // TxScriptInterpreterCreator defines a function type for creating script interpreters
@@ -185,8 +185,12 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 		}
 	}
 
+	consensus := true
+	if validationOptions != nil && validationOptions.disableConsensus {
+		consensus = false
+	}
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.interpreter.VerifyScript(tx, blockHeight); err != nil {
+	if err := tv.interpreter.VerifyScript(tx, blockHeight, consensus); err != nil {
 		return err
 	}
 
