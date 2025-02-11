@@ -192,6 +192,8 @@ func (m *Miner) CPUMine(ctx context.Context, candidate *model.MiningCandidate, n
 				blockHash   *chainhash.Hash
 			)
 
+			dc := NewDifficultyChecker()
+
 			for nonce := startNonce; nonce < endNonce; nonce++ {
 				select {
 				case <-ctx.Done():
@@ -201,7 +203,7 @@ func (m *Miner) CPUMine(ctx context.Context, candidate *model.MiningCandidate, n
 
 					rounds.Add(1)
 
-					headerValid, blockHash = HasMetTargetDifficulty(blockHeader, target)
+					headerValid, blockHash = dc.HasMetTargetDifficulty(blockHeader, target)
 					if headerValid {
 						solutionCh <- &model.MiningSolution{
 							Id:        candidate.Id,
@@ -258,19 +260,26 @@ func (m *Miner) CreateCoinbaseTxCandidate(height uint32, coinbaseValue uint64) (
 	return coinbaseTx, nil
 }
 
-var (
-	bn   = big.NewInt(0)
+type DifficultyChecker struct {
+	bn   *big.Int
 	hash *chainhash.Hash
-)
+}
 
-func HasMetTargetDifficulty(bh *model.BlockHeader, target *big.Int) (bool, *chainhash.Hash) {
-	hash = bh.Hash()
+func NewDifficultyChecker() *DifficultyChecker {
+	return &DifficultyChecker{
+		bn:   big.NewInt(0),
+		hash: &chainhash.Hash{},
+	}
+}
 
-	bn.SetBytes(bt.ReverseBytes(hash[:]))
+func (dc *DifficultyChecker) HasMetTargetDifficulty(bh *model.BlockHeader, target *big.Int) (bool, *chainhash.Hash) {
+	dc.hash = bh.Hash()
 
-	if bn.Cmp(target) <= 0 {
-		return true, hash
+	dc.bn.SetBytes(bt.ReverseBytes(dc.hash[:]))
+
+	if dc.bn.Cmp(target) <= 0 {
+		return true, dc.hash
 	}
 
-	return false, hash
+	return false, dc.hash
 }
