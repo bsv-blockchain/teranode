@@ -117,22 +117,31 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	outputDetails := make([]string, len(tx.Outputs))
+	skipLogging := false
+
 	for i, output := range tx.Outputs {
+		if output == nil {
+			skipLogging = true
+			break
+		}
+
 		outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d}",
 			i, output.Satoshis)
 	}
 
-	s.logger.Debugf("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
-		tx.TxIDChainHash(),
-		strings.Join(inputDetails, ", "),
-		strings.Join(outputDetails, ", "),
-		tx.IsCoinbase(),
-		blockHeight,
-		tx.LockTime,
-		tx.Version,
-		data.String(),
-		err,
-		caller())
+	if !skipLogging {
+		s.logger.Debugf("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
+			tx.TxIDChainHash(),
+			strings.Join(inputDetails, ", "),
+			strings.Join(outputDetails, ", "),
+			tx.IsCoinbase(),
+			blockHeight,
+			tx.LockTime,
+			tx.Version,
+			data.String(),
+			err,
+			caller())
+	}
 
 	return data, err
 }
