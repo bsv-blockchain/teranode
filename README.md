@@ -66,11 +66,12 @@
 
 1. [Interacting with Asset Server](docs/howto/miners/minersHowToInteractWithAssetServer.md)
 2. [Interacting with RPC Server](docs/howto/miners/minersHowToInteractWithRPCServer.md)
-3. [Interacting with the Teranode CLI](docs/howto/miners/minersHowToTeranodeCLI.md)
-4. [Managing Disk Space](docs/howto/miners/minersManagingDiskSpace.md)
-5. [Aerospike Configuration Considerations](docs/howto/miners/minersHowToAerospikeTuning.md)
-6. [How To Reset Teranode](docs/howto/miners/minersHowToResetTeranode.md)
-7. [Blockchain Synchronization](docs/howto/miners/minersHowToSyncTheNode.md)
+3. [Interacting with the FSM via RPC](docs/howto/miners/minersHowToInteractWithFSM.md)
+4. [Interacting with the Teranode CLI](docs/howto/miners/minersHowToTeranodeCLI.md)
+5. [Managing Disk Space](docs/howto/miners/minersManagingDiskSpace.md)
+6. [Aerospike Configuration Considerations](docs/howto/miners/minersHowToAerospikeTuning.md)
+7. [How To Reset Teranode](docs/howto/miners/minersHowToResetTeranode.md)
+8. [Blockchain Synchronization](docs/howto/miners/minersHowToSyncTheNode.md)
 
 -----
 
@@ -159,6 +160,8 @@
 - [Error Handling Guidelines](docs/references/errorHandling.md)
 - [Configuration Settings](docs/references/settings.md)
 - [Testing Framework Technical Reference](docs/references/testingTechnicalReference.md)
+- [Prometheus Metrics](docs/references/prometheusMetrics.md)
+
 - [Network Consensus Rules](docs/references/networkConsensusRules.md)
 
 ## Additional Resources
