@@ -156,6 +156,7 @@ type peerSyncState struct {
 
 // syncPeerState stores additional info about the sync peer.
 type syncPeerState struct {
+	mu                sync.RWMutex // Protects all fields
 	recvBytes         uint64
 	recvBytesLastTick uint64
 	lastBlockTime     time.Time
@@ -167,6 +168,9 @@ type syncPeerState struct {
 // returns an integer representing the number of network
 // violations the sync peer has.
 func (sps *syncPeerState) validNetworkSpeed(minSyncPeerNetworkSpeed uint64) int {
+	sps.mu.Lock()
+	defer sps.mu.Unlock()
+
 	// Fresh sync peer. We need another tick.
 	if sps.ticks == 0 {
 		return 0
@@ -196,9 +200,42 @@ type orphanTxAndParents struct {
 // updateNetwork updates the received bytes. Just tracks 2 ticks
 // worth of network bandwidth.
 func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
+	sps.mu.Lock()
+	defer sps.mu.Unlock()
+
 	sps.ticks++
 	sps.recvBytesLastTick = sps.recvBytes
 	sps.recvBytes = syncPeer.BytesReceived()
+}
+
+// updateLastBlockTime updates the last block time
+func (sps *syncPeerState) updateLastBlockTime() {
+	sps.mu.Lock()
+	defer sps.mu.Unlock()
+	sps.lastBlockTime = time.Now()
+}
+
+// getLastBlockTime returns the last block time
+func (sps *syncPeerState) getLastBlockTime() time.Time {
+	sps.mu.RLock()
+	defer sps.mu.RUnlock()
+
+	return sps.lastBlockTime
+}
+
+// getViolations returns the current violation count
+func (sps *syncPeerState) getViolations() int {
+	sps.mu.RLock()
+	defer sps.mu.RUnlock()
+
+	return sps.violations
+}
+
+// setViolations sets the violation count
+func (sps *syncPeerState) setViolations(v int) {
+	sps.mu.Lock()
+	defer sps.mu.Unlock()
+	sps.violations = v
 }
 
 // SyncManager is used to communicate block related messages with peers. The
@@ -537,7 +574,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	defer sm.syncPeerState.updateNetwork(sm.syncPeer)
 
 	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
-	lastBlockSince := time.Since(sm.syncPeerState.lastBlockTime)
+	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
 
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
@@ -550,6 +587,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Don't update sync peers if you have all the available blocks.
 	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
+		// TODO we should return an error here to the caller
 		sm.logger.Errorf("failed to get best block header: %v", err)
 		return
 	}
@@ -557,8 +595,8 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// check whether this sync peer is still valid, if its height is the same or higher than ours
 	if sm.topBlock() >= int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 		// Update the time and violations to prevent disconnects.
-		sm.syncPeerState.lastBlockTime = time.Now()
-		sm.syncPeerState.violations = 0
+		sm.syncPeerState.updateLastBlockTime()
+		sm.syncPeerState.setViolations(0)
 
 		return
 	}
@@ -628,7 +666,9 @@ func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 
 // updateSyncPeer picks a new peer to sync from.
 func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
-	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v", sm.syncPeerState.lastBlockTime, sm.syncPeerState.violations)
+	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v",
+		sm.syncPeerState.getLastBlockTime(),
+		sm.syncPeerState.getViolations())
 
 	// Disconnect from the misbehaving peer.
 	sm.syncPeer.Disconnect()
@@ -960,7 +1000,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	)
 
 	if peer == sm.syncPeer {
-		sm.syncPeerState.lastBlockTime = time.Now()
+		sm.syncPeerState.updateLastBlockTime()
 	}
 
 	// When the block is not an orphan, log information about it and update the chain state.
@@ -2033,11 +2073,8 @@ func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.UR
 				return nil
 			}
 
-			// create wireBlockHeader
-			wireBlockHeader := block.Header.ToWireBlockHeader()
-
 			sm.logger.Infof("received block final message from Kafka: %s, %s", hash, block.Header.String())
-			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
+			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), block.Header.ToWireBlockHeader())
 		}
 
 		return nil
