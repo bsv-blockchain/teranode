@@ -143,6 +143,13 @@
 - [Blob Store](docs/references/stores/blob_reference.md)
 - [UTXO Store](docs/references/stores/utxo_reference.md)
 
+### Data Model
+- [Block Data Model](docs/topics/datamodel/block_data_model.md)
+- [Block Header Data Model](docs/topics/datamodel/block_header_data_model.md)
+- [Subtree Data Model](docs/topics/datamodel/subtree_data_model.md)
+- [Transaction Data Model](docs/topics/datamodel/transaction_data_model.md)
+- [UTXO Data Model](docs/topics/datamodel/utxo_data_model.md)
+
 ### API Documentation
 - [Alert gRPC API](docs/references/protobuf_docs/alertProto.md)
 - [Block Assembly gRPC API](docs/references/protobuf_docs/blockassemblyProto.md)
@@ -160,8 +167,8 @@
 - [Error Handling Guidelines](docs/references/errorHandling.md)
 - [Configuration Settings](docs/references/settings.md)
 - [Testing Framework Technical Reference](docs/references/testingTechnicalReference.md)
+- [Teranode Daemon Reference](docs/references/teranodeDaemonReference.md)
 - [Prometheus Metrics](docs/references/prometheusMetrics.md)
-
 - [Network Consensus Rules](docs/references/networkConsensusRules.md)
 
 ## Additional Resources
