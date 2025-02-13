@@ -978,6 +978,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
 
+			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
+
 			// TODO TEMPORARY: we should not panic here, but return the error
 			panic(err)
 		}
