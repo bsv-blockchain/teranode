@@ -313,6 +313,13 @@ func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL 
 
 	debugging := s.logger.LogLevel() == ulogger.LogLevelDebug
 
+	sslMode := "disable"
+
+	queryParams := dbURL.Query()
+	if val, ok := queryParams["sslmode"]; ok && len(val) > 0 {
+		sslMode = val[0]
+	}
+
 	// Select the datastore
 	switch dbURL.Scheme {
 	case "sqlite":
@@ -374,6 +381,7 @@ func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL 
 			TimeZone:     "UTC",
 			TxTimeout:    20 * time.Second,
 			User:         dbURL.User.Username(),
+			SslMode:      sslMode,
 		}
 
 		// Create the read/write options
