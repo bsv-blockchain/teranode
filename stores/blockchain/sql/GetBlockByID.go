@@ -14,7 +14,7 @@ import (
 )
 
 func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockByHeight")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockByID")
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds

@@ -34,17 +34,18 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 	q := `
 		SELECT
 		 b.ID
-	  ,b.version
+	    ,b.version
 		,b.block_time
 		,b.n_bits
-	  ,b.nonce
+	    ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
-	  ,b.tx_count
+	    ,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
 		,b.subtree_count
 		,b.subtrees
+		,b.height
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -103,6 +104,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		&coinbaseTx,
 		&subtreeCount,
 		&subtreeBytes,
+		&block.Height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewBlockNotFoundError("failed to get block by height", err)
