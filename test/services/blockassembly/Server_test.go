@@ -36,7 +36,7 @@ func TestServer_Performance(t *testing.T) {
 
 	t.Run("GetMiningCandidate", func(t *testing.T) {
 		ctx := context.Background()
-		miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})
+		miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, miningCandidate)
 
@@ -179,12 +179,16 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
+	readyCh := make(chan struct{}, 1)
+
 	go func() {
-		err = ba.Start(ctx)
+		err = ba.Start(ctx, readyCh)
 		if err != nil {
 			panic(err)
 		}
 	}()
+
+	<-readyCh
 
 	return ba, nil
 }

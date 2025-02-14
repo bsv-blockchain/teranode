@@ -54,6 +54,9 @@ var (
 	prometheusUtxoDelete prometheus.Counter
 	prometheusUtxoErrors *prometheus.CounterVec
 
+	prometheusSQLUtxoGetCounterConflicting prometheus.Histogram
+	prometheusSQLUtxoGetConflicting        prometheus.Histogram
+
 	// only init the metrics once
 	prometheusMetricsInitOnce sync.Once
 )
@@ -105,6 +108,24 @@ func _initPrometheusMetrics() {
 		[]string{
 			"function", // function raising the error
 			"error",    // error returned
+		},
+	)
+
+	prometheusSQLUtxoGetCounterConflicting = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_get_counter_conflicting",
+			Help:      "Histogram of utxo get counter conflicting calls done to sql",
+		},
+	)
+
+	prometheusSQLUtxoGetConflicting = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_get_conflicting",
+			Help:      "Histogram of utxo get conflicting calls done to sql",
 		},
 	)
 }

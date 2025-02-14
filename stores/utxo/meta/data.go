@@ -47,8 +47,14 @@ type Data struct {
 	// Conflicting is a flag indicating if the transaction is conflicting
 	Conflicting bool `json:"conflicting"`
 
+	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
+	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
+
 	// Unspendable is a flag indicating if the transaction is not spendable
 	Unspendable bool `json:"unspendable"`
+
+	// SpendingTxIDs is the transaction ID of the transaction that spent the given tx output idx
+	SpendingTxIDs []*chainhash.Hash `json:"utxos"`
 }
 
 // PreviousOutput represents an input's previous output information.

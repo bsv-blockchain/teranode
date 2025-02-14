@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -47,7 +48,10 @@ func (ps *DumbPropagationServer) Init(_ context.Context) (err error) {
 }
 
 // Start function
-func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
+func (ps *DumbPropagationServer) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	httpAddress := ps.settings.Propagation.HTTPListenAddress
 	if httpAddress != "" {
 		err = ps.startHTTPServer(ctx, httpAddress)
@@ -59,6 +63,7 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 	// this will block
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}

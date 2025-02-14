@@ -89,8 +89,9 @@ import (
 
 // batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
-	spend *utxo.Spend // UTXO to spend
-	errCh chan error  // Channel for completion notification
+	spend             *utxo.Spend // UTXO to spend
+	errCh             chan error  // Channel for completion notification
+	ignoreUnspendable bool
 }
 
 // batchIncrement handles record count updates for paginated transactions
@@ -140,6 +141,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		}
 	}()
 
+	useIgnoreUnspendable := len(ignoreUnspendable) > 0 && ignoreUnspendable[0]
+
 	spends, err := utxo.GetSpends(tx)
 	if err != nil {
 		return nil, err
@@ -165,8 +168,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		g.Go(func() error {
 			errCh := make(chan error)
 			s.spendBatcher.Put(&batchSpend{
-				spend: spend,
-				errCh: errCh,
+				spend:             spend,
+				errCh:             errCh,
+				ignoreUnspendable: useIgnoreUnspendable,
 			})
 
 			// this waits for the batch to be sent and the response to be received from the batch operation
@@ -202,7 +206,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 					spends[idx].ConflictingTxID = &errSpent.SpendingTxHash
 				}
 
-				s.logger.Errorf("error in aerospike spend (batched mode) %s: %v\n", spends[idx].TxID.String(), spends[idx].Err)
+				// s.logger.Errorf("error in aerospike spend (batched mode) %s: %v\n", spends[idx].TxID.String(), spends[idx].Err)
 
 				// don't stop processing the rest of the batch, we want to see all errors
 				return nil
@@ -217,32 +221,25 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, errors.NewError("error in aerospike spend (batched mode)", err)
+		return nil, errors.NewError("error in aerospike unspend (batched mode)", err)
 	}
 
 	if len(spends) != len(spentSpends) { // there must have been failures
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
 
-		spendErrors := make([]error, 0, len(spends))
-		conflictingSpends := make([]*chainhash.Hash, 0, len(spends))
-
-		for _, spend := range spends {
-			if spend.Err != nil {
-				spendErrors = append(spendErrors, spend.Err)
-
-				if errors.As(spend.Err, &errSpent) {
-					conflictingSpends = append(conflictingSpends, spend.ConflictingTxID)
-				}
-			}
-		}
-
-		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode) %v -> conflicting txs %v", spendErrors, conflictingSpends, unspendErr)
+		// return the first error found
+		return spends, errors.NewTxInvalidError("error in aerospike unspend (batched mode)", unspendErr)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
 
 	return spends, nil
+}
+
+type keyIgnoreUnspendable struct {
+	key               *aerospike.Key
+	ignoreUnspendable bool
 }
 
 // sendSpendBatchLua processes a batch of spend requests via Lua scripts.
@@ -278,6 +275,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
+	batchRecordKeys := make([]keyIgnoreUnspendable, 0, len(batch))
 
 	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
 	// evaluate this spend in this block height (i.e. 1 greater)
@@ -294,7 +292,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// this is to avoid the LUA script being called multiple times for the same transaction
 	// we calculate the key source based on the txid and the vout divided by the utxoBatchSize
 	aeroKeyMap := make(map[string]*aerospike.Key)
-	batchesByKey := make(map[*aerospike.Key][]aerospike.MapValue, len(batch))
+	batchesByKey := make(map[keyIgnoreUnspendable][]aerospike.MapValue, len(batch))
 
 	for idx, bItem := range batch {
 		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize)) //nolint:gosec
@@ -325,26 +323,35 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			"spendingTxID": bItem.spend.SpendingTxID[:],
 		})
 
-		if _, ok = batchesByKey[key]; !ok {
-			batchesByKey[key] = []aerospike.MapValue{newMapValue}
+		// we need to group the spends by key and ignoreUnspendable flag
+		useKey := keyIgnoreUnspendable{
+			key:               key,
+			ignoreUnspendable: bItem.ignoreUnspendable,
+		}
+
+		if _, ok = batchesByKey[useKey]; !ok {
+			batchesByKey[useKey] = []aerospike.MapValue{newMapValue}
 		} else {
-			batchesByKey[key] = append(batchesByKey[key], newMapValue)
+			batchesByKey[useKey] = append(batchesByKey[useKey], newMapValue)
 		}
 	}
 
 	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-	for aeroKey, batchItems := range batchesByKey {
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "spendMulti",
+	for batchKey, batchItems := range batchesByKey {
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
+			aerospike.NewValue(batchKey.ignoreUnspendable),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		))
+
+		batchRecordKeys = append(batchRecordKeys, batchKey)
 	}
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchID, len(batch), err)
+		// s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchID, len(batch), err)
 
 		for idx, bItem := range batch {
 			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
@@ -354,11 +361,15 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start = stat.NewStat("BatchOperate").AddTime(start)
 
 	// batchOperate may have no errors, but some of the records may have failed
-	for _, batchRecord := range batchRecords {
+	for batchIdx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
-		aeroKey := batchRecord.BatchRec().Key // will this be the same memory address as the key in the loop above?
 
-		batchByKey := batchesByKey[aeroKey]
+		batchByKey, ok := batchesByKey[batchRecordKeys[batchIdx]]
+		if !ok {
+			s.logger.Errorf("[SPEND_BATCH_LUA] could not find batch key for batchIdx %d", batchIdx)
+			continue
+		}
+
 		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID // all the same ...
 
 		if err != nil {
@@ -409,6 +420,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 							batch[idx].errCh <- errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+						}
+
+					case LuaUnspendable:
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].errCh <- errors.NewTxUnspendableError("[SPEND_BATCH_LUA][%s] transaction is unspendable, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
 						}
 
 					case LuaCoinbaseImmature:

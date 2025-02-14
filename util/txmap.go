@@ -7,28 +7,30 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/dolthub/swiss"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type TxMap interface {
-	Put(hash [32]byte, value uint64) error
-	Get(hash [32]byte) (uint64, bool)
-	Exists(hash [32]byte) bool
+	Put(hash chainhash.Hash, value uint64) error
+	Get(hash chainhash.Hash) (uint64, bool)
+	Exists(hash chainhash.Hash) bool
 	Length() int
+	Keys() []chainhash.Hash
 }
 
 type SwissMap struct {
 	mu     sync.RWMutex
-	m      *swiss.Map[[32]byte, struct{}]
+	m      *swiss.Map[chainhash.Hash, struct{}]
 	length int
 }
 
 func NewSwissMap(length int) *SwissMap {
 	return &SwissMap{
-		m: swiss.NewMap[[32]byte, struct{}](uint32(length)),
+		m: swiss.NewMap[chainhash.Hash, struct{}](uint32(length)), //nolint:gosec
 	}
 }
 
-func (s *SwissMap) Exists(hash [32]byte) bool {
+func (s *SwissMap) Exists(hash chainhash.Hash) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -37,7 +39,7 @@ func (s *SwissMap) Exists(hash [32]byte) bool {
 	return ok
 }
 
-func (s *SwissMap) Get(hash [32]byte) (uint64, bool) {
+func (s *SwissMap) Get(hash chainhash.Hash) (uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -46,7 +48,7 @@ func (s *SwissMap) Get(hash [32]byte) (uint64, bool) {
 	return 0, ok
 }
 
-func (s *SwissMap) Put(hash [32]byte) error {
+func (s *SwissMap) Put(hash chainhash.Hash) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -57,7 +59,7 @@ func (s *SwissMap) Put(hash [32]byte) error {
 	return nil
 }
 
-func (s *SwissMap) PutMulti(hashes [][32]byte) error {
+func (s *SwissMap) PutMulti(hashes []chainhash.Hash) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -70,7 +72,7 @@ func (s *SwissMap) PutMulti(hashes [][32]byte) error {
 	return nil
 }
 
-func (s *SwissMap) Delete(hash [32]byte) error {
+func (s *SwissMap) Delete(hash chainhash.Hash) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -88,23 +90,37 @@ func (s *SwissMap) Length() int {
 	return s.length
 }
 
+func (s *SwissMap) Keys() []chainhash.Hash {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	keys := make([]chainhash.Hash, 0, s.length)
+
+	s.m.Iter(func(k chainhash.Hash, v struct{}) (stop bool) {
+		keys = append(keys, k)
+		return false
+	})
+
+	return keys
+}
+
 type SwissMapUint64 struct {
 	mu     sync.Mutex
-	m      *swiss.Map[[32]byte, uint64]
+	m      *swiss.Map[chainhash.Hash, uint64]
 	length int
 }
 
 func NewSwissMapUint64(length int) *SwissMapUint64 {
 	return &SwissMapUint64{
-		m: swiss.NewMap[[32]byte, uint64](uint32(length)),
+		m: swiss.NewMap[chainhash.Hash, uint64](uint32(length)), //nolint:gosec
 	}
 }
 
-func (s *SwissMapUint64) Map() *swiss.Map[[32]byte, uint64] {
+func (s *SwissMapUint64) Map() *swiss.Map[chainhash.Hash, uint64] {
 	return s.m
 }
 
-func (s *SwissMapUint64) Exists(hash [32]byte) bool {
+func (s *SwissMapUint64) Exists(hash chainhash.Hash) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -113,7 +129,7 @@ func (s *SwissMapUint64) Exists(hash [32]byte) bool {
 	return ok
 }
 
-func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
+func (s *SwissMapUint64) Put(hash chainhash.Hash, n uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -129,7 +145,7 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 	return nil
 }
 
-func (s *SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
+func (s *SwissMapUint64) Get(hash chainhash.Hash) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,6 +161,20 @@ func (s *SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
 
 func (s *SwissMapUint64) Length() int {
 	return s.length
+}
+
+func (s *SwissMapUint64) Keys() []chainhash.Hash {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keys := make([]chainhash.Hash, 0, s.length)
+
+	s.m.Iter(func(k chainhash.Hash, v uint64) (stop bool) {
+		keys = append(keys, k)
+		return false
+	})
+
+	return keys
 }
 
 // Lock-free map for uint64 keys and values
@@ -200,6 +230,16 @@ type SplitSwissMap struct {
 	nrOfBuckets uint16
 }
 
+func (g *SplitSwissMap) Keys() []chainhash.Hash {
+	keys := make([]chainhash.Hash, 0, g.Length())
+
+	for i := uint16(0); i <= g.nrOfBuckets; i++ {
+		keys = append(keys, g.m[i].Keys()...)
+	}
+
+	return keys
+}
+
 func NewSplitSwissMap(length int) *SplitSwissMap {
 	m := &SplitSwissMap{
 		m:           make(map[uint16]*SwissMap, 1024),
@@ -217,18 +257,18 @@ func (g *SplitSwissMap) Buckets() uint16 {
 	return g.nrOfBuckets
 }
 
-func (g *SplitSwissMap) Exists(hash [32]byte) bool {
+func (g *SplitSwissMap) Exists(hash chainhash.Hash) bool {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
-func (g *SplitSwissMap) Get(hash [32]byte) (uint64, bool) {
+func (g *SplitSwissMap) Get(hash chainhash.Hash) (uint64, bool) {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
 }
 
-func (g *SplitSwissMap) Put(hash [32]byte, n uint64) error {
+func (g *SplitSwissMap) Put(hash chainhash.Hash, n uint64) error {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash)
 }
-func (g *SplitSwissMap) PutMulti(bucket uint16, hashes [][32]byte) error {
+func (g *SplitSwissMap) PutMulti(bucket uint16, hashes []chainhash.Hash) error {
 	return g.m[bucket].PutMulti(hashes)
 }
 
@@ -246,6 +286,16 @@ type SplitSwissMapUint64 struct {
 	nrOfBuckets uint16
 }
 
+func (g *SplitSwissMapUint64) Keys() []chainhash.Hash {
+	keys := make([]chainhash.Hash, 0, g.Length())
+
+	for i := uint16(0); i <= g.nrOfBuckets; i++ {
+		keys = append(keys, g.m[i].Keys()...)
+	}
+
+	return keys
+}
+
 func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
 	m := &SplitSwissMapUint64{
 		m:           make(map[uint16]*SwissMapUint64, 256),
@@ -259,7 +309,7 @@ func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
 	return m
 }
 
-func (g *SplitSwissMapUint64) Exists(hash [32]byte) bool {
+func (g *SplitSwissMapUint64) Exists(hash chainhash.Hash) bool {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
@@ -267,11 +317,11 @@ func (g *SplitSwissMapUint64) Map() map[uint16]*SwissMapUint64 {
 	return g.m
 }
 
-func (g *SplitSwissMapUint64) Put(hash [32]byte, n uint64) error {
+func (g *SplitSwissMapUint64) Put(hash chainhash.Hash, n uint64) error {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash, n)
 }
 
-func (g *SplitSwissMapUint64) Get(hash [32]byte) (uint64, bool) {
+func (g *SplitSwissMapUint64) Get(hash chainhash.Hash) (uint64, bool) {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
 }
 
@@ -328,18 +378,18 @@ func (g *SplitSwissMapKVUint64) Length() int {
 }
 
 type SplitGoMap struct {
-	m           map[uint16]*SyncedMap[[32]byte, struct{}]
+	m           map[uint16]*SyncedMap[chainhash.Hash, struct{}]
 	nrOfBuckets uint16
 }
 
 func NewSplitGoMap(length int) *SplitGoMap {
 	m := &SplitGoMap{
-		m:           make(map[uint16]*SyncedMap[[32]byte, struct{}], length),
+		m:           make(map[uint16]*SyncedMap[chainhash.Hash, struct{}], length),
 		nrOfBuckets: 1024,
 	}
 
 	for i := uint16(0); i <= m.nrOfBuckets; i++ {
-		m.m[i] = NewSyncedMap[[32]byte, struct{}]()
+		m.m[i] = NewSyncedMap[chainhash.Hash, struct{}]()
 	}
 
 	return m
@@ -349,21 +399,21 @@ func (g *SplitGoMap) Buckets() uint16 {
 	return g.nrOfBuckets
 }
 
-func (g *SplitGoMap) Exists(hash [32]byte) bool {
+func (g *SplitGoMap) Exists(hash chainhash.Hash) bool {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
-func (g *SplitGoMap) Get(hash [32]byte) (uint64, bool) {
+func (g *SplitGoMap) Get(hash chainhash.Hash) (uint64, bool) {
 	_, ok := g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Get(hash)
 	return 0, ok
 }
 
-func (g *SplitGoMap) Put(hash [32]byte, n uint64) error {
+func (g *SplitGoMap) Put(hash chainhash.Hash, n uint64) error {
 	g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Set(hash, struct{}{})
 	return nil
 }
 
-func (g *SplitGoMap) PutMulti(bucket uint16, hashes [][32]byte) error {
+func (g *SplitGoMap) PutMulti(bucket uint16, hashes []chainhash.Hash) error {
 	g.m[bucket].SetMulti(hashes, struct{}{})
 	return nil
 }
@@ -377,6 +427,6 @@ func (g *SplitGoMap) Length() int {
 	return length
 }
 
-func Bytes2Uint16Buckets(b [32]byte, mod uint16) uint16 {
+func Bytes2Uint16Buckets(b chainhash.Hash, mod uint16) uint16 {
 	return (uint16(b[0])<<8 | uint16(b[1])) % mod
 }

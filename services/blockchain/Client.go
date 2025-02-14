@@ -286,6 +286,22 @@ func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Bl
 		return nil, errors.UnwrapGRPC(err)
 	}
 
+	return c.blockFromResponse(resp)
+}
+
+// GetBlockByID retrieves a block by its ID.
+func (c *Client) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	resp, err := c.client.GetBlockByID(ctx, &blockchain_api.GetBlockByIDRequest{
+		Id: id,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.blockFromResponse(resp)
+}
+
+func (c *Client) blockFromResponse(resp *blockchain_api.GetBlockResponse) (*model.Block, error) {
 	header, err := model.NewBlockHeaderFromBytes(resp.Header)
 	if err != nil {
 		return nil, err
@@ -686,18 +702,21 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 		<-ctx.Done()
 		c.logger.Infof("[Blockchain] context done, closing subscription: %s", source)
 
+		c.subscribersMu.Lock()
+
 		// remove from list of subscribers
 		for i, s := range c.subscribers {
 			if s.id == id {
-				c.subscribersMu.Lock()
 				c.subscribers = append(c.subscribers[:i], c.subscribers[i+1:]...)
-				c.subscribersMu.Unlock()
 
 				break
 			}
 		}
 
-		close(ch)
+		// TODO close the channel properly without a data race
+		// close(ch)
+
+		c.subscribersMu.Unlock()
 	}()
 
 	return ch, nil
@@ -787,6 +806,17 @@ func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 	}
 
 	return nil
+}
+
+func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	resp, err := c.client.GetBlockIsMined(ctx, &blockchain_api.GetBlockIsMinedRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.IsMined, nil
 }
 
 // SetBlockMinedSet marks a block as mined in the blockchain.

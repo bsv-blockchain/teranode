@@ -448,6 +448,7 @@ func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 	)
 	defer deferFn()
 
+	// TODO add this txID to a canflictingChildren slice to the input txs of this transaction, if marked as conflicting
 	data, err := v.utxoStore.Create(ctx, tx, blockHeight, utxo.WithConflicting(markAsConflicting))
 	if err != nil {
 		return nil, err

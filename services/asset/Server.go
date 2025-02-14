@@ -6,6 +6,7 @@ package asset
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/asset/centrifuge_impl"
@@ -165,8 +166,19 @@ func (v *Server) Init(ctx context.Context) (err error) {
 //
 // Returns:
 //   - error: Any error encountered during server startup
-func (v *Server) Start(ctx context.Context) error {
+func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	g, ctx := errgroup.WithContext(ctx)
+
+	// Blocks until the FSM transitions from the IDLE state
+	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		v.logger.Errorf("[Asset Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
 
 	if v.httpServer != nil {
 		g.Go(func() error {
@@ -180,7 +192,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	// Blocks until the FSM transitions from the IDLE state
-	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	err = v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
 		v.logger.Errorf("[Asset Service] Failed to wait for FSM transition from IDLE state: %s", err)
 
@@ -192,6 +204,8 @@ func (v *Server) Start(ctx context.Context) error {
 			return v.centrifugeServer.Start(ctx, v.centrifugeAddr)
 		})
 	}
+
+	closeOnce.Do(func() { close(readyCh) })
 
 	if err := g.Wait(); err != nil {
 		return errors.NewServiceError("the main server has ended with error", err)

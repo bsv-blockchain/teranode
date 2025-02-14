@@ -189,8 +189,6 @@ type BlockValidationSettings struct {
 	RetrySleep                                time.Duration
 	GRPCAddress                               string
 	GRPCListenAddress                         string
-	HTTPAddress                               string
-	HTTPListenAddress                         string
 	KafkaWorkers                              int
 	LocalSetTxMinedConcurrency                int
 	MaxPreviousBlockHeadersToCheck            uint64

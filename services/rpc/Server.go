@@ -969,7 +969,10 @@ func jsonAuthFail(w http.ResponseWriter) {
 }
 
 // Start is used by server.go to start the rpc listener.
-func (s *RPCServer) Start(ctx context.Context) error {
+func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -1058,6 +1061,8 @@ func (s *RPCServer) Start(ctx context.Context) error {
 					s.logger.Errorf("RPC server shutdown error: %v", err)
 				}
 			}()
+
+			closeOnce.Do(func() { close(readyCh) })
 
 			s.logger.Infof("RPC server listening on %s", listener.Addr())
 			_ = httpServer.Serve(listener)

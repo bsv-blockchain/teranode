@@ -2,10 +2,14 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/settings"
+	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
@@ -27,21 +31,20 @@ func TestNew(t *testing.T) {
 	d := New()
 	require.NotNil(t, d)
 	require.NotNil(t, d.doneCh)
+	require.NotNil(t, d.stopCh)
 }
 
 func TestDaemon_Stop(t *testing.T) {
 	d := New()
-
-	// Create a goroutine to check if the done channel is closed
-	done := make(chan bool)
+	done := make(chan struct{})
 
 	go func() {
-		<-d.doneCh
-		done <- true
+		<-d.stopCh
+		close(done)
 	}()
 
 	// Stop the daemon
-	d.Stop()
+	require.NoError(t, d.Stop(1*time.Second))
 
 	// Wait for the done signal or timeout
 	select {
@@ -94,10 +97,25 @@ func TestShouldStart(t *testing.T) {
 }
 
 func TestDaemon_Start_Basic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	d := New()
-	// logger := ulogger.NewVerboseTestLogger(t)
-	logger := ulogger.TestLogger{}
-	args := []string{} // No special flags
+
+	logger := ulogger.NewErrorTestLogger(t, cancel)
+
+	if !isKafkaRunning() {
+		kafkaContainer, err := testkafka.RunTestContainer(ctx)
+		require.NoError(t, err)
+
+		t.Cleanup(func() {
+			_ = kafkaContainer.CleanUp()
+		})
+
+		gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
+	}
+
+	args := []string{"-all=0", "-blockchain=1"}
 	tSettings := settings.NewSettings()
 
 	// Create a ready channel
@@ -108,35 +126,20 @@ func TestDaemon_Start_Basic(t *testing.T) {
 		d.Start(logger, args, tSettings, readyCh)
 	}()
 
-	<-readyCh
+	select {
+	case <-readyCh:
+		// Stop the daemon
+		require.NoError(t, d.Stop(5*time.Second))
 
-	// Stop the daemon
-	d.Stop()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for readyCh")
+	}
 }
 
-func TestDaemon_Start_WithContext(t *testing.T) {
-	d := New()
-	logger := ulogger.NewVerboseTestLogger(t)
-	args := []string{} // No special flags
-	tSettings := settings.NewSettings()
+func isKafkaRunning() bool {
+	port, _ := gocore.Config().GetInt("KAFKA_PORT", 9092)
 
-	// Create a context that we'll cancel
-	ctx, cancel := context.WithCancel(context.Background())
+	_, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
 
-	// Start the daemon in a goroutine
-	go func() {
-		d.Start(logger, args, tSettings)
-	}()
-
-	// Cancel the context after a short delay
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-
-	// Wait for context cancellation
-	<-ctx.Done()
-
-	// Stop the daemon
-	d.Stop()
+	return err == nil
 }

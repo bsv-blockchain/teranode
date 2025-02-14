@@ -690,6 +690,79 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
 		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 	})
+
+	t.Run("aerospike get conflicting", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		txSpends, _, err := db.SetConflicting(context.Background(), []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		require.NoError(t, err)
+
+		tx2 := &bt.Tx{}
+		require.NoError(t, tx2.From(tx.TxID(), 0, tx.Outputs[0].LockingScript.String(), tx.Outputs[0].Satoshis))
+		require.NoError(t, tx2.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+		var tErr *errors.Error
+
+		txSpends, err = db.Spend(context.Background(), tx2)
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+
+		require.Len(t, txSpends, 1)
+
+		require.ErrorAs(t, txSpends[0].Err, &tErr)
+		require.Equal(t, errors.ERR_TX_CONFLICTING, tErr.Code())
+
+		// create the conflicting tx, just like the validator would do, and make sure the parent tx has been updated with the conflicting tx
+		txMeta, err = db.Create(context.Background(), tx2, 1, utxo.WithConflicting(true))
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Conflicting)
+
+		// get the parent tx and make sure it has the conflicting tx flag and tx2 as a conflicting child
+		txMeta, err = db.Get(context.Background(), tx.TxIDChainHash(), []string{"conflicting", "conflictingCs"})
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Conflicting)
+		assert.Len(t, txMeta.ConflictingChildren, 1)
+		assert.Equal(t, tx2.TxIDChainHash().String(), txMeta.ConflictingChildren[0].String())
+	})
+
+	t.Run("aerospike set unspendable", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		err = db.SetUnspendable(context.Background(), []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		require.NoError(t, err)
+
+		tx2 := &bt.Tx{}
+		require.NoError(t, tx2.From(tx.TxID(), 0, tx.Outputs[0].LockingScript.String(), tx.Outputs[0].Satoshis))
+		require.NoError(t, tx2.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+		var tErr *errors.Error
+
+		txSpends, err := db.Spend(context.Background(), tx2)
+		require.ErrorAs(t, err, &tErr)
+		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+
+		assert.Len(t, txSpends, 1)
+		assert.ErrorAs(t, txSpends[0].Err, &tErr)
+		require.Equal(t, errors.ERR_TX_UN_SPENDABLE, tErr.Code())
+
+		err = db.SetUnspendable(context.Background(), []chainhash.Hash{*tx.TxIDChainHash()}, false)
+		require.NoError(t, err)
+
+		txSpends, err = db.Spend(context.Background(), tx2)
+		require.NoError(t, err)
+
+		assert.Len(t, txSpends, 1)
+		assert.Nil(t, txSpends[0].Err)
+		assert.Equal(t, tx2.TxIDChainHash().String(), txSpends[0].SpendingTxID.String())
+	})
 }
 
 func TestCoinbase(t *testing.T) {

@@ -20,6 +20,7 @@ type Store interface {
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
 	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
+	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 
 	/*
 	   GetBlockInChainByHeightHash returns a block by height for a chain determined by the start hash.
@@ -47,6 +48,7 @@ type Store interface {
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 	GetState(ctx context.Context, key string) ([]byte, error)
 	SetState(ctx context.Context, key string, data []byte) error
+	GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error

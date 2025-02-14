@@ -4,8 +4,12 @@ package utxo
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
@@ -38,13 +42,18 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
-func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (err error) {
+func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (losingTxHashesMap util.TxMap, err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessConflicting")
+
+	defer deferFn()
+
 	// 0. Get the transactions, check they are conflicting
 	winningTxs := make([]*bt.Tx, len(conflictingTxHashes))
 
 	// losingTxHashesPerConflictingTx is a slice of slices, each slice contains the hashes of the transactions that are conflicting
 	// with the winning transaction at the same index in the winningTxs slice
 	losingTxHashesPerConflictingTx := make([][]chainhash.Hash, len(conflictingTxHashes))
+	losingTxHashesPerConflictingTxCount := atomic.Int64{}
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -64,49 +73,46 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 			}
 
 			// get the counter conflicting transactions for the current transaction
-			if losingTxHashesPerConflictingTx[idx], err = getLosingTxHashes(gCtx, s, txMeta.Tx); err != nil {
+			// this includes all the children of the conflicting transaction
+			if losingTxHashesPerConflictingTx[idx], err = s.GetCounterConflicting(gCtx, txHash); err != nil {
 				return err
 			}
 
-			// if there are no conflicting transactions, return an error
-			if len(losingTxHashesPerConflictingTx[idx]) == 0 {
-				return errors.NewError("no conflicting spend found")
-			}
-
 			winningTxs[idx] = txMeta.Tx
+
+			losingTxHashesPerConflictingTxCount.Add(int64(len(losingTxHashesPerConflictingTx[idx]))) //nolint:gosec
 
 			return nil
 		})
 	}
 
 	if err = g.Wait(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// create a unique list of all the losing tx hashes
-	losingTxHashesMap := make(map[chainhash.Hash]struct{})
+	losingTxHashesMap = util.NewSplitSwissMap(int(losingTxHashesPerConflictingTxCount.Load()))
 
 	for _, hashes := range losingTxHashesPerConflictingTx {
 		for _, hash := range hashes {
-			losingTxHashesMap[hash] = struct{}{}
+			// an error will be returned if the hash already exists in the map
+			// we don't really care, we just need the unique hashes
+			_ = losingTxHashesMap.Put(hash, 1)
 		}
 	}
 
-	losingTxHashes := make([]chainhash.Hash, 0, len(losingTxHashesMap))
-	for hash := range losingTxHashesMap {
-		losingTxHashes = append(losingTxHashes, hash)
-	}
+	losingTxHashes := losingTxHashesMap.Keys()
 
 	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively
 	affectedParentSpends, err := markConflictingRecursively(ctx, s, losingTxHashes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	err = s.Unspend(ctx, affectedParentSpends, true)
 	if err != nil {
-		return errors.NewTxUnspendableError("error unspending affected parent spends", err)
+		return nil, errors.NewTxUnspendableError("error unspending affected parent spends", err)
 	}
 
 	// get the unique hashes of the transactions that were marked as not spendable
@@ -135,24 +141,28 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 				}
 			}
 
-			return err
+			return nil, err
 		}
 	}
 
 	// - 4: mark txb as not conflicting
 	if _, _, err = s.SetConflicting(ctx, conflictingTxHashes, false); err != nil {
-		return err
+		return nil, err
 	}
 
 	// - 5: mark txp & txq as spendable again
 	if err = s.SetUnspendable(ctx, markedAsNotSpendableHashes, false); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return losingTxHashesMap, nil
 }
 
 func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "markConflictingRecursively")
+
+	defer deferFn()
+
 	// mark tx as conflicting
 	affectedParentSpends, spendingChildTxs, err := s.SetConflicting(ctx, hashes, true)
 	if err != nil {
@@ -171,31 +181,120 @@ func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	return affectedParentSpends, nil
 }
 
-func getLosingTxHashes(gCtx context.Context, s Store, tx *bt.Tx) ([]chainhash.Hash, error) {
-	// 1. try to spend and get back the counter conflicting transactions
-	// this is a shortcut to get the conflicting transactions without having to
-	// iterate over all the inputs of the transaction and check if they are spent
-	// TODO refactor into a function that just gets the conflicting tx hashes
-	spends, err := s.Spend(gCtx, tx)
+func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetConflictingChildren")
+
+	defer deferFn()
+
+	txMeta, err := s.Get(ctx, &hash, []string{"utxos", "conflictingCs"}) // bin name can only be max 15 chars
 	if err != nil {
-		if !errors.Is(err, errors.ErrTxInvalid) {
+		return nil, err
+	}
+
+	conflictingChildrenMap := make(map[chainhash.Hash]struct{})
+
+	// set the conflicting children from the conflictingChildren bin
+	if txMeta.ConflictingChildren != nil {
+		for _, child := range txMeta.ConflictingChildren {
+			conflictingChildrenMap[child] = struct{}{}
+		}
+	}
+
+	// set the conflicting children from the utxos bin spends
+	if txMeta.SpendingTxIDs != nil {
+		for _, spendingTxID := range txMeta.SpendingTxIDs {
+			if spendingTxID != nil {
+				conflictingChildrenMap[*spendingTxID] = struct{}{}
+			}
+		}
+	}
+
+	// get the conflicting children
+	if txMeta.ConflictingChildren != nil {
+		for _, child := range txMeta.ConflictingChildren {
+			conflictingChildrenMap[child] = struct{}{}
+		}
+	}
+
+	// get the conflicting children of the conflicting children
+	for conflictingChild := range conflictingChildrenMap {
+		conflictingChildren, err := s.GetConflictingChildren(ctx, conflictingChild)
+		if err != nil {
 			return nil, err
 		}
+
+		for _, child := range conflictingChildren {
+			conflictingChildrenMap[child] = struct{}{}
+		}
 	}
 
-	// create a slice for the conflicting tx hashes if it doesn't exist
-	losingTxHashes := make([]chainhash.Hash, 0, len(tx.Inputs))
+	conflictingChildren := make([]chainhash.Hash, 0, len(conflictingChildrenMap))
 
-	for _, spend := range spends {
-		if spend.ConflictingTxID == nil {
-			continue
+	for child := range conflictingChildrenMap {
+		conflictingChildren = append(conflictingChildren, child)
+	}
+
+	return conflictingChildren, nil
+}
+
+func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetCounterConflictingTxHashes")
+
+	defer deferFn()
+
+	txMeta, err := s.Get(ctx, &txHash, []string{"tx"})
+	if err != nil {
+		return nil, err
+	}
+
+	counterConflictingMap := make(map[chainhash.Hash]struct{})
+	counterConflictingMap[txHash] = struct{}{}
+
+	// get the unique parent txs
+	parentTxs := make(map[chainhash.Hash][]*chainhash.Hash)
+
+	for _, input := range txMeta.Tx.Inputs {
+		// get the parent tx
+		parentTxs[*input.PreviousTxIDChainHash()] = nil
+	}
+
+	for parentTx := range parentTxs {
+		parentTxHash := &parentTx
+
+		parentTxMeta, err := s.Get(ctx, parentTxHash, []string{"utxos"})
+		if err != nil {
+			return nil, err
 		}
 
-		// append the conflicting tx hash to the slice
-		losingTxHashes = append(losingTxHashes, *spend.ConflictingTxID)
+		parentTxs[*parentTxHash] = parentTxMeta.SpendingTxIDs
 	}
 
-	// get the losing txs themselves
+	for idx, input := range txMeta.Tx.Inputs {
+		parenTxIDS, ok := parentTxs[*input.PreviousTxIDChainHash()]
+		if ok {
+			spendingTxID := parenTxIDS[idx]
+			if spendingTxID != nil {
+				counterConflictingMap[*spendingTxID] = struct{}{}
 
-	return losingTxHashes, nil
+				children, err := s.GetConflictingChildren(ctx, *spendingTxID)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, child := range children {
+					counterConflictingMap[child] = struct{}{}
+				}
+			}
+		}
+	}
+
+	counterConflicting := make([]chainhash.Hash, 0, len(counterConflictingMap))
+
+	for child := range counterConflictingMap {
+		counterConflicting = append(counterConflicting, child)
+	}
+
+	fmt.Printf("counterConflicting: %v\n", counterConflicting)
+
+	return counterConflicting, nil
 }

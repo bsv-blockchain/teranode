@@ -342,6 +342,20 @@ func (st *Subtree) NodeIndex(hash chainhash.Hash) int {
 	return -1
 }
 
+func (st *Subtree) HasNode(hash chainhash.Hash) bool {
+	return st.NodeIndex(hash) != -1
+}
+
+func (st *Subtree) GetNode(hash chainhash.Hash) (*SubtreeNode, error) {
+	for _, node := range st.Nodes {
+		if node.Hash.Equal(hash) {
+			return &node, nil
+		}
+	}
+
+	return nil, errors.NewSubtreeError("node not found")
+}
+
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]SubtreeNode, 0, 1_000)
@@ -629,6 +643,48 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	}
 
 	return nil
+}
+
+func DeserializeSubtreeConflictingFromReader(reader io.Reader) (conflictingNodes []chainhash.Hash, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in DeserializeFromReader", r)
+		}
+	}()
+
+	buf := bufio.NewReaderSize(reader, 1024*1024*16) // 16MB buffer
+
+	// skip root hash 32 bytes
+	// skip fees, 8 bytes
+	// skip sizeInBytes, 8 bytes
+	_, _ = buf.Discard(32 + 8 + 8)
+
+	bytes8 := make([]byte, 8)
+
+	// read number of leaves
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return nil, errors.NewProcessingError("unable to read number of leaves", err)
+	}
+
+	numLeaves := binary.LittleEndian.Uint64(bytes8)
+	_, _ = buf.Discard(int(48 * numLeaves)) //nolint:gosec
+
+	// read number of conflicting nodes
+	if _, err = io.ReadFull(buf, bytes8); err != nil {
+		return nil, errors.NewProcessingError("unable to read number of conflicting nodes", err)
+	}
+
+	numConflictingLeaves := binary.LittleEndian.Uint64(bytes8)
+
+	// read conflicting nodes
+	conflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
+	for i := uint64(0); i < numConflictingLeaves; i++ {
+		if _, err = io.ReadFull(buf, conflictingNodes[i][:]); err != nil {
+			return nil, errors.NewProcessingError("unable to read conflicting node", err)
+		}
+	}
+
+	return conflictingNodes, nil
 }
 
 func (st *Subtree) DeserializeOld(b []byte) (err error) {

@@ -452,8 +452,16 @@ func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtx
 	return t.Delete(ctx, utxo.TxID)
 }
 
+func (t *TxMetaCache) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return t.utxoStore.GetCounterConflicting(ctx, txHash)
+}
+
+func (t *TxMetaCache) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return t.utxoStore.GetConflictingChildren(ctx, txHash)
+}
+
 func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return nil, nil, nil
+	return t.utxoStore.SetConflicting(ctx, txHashes, setValue)
 }
 
 func (t *TxMetaCache) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {

@@ -248,8 +248,15 @@ func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 // Returns:
 //   - *model.MiningCandidate: Mining candidate block
 //   - error: Any error encountered during retrieval
-func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
-	req := &blockassembly_api.EmptyMessage{}
+func (s *Client) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
+	includeSubtrees := false
+	if len(includeSubtreeHashes) > 0 {
+		includeSubtrees = includeSubtreeHashes[0]
+	}
+
+	req := &blockassembly_api.GetMiningCandidateRequest{
+		IncludeSubtrees: includeSubtrees,
+	}
 
 	res, err := s.client.GetMiningCandidate(ctx, req)
 	if err != nil {

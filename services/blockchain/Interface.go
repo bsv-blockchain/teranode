@@ -31,6 +31,9 @@ type ClientI interface {
 	// GetBlockByHeight retrieves a block at a specific height.
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 
+	// GetBlockByID retrieves a block by its ID.
+	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
+
 	// GetBlockStats retrieves statistical information about the blockchain.
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 
@@ -91,6 +94,9 @@ type ClientI interface {
 
 	// SetBlockMinedSet marks a block as mined.
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// GetBlockIsMined retrieves whether a block has been marked as mined
+	GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 
 	// GetBlocksMinedNotSet retrieves blocks not marked as mined.
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
@@ -171,6 +177,9 @@ func (s *MockBlockchain) GetBlocks(ctx context.Context, blockHash *chainhash.Has
 	return []*model.Block{s.Block}, nil
 }
 func (s *MockBlockchain) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	return s.Block, nil
+}
+func (s *MockBlockchain) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
 	return s.Block, nil
 }
 func (s *MockBlockchain) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
@@ -268,6 +277,9 @@ func (s *MockBlockchain) SetState(ctx context.Context, key string, data []byte) 
 	panic("not implemented")
 }
 func (s *MockBlockchain) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic("not implemented")
+}
+func (s *MockBlockchain) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {

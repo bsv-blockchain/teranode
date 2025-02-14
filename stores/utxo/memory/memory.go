@@ -31,6 +31,7 @@ package memory
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -46,15 +47,17 @@ import (
 
 // memoryData holds transaction data and UTXO state in memory.
 type memoryData struct {
-	tx              *bt.Tx                             // The full transaction
-	blockHeight     uint32                             // Block height where tx appears
-	lockTime        uint32                             // Transaction lock time
-	blockIDs        []uint32                           // Block heights where tx appears
-	utxoMap         map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
-	utxoSpendableIn map[uint32]uint32                  // Maps output index to spendable height
-	frozenMap       map[chainhash.Hash]bool            // Tracks frozen UTXOs
-	frozen          bool                               // Tracks whether the transaction is frozen
-	conflicting     bool                               // Tracks whether the transaction is conflicting
+	tx                  *bt.Tx                             // The full transaction
+	blockHeight         uint32                             // Block height where tx appears
+	lockTime            uint32                             // Transaction lock time
+	blockIDs            []uint32                           // Block heights where tx appears
+	utxoMap             map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
+	utxoSpendableIn     map[uint32]uint32                  // Maps output index to spendable height
+	frozenMap           map[chainhash.Hash]bool            // Tracks frozen UTXOs
+	frozen              bool                               // Tracks whether the transaction is frozen
+	conflicting         bool                               // Tracks whether the transaction is conflicting
+	conflictingChildren []chainhash.Hash                   // Tracks conflicting children
+	unspendable         bool                               // Tracks whether the transaction is unspendable
 }
 
 // Memory implements the UTXO store interface using in-memory data structures.
@@ -130,6 +133,24 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 
 	if options.Conflicting {
 		txMetaData.Conflicting = true
+
+		// set this transaction as a conflicting child in all its parents
+		for idx, input := range tx.Inputs {
+			parentTxHash := input.PreviousTxIDChainHash()
+
+			parentTx, ok := m.txs[*parentTxHash]
+			if !ok {
+				return nil, errors.NewTxNotFoundError("parent tx %s of %s:%d not found", parentTxHash, txHash, idx)
+			}
+
+			if parentTx.conflictingChildren == nil {
+				parentTx.conflictingChildren = make([]chainhash.Hash, 0)
+			}
+
+			if !slices.Contains(parentTx.conflictingChildren, *txHash) {
+				parentTx.conflictingChildren = append(parentTx.conflictingChildren, *txHash)
+			}
+		}
 	}
 
 	utxoHashes, err := utxo.GetUtxoHashes(tx)
@@ -155,6 +176,10 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string
 		}
 
 		txMeta.BlockIDs = data.blockIDs
+		txMeta.Conflicting = data.conflicting
+		txMeta.ConflictingChildren = data.conflictingChildren
+		txMeta.Frozen = data.frozen
+		txMeta.Unspendable = data.unspendable
 
 		return txMeta, nil
 	}
@@ -495,11 +520,118 @@ func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *u
 	return nil
 }
 
-func (m *Memory) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return nil, nil, nil
+func (m *Memory) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	tx, ok := m.txs[txHash]
+	if !ok {
+		return nil, errors.NewTxNotFoundError("%v not found", txHash)
+	}
+
+	counterConflictingMap := make(map[chainhash.Hash]struct{})
+
+	for _, spendingTxID := range tx.utxoMap {
+		if spendingTxID != nil {
+			counterConflictingMap[*spendingTxID] = struct{}{}
+		}
+	}
+
+	// get all the children of the counter conflicting transactions
+	for counterConflictingTx := range counterConflictingMap {
+		counterConflictingChildren, err := m.GetConflictingChildren(ctx, counterConflictingTx)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, child := range counterConflictingChildren {
+			counterConflictingMap[child] = struct{}{}
+		}
+	}
+
+	counterConflicting := make([]chainhash.Hash, 0, len(counterConflictingMap))
+
+	for hash := range counterConflictingMap {
+		counterConflicting = append(counterConflicting, hash)
+	}
+
+	return counterConflicting, nil
 }
 
-func (m *Memory) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (m *Memory) GetConflictingChildren(_ context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	tx, ok := m.txs[txHash]
+	if !ok {
+		return nil, errors.NewTxNotFoundError("%v not found", txHash)
+	}
+
+	conflicting := make([]chainhash.Hash, 0)
+
+	conflicting = append(conflicting, tx.conflictingChildren...)
+
+	for _, spendingTxID := range tx.utxoMap {
+		if spendingTxID != nil && !slices.Contains(conflicting, *spendingTxID) {
+			conflicting = append(conflicting, *spendingTxID)
+		}
+	}
+
+	return conflicting, nil
+}
+
+func (m *Memory) SetConflicting(_ context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	var (
+		affectedParentSpends = make([]*utxo.Spend, 0, len(txHashes))
+		spendingTxHashes     = make([]chainhash.Hash, 0, len(txHashes))
+	)
+
+	for _, txHash := range txHashes {
+		if _, ok := m.txs[txHash]; !ok {
+			return nil, nil, errors.NewTxNotFoundError("%v not found", txHash)
+		}
+
+		m.txs[txHash].conflicting = setValue
+
+		// mark this transaction as a conflicting child in all its parents
+		if setValue {
+			for idx, input := range m.txs[txHash].tx.Inputs {
+				parentTxHash := input.PreviousTxIDChainHash()
+
+				parentTx, ok := m.txs[*parentTxHash]
+				if !ok {
+					return nil, nil, errors.NewTxNotFoundError("parent tx %s of %s:%d not found", parentTxHash, txHash, idx)
+				}
+
+				if parentTx.conflictingChildren == nil {
+					parentTx.conflictingChildren = make([]chainhash.Hash, 0)
+				}
+
+				if !slices.Contains(parentTx.conflictingChildren, txHash) {
+					parentTx.conflictingChildren = append(parentTx.conflictingChildren, txHash)
+				}
+			}
+		}
+	}
+
+	return affectedParentSpends, spendingTxHashes, nil
+}
+
+func (m *Memory) SetUnspendable(_ context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, txHash := range txHashes {
+		if _, ok := m.txs[txHash]; !ok {
+			return errors.NewTxNotFoundError("%v not found", txHash)
+		}
+
+		m.txs[txHash].unspendable = setValue
+	}
+
 	return nil
 }
 

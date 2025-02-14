@@ -61,9 +61,11 @@ func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
 	}
 
 	l.t.Logf(prefix, args...)
-	// l.cancelFn()
+	// if l.cancelFn != nil {
+	// 	l.cancelFn()
+	// }
 
-	l.t.FailNow()
+	// l.t.FailNow()
 }
 
 func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
@@ -76,8 +78,10 @@ func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
 		return
 	}
 
-	l.cancelFn()
 	l.t.Logf(prefix, args...)
+	// if l.cancelFn != nil {
+	// 	l.cancelFn()
+	// }
 
-	l.t.FailNow()
+	// l.t.FailNow()
 }

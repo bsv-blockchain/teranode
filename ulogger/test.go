@@ -1,5 +1,11 @@
 package ulogger
 
+import (
+	"fmt"
+	"log"
+	"runtime"
+)
+
 type TestLogger struct{}
 
 func (l TestLogger) LogLevel() int {
@@ -25,8 +31,16 @@ func (l TestLogger) Warnf(format string, args ...interface{}) {
 	// ignore
 }
 func (l TestLogger) Errorf(format string, args ...interface{}) {
-	// ignore
+	_, file, line, _ := runtime.Caller(2)
+
+	prefix := fmt.Sprintf("%s:%d: [ERROR] %s ", file, line, format)
+
+	log.Printf(prefix, args...)
 }
 func (l TestLogger) Fatalf(format string, args ...interface{}) {
-	// ignore
+	_, file, line, _ := runtime.Caller(2)
+
+	prefix := fmt.Sprintf("%s:%d: [ERROR] %s ", file, line, format)
+
+	log.Printf(prefix, args...)
 }

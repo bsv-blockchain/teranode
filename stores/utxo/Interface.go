@@ -203,6 +203,12 @@ type Store interface {
 	// The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
 	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
+	// GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
+	GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error)
+
+	// GetConflictingChildren returns the children of the given conflicting transaction
+	GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error)
+
 	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
 	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
 
@@ -294,6 +300,14 @@ func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSe
 
 func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error {
 	return nil
+}
+
+func (mu *MockUtxostore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
+func (mu *MockUtxostore) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
 }
 
 func (mu *MockUtxostore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error) {

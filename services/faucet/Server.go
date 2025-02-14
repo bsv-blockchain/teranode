@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -105,7 +106,10 @@ func (f *Faucet) Init(ctx context.Context) error {
 	return nil
 }
 
-func (f *Faucet) Start(ctx context.Context) error {
+func (f *Faucet) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	var err error
 
 	// Blocks until the FSM transitions from the IDLE state
@@ -137,6 +141,8 @@ func (f *Faucet) Start(ctx context.Context) error {
 			f.logger.Errorf("[Faucet] %s service shutdown error: %s", mode, err)
 		}
 	}()
+
+	closeOnce.Do(func() { close(readyCh) })
 
 	if mode == "HTTP" {
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTP listening on %s", addr))

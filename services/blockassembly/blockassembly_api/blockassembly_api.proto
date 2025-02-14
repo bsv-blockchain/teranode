@@ -32,7 +32,7 @@ service BlockAssemblyAPI {
 
   // GetMiningCandidate retrieves a block template ready for mining.
   // Includes all necessary components for miners to begin work.
-  rpc GetMiningCandidate (EmptyMessage) returns (model.MiningCandidate) {}
+  rpc GetMiningCandidate (GetMiningCandidateRequest) returns (model.MiningCandidate) {}
 
   // GetCurrentDifficulty retrieves the current network mining difficulty.
   // Used by miners to understand the current mining requirements.
@@ -88,6 +88,11 @@ message AddTxRequest {
 // Request for adding a batch of transactions to the mining candidate block.
 message AddTxBatchRequest {
   repeated AddTxRequest txRequests = 1; // a batch of transaction requests
+}
+
+// Request for retrieving a mining candidate block template.
+message GetMiningCandidateRequest {
+  bool includeSubtrees = 1; // whether to include the subtrees in the mining candidate
 }
 
 // Request for removing a transaction from the mining candidate block.

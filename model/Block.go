@@ -29,8 +29,6 @@ import (
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -40,148 +38,12 @@ const GenesisBlockID = 0
 const LastV1Block = 227_835
 
 var (
-	emptyTX                               = &bt.Tx{}
-	prometheusBlockFromBytes              prometheus.Histogram
-	prometheusBlockValid                  prometheus.Histogram
-	prometheusBlockCheckMerkleRoot        prometheus.Histogram
-	prometheusBlockGetSubtrees            prometheus.Histogram
-	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
-	prometheusBloomQueryCounter           prometheus.Gauge
-	prometheusBloomPositiveCounter        prometheus.Gauge
-	prometheusBloomFalsePositiveCounter   prometheus.Gauge
+	emptyTX = &bt.Tx{}
 )
-
-var (
-	prometheusMetricsInitOnce sync.Once
-)
-
-func init() {
-	initPrometheusMetrics()
-}
-
-func initPrometheusMetrics() {
-	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
-}
-
-func _initPrometheusMetrics() {
-	prometheusBlockFromBytes = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "from_bytes",
-			Help:      "Histogram of Block.FromBytes",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockValid = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "valid",
-			Help:      "Histogram of Block.Valid",
-			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockCheckMerkleRoot = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "check_merkle_root",
-			Help:      "Histogram of Block.CheckMerkleRoot",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockGetSubtrees = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "get_subtrees",
-			Help:      "Histogram of Block.GetSubtrees",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockGetAndValidateSubtrees = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "get_and_validate_subtrees",
-			Help:      "Histogram of Block.GetAndValidateSubtrees",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBloomQueryCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_query_counter",
-			Help:      "Number of queries to the bloom filter",
-		},
-	)
-
-	prometheusBloomPositiveCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_positive_counter",
-			Help:      "Number of positive from the bloom filter",
-		},
-	)
-
-	prometheusBloomFalsePositiveCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_false_positive_counter",
-			Help:      "Number of false positives from the bloom filter",
-		},
-	)
-}
 
 type missingParentTx struct {
 	parentTxHash chainhash.Hash
 	txHash       chainhash.Hash
-}
-
-type BloomStats struct {
-	QueryCounter         uint64
-	PositiveCounter      uint64
-	FalsePositiveCounter uint64
-	mu                   sync.Mutex
-}
-
-func NewBloomStats() *BloomStats {
-	return &BloomStats{
-		QueryCounter:         0,
-		PositiveCounter:      0,
-		FalsePositiveCounter: 0,
-	}
-}
-
-func (bs *BloomStats) BloomFilterStatsProcessor(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if prometheusBloomQueryCounter != nil {
-					bs.mu.Lock()
-					prometheusBloomQueryCounter.Set(float64(bs.QueryCounter))
-					prometheusBloomPositiveCounter.Set(float64(bs.PositiveCounter))
-					prometheusBloomFalsePositiveCounter.Set(float64(bs.FalsePositiveCounter))
-					bs.mu.Unlock()
-				}
-			}
-		}
-	}()
 }
 
 type Block struct {
@@ -201,12 +63,6 @@ type Block struct {
 	txMap           util.TxMap
 	medianTimestamp uint32
 	settings        *settings.Settings
-}
-
-type BlockBloomFilter struct {
-	Filter       *blobloom.Filter
-	BlockHash    *chainhash.Hash
-	CreationTime time.Time
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32, optionalSettings *settings.Settings) (*Block, error) {

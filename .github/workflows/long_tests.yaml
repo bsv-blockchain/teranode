@@ -143,8 +143,7 @@ jobs:
 
       - name: Run Double Spend Tests
         run: |
-          cd test/double_spend && \
-          go test -v -count 1 -tags test_full ./...
+          make sequentialtests
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
         continue-on-error: false

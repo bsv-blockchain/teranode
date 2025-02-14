@@ -19,7 +19,6 @@
       - blockchain_store=postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
       - utxostore=postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}
       - blockassembly_grpcAddress={{ .BlockAssemblyGRPCAddress }}
-      - blockvalidation_httpAddress={{ .BlockValidationHTTPAddress }}
       - coinbase_store=postgres://postgres:postgres@postgres:5432/coinbase{{ .Index }}
       - coinbase_wallet_private_key={{ .CoinbaseWalletPrivateKey }}
       - coinbase_arbitrary_text=teranode-{{ .Index }}

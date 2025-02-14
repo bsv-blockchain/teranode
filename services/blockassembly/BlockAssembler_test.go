@@ -394,6 +394,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		ba.settings,
 		nil,
 		nil,
+		nil,
 		items.newSubtreeChan,
 		subtreeprocessor.WithBatcherSize(1),
 	)

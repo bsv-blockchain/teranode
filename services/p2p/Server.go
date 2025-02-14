@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -225,7 +226,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (s *Server) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	var err error
 
 	// Blocks until the FSM transitions from the IDLE state
@@ -336,6 +340,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "p2p", s.settings.P2P.GRPCListenAddress, func(server *grpc.Server) {
 		p2p_api.RegisterPeerServiceServer(server, s)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
 	}

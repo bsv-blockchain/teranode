@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -169,7 +170,10 @@ func (v *Server) Init(ctx context.Context) (err error) {
 //
 // Returns:
 //   - error: Any startup errors
-func (v *Server) Start(ctx context.Context) error {
+func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -213,6 +217,7 @@ func (v *Server) Start(ctx context.Context) error {
 	//  Start gRPC server - this will block
 	if err := util.StartGRPCServer(ctx, v.logger, v.settings, "validator", v.settings.Validator.GRPCListenAddress, func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}

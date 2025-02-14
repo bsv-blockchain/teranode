@@ -1,4 +1,4 @@
-//go:build test_full
+//go:build test_sequentially
 
 package doublespendtest
 
@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
+	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
@@ -39,6 +41,8 @@ import (
 
 type DoubleSpendTester struct {
 	ctx                   context.Context
+	ctxCancel             context.CancelFunc
+	tracingDeferFn        func(...error)
 	logger                *ulogger.ErrorTestLogger
 	d                     *daemon.Daemon
 	blockchainClient      blockchain.ClientI
@@ -50,16 +54,25 @@ type DoubleSpendTester struct {
 	utxoStore             utxo.Store
 }
 
-func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
+func NewDoubleSpendTester(t *testing.T, utxoStoreOverride string) *DoubleSpendTester {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := ulogger.NewErrorTestLogger(t, cancel)
 
 	// Delete the sqlite db at the beginning of the test
-	_ = os.RemoveAll("data")
+	cpwd, _ := os.Getwd()
+	_ = cpwd
+	_ = os.RemoveAll("./data")
 
 	persistentStore, err := url.Parse("sqlite:///test")
 	require.NoError(t, err)
+
+	useUxoStore := persistentStore
+
+	if len(utxoStoreOverride) > 0 {
+		useUxoStore, err = url.Parse(utxoStoreOverride)
+		require.NoError(t, err)
+	}
 
 	memoryStore, err := url.Parse("memory:///")
 	require.NoError(t, err)
@@ -80,9 +93,16 @@ func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
 	// Override with test settings...
 	tSettings.SubtreeValidation.SubtreeStore = memoryStore
 	tSettings.BlockChain.StoreURL = persistentStore
-	tSettings.UtxoStore.UtxoStore = persistentStore
+	tSettings.UtxoStore.UtxoStore = useUxoStore
 	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 	tSettings.Asset.CentrifugeDisable = true
+	tSettings.UtxoStore.DBTimeout = 500 * time.Second
+	tSettings.LocalTestStartFromState = "RUNNING"
+	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
+
+	// tracing
+	tSettings.UseOpenTracing = true
+	tSettings.TracingSampleRate = "1" // 100% sampling during the test
 
 	readyCh := make(chan struct{})
 
@@ -99,6 +119,11 @@ func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
 	}, tSettings, readyCh)
 
 	<-readyCh
+
+	// start tracing after the global tracer has been set
+	ctx, _, deferFn := tracing.StartTracing(ctx, "NewDoubleSpendTester",
+		tracing.WithLogMessage(logger, "NewDoubleSpendTester"),
+	)
 
 	bcClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
 	require.NoError(t, err)
@@ -125,6 +150,8 @@ func NewDoubleSpendTester(t *testing.T) *DoubleSpendTester {
 
 	return &DoubleSpendTester{
 		ctx:                   ctx,
+		ctxCancel:             cancel,
+		tracingDeferFn:        deferFn,
 		logger:                logger,
 		d:                     d,
 		blockchainClient:      bcClient,
@@ -161,9 +188,9 @@ func (dst *DoubleSpendTester) verifyConflictingInSubtrees(t *testing.T, subtreeH
 	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
 		"Unexpected number of conflicting nodes in subtree")
 
-	for i, conflict := range expectedConflicts {
-		assert.Equal(t, conflict.String(), latestSubtree.ConflictingNodes[i].String(),
-			"Conflicting node mismatch at index %d", i)
+	for _, conflict := range expectedConflicts {
+		// conflicting txs are not in order
+		assert.True(t, slices.Contains(latestSubtree.ConflictingNodes, conflict), "Expected conflicting node %s not found in subtree", conflict.String())
 	}
 }
 
@@ -175,7 +202,60 @@ func (dst *DoubleSpendTester) verifyConflictingInUtxoStore(t *testing.T, expecte
 	}
 }
 
-func (dst *DoubleSpendTester) createTestBlock(t *testing.T, txs []*bt.Tx, previousBlock *model.Block) (*util.Subtree, *model.Block) {
+func (dst *DoubleSpendTester) verifyNotInBlockAssembly(t *testing.T, txHash []chainhash.Hash) {
+	// get a mining candidate and check the subtree does not contain the given transactions
+	candidate, err := dst.blockAssemblyClient.GetMiningCandidate(dst.ctx, true)
+	require.NoError(t, err)
+
+	for _, subtreeHash := range candidate.SubtreeHashes {
+		subtreeBytes, err := dst.subtreeStore.Get(dst.ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+		require.NoError(t, err, "Failed to get subtree")
+
+		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+		require.NoError(t, err, "Failed to parse subtree bytes")
+
+		for _, hash := range txHash {
+			found := subtree.HasNode(hash)
+			assert.False(t, found, "Expected subtree to not contain transaction %s", hash.String())
+		}
+	}
+}
+
+func (dst *DoubleSpendTester) verifyInBlockAssembly(t *testing.T, txHash []chainhash.Hash) {
+	// get a mining candidate and check the subtree does not contain the given transactions
+	candidate, err := dst.blockAssemblyClient.GetMiningCandidate(dst.ctx, true)
+	require.NoError(t, err)
+
+	// Check the candidate has at least one subtree hash, otherwise there is nothing to check
+	require.GreaterOrEqual(t, candidate.SubtreeHashes, 1, "Expected at least one subtree hash in the candidate")
+
+	txFoundMap := make(map[chainhash.Hash]int)
+	for _, hash := range txHash {
+		txFoundMap[hash] = 0
+	}
+
+	for _, subtreeHash := range candidate.SubtreeHashes {
+		subtreeBytes, err := dst.subtreeStore.Get(dst.ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+		require.NoError(t, err, "Failed to get subtree")
+
+		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+		require.NoError(t, err, "Failed to parse subtree bytes")
+
+		for _, hash := range txHash {
+			found := subtree.HasNode(hash)
+			if found {
+				txFoundMap[hash]++
+			}
+		}
+	}
+
+	// check all transactions have been found exactly once
+	for hash, count := range txFoundMap {
+		assert.Equal(t, 1, count, "Expected transaction %s to be found exactly once", hash.String())
+	}
+}
+
+func (dst *DoubleSpendTester) createTestBlock(t *testing.T, txs []*bt.Tx, previousBlock *model.Block, nonce uint32) (*util.Subtree, *model.Block) {
 	// Create and save the subtree with the double spend tx
 	subtree, err := createAndSaveSubtrees(dst.ctx, dst.subtreeStore, txs)
 	require.NoError(t, err)
@@ -199,7 +279,7 @@ func (dst *DoubleSpendTester) createTestBlock(t *testing.T, txs []*bt.Tx, previo
 			HashMerkleRoot: merkleRoot,
 			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 			Bits:           previousBlock.Header.Bits,
-			Nonce:          0,
+			Nonce:          nonce,
 		},
 		Height: previousBlock.Height + 1,
 	}
@@ -258,7 +338,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 			return nil, err
 		}
 
-		err = subtreeData.AddTx(tx, 1)
+		err = subtreeData.AddTx(tx, i+1)
 		if err != nil {
 			return nil, err
 		}

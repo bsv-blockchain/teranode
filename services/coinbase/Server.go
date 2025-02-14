@@ -3,6 +3,7 @@ package coinbase
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -110,7 +111,10 @@ func (s *Server) Init(ctx context.Context) error {
 }
 
 // Start function
-func (s *Server) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -126,6 +130,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, s.logger, s.settings, "coinbase", s.settings.Coinbase.GRPCListenAddress, func(server *grpc.Server) {
 		coinbase_api.RegisterCoinbaseAPIServer(server, s)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}

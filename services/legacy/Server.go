@@ -3,6 +3,7 @@ package legacy
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
@@ -215,9 +216,22 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 }
 
 // Start function
-func (s *Server) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	if err != nil {
+		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
+
+		return err
+	}
+
+	s.logger.Infof("[Legacy Server] Starting...")
+
+	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
+	err = s.blockchainClient.LegacySync(ctx)
 	if err != nil {
 		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
 
@@ -231,6 +245,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "legacy", s.settings.Legacy.GRPCListenAddress, func(server *grpc.Server) {
 		peer_api.RegisterPeerServiceServer(server, s)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
 	}

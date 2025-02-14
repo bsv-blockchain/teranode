@@ -44,6 +44,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -386,11 +387,39 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
+	if txMeta.Conflicting {
+		if err = s.updateParentConflictingChildren(ctx, transactionId, tx, txn); err != nil {
+			return nil, err
+		}
+	}
+
 	if err = txn.Commit(); err != nil {
 		return nil, err
 	}
 
 	return txMeta, nil
+}
+
+func (s *Store) updateParentConflictingChildren(ctx context.Context, transactionID int, tx *bt.Tx, txn *sql.Tx) error {
+	// update all the parents to have this transaction as a conflicting child
+	// do not fail if already exists
+	q := `
+			INSERT INTO conflicting_children (
+			 transaction_id, child_transaction_id
+			) VALUES (
+			 (SELECT id FROM transactions WHERE hash = $1),
+			 $2
+			)
+			ON CONFLICT DO NOTHING
+		`
+
+	for _, input := range tx.Inputs {
+		if _, err := txn.ExecContext(ctx, q, input.PreviousTxIDChainHash()[:], transactionID); err != nil {
+			return errors.NewStorageError("Failed to insert conflicting_children", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
@@ -439,9 +468,10 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	data := &meta.Data{}
 
 	var (
-		id       int
-		version  uint32
-		lockTime uint32
+		id        int
+		version   uint32
+		lockTime  uint32
+		hashBytes []byte
 	)
 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Unspendable)
@@ -458,7 +488,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		LockTime: lockTime,
 	}
 
-	if contains(bins, "tx") || contains(bins, "inputs") || contains(bins, "parentTxHashes") {
+	if contains(bins, "tx") || contains(bins, "inputs") || contains(bins, "parentTxHashes") || contains(bins, "utxos") {
 		q := `
 			SELECT
 			 previous_transaction_hash
@@ -500,7 +530,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "tx") || contains(bins, "outputs") {
+	if contains(bins, "tx") || contains(bins, "outputs") || contains(bins, "utxos") {
 		q := `SELECT locking_script, satoshis FROM outputs WHERE transaction_id = $1 ORDER BY idx`
 
 		rows, err := s.db.QueryContext(ctx, q, id)
@@ -537,6 +567,73 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 			}
 
 			data.BlockIDs = append(data.BlockIDs, blockID)
+		}
+	}
+
+	if contains(bins, "conflictingCs") {
+		q := `
+			SELECT conflicting_t.hash
+			FROM conflicting_children c
+			INNER JOIN transactions t ON c.transaction_id = t.id
+			INNER JOIN transactions conflicting_t ON c.child_transaction_id = conflicting_t.id
+			WHERE t.hash = $1
+		`
+
+		txHashStr := hex.EncodeToString(hash[:])
+		s.logger.Infof("Getting conflicting children for tx %s", txHashStr)
+
+		rows, err := s.db.QueryContext(ctx, q, hash[:])
+		if err != nil {
+			return nil, err
+		}
+
+		defer rows.Close()
+
+		data.ConflictingChildren = make([]chainhash.Hash, 0, 16)
+
+		for rows.Next() {
+			if err = rows.Scan(&hashBytes); err != nil {
+				return nil, err
+			}
+
+			data.ConflictingChildren = append(data.ConflictingChildren, chainhash.Hash(hashBytes))
+		}
+	}
+
+	if contains(bins, "utxos") {
+		var idx int
+
+		// get all the spending tx ids for this tx
+		q := `
+			SELECT o.idx, o.spending_transaction_id
+			FROM transactions as t, outputs as o
+			WHERE t.hash = $1 
+			  AND t.id = o.transaction_id
+			ORDER BY o.idx
+		`
+
+		rows, err := s.db.QueryContext(ctx, q, hash[:])
+		if err != nil {
+			return nil, err
+		}
+
+		defer rows.Close()
+
+		data.SpendingTxIDs = make([]*chainhash.Hash, len(tx.Outputs)) // needs to be nullable
+
+		for rows.Next() {
+			if err = rows.Scan(&idx, &hashBytes); err != nil {
+				return nil, err
+			}
+
+			if hashBytes != nil {
+				data.SpendingTxIDs[idx], err = chainhash.NewHash(hashBytes)
+				if err != nil {
+					return nil, errors.NewProcessingError("failed to create hash from bytes", err)
+				}
+			} else {
+				data.SpendingTxIDs[idx] = nil
+			}
 		}
 	}
 
@@ -641,7 +738,14 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		)
 	`
 
-	var errorFound bool
+	var (
+		errorFound           bool
+		useIgnoreUnspendable bool
+	)
+
+	if len(ignoreUnspendable) > 0 {
+		useIgnoreUnspendable = ignoreUnspendable[0]
+	}
 
 	for _, spend := range spends {
 		select {
@@ -686,14 +790,14 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			}
 
 			// If the tx is marked as conflicting, it cannot be spent
-			if conflicting {
+			if conflicting && !useIgnoreUnspendable {
 				errorFound = true
-				spend.Err = errors.NewTxConflictingError("[Spend] utxo is conflicting for %s:%d", spend.TxID, spend.Vout)
+				spend.Err = errors.NewTxConflictingError("[Spend] tx is conflicting for %s:%d", spend.TxID, spend.Vout)
 
 				continue
 			}
 
-			if unspendable && (len(ignoreUnspendable) == 0 || !ignoreUnspendable[0]) {
+			if unspendable && !useIgnoreUnspendable {
 				errorFound = true
 				spend.Err = errors.NewTxUnspendableError("[Spend] utxo is not spendable for %s:%d", spend.TxID, spend.Vout)
 
@@ -734,7 +838,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 				continue
 			}
 
-			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout, err)
+			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout)
 			if err != nil {
 				errorFound = true
 				spend.Err = errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d", spend.TxID, spend.Vout, err)
@@ -1112,6 +1216,27 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	return nil
 }
 
+func (s *Store) GetCounterConflicting(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetCounterConflicting",
+		tracing.WithHistogram(prometheusSQLUtxoGetCounterConflicting),
+	)
+
+	defer deferFn()
+
+	return utxo.GetCounterConflictingTxHashes(ctx, s, hash)
+}
+
+// GetConflictingChildren returns a list of conflicting transactions for a given transaction hash.
+func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetConflicting",
+		tracing.WithHistogram(prometheusSQLUtxoGetConflicting),
+	)
+
+	defer deferFn()
+
+	return utxo.GetConflictingChildren(ctx, s, hash)
+}
+
 // SetConflicting marks a list of transactions as conflicting.
 // It returns a list of spends that are affected by the conflicting status.
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
@@ -1138,15 +1263,28 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		utxoHash      *chainhash.Hash
 	)
 
-	for _, conflictingTxHash := range txHashes {
-		err := s.db.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, tombstoneMillis).Scan(&transactionID)
-		if err != nil {
-			return nil, nil, errors.NewStorageError("failed to set conflicting flag for %s", conflictingTxHash, err)
-		}
+	// Create a database transaction
+	txn, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, err
+	}
 
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	for _, conflictingTxHash := range txHashes {
 		// get the extended tx
 		txMeta, err := s.Get(ctx, &conflictingTxHash)
 		if err != nil {
+			return nil, nil, err
+		}
+
+		if err = txn.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, tombstoneMillis).Scan(&transactionID); err != nil {
+			return nil, nil, errors.NewStorageError("failed to set conflicting flag for %s", conflictingTxHash, err)
+		}
+
+		if err = s.updateParentConflictingChildren(ctx, transactionID, txMeta.Tx, txn); err != nil {
 			return nil, nil, err
 		}
 
@@ -1190,6 +1328,10 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 	}
 
+	if err = txn.Commit(); err != nil {
+		return nil, nil, errors.NewStorageError("failed to commit conflicting transaction", err)
+	}
+
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
@@ -1222,7 +1364,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
-        ,unspendable        BOOLEAN DEFAULT FALSE NOT NULL
+        ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
 		,tombstone_millis BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
@@ -1244,7 +1386,7 @@ func createPostgresSchema(db *usql.DB) error {
 	// The previous transaction hash may exist in this table
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
-          transaction_id            BIGINT NOT NULL REFERENCES transactions(id)
+          transaction_id            BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
          ,idx                       BIGINT NOT NULL
          ,previous_transaction_hash BYTEA NOT NULL
          ,previous_tx_idx           BIGINT NOT NULL
@@ -1265,7 +1407,7 @@ func createPostgresSchema(db *usql.DB) error {
 	// the spending transaction may not have been removed from the database.
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
-         transaction_id           BIGINT NOT NULL REFERENCES transactions(id)
+         transaction_id           BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
         ,idx                      BIGINT NOT NULL
         ,locking_script           BYTEA NOT NULL
         ,satoshis                 BIGINT NOT NULL
@@ -1283,13 +1425,24 @@ func createPostgresSchema(db *usql.DB) error {
 
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS block_ids (
-          transaction_id BIGINT NOT NULL REFERENCES transactions(id)
+          transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
          ,block_id       BIGINT NOT NULL
          ,PRIMARY KEY (transaction_id, block_id)
 	  );
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create block_ids table - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`
+      CREATE TABLE IF NOT EXISTS conflicting_children (
+         transaction_id        BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
+        ,child_transaction_id  BIGINT NOT NULL
+        ,PRIMARY KEY (transaction_id, child_transaction_id)
+	  );
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create conflicting_children table - [%+v]", err)
 	}
 
 	return nil
@@ -1324,7 +1477,7 @@ func createSqliteSchema(db *usql.DB) error {
 	// The previous transaction hash may exist in this table
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
-         transaction_id            INTEGER NOT NULL REFERENCES transactions(id)
+         transaction_id            INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
         ,idx                       BIGINT NOT NULL
         ,previous_transaction_hash BLOB NOT NULL
         ,previous_tx_idx           BIGINT NOT NULL
@@ -1345,7 +1498,7 @@ func createSqliteSchema(db *usql.DB) error {
 	// the spending transaction may not have been removed from the database.
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
-         transaction_id           INTEGER NOT NULL REFERENCES transactions(id)
+         transaction_id           INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
         ,idx                      BIGINT NOT NULL
         ,locking_script           BLOB NOT NULL
         ,satoshis                 BIGINT NOT NULL
@@ -1363,7 +1516,7 @@ func createSqliteSchema(db *usql.DB) error {
 
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS block_ids (
-         transaction_id INTEGER NOT NULL REFERENCES transactions(id)
+         transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
         ,block_id 			 BIGINT NOT NULL
         ,PRIMARY KEY (transaction_id, block_id)
 	  );
@@ -1372,62 +1525,26 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create block_ids table - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`
+      CREATE TABLE IF NOT EXISTS conflicting_children (
+         transaction_id        INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
+        ,child_transaction_id  BIGINT NOT NULL
+        ,PRIMARY KEY (transaction_id, child_transaction_id)
+	  );
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create conflicting_children table - [%+v]", err)
+	}
+
 	return nil
 }
 
 // deleteTombstoned removes transactions that have passed their expiration time.
 func deleteTombstoned(db *usql.DB) error {
-	q := `SELECT id FROM transactions WHERE tombstone_millis < $1;`
-
-	rows, err := db.Query(q, time.Now().UnixNano()/1e6)
-	if err != nil {
-		return errors.NewStorageError("failed to get transactions with tombstone", err)
-	}
-
-	var ids []int
-
-	for rows.Next() {
-		var id int
-
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return errors.NewStorageError("failed to scan transaction id", err)
-		}
-
-		ids = append(ids, id)
-	}
-
-	_ = rows.Close()
-
-	for _, id := range ids {
-		txn, err := db.Begin()
-		if err != nil {
-			return errors.NewStorageError("failed to start transaction", err)
-		}
-
-		if _, err := txn.Exec("DELETE FROM block_ids WHERE transaction_id = $1", id); err != nil {
-			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete block_ids", err)
-		}
-
-		if _, err := txn.Exec("DELETE FROM outputs WHERE transaction_id = $1", id); err != nil {
-			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete outputs", err)
-		}
-
-		if _, err := txn.Exec("DELETE FROM inputs WHERE transaction_id = $1", id); err != nil {
-			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete inputs", err)
-		}
-
-		if _, err := txn.Exec("DELETE FROM transactions WHERE id = $1", id); err != nil {
-			_ = txn.Rollback()
-			return errors.NewStorageError("failed to delete transaction", err)
-		}
-
-		if err := txn.Commit(); err != nil {
-			return errors.NewStorageError("failed to commit transaction", err)
-		}
+	// Delete transactions that have passed their expiration time
+	// this will cascade to inputs, outputs, block_ids and conflicting_children
+	if _, err := db.Exec("DELETE FROM transactions WHERE tombstone_millis < $1", time.Now().UnixNano()/1e6); err != nil {
+		return errors.NewStorageError("failed to delete transactions", err)
 	}
 
 	return nil

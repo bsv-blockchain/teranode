@@ -1,22 +1,26 @@
-//go:build test_full
+//go:build test_sequentially
 
 package doublespendtest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/require"
 )
 
-func setupDoubleSpendTest(t *testing.T) (dst *DoubleSpendTester, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block) {
-	dst = NewDoubleSpendTester(t)
+func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (dst *DoubleSpendTester, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block) {
+	dst = NewDoubleSpendTester(t, utxoStoreOverride)
 
 	// Set the FSM state to RUNNING...
 	err := dst.blockchainClient.Run(dst.ctx, "test")
@@ -61,14 +65,20 @@ func setupDoubleSpendTest(t *testing.T) (dst *DoubleSpendTester, coinbaseTx1, tx
 	return dst, coinbaseTx1, txOriginal, txDoubleSpend, block102
 }
 
-func createTransaction(t *testing.T, coinbaseTx *bt.Tx, privkey *bec.PrivateKey, amount uint64) *bt.Tx {
+func (dst *DoubleSpendTester) Stop() {
+	dst.tracingDeferFn()
+	_ = dst.d.Stop()
+	dst.ctxCancel()
+}
+
+func createTransaction(t *testing.T, parentTx *bt.Tx, privkey *bec.PrivateKey, amount uint64) *bt.Tx {
 	tx := bt.NewTx()
 
 	err := tx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		TxIDHash:      parentTx.TxIDChainHash(),
 		Vout:          0,
-		LockingScript: coinbaseTx.Outputs[0].LockingScript,
-		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
+		LockingScript: parentTx.Outputs[0].LockingScript,
+		Satoshis:      parentTx.Outputs[0].Satoshis,
 	})
 	require.NoError(t, err)
 
@@ -79,4 +89,43 @@ func createTransaction(t *testing.T, coinbaseTx *bt.Tx, privkey *bec.PrivateKey,
 	require.NoError(t, err)
 
 	return tx
+}
+
+// TODO should be moved into a test helper package
+func initAerospike() (string, func() error, error) {
+	teranode_aerospike.InitPrometheusMetrics()
+
+	ctx := context.Background()
+
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	if err != nil {
+		return "", nil, err
+	}
+
+	cleanup := func() error {
+		return container.Terminate(ctx)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		return "", cleanup, err
+	}
+
+	port, err := container.ServicePort(ctx)
+	if err != nil {
+		return "", cleanup, err
+	}
+
+	// raw client to be able to do gets and cleanup
+	client, aeroErr := uaerospike.NewClient(host, port)
+	if aeroErr != nil {
+		return "", cleanup, aeroErr
+	}
+
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=file://./data/externalStore", host, port, "test", "test", "10m")
+
+	return aerospikeContainerURL, func() error {
+		client.Close()
+		return cleanup()
+	}, nil
 }

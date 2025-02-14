@@ -142,18 +142,20 @@ func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ..
 
 	policy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
 
-	_, err := client.Delete(policy, key)
-	require.NoError(t, err)
+	if key != nil {
+		_, err := client.Delete(policy, key)
+		require.NoError(t, err)
+	}
 
 	if coinbaseKey != nil {
-		_, err = client.Delete(policy, coinbaseKey)
+		_, err := client.Delete(policy, coinbaseKey)
 		require.NoError(t, err)
 	}
 
 	if len(txs) > 0 {
 		for _, tx := range txs {
 			key, _ = aerospike.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
-			_, err = client.Delete(policy, key)
+			_, err := client.Delete(policy, key)
 			require.NoError(t, err)
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,8 +42,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -535,7 +534,10 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 // Start initiates the block validation service, starting Kafka consumers
 // and HTTP/gRPC servers. It begins processing blocks and handling validation
 // requests.
-func (u *Server) Start(ctx context.Context) error {
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -547,90 +549,13 @@ func (u *Server) Start(ctx context.Context) error {
 	// start blocks kafka consumer
 	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
-	httpAddress := u.settings.BlockValidation.HTTPListenAddress
-	if httpAddress != "" {
-		err := u.httpServer(ctx, httpAddress)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation] failed to start http server: %v", err)
-		}
-	}
-
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
 		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-// httpServer initializes and manages the HTTP server component of the validation service.
-// The server provides health check endpoints and subtree data access through a RESTful API.
-//
-// The implementation includes:
-// - Basic health and liveness checking endpoints
-// - CORS configuration for cross-origin requests
-// - Subtree data retrieval endpoint with proper error handling
-// - Graceful shutdown handling
-//
-// Parameters:
-//   - ctx: Context for server lifecycle management
-//   - httpAddress: The address on which to listen for HTTP requests
-//
-// Returns an error if server initialization fails or nil on successful startup.
-func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
-	startTime := time.Now()
-
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
-
-	e.Use(middleware.Recover())
-
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{echo.GET},
-	}))
-
-	e.GET("/alive", func(c echo.Context) error {
-		return c.String(http.StatusOK, fmt.Sprintf("Asset service is alive. Uptime: %s\n", time.Since(startTime)))
-	})
-
-	e.GET("/health", func(c echo.Context) error {
-		return c.String(http.StatusOK, "OK")
-	})
-	e.GET("/subtree/:hash", func(c echo.Context) error {
-		hashStr := c.Param("hash")
-
-		hash, err := chainhash.NewHashFromStr(hashStr)
-		if err != nil {
-			return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
-		}
-
-		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), hash[:], options.WithFileExtension("subtree"))
-		if err != nil {
-			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to get subtree: %v", err))
-		}
-
-		return c.Blob(200, echo.MIMEOctetStream, subtreeBytes)
-	})
-
-	go func() {
-		if err := e.Start(httpAddress); err != nil {
-			u.logger.Errorf("[Block Validation] failed to start http server: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-
-		u.logger.Infof("[Block Validation] Shutting down block validation http server")
-
-		if err := e.Shutdown(ctx); err != nil {
-			u.logger.Errorf("[Block Validation] failed to shutdown http server: %v", err)
-		}
-	}()
 
 	return nil
 }

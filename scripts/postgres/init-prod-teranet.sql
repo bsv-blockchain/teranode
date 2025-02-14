@@ -58,4 +58,3 @@ DATABASE "prod-teranet-3"
   WITH OWNER = "prod-teranet-3"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
-

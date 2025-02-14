@@ -95,12 +95,11 @@ func (c LocalClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, n
 }
 
 func (c LocalClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	block, err := c.store.GetBlockByHeight(ctx, height)
-	if err != nil {
-		return nil, err
-	}
+	return c.store.GetBlockByHeight(ctx, height)
+}
 
-	return block, nil
+func (c LocalClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	return c.store.GetBlockByID(ctx, id)
 }
 
 func (c LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
@@ -191,6 +190,10 @@ func (c LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
 
 func (c LocalClient) SetState(ctx context.Context, key string, data []byte) error {
 	return c.store.SetState(ctx, key, data)
+}
+
+func (c LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
 func (c LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

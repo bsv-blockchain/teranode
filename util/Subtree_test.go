@@ -295,9 +295,11 @@ func Test_Serialize(t *testing.T) {
 		_ = st.AddNode(*hash3, 111, 0)
 		_ = st.AddNode(*hash4, 111, 0)
 
-		st.ConflictingNodes = []chainhash.Hash{
-			*hash3,
-		}
+		err = st.AddConflictingNode(*hash3)
+		require.NoError(t, err)
+
+		err = st.AddConflictingNode(*hash4)
+		require.NoError(t, err)
 
 		serializedBytes, err := st.Serialize()
 		require.NoError(t, err)
@@ -322,6 +324,15 @@ func Test_Serialize(t *testing.T) {
 
 		for i := 0; i < len(st.ConflictingNodes); i++ {
 			assert.Equal(t, st.ConflictingNodes[i].String(), newSubtree.ConflictingNodes[i].String())
+		}
+
+		conflictingNodes, err := DeserializeSubtreeConflictingFromReader(bytes.NewReader(serializedBytes))
+		require.NoError(t, err)
+
+		assert.Equal(t, len(st.ConflictingNodes), len(conflictingNodes))
+
+		for i := 0; i < len(st.ConflictingNodes); i++ {
+			assert.Equal(t, st.ConflictingNodes[i].String(), conflictingNodes[i].String())
 		}
 	})
 }

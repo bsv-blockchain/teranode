@@ -112,7 +112,9 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 // Start function
-func (s *Server) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	close(readyCh)
+
 	var (
 		err error
 		ch  chan *blockchain.Notification

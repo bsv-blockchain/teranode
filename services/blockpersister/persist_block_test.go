@@ -158,6 +158,14 @@ func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo 
 	return nil
 }
 
+func (m *MockStore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
+func (m *MockStore) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
 func (m *MockStore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	return nil, nil, nil
 }

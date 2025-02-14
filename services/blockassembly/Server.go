@@ -4,6 +4,7 @@ package blockassembly
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -405,7 +406,9 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 //
 // Returns:
 //   - error: Any error encountered during startup
-func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
+func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
 
 	// Blocks until the FSM transitions from the IDLE state
 	err = ba.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
@@ -422,6 +425,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}
@@ -580,7 +584,7 @@ func (ba *BlockAssembly) TxCount() uint64 {
 // Returns:
 //   - *model.MiningCandidate: Mining candidate block
 //   - error: Any error encountered during retrieval
-func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {
+func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassembly_api.GetMiningCandidateRequest) (*model.MiningCandidate, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
@@ -596,6 +600,8 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	if !isRunning {
 		return nil, errors.WrapGRPC(errors.NewStateError("cannot get mining candidate when FSM is not in RUNNING state"))
 	}
+
+	includeSubtreeHashes := req.IncludeSubtrees
 
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
@@ -634,10 +640,17 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		}
 	}()
 
+	if includeSubtreeHashes {
+		miningCandidate.SubtreeHashes = make([][]byte, len(subtrees))
+		for i, subtree := range subtrees {
+			miningCandidate.SubtreeHashes[i] = subtree.RootHash()[:]
+		}
+	}
+
 	return miningCandidate, nil
 }
 
-// submitMiningSolution processes a mining solution submission.
+// SubmitMiningSolution processes a mining solution submission.
 // It validates the solution, creates a block, and adds it to the blockchain.
 //
 // Parameters:
@@ -1080,7 +1093,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
 	// get a mining candidate
-	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.EmptyMessage{})
+	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 	if err != nil {
 		return errors.NewProcessingError("error getting mining candidate", err)
 	}

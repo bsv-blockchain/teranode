@@ -249,10 +249,6 @@ The Block Validation service uses the following configuration options:
 
 1. **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. It is crucial for initializing the block validation client and establishing communication with the block validation service.
 
-2. **`blockvalidation_httpAddress`**: Configures the HTTP address for the block validation service. This setting is optional and, if provided, enables HTTP-based interactions with the block validation service.
-
-3. **`blockvalidation_httpListenAddress`**: Defines the address on which the HTTP server within the block validation service listens for incoming requests.
-
 ### Kafka and Concurrency Settings
 
 4. **`kafka_blocksConfig`**: Specifies the Kafka configuration for block messages, enabling the service to consume block data from Kafka.

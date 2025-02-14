@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -194,7 +195,10 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 //
 // Returns:
 //   - error: error if server fails to start
-func (ps *PropagationServer) Start(ctx context.Context) (err error) {
+func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -218,13 +222,12 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		errChan := make(chan error, 1) // Buffered channel
 
 		// Context for the QUIC server
-		ctx, cancel := context.WithCancel(context.Background())
+		quicCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		// Run the QUIC server in a goroutine
 		go func() {
-			err := ps.quicServer(ctx, quicAddress)
-			if err != nil {
+			if err := ps.quicServer(quicCtx, quicAddress); err != nil {
 				errChan <- err // Send any errors to the error channel
 			}
 
@@ -246,6 +249,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
+		closeOnce.Do(func() { close(readyCh) })
 	}, maxConnectionAge); err != nil {
 		return err
 	}
@@ -357,7 +361,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 //
 // Returns:
 //   - error: error if server fails to start or encounters runtime errors
-func (ps *PropagationServer) quicServer(_ context.Context, quicAddresses string) error {
+func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
 
 	tlsConfig, err := ps.generateTLSConfig()
@@ -365,12 +369,20 @@ func (ps *PropagationServer) quicServer(_ context.Context, quicAddresses string)
 		return errors.NewInvalidArgumentError("error generating TLS config", err)
 	}
 
+	mux := http.NewServeMux()
+	mux.Handle("/tx", http.HandlerFunc(ps.handleStream))
+
 	server := http3.Server{
 		Addr:      quicAddresses,
 		TLSConfig: tlsConfig, // Assume generateTLSConfig() sets up your TLS
+		Handler:   mux,
 	}
 
-	http.Handle("/tx", http.HandlerFunc(ps.handleStream))
+	go func() {
+		<-ctx.Done()
+
+		_ = server.Close()
+	}()
 
 	err = server.ListenAndServe() // Empty because certs are in TLSConfig
 	if err != nil {
@@ -528,10 +540,9 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 
 		g.Go(func() error {
 			// just call the internal process transaction function for every transaction
-			err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
+			if err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
-			})
-			if err != nil {
+			}); err != nil {
 				// TODO how can we send the real error back and not just a string?
 				response.Error[idx] = RemoveInvalidUTF8(err.Error())
 			} else {
@@ -606,12 +617,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
 		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
-			err = errors.NewServiceError("failed validating transaction", err)
-			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
-
-			prometheusInvalidTransactions.Inc()
-
-			return err
+			return errors.NewServiceError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
 

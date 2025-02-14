@@ -197,7 +197,10 @@ func (b *Blockchain) Init(ctx context.Context) error {
 }
 
 // Start begins the blockchain service operations.
-func (b *Blockchain) Start(ctx context.Context) error {
+func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	b.startKafka()
 
 	go b.startSubscriptions()
@@ -209,6 +212,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
 	}
@@ -524,6 +528,41 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 	return &blockchain_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           request.Height,
+		CoinbaseTx:       coinbaseBytes,
+		SubtreeHashes:    subtreeHashes,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+		Id:               block.ID,
+	}, nil
+}
+
+// GetBlockByID retrieves a block by its ID.
+func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.GetBlockByIDRequest) (*blockchain_api.GetBlockResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlock),
+		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Id),
+	)
+	defer deferFn()
+
+	block, err := b.store.GetBlockByID(ctx, request.Id)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	subtreeHashes := make([][]byte, len(block.Subtrees))
+	for i, subtreeHash := range block.Subtrees {
+		subtreeHashes[i] = subtreeHash[:]
+	}
+
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
+	return &blockchain_api.GetBlockResponse{
+		Header:           block.Header.Bytes(),
+		Height:           block.Height,
 		CoinbaseTx:       coinbaseBytes,
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
@@ -1100,6 +1139,26 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	b.notifications <- req
 
 	return &emptypb.Empty{}, nil
+}
+
+// GetBlockIsMined checks if a block has been mined in the blockchain.
+func (b *Blockchain) GetBlockIsMined(ctx context.Context, req *blockchain_api.GetBlockIsMinedRequest) (*blockchain_api.GetBlockIsMinedResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockIsMined",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockIsMined),
+	)
+	defer deferFn()
+
+	blockHash := chainhash.Hash(req.BlockHash)
+
+	isMined, err := b.store.GetBlockIsMined(ctx, &blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetBlockIsMinedResponse{
+		IsMined: isMined,
+	}, nil
 }
 
 // SetBlockMinedSet marks a block as mined in the blockchain.

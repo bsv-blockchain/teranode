@@ -76,12 +76,13 @@ var (
 	prometheusUtxoSpendBatch      prometheus.Histogram
 	prometheusUtxoSpendBatchSize  prometheus.Histogram
 
-	prometheusTxMetaAerospikeMapGet       prometheus.Counter
-	prometheusUtxostoreCreate             prometheus.Counter
-	prometheusTxMetaAerospikeMapSetMined  prometheus.Counter
-	prometheusTxMetaAerospikeMapErrors    *prometheus.CounterVec
-	prometheusTxMetaAerospikeMapGetMulti  prometheus.Counter
-	prometheusTxMetaAerospikeMapGetMultiN prometheus.Counter
+	prometheusTxMetaAerospikeMapGet                   prometheus.Counter
+	prometheusUtxostoreCreate                         prometheus.Counter
+	prometheusTxMetaAerospikeMapErrors                *prometheus.CounterVec
+	prometheusTxMetaAerospikeMapGetMulti              prometheus.Counter
+	prometheusTxMetaAerospikeMapGetMultiN             prometheus.Counter
+	prometheusTxMetaAerospikeMapGetCounterConflicting prometheus.Histogram
+	prometheusTxMetaAerospikeMapGetConflicting        prometheus.Histogram
 
 	prometheusTxMetaAerospikeMapSetMinedBatch     prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchN    prometheus.Counter
@@ -115,14 +116,7 @@ func _initPrometheusMetrics() {
 			Help:      "Number of Create calls done to aerospike",
 		},
 	)
-	prometheusTxMetaAerospikeMapSetMined = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "aerospike",
-			Name:      "txmeta_set_mined",
-			Help:      "Number of txmeta set_mined calls done to aerospike",
-		},
-	)
+
 	prometheusTxMetaAerospikeMapErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -149,6 +143,26 @@ func _initPrometheusMetrics() {
 			Subsystem: "aerospike",
 			Name:      "txmeta_get_multi_n",
 			Help:      "Number of txmeta get_multi txs done to aerospike map",
+		},
+	)
+
+	prometheusTxMetaAerospikeMapGetCounterConflicting = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_get_counter_conflicting",
+			Help:      "Duration of getting counter conflicting transactions from the blob store",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusTxMetaAerospikeMapGetConflicting = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_get_conflicting",
+			Help:      "Duration of getting conflicting transactions from the blob store",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 

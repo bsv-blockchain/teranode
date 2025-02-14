@@ -4,6 +4,7 @@ package blockpersister
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -162,8 +163,11 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 	return nil, nil
 }
 
-// Start begins the block processing loop and runs until the context is cancelled.
-func (u *Server) Start(ctx context.Context) error {
+// Start function
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -245,6 +249,8 @@ func (u *Server) Start(ctx context.Context) error {
 			}
 		}
 	}()
+
+	closeOnce.Do(func() { close(readyCh) })
 
 	<-ctx.Done()
 

@@ -11,13 +11,19 @@
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
+function spend(rec, offset, utxoHash, spendingTxID, ignoreUnspendable, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
 
-    if rec['conflicting'] then
-        return "CONFLICTING:TX is conflicting"
+    if not ignoreUnspendable then
+        if rec['conflicting'] then
+            return "CONFLICTING:TX is conflicting"
+        end
+
+        if rec['unspendable'] then
+            return "UNSPENDABLE:TX is unspendable"
+        end
     end
 
     if rec['frozen'] then
@@ -30,13 +36,13 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     end
 
     -- Get the utxos list from the record
-    local utxos = rec['utxos'] 
+    local utxos = rec['utxos']
     if utxos == nil then
         return "ERROR:UTXOs list not found"
     end
 
     -- Get the utxo that we want from the utxos list
-    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found for offset " .. offset
     end
@@ -56,12 +62,13 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
+
         
         
         if bytes_equal(existingSpendingTxID, spendingTxID) then
             return 'OK'
         elseif frozen(existingSpendingTxID) then
-			return "FROZEN:UTXO is frozen"
+            return "FROZEN:UTXO is frozen"
         else
             return 'SPENT:' .. bytes_to_hex(existingSpendingTxID)
         end
@@ -70,17 +77,19 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     -- Update the output to spend it by appending the spendingTxID
     -- Resize the utxo to 64 bytes
     local newUtxo = bytes(64)
-    
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[i] = utxo[i]
     end
-    
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[32 + i] = spendingTxID[i]
     end
 
     -- Update the record
-    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+    utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
     rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
@@ -91,13 +100,19 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     return 'OK' .. signal
 end
 
-function spendMulti(rec, spends, currentBlockHeight, ttl)
+function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
 
-    if rec['conflicting'] then
-        return "CONFLICTING:TX is conflicting"
+    if not ignoreUnspendable then
+        if rec['conflicting'] then
+            return "CONFLICTING:TX is conflicting"
+        end
+
+        if rec['unspendable'] then
+            return "UNSPENDABLE:TX is unspendable"
+        end
     end
 
     if rec['frozen'] then
@@ -122,7 +137,7 @@ function spendMulti(rec, spends, currentBlockHeight, ttl)
         local spendingTxID = spend['spendingTxID']
 
         -- Get the utxo that we want from the utxos list
-        local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+        local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
         if utxo == nil then
             return "ERROR:UTXO not found for offset " .. offset
         end
@@ -156,16 +171,18 @@ function spendMulti(rec, spends, currentBlockHeight, ttl)
         -- Resize the utxo to 64 bytes
         local newUtxo = bytes(64)
 
-        for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+        for i = 1, 32 do
+            -- NB - lua arrays are 1-based!!!!
             newUtxo[i] = utxo[i]
         end
 
-        for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+        for i = 1, 32 do
+            -- NB - lua arrays are 1-based!!!!
             newUtxo[32 + i] = spendingTxID[i]
         end
 
         -- Update the record
-        utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+        utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec['spentUtxos'] = rec['spentUtxos'] + 1
     end
 
@@ -196,12 +213,12 @@ function unspend(rec, offset, utxoHash)
     end
 
     -- Get the correct output record
-    local utxos = rec['utxos'] 
+    local utxos = rec['utxos']
     if utxos == nil then
         return "ERROR:UTXOs list not found"
     end
 
-    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found"
     end
@@ -236,7 +253,7 @@ function unspend(rec, offset, utxoHash)
         end
 
         -- Update the record
-        utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+        utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec['utxos'] = utxos
         rec['spentUtxos'] = spentUtxos - 1
     end
@@ -274,10 +291,10 @@ function setMined(rec, blockID, ttl)
     rec['blockIDs'] = blocks
 
     local signal = setTTL(rec, ttl)
-    
+
     -- Update the record to save changes
     aerospike:update(rec)
-    
+
     return 'OK' .. signal
 end
 
@@ -300,7 +317,7 @@ function freeze(rec, offset, utxoHash)
         return "ERROR:UTXOs list not found"
     end
 
-    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found"
     end
@@ -332,16 +349,18 @@ function freeze(rec, offset, utxoHash)
     -- Resize the utxo to 64 bytes
     local newUtxo = bytes(64)
 
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[i] = utxo[i]
     end
 
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[32 + i] = 255
     end
 
     -- Update the record
-    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+    utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
 
     rec['utxos'] = utxos
 
@@ -370,7 +389,7 @@ function unfreeze(rec, offset, utxoHash)
         return "ERROR:UTXOs list not found"
     end
 
-    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found"
     end
@@ -397,12 +416,13 @@ function unfreeze(rec, offset, utxoHash)
     -- Update the output utxo to the new utxo
     local newUtxo = bytes(32)
 
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[i] = utxo[i]
     end
 
     -- Update the record
-    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+    utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
 
     rec['utxos'] = utxos
 
@@ -432,7 +452,7 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         return "ERROR:UTXOs list not found"
     end
 
-    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset + 1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found"
     end
@@ -459,12 +479,13 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
     -- Resize the utxo to 64 bytes
     local newUtxo = bytes(32)
 
-    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+    for i = 1, 32 do
+        -- NB - lua arrays are 1-based!!!!
         newUtxo[i] = newUtxoHash[i]
     end
 
     -- Update the record
-    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+    utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
 
     rec['utxos'] = utxos
 
@@ -508,12 +529,12 @@ function bytes_equal(a, b)
     end
 
     -- Compare each byte in the arrays
-    for i = 1, bytes.size(a) do 
+    for i = 1, bytes.size(a) do
         if a[i] ~= b[i] then
             return false
         end
     end
-    
+
     -- If all bytes are equal, return true
     return true
 end
@@ -531,7 +552,8 @@ end
 -- |_| |_|  \___/___\___|_| |_|
 --                           
 function frozen(a)
-    if bytes.size(a) ~= 32 then -- Frozen utxos have 32 'FF' bytes.
+    if bytes.size(a) ~= 32 then
+        -- Frozen utxos have 32 'FF' bytes.
         return false
     end
 
@@ -567,11 +589,11 @@ end
 function incrementNrRecords(rec, inc, ttl)
     local nrRecords = rec['nrRecords']
     if nrRecords == nil then
-       return 'ERROR: nrRecords not found in record. Possible non-master record?'
+        return 'ERROR: nrRecords not found in record. Possible non-master record?'
     end
 
     nrRecords = nrRecords + inc
-   
+
     rec['nrRecords'] = nrRecords
 
     local signal = setTTL(rec, ttl)

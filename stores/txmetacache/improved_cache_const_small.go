@@ -12,5 +12,5 @@ const chunkSize = maxValueSizeKB * 512
 
 func LogCacheSize() {
 	logger := ulogger.NewZeroLogger("improved_cache")
-	logger.Infof("Using improved_cache_const_small.go")
+	logger.Debugf("Using improved_cache_const_small.go")
 }

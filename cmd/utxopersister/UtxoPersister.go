@@ -102,8 +102,12 @@ func UtxoPersister() {
 		return
 	}
 
-	if err := service.Start(ctx); err != nil {
+	readyCh := make(chan struct{}, 1)
+
+	if err := service.Start(ctx, readyCh); err != nil {
 		logger.Errorf("Failed utxopersister service: %v", err)
 		return
 	}
+
+	<-readyCh
 }

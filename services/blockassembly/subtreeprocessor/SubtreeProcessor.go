@@ -9,12 +9,14 @@ import (
 	"log"
 	"math"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -141,6 +143,9 @@ type SubtreeProcessor struct {
 	// removeMap tracks transactions marked for removal
 	removeMap *util.SwissMap
 
+	// blockchainClient provides access to blockchain data
+	blockchainClient blockchain.ClientI
+
 	// subtreeStore provides persistent storage for subtrees
 	subtreeStore blob.Store
 
@@ -178,8 +183,8 @@ var (
 // Returns:
 //   - *SubtreeProcessor: Initialized subtree processor
 //   - error: Any error encountered during initialization
-func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, utxoStore utxostore.Store,
-	newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
+func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store,
+	blockchainClient blockchain.ClientI, utxoStore utxostore.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
 	initPrometheusMetrics()
 
 	initialItemsPerFile := tSettings.BlockAssembly.InitialMerkleItemsPerSubtree
@@ -188,8 +193,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	if err != nil {
 		return nil, errors.NewInvalidArgumentError("error creating first subtree", err)
 	}
+
 	// We add a placeholder for the coinbase tx because we know this is the first subtree in the chain
-	if err := firstSubtree.AddCoinbaseNode(); err != nil {
+	if err = firstSubtree.AddCoinbaseNode(); err != nil {
 		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
@@ -212,6 +218,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		batcher:                   NewTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 		queue:                     queue,
 		removeMap:                 util.NewSwissMap(0),
+		blockchainClient:          blockchainClient,
 		subtreeStore:              subtreeStore,
 		utxoStore:                 utxoStore,
 		logger:                    logger,
@@ -484,6 +491,46 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		stp.currentBlockHeader = blockHeader
 	} else {
 		for _, block := range moveForwardBlocks {
+			// A block has potentially some conflicting transactions that need to be processed when we
+			// move forward the block
+			ctx := context.Background()
+
+			// TODO optimize this to only read in the conflicting transactions from the subtree
+			// when the block actually has conflicting transactions, should be marked in the block
+			conflictingNodes := make([]chainhash.Hash, 0, 1024)
+
+			// get the conflicting transactions from the block subtrees
+			for _, subtreeHash := range block.Subtrees {
+				// get the conflicting transactions from the subtree
+				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:])
+				if err != nil {
+					return errors.NewProcessingError("[moveForwardBlock][%s] error getting subtree from store", block.String(), err)
+				}
+
+				subtreeConflictingNodes, err := util.DeserializeSubtreeConflictingFromReader(subtreeReader)
+				if err != nil {
+					return errors.NewProcessingError("[moveForwardBlock][%s] error deserializing subtree conflicting nodes", block.String(), err)
+				}
+
+				if len(subtreeConflictingNodes) > 0 {
+					conflictingNodes = append(conflictingNodes, subtreeConflictingNodes...)
+				}
+			}
+
+			if len(conflictingNodes) > 0 {
+				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes)
+				if err != nil {
+					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+				}
+
+				if losingTxHashesMap.Length() > 0 {
+					// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
+					if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
+						return errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
+					}
+				}
+			}
+
 			if err := stp.processCoinbaseUtxos(context.Background(), block); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 			}
@@ -1117,7 +1164,6 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 
 // moveForwardBlock cleans out all transactions that are in the current subtrees and also in the block
 // given. It is akin moving up the blockchain to the next block.
-// TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.Block, skipNotification bool) error {
 	if block == nil {
 		return errors.NewProcessingError("[moveForwardBlock] you must pass in a block to moveForwardBlock")
@@ -1204,10 +1250,27 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		stp.logger.Debugf("[moveForwardBlock][%s] processing subtrees into transaction map DONE in %s: %d", block.String(), time.Since(mapStartTime).String(), transactionMap.Length())
 	}
 
+	var losingTxHashesMap util.TxMap
+
 	// process conflicting txs
 	if len(conflictingNodes) > 0 {
-		if err = utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes); err != nil {
+		// before we process the conflicting transactions, we need to make sure this block has been marked as mined
+		// that would mean any previous block is also marked as mined and the data should be in a correct state
+		// we can then process the conflicting transactions
+		_, err = stp.waitForBlockBeingMined(ctx, block.Header.Hash())
+		if err != nil {
+			return errors.NewProcessingError("[moveForwardBlock][%s] error waiting for block to be mined", block.String(), err)
+		}
+
+		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes); err != nil {
 			return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+		}
+
+		if losingTxHashesMap.Length() > 0 {
+			// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
+			if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
+				return errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
+			}
 		}
 	}
 
@@ -1241,7 +1304,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 		stp.logger.Debugf("[moveForwardBlock][%s] processRemainderTxHashes with %d subtrees", block.String(), len(chainedSubtrees))
 
-		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, skipNotification); err != nil {
+		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, losingTxHashesMap, skipNotification); err != nil {
 			return errors.NewProcessingError("[moveForwardBlock][%s] error getting remainder tx hashes", block.String(), err)
 		}
 
@@ -1253,7 +1316,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 		stp.logger.Debugf("[moveForwardBlock][%s] processing queue while moveForwardBlock: %d", block.String(), stp.queue.length())
 
-		err = stp.moveForwardBlockDeQueue(transactionMap, skipNotification)
+		err = stp.moveForwardBlockDeQueue(transactionMap, losingTxHashesMap, skipNotification)
 		if err != nil {
 			return errors.NewProcessingError("[moveForwardBlock][%s] error moving up block deQueue", block.String(), err)
 		}
@@ -1310,15 +1373,40 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	return nil
 }
 
+func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	// try to wait for the block to be mined for maximum 30 sec
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false, errors.NewProcessingError("[waitForBlockBeingMined] block not mined within 30 seconds", nil)
+		default:
+			blockMined, err := stp.blockchainClient.GetBlockIsMined(ctx, blockHash)
+			if err != nil {
+				return false, errors.NewProcessingError("[waitForBlockBeingMined] error getting block mined status", err)
+			}
+
+			if blockMined {
+				return true, nil
+			}
+
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
 // moveForwardBlockDeQueue processes the transaction queue during block movement.
 //
 // Parameters:
-//   - transactionMap: Map of transactions to process
+//   - transactionMap: Map of transactions that were in the block and need to be removed
+//   - losingTxHashesMap: Map of transactions that were conflicting and need to be removed
 //   - skipNotification: Whether to skip notification of new subtrees
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap util.TxMap, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap, losingTxHashesMap util.TxMap, skipNotification bool) (err error) {
 	queueLength := stp.queue.length()
 	if queueLength > 0 {
 		nrProcessed := int64(0)
@@ -1331,7 +1419,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap util.TxMap, 
 				break
 			}
 
-			if !transactionMap.Exists(item.node.Hash) {
+			if !transactionMap.Exists(item.node.Hash) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(item.node.Hash)) {
 				_ = stp.addNode(item.node, skipNotification)
 			}
 
@@ -1345,7 +1433,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap util.TxMap, 
 	return nil
 }
 
-// deDuplicateTransactions removes duplicate transactions from the processor.
+// DeDuplicateTransactions removes duplicate transactions from the processor.
 func (stp *SubtreeProcessor) DeDuplicateTransactions() {
 	stp.deDuplicateTransactionsCh <- struct{}{}
 }
@@ -1472,12 +1560,14 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 // Parameters:
 //   - ctx: Context for cancellation
 //   - chainedSubtrees: List of subtrees to process
-//   - transactionMap: Map of transactions to process
+//   - transactionMap: Map of transactions that were in the block and need to be removed
+//   - losingTxHashesMap: Map of transactions that were conflicting and need to be removed
 //   - skipNotification: Whether to skip notification of new subtrees
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree, transactionMap util.TxMap, skipNotification bool) error {
+func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree,
+	transactionMap, losingTxHashesMap util.TxMap, skipNotification bool) error {
 	var hashCount atomic.Int64
 
 	// clean out the transactions from the old current subtree that were in the block
@@ -1487,6 +1577,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
 	remainderSubtrees := make([][]util.SubtreeNode, len(chainedSubtrees))
+	removeMapLength := stp.removeMap.Length()
 
 	for idx, subtree := range chainedSubtrees {
 		idx := idx
@@ -1497,8 +1588,14 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 			// don't use the util function, keep the memory local in this function, no jumping between heap and stack
 			// err = st.Difference(transactionMap, &remainderSubtrees[idx])
 			for _, node := range st.Nodes {
-				if !transactionMap.Exists(node.Hash) {
-					remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+				if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
+					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+						if err := stp.removeMap.Delete(node.Hash); err != nil {
+							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
+						}
+					} else if !transactionMap.Exists(node.Hash) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(node.Hash)) {
+						remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+					}
 				}
 			}
 
@@ -1512,21 +1609,10 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		return errors.NewProcessingError("error getting remainder tx difference", err)
 	}
 
-	removeMapLength := stp.removeMap.Length()
-
-	// TODO find a way to this in parallel
 	// add all found tx hashes to the final list, in order
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
-			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-				if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
-					if err := stp.removeMap.Delete(node.Hash); err != nil {
-						stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
-					}
-				} else {
-					_ = stp.addNode(node, skipNotification)
-				}
-			}
+			_ = stp.addNode(node, skipNotification)
 		}
 	}
 
@@ -1624,6 +1710,123 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	return transactionMap, conflictingNodes, nil
 }
 
+func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, losingTxHashesMap util.TxMap) error {
+	if losingTxHashesMap == nil || losingTxHashesMap.Length() == 0 {
+		return nil
+	}
+
+	// get all the blocks these transactions were mined into
+	blockIdsMap := make(map[uint32][]chainhash.Hash)
+	blockIdsMapMu := sync.Mutex{}
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for _, txHash := range losingTxHashesMap.Keys() {
+		txHash := txHash
+
+		g.Go(func() error {
+			txMeta, err := stp.utxoStore.Get(gCtx, &txHash, []string{"blockIDs"})
+			if err != nil {
+				return errors.NewServiceError("error getting utxos for tx %s", txHash.String())
+			}
+
+			blockIdsMapMu.Lock()
+
+			for _, blockID := range txMeta.BlockIDs {
+				if _, ok := blockIdsMap[blockID]; !ok {
+					blockIdsMap[blockID] = make([]chainhash.Hash, 0, 1024)
+				}
+
+				blockIdsMap[blockID] = append(blockIdsMap[blockID], txHash)
+			}
+
+			blockIdsMapMu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("error getting mined blocks for conflicting txs", err)
+	}
+
+	// limit the number of concurrent writes to the subtrees
+	g.SetLimit(32)
+
+	// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
+	for blockID, txHashes := range blockIdsMap {
+		// get the block
+		block, err := stp.blockchainClient.GetBlockByID(ctx, uint64(blockID))
+		if err != nil {
+			return errors.NewServiceError("error getting block %d", blockID)
+		}
+
+		// get the subtrees
+		for _, subtreeHash := range block.Subtrees {
+			subtreeHash := subtreeHash
+
+			g.Go(func() error {
+				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+				if err != nil {
+					return errors.NewServiceError("error getting subtree %s", subtreeHash.String())
+				}
+
+				subtree := util.Subtree{}
+				if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
+					return errors.NewProcessingError("error deserializing subtree %s", subtreeHash.String(), err)
+				}
+
+				conflictingTransactionsMap := make(map[chainhash.Hash]int, len(txHashes))
+
+				for _, txHash := range txHashes {
+					idx := subtree.NodeIndex(txHash)
+					if idx >= 0 {
+						conflictingTransactionsMap[txHash] = idx
+					}
+				}
+
+				// if we marked at least 1 node as conflicting, we should save the subtree again
+				if len(conflictingTransactionsMap) > 0 {
+					// create a slice of the conflicting nodes
+					conflictingNodes := make([]chainhash.Hash, 0, len(conflictingTransactionsMap))
+					for txHash := range conflictingTransactionsMap {
+						conflictingNodes = append(conflictingNodes, txHash)
+					}
+
+					// sort the conflicting nodes by their index in the subtree
+					slices.SortFunc(conflictingNodes, func(i, j chainhash.Hash) int {
+						return conflictingTransactionsMap[i] - conflictingTransactionsMap[j]
+					})
+
+					// mark the transaction as conflicting in order of idx
+					for _, txHash := range conflictingNodes {
+						if err = subtree.AddConflictingNode(txHash); err != nil {
+							return errors.NewProcessingError("error adding conflicting node %s to subtree %s", txHash.String(), subtreeHash.String(), err)
+						}
+					}
+
+					subtreeBytes, err := subtree.Serialize()
+					if err != nil {
+						return errors.NewProcessingError("error serializing subtree %s", subtreeHash.String(), err)
+					}
+
+					if err = stp.subtreeStore.Set(gCtx, subtreeHash[:], subtreeBytes, options.WithFileExtension("subtree")); err != nil {
+						return errors.NewServiceError("error saving subtree %s", subtreeHash.String(), err)
+					}
+				}
+
+				return nil
+			})
+		}
+	}
+
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("error marking conflicting txs in subtrees", err)
+	}
+
+	return nil
+}
+
 // DeserializeHashesFromReaderIntoBuckets deserializes transaction hashes from a reader into buckets.
 //
 // Parameters:
@@ -1633,7 +1836,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 // Returns:
 //   - map[uint16][][32]byte: Map of bucketed hash arrays
 //   - error: Any error encountered during deserialization
-func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][][32]byte, conflictingNodes []chainhash.Hash, err error) {
+func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (hashes map[uint16][]chainhash.Hash, conflictingNodes []chainhash.Hash, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.NewProcessingError("recovered in DeserializeHashesFromReaderIntoBuckets: %v", r)
@@ -1655,9 +1858,9 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
 
 	// read leaves
-	hashes = make(map[uint16][][32]byte, nBuckets)
+	hashes = make(map[uint16][]chainhash.Hash, nBuckets)
 	for i := uint16(0); i < nBuckets; i++ {
-		hashes[i] = make([][32]byte, 0, int(math.Ceil(float64(numLeaves/uint64(nBuckets))*1.1)))
+		hashes[i] = make([]chainhash.Hash, 0, int(math.Ceil(float64(numLeaves/uint64(nBuckets))*1.1)))
 	}
 
 	var bucket uint16
@@ -1670,8 +1873,8 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 			return nil, nil, errors.NewProcessingError("unable to read node", err)
 		}
 
-		bucket = util.Bytes2Uint16Buckets([32]byte(bytes48[:32]), nBuckets)
-		hashes[bucket] = append(hashes[bucket], [32]byte(bytes48[:32]))
+		bucket = util.Bytes2Uint16Buckets(chainhash.Hash(bytes48[:32]), nBuckets)
+		hashes[bucket] = append(hashes[bucket], chainhash.Hash(bytes48[:32]))
 	}
 
 	conflictingNodes = make([]chainhash.Hash, 0, 1024)

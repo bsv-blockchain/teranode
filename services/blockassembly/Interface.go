@@ -54,7 +54,7 @@ type ClientI interface {
 	// Returns:
 	//   - *model.MiningCandidate: Mining candidate block
 	//   - error: Any error encountered during retrieval
-	GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error)
+	GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error)
 
 	// GetCurrentDifficulty retrieves the current mining difficulty.
 	//
@@ -172,7 +172,7 @@ func (m Mock) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	panic("implement me")
 }
 
-func (m Mock) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
+func (m Mock) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
 	// TODO implement me
 	panic("implement me")
 }

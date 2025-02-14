@@ -69,7 +69,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v23" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v24" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]
@@ -134,6 +134,9 @@ const (
 
 	// LuaConflicting indicates conflicting transaction
 	LuaConflicting LuaReturnValue = "CONFLICTING"
+
+	// LuaUnspendable indicates transaction is unspendable
+	LuaUnspendable LuaReturnValue = "UNSPENDABLE"
 
 	// LuaError indicates operation failed
 	LuaError LuaReturnValue = "ERROR"

@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/alert-system/app/config"
@@ -135,7 +136,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 // Start begins the server operation and blocks until shutdown.
-func (s *Server) Start(ctx context.Context) (err error) {
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Ensure we have the genesis alert in the database
 	if err = models.CreateGenesisAlert(
 		ctx, model.WithAllDependencies(s.appConfig),
@@ -163,6 +167,8 @@ func (s *Server) Start(ctx context.Context) (err error) {
 	if err = s.p2pServer.Start(ctx); err != nil {
 		return errors.NewServiceError("error starting p2p server", err)
 	}
+
+	closeOnce.Do(func() { close(readyCh) })
 
 	// wait for a shutdown signal
 	<-ctx.Done()

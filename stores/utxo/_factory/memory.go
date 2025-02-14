@@ -1,5 +1,3 @@
-// //go:build memory
-
 // Package _factory provides a factory for creating UTXO store implementations.
 // It supports multiple database backends through build tags and connection URLs.
 //
@@ -69,16 +67,18 @@
 //   - Error status
 package _factory
 
-// import (
-//	"net/url"
-//
-//	"github.com/bitcoin-sv/teranode/stores/utxomap"
-//	"github.com/bitcoin-sv/teranode/stores/utxomap/memory"
-//	"github.com/bitcoin-sv/teranode/ulogger"
-//)
-//
-// func init() {
-//	availableDatabases["memory"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxomap.Interface, error) {
-//		return memory.New(true), nil
-//	}
-//}
+import (
+	"context"
+	"net/url"
+
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/ulogger"
+)
+
+func init() {
+	availableDatabases["memory"] = func(_ context.Context, logger ulogger.Logger, _ *settings.Settings, _ *url.URL) (utxo.Store, error) {
+		return memory.New(logger), nil
+	}
+}

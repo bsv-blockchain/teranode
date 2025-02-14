@@ -3,10 +3,13 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -31,32 +34,67 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
-	"github.com/felixge/fgprof"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var appCount int
+var (
+	appCount          int
+	pprofRegistered   atomic.Bool
+	metricsRegistered atomic.Bool
+	healthRegistered  atomic.Bool
+	traceCloser       io.Closer
+)
 
 type Daemon struct {
-	doneCh chan struct{}
+	doneCh        chan struct{}
+	closeDoneOnce sync.Once
+
+	stopCh        chan struct{} // Channel to signal when all services have stopped
+	closeStopOnce sync.Once
 }
 
 func New() *Daemon {
 	return &Daemon{
-		doneCh: make(chan struct{}),
+		closeDoneOnce: sync.Once{},
+		closeStopOnce: sync.Once{},
+		doneCh:        make(chan struct{}),
+		stopCh:        make(chan struct{}),
 	}
 }
 
-func (d *Daemon) Stop() {
-	close(d.doneCh)
+func (d *Daemon) Stop(timeout ...time.Duration) error {
+	if traceCloser != nil {
+		_ = traceCloser.Close()
+	}
+
+	d.closeDoneOnce.Do(func() { close(d.doneCh) })
+
+	if appCount == 0 {
+		d.closeStopOnce.Do(func() { close(d.stopCh) })
+		return nil
+	}
+
+	if len(timeout) > 0 {
+		select {
+		case <-d.stopCh: // Wait for all services to complete
+			return nil
+		case <-time.After(timeout[0]):
+			return errors.NewProcessingError("timeout waiting for services to stop after %v", timeout[0])
+		}
+	}
+
+	<-d.stopCh // Wait for all services to complete without timeout
+
+	return nil
 }
 
 func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings.Settings, readyCh ...chan struct{}) {
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if shouldStart("wait_for_postgres", args) {
 		if err := waitForPostgresToStart(logger, tSettings.PostgresCheckAddress); err != nil {
-			logger.Fatalf("error waiting for postgres: %v", err)
+			logger.Errorf("error waiting for postgres: %v", err)
+			return
 		}
 	}
 
@@ -83,9 +121,16 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		}
 	}()
 
-	err := startServices(sm.Ctx, logger, tSettings, sm, args)
+	var readyChInternal chan struct{}
+	if len(readyCh) > 0 {
+		readyChInternal = readyCh[0]
+	}
+
+	err := startServices(sm.Ctx, logger, tSettings, sm, args, readyChInternal)
 	if err != nil {
-		logger.Fatalf("error starting services: %v", err)
+		logger.Errorf("error starting services: %v", err)
+		sm.ForceShutdown()
+		d.closeDoneOnce.Do(func() { close(d.doneCh) })
 	}
 
 	util.RegisterPrometheusMetrics()
@@ -109,10 +154,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	mux.HandleFunc("/health/readiness", healthFunc(false))
 	mux.HandleFunc("/health/liveness", healthFunc(true))
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("STOP USING THIS ENDPOINT - use port 8000/health/readiness or 8000/health/liveness"))
-	})
+	if !healthRegistered.Load() {
+		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("STOP USING THIS ENDPOINT - use port 8000/health/readiness or 8000/health/liveness"))
+		})
+		healthRegistered.Store(true)
+	}
 
 	port := tSettings.HealthCheckPort
 
@@ -134,29 +182,40 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	logger.Infof("Health check endpoint listening on http://localhost:%d/health", port)
 
 	// Create a channel to receive the wait result
-	waitCh := make(chan error, 1)
+	waitErr := make(chan error, 1)
 	go func() {
-		waitCh <- sm.Wait()
+		waitErr <- sm.Wait()
 	}()
-
-	if len(readyCh) > 0 {
-		close(readyCh[0])
-	}
 
 	// Wait for either services to complete or doneCh to be closed
 	select {
-	case err := <-waitCh:
+	case err := <-waitErr:
 		if err != nil {
 			logger.Errorf("services failed: %v", err)
 		}
 	case <-d.doneCh:
 		logger.Infof("daemon shutdown requested")
+
+		sm.ForceShutdown()
+
+		// Wait for services to complete shutdown using the existing waitCh
+		if err := <-waitErr; err != nil {
+			logger.Errorf("error during service shutdown: %v", err)
+		}
 	}
+
+	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
 // startServices starts the services based on the command line arguments and the config file
 // nolint:gocognit
-func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string) error {
+func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+
+	if readyCh != nil {
+		defer closeOnce.Do(func() { close(readyCh) })
+	}
+
 	help := shouldStart("help", args)
 	startBlockchain := shouldStart("Blockchain", args)
 	startBlockAssembly := shouldStart("BlockAssembly", args)
@@ -180,7 +239,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	profilerAddr := tSettings.ProfilerAddr
-	if profilerAddr != "" {
+	if profilerAddr != "" && !pprofRegistered.Load() {
+		pprofRegistered.Store(true)
+
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
@@ -197,7 +258,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 				IdleTimeout:  120 * time.Second,
 			}
 
-			http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+			// http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 			logger.Fatalf("%v", server.ListenAndServe())
 		}()
 	}
@@ -208,7 +269,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	prometheusEndpoint := tSettings.PrometheusEndpoint
-	if prometheusEndpoint != "" {
+	if prometheusEndpoint != "" && !metricsRegistered.Load() {
+		metricsRegistered.Store(true)
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 		http.Handle(prometheusEndpoint, promhttp.Handler())
 	}
@@ -234,7 +296,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		}
 
 		if closer != nil {
-			defer closer.Close()
+			traceCloser = closer
 		}
 	}
 
@@ -401,7 +463,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			utxoStore,
 			blockassemblyClient,
 		)); err != nil {
-			panic(err)
+			return err
 		}
 	}
 
@@ -770,6 +832,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		)); err != nil {
 			return err
 		}
+	}
+
+	if readyCh != nil {
+		sm.WaitForServiceToBeReady()
+		closeOnce.Do(func() { close(readyCh) })
 	}
 
 	return nil

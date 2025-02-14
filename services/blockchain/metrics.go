@@ -33,6 +33,7 @@ var (
 	prometheusBlockchainInvalidateBlock            prometheus.Histogram
 	prometheusBlockchainRevalidateBlock            prometheus.Histogram
 	prometheusBlockchainSendNotification           prometheus.Histogram
+	prometheusBlockchainGetBlockIsMined            prometheus.Histogram
 	prometheusBlockchainSetBlockMinedSet           prometheus.Histogram
 	prometheusBlockchainGetBlocksMinedNotSet       prometheus.Histogram
 	prometheusBlockchainSetBlockSubtreesSet        prometheus.Histogram
@@ -284,6 +285,16 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockchainGetBlockIsMined = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "get_block_is_mined",
+			Help:      "Histogram of GetBlockIsMined calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
 	prometheusBlockchainSetBlockMinedSet = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -371,4 +382,4 @@ func _initPrometheusMetrics() {
 //		Help:      "Histogram of ExportBlockDB calls to the blockchain service",
 //		Buckets:   util.MetricsBucketsMilliSeconds,
 //	},
-//)
+// )

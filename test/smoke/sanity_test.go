@@ -8,13 +8,12 @@
 package smoke
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	// "github.com/bitcoin-sv/teranode/services/coinbase"
-	"github.com/bitcoin-sv/teranode/services/coinbase"
+
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -72,11 +71,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	var tx *bt.Tx
 
 	timeout := time.After(10 * time.Second)
-
-	err2 := coinbaseClient.SetMalformedUTXOConfig(ctx, 100, coinbase.ZeroSatoshis)
-	errorUnwrap := errors.Unwrap(err2)
-	t.Logf("err: %v", errorUnwrap)
-	require.NoError(t, errorUnwrap, "Failed to set malformed utxo config: %v", errorUnwrap)
 
 loop:
 	for tx == nil || err != nil {

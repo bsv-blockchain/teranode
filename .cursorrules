@@ -29,4 +29,3 @@
   - Always follow linting rules as per .golangci.yml
 
   Always prioritize security, scalability, and maintainability in your API designs and implementations. Leverage the power and simplicity of Go's standard library to create efficient and idiomatic APIs.
-  

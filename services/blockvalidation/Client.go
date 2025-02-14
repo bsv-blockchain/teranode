@@ -28,7 +28,6 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 )
 
 // Client provides an interface to interact with the block validation service.
@@ -37,10 +36,6 @@ import (
 type Client struct {
 	// apiClient handles gRPC communication with the validation service
 	apiClient blockvalidation_api.BlockValidationAPIClient
-
-	// httpAddress stores the HTTP endpoint for the validation service
-	// This provides an alternative communication channel when available
-	httpAddress string
 
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
@@ -79,11 +74,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
 		logger:    logger,
 		settings:  tSettings,
-	}
-
-	httpAddress := tSettings.BlockValidation.HTTPAddress
-	if httpAddress != "" {
-		client.httpAddress = httpAddress
 	}
 
 	return client, nil
@@ -214,16 +204,6 @@ func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, 
 //   - The subtree data as bytes
 //   - An error if retrieval fails through all available channels
 func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
-	if s.httpAddress != "" {
-		// try the http endpoint first, if that fails we can try the grpc endpoint
-		subtreeBytes, err := util.DoHTTPRequest(ctx, s.httpAddress+"/subtree/"+utils.ReverseAndHexEncodeSlice(subtreeHash))
-		if err != nil {
-			s.logger.Warnf("error getting subtree %x from blockvalidation http endpoint: %s", subtreeHash, err)
-		} else if subtreeBytes != nil {
-			return subtreeBytes, nil
-		}
-	}
-
 	req := &blockvalidation_api.GetSubtreeRequest{
 		Hash: subtreeHash,
 	}

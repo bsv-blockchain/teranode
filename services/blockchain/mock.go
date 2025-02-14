@@ -128,6 +128,18 @@ func (s *mockStore) GetState(ctx context.Context, key string) ([]byte, error) {
 func (s *mockStore) SetState(ctx context.Context, key string, data []byte) error {
 	panic("not implemented")
 }
+
+//nolint:unused
+func (s *mockStore) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	// TODO implement me
+	panic("implement me")
+}
+
+//nolint:unused
+func (s *mockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	// TODO implement me
+	panic("implement me")
+}
 func (s *mockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic("not implemented")
 }

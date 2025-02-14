@@ -15,6 +15,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	st "github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
@@ -84,7 +85,18 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
 
-	stp, _ := st.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
+	// Create a mock blockchain client
+	mockBlockchainClient := &blockchain.MockBlockchain{}
+
+	stp, _ := st.NewSubtreeProcessor(
+		context.Background(),
+		ulogger.TestLogger{},
+		settings,
+		subtreeStore,
+		mockBlockchainClient,
+		utxosStore,
+		newSubtreeChan,
+	)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -187,7 +199,19 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		utxosStore := memory.New(ulogger.TestLogger{})
 
 		settings := test.CreateBaseTestSettings()
-		stp, _ := st.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, utxosStore, newSubtreeChan)
+
+		// Create a mock blockchain client
+		mockBlockchainClient := &blockchain.MockBlockchain{}
+
+		stp, _ := st.NewSubtreeProcessor(
+			context.Background(),
+			ulogger.TestLogger{},
+			settings,
+			subtreeStore,
+			mockBlockchainClient,
+			utxosStore,
+			newSubtreeChan,
+		)
 
 		subtreeSize := uint64(1024 * 1024)
 		nrSubtrees := 10

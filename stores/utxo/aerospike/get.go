@@ -510,10 +510,37 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.Frozen = frozenBool
 					}
 
+				case "utxos":
+					utxos, ok := value.([]interface{})
+					if ok {
+						items[idx].Data.SpendingTxIDs = make([]*chainhash.Hash, len(utxos))
+
+						for i, ui := range utxos {
+							u, ok := ui.([]uint8)
+							if ok {
+								if len(u) == 64 {
+									items[idx].Data.SpendingTxIDs[i], _ = chainhash.NewHash(u[32:])
+								} else {
+									items[idx].Data.SpendingTxIDs[i] = nil
+								}
+							}
+						}
+					}
+
 				case "conflicting":
 					conflictingBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.Conflicting = conflictingBool
+					}
+
+				case "conflictingCs": // bin name can only be max 15 chars
+					conflictingChildren, ok := value.([]interface{})
+					if ok {
+						items[idx].Data.ConflictingChildren = make([]chainhash.Hash, len(conflictingChildren))
+
+						for i, child := range conflictingChildren {
+							items[idx].Data.ConflictingChildren[i] = chainhash.Hash(child.([]uint8))
+						}
 					}
 				}
 			}

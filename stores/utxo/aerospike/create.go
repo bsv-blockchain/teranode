@@ -139,6 +139,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Conflicting = createOptions.Conflicting
 
+	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
+	// we should do this before we store the transaction, so we are sure the parents have been updated properly
+	if txMeta.Conflicting {
+		if err = s.updateParentConflictingChildren(tx); err != nil {
+			return nil, errors.NewProcessingError("failed to update parent conflicting children", err)
+		}
+	}
+
 	errCh := make(chan error)
 	defer close(errCh)
 

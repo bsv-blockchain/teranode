@@ -23,6 +23,7 @@ type serviceWrapper struct {
 	name     string
 	instance Service
 	index    int
+	readyCh  chan struct{}
 }
 
 var (
@@ -112,6 +113,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		name:     name,
 		instance: service,
 		index:    len(sm.dependencyChannels) - 1,
+		readyCh:  make(chan struct{}, 1),
 	}
 	sm.dependencyChannelsMux.Unlock()
 
@@ -140,7 +142,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		close(sm.dependencyChannels[sw.index])
 		sm.dependencyChannelsMux.Unlock()
 
-		if err := service.Start(sm.Ctx); err != nil {
+		if err := service.Start(sm.Ctx, sw.readyCh); err != nil {
 			sm.logger.Errorf("Error from service start %s: %v", name, err)
 			return err
 		}
@@ -149,6 +151,12 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	})
 
 	return nil
+}
+
+func (sm *ServiceManager) WaitForServiceToBeReady() {
+	for _, service := range sm.services {
+		<-service.readyCh
+	}
 }
 
 func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) error {
@@ -162,6 +170,10 @@ func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, chann
 	case <-timer.C:
 		return errors.NewServiceError("%s (index %d) timed out waiting for previous service to start", sw.name, sw.index)
 	}
+}
+
+func (sm *ServiceManager) ForceShutdown() {
+	sm.cancelFunc()
 }
 
 // StartAllAndWait starts all services and waits for them to complete or error.

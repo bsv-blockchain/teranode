@@ -213,7 +213,10 @@ func (u *Server) SetUutxoStore(s utxo.Store) {
 
 // Start initializes and starts the server components including Kafka consumers
 // and gRPC server. It blocks until the context is canceled or an error occurs.
-func (u *Server) Start(ctx context.Context) error {
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+	var closeOnce sync.Once
+	defer closeOnce.Do(func() { close(readyCh) })
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -229,6 +232,7 @@ func (u *Server) Start(ctx context.Context) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "subtreevalidation", u.settings.SubtreeValidation.GRPCListenAddress, func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)
+		closeOnce.Do(func() { close(readyCh) })
 	}); err != nil {
 		return err
 	}
@@ -250,7 +254,7 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-// CheckSubtree validates a subtree and its transactions based on the provided request.
+// CheckSubtreeFromBlock validates a subtree and its transactions based on the provided request.
 // It handles both legacy and current validation paths, managing locks to prevent
 // duplicate processing.
 //
@@ -276,7 +280,7 @@ func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}, nil
 }
 
-// checkSubtree is the internal function used to check a subtree
+// checkSubtreeFromBlock is the internal function used to check a subtree
 // This function expects a subtree to have been stored in the subtree store with an extension of .subtreeToCheck
 // compared to the normal .subtree extension. This is done so that the subtree validation does not think that the subtree
 // is a valid subtree and has already been checked.

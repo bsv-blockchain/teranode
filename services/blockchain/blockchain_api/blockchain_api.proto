@@ -27,6 +27,9 @@ service BlockchainAPI {
   // GetBlockByHeight retrieves a block at a specific height.
   rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
 
+  // GetBlockByID retrieves a block by its id.
+  rpc GetBlockByID (GetBlockByIDRequest) returns (GetBlockResponse) {}
+
   // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
 
@@ -90,6 +93,9 @@ service BlockchainAPI {
 
   // SetState stores state data with a key.
   rpc SetState(SetStateRequest) returns (google.protobuf.Empty) {}
+
+  // GetBlockIsMined checks if a block is marked as mined.
+  rpc GetBlockIsMined(GetBlockIsMinedRequest) returns (GetBlockIsMinedResponse) {}
 
   // SetBlockMinedSet marks a block as mined.
   rpc SetBlockMinedSet(SetBlockMinedSetRequest) returns (google.protobuf.Empty) {}
@@ -184,6 +190,11 @@ message GetBlocksResponse {
 // GetBlockByHeightRequest represents a request to retrieve a block at a specific height.
 message GetBlockByHeightRequest {
   uint32 height = 1;  // Block height to retrieve
+}
+
+// GetBlockByIDRequest represents a request to retrieve a block by its ID.
+message GetBlockByIDRequest {
+  uint64 id = 1;  // Block ID to retrieve
 }
 
 // GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
@@ -354,6 +365,16 @@ message SetStateRequest {
   bytes data = 2;   // State data to store
 }
 
+// GetBlockIsMinedRequest checks if a block is marked as mined.
+message GetBlockIsMinedRequest {
+  bytes blockHash = 1;  // Hash of the block
+}
+
+// GetBlockIsMinedResponse indicates if a block is marked as mined.
+message GetBlockIsMinedResponse {
+  bool isMined = 1;  // True if the block is marked as mined
+}
+
 // GetLastNBlocksRequest requests the most recent blocks.
 message GetLastNBlocksRequest {
   int64 numberOfBlocks = 1;   // Number of blocks to retrieve
@@ -442,7 +463,7 @@ message SetFSMStateRequest {
 enum FSMEventType {
   STOP = 0;
   RUN = 1;
-  CATCHUPBLOCKS = 2;  
+  CATCHUPBLOCKS = 2;
   LEGACYSYNC = 3;
 }
 

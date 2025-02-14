@@ -204,8 +204,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			RetrySleep:                 getDuration("blockValidationRetrySleep", 1*time.Second),
 			GRPCAddress:                getString("blockvalidation_grpcAddress", "localhost:8088", alternativeContext...),
 			GRPCListenAddress:          getString("blockvalidation_grpcListenAddress", ":8088", alternativeContext...),
-			HTTPAddress:                getString("blockvalidation_httpAddress", "http://localhost:8188", alternativeContext...),
-			HTTPListenAddress:          getString("blockvalidation_httpListenAddress", ":8188", alternativeContext...),
 			KafkaWorkers:               getInt("blockvalidation_kafkaWorkers", 0, alternativeContext...),
 			LocalSetTxMinedConcurrency: getInt("blockvalidation_localSetTxMinedConcurrency", 8, alternativeContext...),
 			//nolint:gosec

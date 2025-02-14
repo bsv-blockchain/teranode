@@ -54,6 +54,9 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 }
 
 func cleanExpiredFiles(m *Memory) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for key, expiryTime := range m.blobTimes {
 		ttl, ok := m.ttls[key]
 		if !ok {
@@ -162,6 +165,9 @@ func (m *Memory) SetTTL(_ context.Context, hash []byte, newTTL time.Duration, op
 	merged := options.MergeOptions(m.options, opts)
 
 	storeKey := hashKey(hash, merged)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if newTTL > 0 {
 		m.blobTimes[storeKey] = time.Now()

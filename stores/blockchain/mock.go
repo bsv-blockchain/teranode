@@ -93,6 +93,11 @@ func (m *MockStore) GetBlockGraphData(ctx context.Context, periodMillis uint64) 
 	panic(implementMe)
 }
 
+func (m *MockStore) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	// TODO implement me
+	panic("implement me")
+}
+
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	// TODO implement me
 	panic(implementMe)
@@ -214,6 +219,11 @@ func (m *MockStore) GetState(ctx context.Context, key string) ([]byte, error) {
 func (m *MockStore) SetState(ctx context.Context, key string, data []byte) error {
 	// TODO implement me
 	panic(implementMe)
+}
+
+func (m *MockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	// TODO implement me
+	panic("implement me")
 }
 
 func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
