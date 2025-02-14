@@ -32,6 +32,7 @@ var (
 			HashMerkleRoot: hashMerkleRoot,
 			Bits:           *bits,
 		},
+		Height:           1,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		Subtrees: []*chainhash.Hash{
@@ -47,6 +48,7 @@ var (
 			HashMerkleRoot: block2MerkleRootHash,
 			Bits:           *bits,
 		},
+		Height:           2,
 		CoinbaseTx:       coinbaseTx2,
 		TransactionCount: 1,
 		Subtrees: []*chainhash.Hash{
