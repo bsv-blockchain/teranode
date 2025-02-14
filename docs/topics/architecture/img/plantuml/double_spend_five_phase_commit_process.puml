@@ -1,0 +1,32 @@
+@startuml five_phase_commit
+title ProcessConflicting: Five-Phase Commit Process
+
+participant "UTXO Store" as UTXO
+participant "ProcessConflicting" as PC
+
+activate PC
+
+== Phase 1: Mark Transactions as Conflicting ==
+PC -> UTXO: markConflictingRecursively()
+note right: Mark tx_original and all children as conflicting
+
+== Phase 2: Unspend Transactions ==
+PC -> UTXO: Unspend(affectedParentSpends, true)
+note right: Unspend tx_original and children\nMark parent UTXOs as not spendable
+
+== Phase 3: Process Double Spend ==
+PC -> UTXO: Spend(winningTxs, true)
+note right: Spend tx_double_spend ignoring not spendable flag
+
+== Phase 4: Update Conflict Status ==
+PC -> UTXO: SetConflicting(conflictingTxHashes, false)
+note right: Mark double-spend as not conflicting
+
+== Phase 5: Cleanup ==
+PC -> UTXO: SetUnspendable(markedAsNotSpendableHashes, false)
+note right: Mark parent UTXOs as spendable again
+
+deactivate PC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

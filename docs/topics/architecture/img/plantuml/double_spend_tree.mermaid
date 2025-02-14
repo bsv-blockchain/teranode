@@ -1,0 +1,26 @@
+graph LR
+    subgraph "Parent Transaction"
+        P1["tx_parent<br/>Output: 1 BSV to UserA"]
+    end
+
+    subgraph "Block 102b → 103b"
+        TX_DOUBLE["tx_double_spend<br/>Spends: tx_parent.Output<br/>Output: 1 BSV to UserD"]
+        CHILD_DOUBLE["tx_double_spend_child<br/>Spends: tx_double_spend.Output<br/>Output: 1 BSV to UserE"]
+    end
+
+    subgraph "Block 102a → 103a"
+        TX_ORIG["tx_original<br/>Spends: tx_parent.Output<br/>Output: 1 BSV to UserB"]
+        CHILD["tx_original_child<br/>Spends: tx_original.Output<br/>Output: 1 BSV to UserC"]
+    end
+
+
+    P1 --> TX_ORIG
+    P1 --> TX_DOUBLE
+    TX_ORIG --> CHILD
+    TX_DOUBLE --> CHILD_DOUBLE
+
+    style TX_ORIG fill:#90EE90
+    style TX_DOUBLE fill:#FFB6C1
+    style CHILD fill:#90EE90
+
+    classDef block fill:#f9f,stroke:#ccc,stroke-width:4px;

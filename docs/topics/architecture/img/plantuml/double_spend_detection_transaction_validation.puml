@@ -1,0 +1,23 @@
+@startuml double_spend_detection_validation
+title Double Spend Detection During Transaction Validation
+
+participant "Validator Service" as VS
+database "UTXO Store" as UTXO
+participant "SubtreeValidation" as SV
+
+VS -> UTXO: Check if UTXO is spendable
+activate UTXO
+
+alt UTXO already spent
+UTXO --> VS: UTXO spent error
+VS -> VS: Reject transaction
+else UTXO available
+UTXO --> VS: UTXO available
+VS -> VS: Process transaction normally
+VS -> SV: Forward to subtree validation
+end
+
+deactivate UTXO
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

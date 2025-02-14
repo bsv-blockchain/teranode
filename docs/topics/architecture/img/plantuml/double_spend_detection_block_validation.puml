@@ -1,0 +1,47 @@
+@startuml
+title Subtree Validation During Block Processing
+
+participant "Block Validation" as BV
+participant "Subtree Validation" as SV
+participant "Validator" as V
+database "Subtree Store" as SS
+database "UTXO Store" as UTXO
+
+BV -> SV: CheckSubtreeFromBlock()
+activate SV
+
+alt subtree already exists
+    SV --> BV: Return true (already validated)
+else got lock
+
+    SV -> SV: ValidateSubtreeInternal()
+
+    group ValidateSubtreeInternal
+        SV -> SV: Process transactions in order
+
+        loop for each transaction
+            SV -> V: Validate(tx)
+
+            alt validation succeeds
+                V -> UTXO: Store transaction metadata
+                V --> SV: txMeta
+            else validation fails with conflict
+                V --> SV: ErrTxConflicting
+
+                note right: Transaction saved\n(and marked as "conflicting")\n but not spent
+
+                V -> UTXO: Store transaction metadata\n (as "conflicting")
+                SV -> SV: Mark as conflicting\n in current subtree
+            end
+        end
+
+        SV -> SS: Store validated subtree
+    end
+
+end
+
+SV --> BV: Validation result
+deactivate SV
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
