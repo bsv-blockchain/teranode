@@ -357,10 +357,11 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
    - If frozen, it removes the freeze mark
    - If not frozen, it returns an error
 
-3. **Reassigning UTXOs**: In certain scenarios, UTXOs can be re-assigned to a different transaction.
-   - Checks if the UTXO exists and is frozen
-   - If frozen, it removes the freeze mark
-   - If not frozen, it returns an error
+3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
+   - Verifies the UTXO exists and is frozen
+   - Updates the UTXO hash to the new value
+   - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+   - Logs the reassignment for audit purposes
 
 ## 5. Technology
 

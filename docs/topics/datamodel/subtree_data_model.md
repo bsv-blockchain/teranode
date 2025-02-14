@@ -15,13 +15,13 @@ The concept of subtrees is a distinct feature not found in the BTC design.
 
 Here's a table documenting the structure of the `Subtree` type:
 
-| Field            | Type                  | Description                                                                     |
-|------------------|-----------------------|---------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                |
-| Fees             | uint64                | Total fees associated with the transactions in the subtree.                     |
-| SizeInBytes      | uint64                | The size of the subtree in bytes.                                               |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                             |
-| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree. |
+| Field            | Type                  | Description                                                                              |
+|------------------|-----------------------|------------------------------------------------------------------------------------------|
+| Height           | int                   | The height of the subtree within the blockchain.                                         |
+| Fees             | uint64                | Total fees associated with the transactions in the subtree.                              |
+| SizeInBytes      | uint64                | The size of the subtree in bytes.                                                        |
+| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                                      |
+| Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree.   |
 | ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
 
 Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
@@ -31,16 +31,23 @@ Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a s
 ##### Subtree Composition
 
 Each subtree consists of:
-- hash: 32 bytes
-- fees: 4 bytes
-- sizeInBytes: 4 bytes
-- numberOfLeaves: 4 bytes
-- subtreeHeight: 4 bytes
+- root hash: 32 bytes
+- fees: 8 bytes (uint64)
+- sizeInBytes: 8 bytes (uint64)
+- numberOfNodes: 8 bytes (uint64)
+- nodes: 48 bytes per node (hash:32 + fee:8 + size:8)
+- numberOfConflictingNodes: 8 bytes (uint64)
+- conflictingNodes: 32 bytes per conflicting node
 
 ##### Calculation:
 ```
-1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
+
+Fixed header: 32 + 8 + 8 + 8 + 8 = 64 bytes
+
+Additional - Per transaction node: 48 bytes
 ```
+
+
 
 ##### Data Transfer Between Nodes
 

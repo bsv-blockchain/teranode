@@ -1,0 +1,45 @@
+@startuml
+title Subtree Validation Double Spend Handling
+
+participant "P2P Service" as P2P
+participant "Subtree Validation" as SV
+participant "Validator" as V
+database "Subtree Store" as SS
+
+alt Normal Subtree Validation
+    P2P -> SV: Validate Subtree
+    activate SV
+
+    SV -> V: Validate Transactions
+
+    alt Contains Double Spend
+        V --> SV: Double Spend Detected
+        SV --> P2P: Reject Subtree\n(not blessed)
+    else No Double Spend
+        V --> SV: Valid
+        SV -> SS: Store Subtree
+        SV --> P2P: Accept Subtree\n(blessed)
+    end
+    deactivate SV
+
+else Subtree from Block with PoW
+    P2P -> SV: Validate Block Subtree
+    activate SV
+
+    SV -> V: Validate Transactions
+
+    alt Contains Double Spend
+        V --> SV: Double Spend Detected
+        SV -> SV: Mark transactions as conflicting
+        SV -> SS: Store Subtree with\nconflictingTransactions field
+        SV --> P2P: Accept Subtree\n(with conflicts marked)
+    else No Double Spend
+        V --> SV: Valid
+        SV -> SS: Store Subtree
+        SV --> P2P: Accept Subtree
+    end
+    deactivate SV
+end
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
