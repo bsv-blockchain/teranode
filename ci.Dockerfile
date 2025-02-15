@@ -31,12 +31,12 @@ RUN go mod verify
 RUN go mod tidy
 
 # Build main binaries
-RUN RACE=true TXMETA_SMALL_TAG=true make build-teranode-ci -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build-teranode-ci -j 8
 
-RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 8
 
 # Build test binaries
-RUN RACE=true TXMETA_SMALL_TAG=true make buildtest -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make buildtest -j 8
 
 ENV GOPATH=/go
 RUN go install github.com/go-delve/delve/cmd/dlv@latest

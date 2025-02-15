@@ -78,6 +78,9 @@ func NewRPCDaemonTester(t *testing.T) *RPCDaemonTester {
 
 	tSettings.Asset.CentrifugeDisable = true
 
+	tSettings.LocalTestStartFromState = "RUNNING"
+	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
+
 	readyCh := make(chan struct{})
 	d := daemon.New()
 
@@ -96,7 +99,7 @@ func NewRPCDaemonTester(t *testing.T) *RPCDaemonTester {
 	select {
 	case <-readyCh:
 		t.Log("Daemon started successfully")
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("Daemon failed to start within timeout")
 	}
 
