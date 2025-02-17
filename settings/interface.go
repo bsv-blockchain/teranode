@@ -41,7 +41,6 @@ type Settings struct {
 	BlockChain        BlockChainSettings
 	BlockValidation   BlockValidationSettings
 	Validator         ValidatorSettings
-	Redis             RedisSettings
 	Region            RegionSettings
 	Advertising       AdvertisingSettings
 	UtxoStore         UtxoStoreSettings
@@ -230,11 +229,6 @@ type ValidatorSettings struct {
 	BlockValidationMaxRetries int
 	BlockValidationRetrySleep string
 	VerboseDebug              bool
-}
-
-type RedisSettings struct {
-	Hosts string
-	Port  int
 }
 
 type RegionSettings struct {

@@ -246,10 +246,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockValidationRetrySleep: getString("validator_blockvalidation_retrySleep", "2s", alternativeContext...),
 			VerboseDebug:              getBool("validator_verbose_debug", false, alternativeContext...),
 		},
-		Redis: RedisSettings{
-			Hosts: getString("REDIS_HOSTS", "localhost:6379", alternativeContext...),
-			Port:  getInt("REDIS_PORT", 6379, alternativeContext...),
-		},
 		Region: RegionSettings{
 			Name: getString("regionName", "defaultRegionName", alternativeContext...),
 		},

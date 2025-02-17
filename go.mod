@@ -95,7 +95,6 @@ require (
 	github.com/containerd/errdefs v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/containerd/ttrpc v1.2.5 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/docker/cli-docs-tool v0.8.0 // indirect
 	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
@@ -135,10 +134,8 @@ require (
 )
 
 require (
-	github.com/bitcoin-sv/testcontainers-redis-go v0.2.2
 	github.com/felixge/fgprof v0.9.5
 	github.com/ordishs/go-bitcoin v1.0.86
-	github.com/redis/go-redis/v9 v9.7.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
 )
 
@@ -297,7 +294,7 @@ require (
 	github.com/libsv/go-bn v0.0.2
 	github.com/libsv/go-p2p v0.3.3
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/magiconair/properties v1.8.7
+	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/marten-seemann/tcp v0.0.0-20210406111302-dfbc87cc63fd // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

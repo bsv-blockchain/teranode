@@ -704,7 +704,7 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	// TODO (Gokhan): add retry
 	if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
 		// TODO make this resilient to errors
-		// write it to secondary store (Kafka, Badger) and retry?
+		// write it to secondary store (Kafka) and retry?
 		return err
 	}
 

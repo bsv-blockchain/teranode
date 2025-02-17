@@ -216,6 +216,7 @@ func testDoubleSpendInSubsequentBlock(t *testing.T, utxoStore string) {
 // 2. All conflicting transactions are in the same block
 // 3. All conflicting transactions should be marked as conflicting
 func testMarkAsConflictingMultipleSameBlock(t *testing.T, utxoStore string) {
+	_ = utxoStore
 	t.Errorf("testMarkAsConflictingMultipleSameBlock not implemented")
 }
 

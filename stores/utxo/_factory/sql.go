@@ -5,8 +5,6 @@
 //
 // The following storage backends are available:
 //   - Aerospike (build tag: aerospike): "aerospike://host:port/namespace/set"
-//   - Redis (default): "redis://host:port/db"
-//   - Redis2 (optimized): "redis2://host:port/db"
 //   - PostgreSQL: "postgres://user:pass@host:port/dbname"
 //   - SQLite: "sqlite://path/to/file.db"
 //   - SQLite Memory: "sqlitememory://"
@@ -45,7 +43,6 @@
 // Example URLs:
 //
 //	postgres://user:pass@localhost:5432/utxo?sslmode=disable&logging=true
-//	redis://localhost:6379/0?logging=true
 //	aerospike://localhost:3000/test/utxos?logging=true
 //
 // # Block Height Management
@@ -57,8 +54,6 @@
 // # Logging
 //
 // Logging can be enabled by adding logging=true to the connection URL:
-//
-//	redis://localhost:6379/0?logging=true
 //
 // When enabled, all store operations will be logged with:
 //   - Operation name

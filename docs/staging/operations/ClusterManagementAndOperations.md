@@ -31,10 +31,10 @@ This document describes the processes involved in configuring, deploying, and ma
 
 For each microservice, we maintain several YAML files that define its behavior within a Kubernetes cluster. These files include:
 
-- **Application YAML Configuration Files**: These files manage the deployment setup of containerized applications. For example, `utxo-blaster.yaml` specifies the deployment details for the UTXO Blaster service. Key fields within these files include:
+- **Application YAML Configuration Files**: These files manage the deployment setup of containerized applications. For example, `txblaster.yaml` specifies the deployment details for the TXBlaster service. Key fields within these files include:
   - `name`: Serves as a base prefix for application naming within Kubernetes.
   - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
-  - `command`: Indicates the command to be executed within the Docker container. For instance, `utxo-blaster.yaml` might specify `./utxostoreblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
+  - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
   - `role`: Defines which Kubernetes nodes can run the application, based on assigned roles. Node roles can be checked with the command `$ kubectl get node -L role`.
   - `replicas`: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.
   - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
@@ -48,7 +48,7 @@ For each microservice, we maintain several YAML files that define its behavior w
 
 - **Volume YAML Configuration Files**: These files define persistent volumes for storage purposes. A `lustre-pvc.yaml` file, for instance, would specify the configuration for a Lustre filesystem storage volume.
 
-- **Service YAML Configuration Files**: Detail the Kubernetes service configuration for running specific containerized applications. For example, `utxo-blaster-service.yaml` outlines the service setup for the UTXO Blaster application, including port mappings between the internal and external interfaces.
+- **Service YAML Configuration Files**: Detail the Kubernetes service configuration for running specific containerized applications. For example, `tx-blaster-service.yaml` outlines the service setup for the TXBlaster application, including port mappings between the internal and external interfaces.
 
 - **Traefik Ingress YAML Configuration Files**: As part of Traefik's Kubernetes CRDs, these files facilitate advanced routing and ingress management, leveraging Traefik's capabilities as an edge router. An example file, `asset-grpc-ingress.yaml`, would define ingress rules for gRPC assets.
 

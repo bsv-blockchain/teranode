@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Common test flags
-TEST_FLAGS="-timeout 30s -tags aerospike,native,functional,test_sequentially,test_all,memory,redis,redis2,postgres,sqlite -count=1"
+TEST_FLAGS="-timeout 30s -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -count=1"
 
 # Store the original directory
 ORIGINAL_DIR=$(pwd)
@@ -27,7 +27,7 @@ for test_file in $test_files; do
     test_dir=$(dirname "$test_file")
     cd "$test_dir"
     echo "Compiling tests in ${test_dir}..."
-    if ! go test -c -tags aerospike,native,functional,test_sequentially,test_all,memory,redis,redis2,postgres,sqlite -race; then
+    if ! go test -c -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -race; then
         echo "Failed to compile tests in ${test_dir}"
         cd "$ORIGINAL_DIR"
         exit 1

@@ -61,7 +61,7 @@ func ExampleNewAmount() {
 	// invalid bitcoin amount
 }
 
-func ExampleAmountUnitConversions() {
+func ExampleAmount_conversions() {
 	amount := bsvutil.Amount(44433322211100)
 
 	fmt.Println("Satoshi to kBSV:", amount.Format(bsvutil.AmountKiloBSV))

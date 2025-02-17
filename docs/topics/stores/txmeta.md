@@ -11,14 +11,35 @@
 2. [Architecture](#2-architecture)
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
-- [4.1. Asset Server](#41-asset-server)
-- [4.2. Transaction Validation Service](#42-transaction-validation-service)
-- [4.3. Block Validation Service](#43-block-validation-service)
-   - [4.3.1. Block Validation TX Meta Cache](#431-block-validation---tx-meta-cache)
-   - [4.3.2. Block Validation Validate Subtrees](#432-block-validation---validate-subtrees)
-   - [4.3.3. Block Validation Store Coinbase TX Meta Data](#433-block-validation---store-coinbase-tx-meta-data)
-   - [4.3.4. Block Validation Update TX Meta as Mined](#434-block-validation---update-tx-meta-as-mined)
-- [4.4. Block Assembly Service](#44-block-assembly-service)
+- [📒 TXMeta Store](#-txmeta-store)
+  - [DEPRECATED - Kept for historical purposes only](#deprecated---kept-for-historical-purposes-only)
+  - [Index](#index)
+  - [1. Description](#1-description)
+    - [1.1 Purpose](#11-purpose)
+  - [2. Architecture](#2-architecture)
+  - [3. Data Model](#3-data-model)
+  - [4. Use Cases](#4-use-cases)
+    - [4.1. Asset Server](#41-asset-server)
+    - [4.2. Transaction Validation Service](#42-transaction-validation-service)
+    - [4.3. Block Validation Service](#43-block-validation-service)
+      - [4.3.1. Block Validation - TX Meta Cache](#431-block-validation---tx-meta-cache)
+      - [4.3.2. Block Validation - Validate Subtrees](#432-block-validation---validate-subtrees)
+      - [4.3.3. Block Validation - Store Coinbase TX Meta Data](#433-block-validation---store-coinbase-tx-meta-data)
+      - [4.3.4. Block Validation - Update TX Meta as Mined](#434-block-validation---update-tx-meta-as-mined)
+    - [4.4. Block Assembly Service](#44-block-assembly-service)
+  - [5. Technology](#5-technology)
+    - [5.1. Language and Libraries](#51-language-and-libraries)
+    - [5.2. Data Stores](#52-data-stores)
+    - [5.3. Data Purging](#53-data-purging)
+  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+  - [7. How to run](#7-how-to-run)
+    - [7.1. How to run](#71-how-to-run)
+    - [7.2. Configuration options (settings flags)](#72-configuration-options-settings-flags)
+      - [Timeout Settings](#timeout-settings)
+      - [Time-to-Live (TTL) Settings](#time-to-live-ttl-settings)
+      - [Batch Processing Settings](#batch-processing-settings)
+      - [Block Validation - TX Meta Cache Settings](#block-validation---tx-meta-cache-settings)
+      - [Data Store Examples](#data-store-examples)
 5. [Technology ](#5-technology-)
 - [5.1. Language and Libraries](#51-language-and-libraries)
 - [5.2. Data Stores](#52-data-stores)
@@ -73,11 +94,9 @@ From the point of view of the components:
 The TX Meta Service / Store uses a number of different datastores, either in-memory or persistent, to store the TX Meta data.
 
 1. **AeroSpike**
-2. **Badger**
-3. **Memory**
-4. **NullStore**
-5. **Redis**
-6. **SQL**
+2. **Memory**
+3. **NullStore**
+4. **SQL**
    * **Postgres**
 
 The TX Meta configuration implementation (datastore type) is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`txmeta_store`), as it can be seen in `main_stores.go` (`getTxMetaStore()` method).
@@ -259,25 +278,14 @@ The following datastores are supported (either in development / experimental or 
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.
 
-4. **Redis**:
-    - An in-memory data structure store, used as a database, cache, and message broker.
-    - Offers fast data access and can persist data to disk.
-    - Useful for scenarios requiring rapid access combined with the ability to handle volatile or transient data.
-    - https://redis.com.
-
-5. **Badger**:
-    - BadgerDB is a fast, embeddable, persistent key-value (KV) database that is written in the Go programming language.
-    - Suitable for write-heavy workloads.
-    - https://github.com/dgraph-io/badger.
-
-6. **SQL**:
+4. **SQL**:
     - SQL-based relational database implementations like PostgreSQL.
     - PostgreSQL: Offers robustness, advanced features, and strong consistency, suitable for complex queries and large datasets.
         - https://www.postgresql.org.
 
 - The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
-- Memory-based stores (like in-memory and Redis) are typically faster but may require additional persistence mechanisms.
-- Databases like Aerospike, Badger, and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
+- Memory-based stores (like in-memory) are typically faster but may require additional persistence mechanisms.
+- Databases like Aerospike and PostgreSQL provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore is more appropriate for testing, development, or lightweight applications.
 
 
@@ -301,9 +309,6 @@ stores/txmeta/              # Directory for the txmeta store
 ├── aerospikemap            # Map utility based on Aerospike
 │   └── aerospikemap.go     # Implementation file for aerospikemap
 │
-├── badger                  # BadgerDB-specific store implementation
-│   └── badger.go           # Implementation file for BadgerDB
-│
 ├── data.go                 # Data structures for txmeta store
 │
 ├── memory                  # In-memory store implementation
@@ -311,10 +316,6 @@ stores/txmeta/              # Directory for the txmeta store
 │
 ├── nullstore               # Null (no-op) store implementation
 │   └── nullstore.go        # Implementation file for nullstore
-│
-├── redis                   # Redis-specific store implementation
-│   ├── redis.go            # Implementation file for Redis
-│   └── update_blockhash.lua # Lua script for Redis operations
 │
 ├── sql                     # SQL-specific store implementation
 │   └── sql.go              # Implementation file for SQL store
@@ -375,12 +376,5 @@ txmeta_store.{ENVIRONMENT}=memory://localhost:${TX_META_GRPC_PORT}
 txmeta_store.{ENVIRONMENT}=postgres://teranode:teranode@localhost:5432/teranode
 ```
 
-- For a Redis datastore:
-```
-txmeta_store.{ENVIRONMENT}=redis://redis-1-headless.redis-miner1.svc.cluster.local:${REDIS_PORT}
-```
-
 
 Replace `{ENVIRONMENT}` with the specific environment you are configuring, such as `development`, `staging`, `production`, your dev username, etc.
-
-The `${TX_META_GRPC_PORT}` and `${REDIS_PORT}` are placeholders for the respective ports to be used for the gRPC server and Redis datastore, which should be replaced with actual port numbers.

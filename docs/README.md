@@ -105,7 +105,6 @@
    - [Kafka](docs/kafka/kafka.md)
 - **Utilities**
    - [UTXO Seeder](docs/commands/seeder.md)
-   - [UTXO Blaster](docs/commands/utxoBlaster.md)
    - [TX Blaster](docs/commands/txBlaster.md)
    - [Propagation Blaster](docs/commands/propagationBlaster.md)
    - [Chain Integrity](docs/commands/chainIntegrity.md)

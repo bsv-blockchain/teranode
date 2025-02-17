@@ -12,7 +12,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 
 > **📝 Note:** Confirm that settings for your username are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](../tutorials/developers/developerSetup.md).
 >
-> **⚠️ Warning:** When using BadgerDB or SQLite, the data directory must be deleted before rerunning the services:
+> **⚠️ Warning:** When using SQLite, the data directory must be deleted before rerunning the services:
 >
 > ```shell
 > rm -rf data

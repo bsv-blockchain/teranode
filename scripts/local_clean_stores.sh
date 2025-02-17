@@ -7,9 +7,6 @@ rm -rf "$(dirname "$0")/../data"
 psql postgres://teranode:teranode@localhost:5432/teranode -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions;"
 psql postgres://teranode:teranode@localhost:5432/coinbase -c "SET client_min_messages TO WARNING; drop table if exists coinbase_utxos; drop table if exists spendable_utxos_balance; drop table if exists spendable_utxos_log; drop table if exists spendable_utxos; drop table if exists blocks; drop table if exists state;"
 
-# Flush redis
-redis-cli FLUSHALL
-
 # Flush aerospike
 # aql -c "truncate test.utxo;"
 

@@ -99,7 +99,6 @@ The Settings struct includes multiple setting groups:
 - BlockChain Settings (BlockChainSettings)
 - BlockValidation Settings (BlockValidationSettings)
 - Kafka Settings (KafkaSettings)
-- Redis Settings (RedisSettings)
 - Validator Settings (ValidatorSettings)
 - And more...
 
