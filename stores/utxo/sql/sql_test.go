@@ -495,3 +495,77 @@ func Test_SmokeTests(t *testing.T) {
 		tests.Conflicting(t, db)
 	})
 }
+
+func TestSetTTL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	var (
+		transactionID   int
+		tombstoneMillis *int64
+	)
+
+	err = store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&transactionID)
+	require.NoError(t, err)
+
+	err = store.db.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.Nil(t, tombstoneMillis)
+
+	txn, err := store.db.Begin()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	err = store.setTTL(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.Nil(t, tombstoneMillis)
+
+	// update all outputs to be spent
+	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = 1 WHERE transaction_id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setTTL(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+
+	// unset one of the outputs to be unspent
+	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
+	require.NoError(t, err)
+
+	err = store.setTTL(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.Nil(t, tombstoneMillis)
+
+	// mark the tx as conflicting, should set a tombstone
+	_, err = txn.ExecContext(ctx, "UPDATE transactions SET conflicting = true WHERE id = $1", transactionID)
+	require.NoError(t, err)
+
+	err = store.setTTL(ctx, txn, transactionID)
+	require.NoError(t, err)
+
+	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	require.NoError(t, err)
+
+	assert.NotNil(t, tombstoneMillis)
+}

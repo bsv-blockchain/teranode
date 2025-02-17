@@ -176,7 +176,7 @@ endif
 
 .PHONY: sequentialtests
 sequentialtests:
-	test/scripts/run_tests_sequentially.sh
+	logLevel=INFO test/scripts/run_tests_sequentially.sh
 	
 .PHONY: racetest
 racetest: set_race_flag

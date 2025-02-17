@@ -4,7 +4,6 @@ package utxo
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -294,7 +293,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		counterConflicting = append(counterConflicting, child)
 	}
 
-	fmt.Printf("counterConflicting: %v\n", counterConflicting)
+	// fmt.Printf("counterConflicting: %v\n", counterConflicting)
 
 	return counterConflicting, nil
 }

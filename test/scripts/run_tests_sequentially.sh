@@ -16,8 +16,10 @@ if [ -z "$test_files" ]; then
     exit 1
 fi
 
-echo "Starting test execution at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-echo "----------------------------------------"
+# Store start time
+start_time=$(date +%s)
+echo -e "\nStarting test execution at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo "----------------------------------------------------------"
 
 # First compile all test packages
 echo "Compiling test packages..."
@@ -32,6 +34,7 @@ for test_file in $test_files; do
     fi
     cd "$ORIGINAL_DIR"
 done
+echo "----------------------------------------------------------"
 
 # Initialize counters
 TOTAL_TESTS=0
@@ -48,11 +51,26 @@ declare -a SKIPPED_TEST_NAMES
 run_test() {
     local test_name=$1
     local test_binary=$2
-    if "./${test_binary}" -test.run "^${test_name}$" -test.timeout 30s -test.count=1; then
+    local output
+    output=$("./${test_binary}" -test.run "^${test_name}$" -test.timeout 30s -test.count=1 2>&1)
+    local result=$?
+
+    echo "$output" | sed '$d'
+    
+    if echo "$output" | grep -q "warning: no tests to run"; then
+        SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+        SKIPPED_TEST_NAMES+=("$test_name")
+        echo "SKIPPED"
+        return 0
+    elif [ $result -eq 0 ]; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
+        PASSED_TEST_NAMES+=("$test_name")
+        echo "PASSED"
         return 0
     else
         FAILED_TESTS=$((FAILED_TESTS + 1))
+        FAILED_TEST_NAMES+=("$test_name")
+        echo "FAILED"
         return 1
     fi
 }
@@ -77,8 +95,7 @@ for test_file in $test_files; do
         
         # Extract the test function name
         test_func=$(echo "$line" | awk '{print $2}' | cut -d'(' -f1)
-        echo -e "\n\nProcessing test function: $test_func"
-
+        
         # Find the next test function to get the end line
         next_line_num=
         if [ $((i + 1)) -lt "${#test_functions[@]}" ]; then
@@ -94,8 +111,8 @@ for test_file in $test_files; do
                 has_subtests=true
                 subtest_name=$(echo "$subtest_line" | sed -n 's/.*t.Run("\([^"]*\)".*/\1/p')
                 if [ ! -z "$subtest_name" ]; then
-                    echo -e "\nRunning subtest: $subtest_name"
-                    echo "----------------------------------------"
+                    echo -e "\nRunning $test_func / $subtest_name"
+                    
                     TOTAL_TESTS=$((TOTAL_TESTS + 1))
                     if ! run_test "${test_func}/${subtest_name}" "${test_binary}"; then
                         any_test_failed=1
@@ -112,7 +129,8 @@ for test_file in $test_files; do
                 any_test_failed=1
             fi
         fi
-        echo "----------------------------------------"
+
+        echo -e "\n"
     done
 
     # Return to the original directory after processing each test file
@@ -129,7 +147,15 @@ echo "Passed: $PASSED_TESTS"
 echo "Failed: $FAILED_TESTS"
 echo "Skipped: $SKIPPED_TESTS"
 
+# Print end time and duration
+end_time=$(date +%s)
+duration=$((end_time - start_time))
+echo -e "\nTest execution completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo "Total duration: $((duration / 60)) minutes and $((duration % 60)) seconds"
+
 if [ "$FAILED_TESTS" -gt 0 ]; then
     echo -e "\nSome tests failed!"
     exit 1
 fi
+
+exit $any_test_failed

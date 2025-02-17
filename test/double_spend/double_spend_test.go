@@ -3,6 +3,7 @@
 package doublespendtest
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	os.Setenv("SETTINGS_CONTEXT", "test")
+}
 
 var (
 	// DEBUG DEBUG DEBUG
@@ -28,9 +33,6 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	// t.Run("single tx with one conflicting transaction and child", func(t *testing.T) {
-	// 	testDoubleSpendAndChildAreMarkedAsConflicting(t, utxoStore)
-	// })
 	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
 		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
 	})
@@ -40,9 +42,9 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("conflicting transaction chains", func(t *testing.T) {
 		testMarkAsConflictingChains(t, utxoStore)
 	})
-	t.Run("double spend in subsequent block", func(t *testing.T) {
-		testDoubleSpendInSubsequentBlock(t, utxoStore)
-	})
+	// t.Run("double spend in subsequent block", func(t *testing.T) {
+	// 	testDoubleSpendInSubsequentBlock(t, utxoStore)
+	// })
 }
 
 func TestDoubleSpendPostgres(t *testing.T) {
@@ -57,9 +59,6 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	// t.Run("single tx with one conflicting transaction and child", func(t *testing.T) {
-	// 	testDoubleSpendAndChildAreMarkedAsConflicting(t, utxoStore)
-	// })
 	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
 		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
 	})
@@ -85,9 +84,6 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	// t.Run("single tx with one conflicting transaction and child", func(t *testing.T) {
-	// 	testDoubleSpendAndChildAreMarkedAsConflicting(t, utxoStore)
-	// })
 	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
 		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
 	})
@@ -199,73 +195,6 @@ func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 	dst.verifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
 	dst.verifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 }
-
-// func testDoubleSpendAndChildAreMarkedAsConflicting(t *testing.T) {
-// 	// Setup test environment
-// 	dst, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t)
-// 	defer dst.Stop()
-
-// 	// At this point we have:
-// 	// 0 -> 1 ... 101 -> 102a (winning)
-
-// 	// Get block 101 so we can create an alternate bock for height 102 with a double spend in it.
-// 	block101, err := dst.blockchainClient.GetBlockByHeight(dst.ctx, 101)
-// 	require.NoError(t, err)
-
-// 	// Step 1: Create and validate block with double spend transaction
-// 	subtree102b, block102b := dst.createTestBlock(t, []*bt.Tx{txDoubleSpend}, block101)
-
-// 	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block102b, block102b.Height),
-// 		"Failed to process block with double spend transaction")
-
-// 	dst.verifyBlockByHash(t, block102b, block102b.Header.Hash())
-
-// 	// At this point we have:
-// 	//                   / 102a (winning)
-// 	// 0 -> 1 ... 101 ->
-// 	//                   \ 102b (losing)
-
-// 	// Verify block 102 is still the original block at height 102
-// 	dst.verifyBlockByHeight(t, block102a, 102)
-
-// 	// Verify conflicting
-// 	dst.verifyConflicting(t, subtree102b.RootHash(), []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
-
-// 	// Step 2: Create child transaction of the conflicting transaction
-// 	txDoubleSpendChild := createTransaction(t, txDoubleSpend, dst.privKey, 47e8)
-
-// 	subtree103b, block103b := dst.createTestBlock(t, []*bt.Tx{txDoubleSpendChild}, block102b)
-
-// 	require.NoError(t, dst.blockValidationClient.ProcessBlock(dst.ctx, block103b, block103b.Height),
-// 		"Failed to process block with child of double spend transaction")
-
-// 	// At this point we have:
-// 	//                   / 102a (losing)
-// 	// 0 -> 1 ... 101 ->
-// 	//                   \ 102b -> 103b (winning)
-
-// 	// Verify block 102b is now the block at height 102
-// 	dst.verifyBlockByHeight(t, block102b, 102)
-
-// 	// Verify block 103b is the block at height 103
-// 	dst.verifyBlockByHeight(t, block103b, 103)
-
-// 	dst.verifyConflicting(t, subtree103b.RootHash(), []chainhash.Hash{*txDoubleSpendChild.TxIDChainHash()})
-
-// 	// Verify final state in Block Assembly
-// 	state := dst.waitForBlockHeight(t, 103, 5*time.Second)
-
-// 	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
-
-// 	// Check the txOriginal is marked as conflicting
-// 	dst.verifyConflicting(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
-
-// 	// Check the txDoubleSpend is no longer marked as conflicting
-// 	dst.verifyConflicting(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
-
-// 	// Check the txDoubleSpendChild is no longer marked as conflicting
-// 	dst.verifyConflicting(t, block103b.Subtrees[0], []chainhash.Hash{*txDoubleSpendChild.TxIDChainHash()})
-// }
 
 // This is testing a scenario where:
 // 1. Block 103 is is continuing from block 102

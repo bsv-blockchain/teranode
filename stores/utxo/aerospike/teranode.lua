@@ -654,3 +654,31 @@ function setTTL(rec, ttl)
     -- Return the signal indicating the action taken (if any)
     return signal
 end
+
+-- Function to set the 'conflicting' field of a record
+-- Parameters:
+--   rec: table - The record to update
+--   setValue: boolean - The value to set for the 'conflicting' field
+--   ttl: number - The TTL value to set (in seconds)
+-- Returns:
+--   string - A signal indicating the action taken
+--          _    ____             __ _ _      _   _
+-- ___  ___| |_ / ___|___  _ __  / _| (_) ___| |_(_)_ __   __ _
+--/ __|/ _ \ __| |   / _ \| '_ \| |_| | |/ __| __| | '_ \ / _` |
+--\__ \  __/ |_| |__| (_) | | | |  _| | | (__| |_| | | | | (_| |
+--|___/\___|\__|\____\___/|_| |_|_| |_|_|\___|\__|_|_| |_|\__, |
+--                                                        |___/
+--
+function setConflicting(rec, setValue, ttl)
+    if not aerospike:exists(rec) then
+        return "ERROR:TX not found"
+    end
+
+    rec['conflicting'] = setValue
+
+    local signal = setTTL(rec, ttl)
+
+    aerospike:update(rec)
+
+    return 'OK' .. signal
+end

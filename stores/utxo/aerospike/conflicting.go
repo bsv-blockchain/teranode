@@ -34,10 +34,10 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 // the flag should always be stored and read on the main record
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var (
-		batchWritePolicy = aerospike.NewBatchWritePolicy()
-		batchRecords     = make([]aerospike.BatchRecordIfc, 0, len(txHashes))
-		txs              = make([]*bt.Tx, len(txHashes))
-		g, gCtx          = errgroup.WithContext(ctx)
+		batchRecords   = make([]aerospike.BatchRecordIfc, 0, len(txHashes))
+		batchUDFPolicy = aerospike.NewBatchUDFPolicy()
+		txs            = make([]*bt.Tx, len(txHashes))
+		g, gCtx        = errgroup.WithContext(ctx)
 	)
 
 	// first get all the tx data in parallel
@@ -76,9 +76,15 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, errors.NewProcessingError("could not create aerospike key", err)
 		}
 
-		op := aerospike.PutOp(aerospike.NewBin("conflicting", setValue))
-
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
+		// set the conflicting flag using a lua script in the batch
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(
+			batchUDFPolicy,
+			key,
+			LuaPackage,
+			"setConflicting",
+			aerospike.NewValue(setValue),
+			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
+		))
 
 		for i, input := range tx.Inputs {
 			utxoHash, err := util.UTXOHashFromInput(input)

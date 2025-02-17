@@ -729,15 +729,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		AND idx = $3
 	`
 
-	q3 := `
-		UPDATE transactions
-		SET tombstone_millis = $2
-		WHERE id = $1
-		AND NOT EXISTS (
-			SELECT 1 FROM outputs WHERE transaction_id = $1 AND spending_transaction_id IS NULL
-		)
-	`
-
 	var (
 		errorFound           bool
 		useIgnoreUnspendable bool
@@ -861,16 +852,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 				continue
 			}
 
-			if s.expiration > 0 {
-				// Now mark the transaction as tombstoned if there are no more unspent outputs
-				tombstoneTime := time.Now().Add(s.expiration).UnixNano() / 1e6 //nolint:gosec
-
-				if _, err := txn.ExecContext(ctx, q3, transactionID, tombstoneTime); err != nil {
-					errorFound = true
-					spend.Err = errors.NewStorageError("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout, err)
-
-					continue
-				}
+			if err = s.setTTL(ctx, txn, transactionID); err != nil {
+				errorFound = true
+				spend.Err = err
 			}
 
 			prometheusUtxoSpend.Inc()
@@ -886,6 +870,48 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 	}
 
 	return spends, nil
+}
+
+func (s *Store) setTTL(ctx context.Context, txn *sql.Tx, transactionID int) error {
+	// doing 2 updates is the only thing that works in both postgres and sqlite
+	qSetTTL := `
+		UPDATE transactions
+		SET tombstone_millis = $2
+		WHERE id = $1
+	`
+
+	if s.expiration > 0 {
+		// check whether the transaction has any unspent outputs
+		qUnspent := `
+			SELECT count(o.idx), t.conflicting
+			FROM transactions t
+			LEFT JOIN outputs o ON t.id = o.transaction_id
+			   AND o.spending_transaction_id IS NULL
+			WHERE t.id = $1
+			GROUP BY t.id
+		`
+
+		var (
+			unspent             int
+			conflicting         bool
+			tombstoneTimeOrNull sql.NullInt64
+		)
+
+		if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting); err != nil {
+			return errors.NewStorageError("[setTTL] error checking for unspent outputs for %d", transactionID, err)
+		}
+
+		if unspent == 0 || conflicting {
+			// Now mark the transaction as tombstoned if there are no more unspent outputs
+			_ = tombstoneTimeOrNull.Scan(time.Now().Add(s.expiration).UnixNano() / 1e6) //nolint:gosec
+		}
+
+		if _, err := txn.ExecContext(ctx, qSetTTL, transactionID, tombstoneTimeOrNull); err != nil {
+			return errors.NewStorageError("[setTTL] error setting tombstone for %d", transactionID, err)
+		}
+	}
+
+	return nil
 }
 
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
@@ -922,7 +948,6 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 	q2 := `
 		UPDATE transactions
 		SET 
-		    tombstone_millis = NULL,
 			unspendable = $2
 		WHERE id = $1
 	`
@@ -950,6 +975,10 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 
 			if _, err = txn.ExecContext(ctx, q2, transactionId, unspendable); err != nil {
 				return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
+			}
+
+			if err = s.setTTL(ctx, txn, transactionId); err != nil {
+				return err
 			}
 
 			prometheusUtxoReset.Inc()
