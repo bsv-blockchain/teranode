@@ -352,8 +352,6 @@ teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Runnin
 
 2. Ensure all services show a status of "Running" or "Completed".
 
-
-
 **Step 7: Configure Ingress (if applicable)**
 
 1. Verify that ingress resources are created for Asset, Peer, and Propagation services:
@@ -370,9 +368,20 @@ teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Runnin
 - The various Teranode services will be accessible through the configured ingress or service endpoints.
 - Refer to your specific ingress or network configuration for exact URLs and ports.
 
+**Step 9: Change the node status to Run or LegacySync**
+
+Force the node to transition to Run mode:
+```
+grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
+```
+
+or LegacySync mode:
+```
+grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
+```
 
 
-**Step 9: Access Monitoring Tools**
+**Step 10: Access Monitoring Tools**
 
 _Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
 - **Port**: Exposed on port **8090** of the asset container.
@@ -380,7 +389,7 @@ _Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be 
 
 Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
-**Step 10: Monitoring and Logging**
+**Step 11: Monitoring and Logging**
 
 - Set up your preferred monitoring stack (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
 - Use standard Kubernetes logging practices to access logs:
@@ -388,9 +397,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
   kubectl logs <pod-name>
   ```
 
-
-
-**Step 11: Troubleshooting**
+**Step 12: Troubleshooting**
 
 1. Check pod status:
    ```
@@ -407,8 +414,6 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
    kubectl get configmaps
    kubectl get secrets
    ```
-
-
 
 Additional Notes:
 

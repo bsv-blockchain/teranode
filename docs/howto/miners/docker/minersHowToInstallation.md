@@ -281,6 +281,16 @@ cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
    docker-compose up -d
    ```
 
+Force the node to transition to Run mode:
+```
+grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+```
+
+or LegacySync mode:
+```
+grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.LegacySync
+```
+
 
 
 **Step 7: Verify Services**
