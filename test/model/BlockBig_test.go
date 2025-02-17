@@ -175,16 +175,19 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 		}
 	}
 
-	// initialize the block with the coinbase tx, block header and the subtree
-	b := &teranode_model.Block{
-		Header:           blockHeader,
-		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(leafCount),
-		SizeInBytes:      123,
-		Subtrees: []*chainhash.Hash{
+	b, err := teranode_model.NewBlock(
+		blockHeader,
+		coinbase,
+		[]*chainhash.Hash{
 			subtreeHash,
 		},
-	}
+		uint64(leafCount),
+		123,
+		0,
+		0,
+		nil,
+	)
+	require.NoError(t, err)
 
 	currentChain := make([]*teranode_model.BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)

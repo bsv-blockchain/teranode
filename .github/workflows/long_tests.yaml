@@ -90,7 +90,7 @@ jobs:
       - name: Run Stores Tests
         run: |
           cd test/stores && \
-          go test -v -count 1 -tags test_stores ./...
+          go test -v -count 1 -tags test_stores,testtxmetacache ./...
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
         continue-on-error: false
