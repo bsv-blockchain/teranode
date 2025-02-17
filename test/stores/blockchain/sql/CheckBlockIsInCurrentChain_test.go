@@ -31,7 +31,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		}()
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -51,8 +51,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
-
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 		defer func() {
 			err := teardown()
 			require.NoError(t, err)
@@ -84,7 +83,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		defer func() {
 			err := teardown()
@@ -132,7 +131,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		defer func() {
 			err := teardown()
@@ -161,7 +160,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		defer func() {
 			err := teardown()
@@ -219,7 +218,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		defer func() {
 			err := teardown()
@@ -277,7 +276,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		tSettings := settings.NewSettings()
-		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		defer func() {
 			err := teardown()
