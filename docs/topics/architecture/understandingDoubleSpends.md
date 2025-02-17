@@ -1,4 +1,4 @@
-# Understanding Double Spend Handling in Teranode
+# Understanding Double Spend Handling and Conflict Resolution in Teranode
 
 
 ## Index
