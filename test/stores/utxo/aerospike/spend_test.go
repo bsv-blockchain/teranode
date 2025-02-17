@@ -253,7 +253,7 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 }
 
 func TestStore_Unspend(t *testing.T) {
-	_, db, ctx, deferFn := initAerospike(t)
+	client, db, ctx, deferFn := initAerospike(t)
 	defer deferFn()
 
 	t.Run("Successfully unspend a spent tx", func(t *testing.T) {
@@ -280,6 +280,14 @@ func TestStore_Unspend(t *testing.T) {
 	})
 
 	t.Run("Unspend a non-spent tx", func(t *testing.T) {
+		txID := tx.TxIDChainHash()
+
+		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
+		require.NoError(t, aErr)
+
+		// Clean up the database
+		cleanDB(t, client, key, tx)
+
 		// Clean up any existing data
 		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
