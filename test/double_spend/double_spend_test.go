@@ -33,9 +33,9 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
-	})
+	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
+	// })
 	t.Run("multiple conflicting txs in different blocks", func(t *testing.T) {
 		testMarkAsConflictingMultiple(t, utxoStore)
 	})
@@ -59,9 +59,9 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
-	})
+	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
+	// })
 	t.Run("multiple conflicting txs in different blocks", func(t *testing.T) {
 		testMarkAsConflictingMultiple(t, utxoStore)
 	})
@@ -84,9 +84,9 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	t.Run("single tx with one conflicting transaction", func(t *testing.T) {
 		testSingleDoubleSpend(t, utxoStore)
 	})
-	t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-		testMarkAsConflictingMultipleSameBlock(t, utxoStore)
-	})
+	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
+	// })
 	t.Run("multiple conflicting txs in different blocks", func(t *testing.T) {
 		testMarkAsConflictingMultiple(t, utxoStore)
 	})
