@@ -272,4 +272,5 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 9. Other Resources
 
-[Subtree Validation Reference](../../references/services/subtreevalidation_reference.md)
+- [Subtree Validation Reference](../../references/services/subtreevalidation_reference.md)
+- [Handling Double Spends](../architecture/understandingDoubleSpends.md)

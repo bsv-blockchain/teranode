@@ -118,6 +118,8 @@
 ### Additional Topics
 - [Technology Stack](docs/topics/technologyStack.md)
 - [Testing Framework](docs/topics/understandingTheTestingFramework.md)
+- [QA Guide & Instructions for Functional Requirement Tests](test/README.md)
+- [Double Spends](docs/topics/architecture/understandingDoubleSpends.md)
 
 -----
 

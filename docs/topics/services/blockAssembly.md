@@ -297,8 +297,7 @@ The following diagram illustrates how the Block Assembly service handles a chain
             - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
             - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
 
-Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will not build on top of such blocks. The only exception occurs when a second block is built on top of the disputed block, indicating that the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment.
-
+Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
 ### 3.6. Resetting the Block Assembly
 
@@ -433,4 +432,5 @@ The Block Assembly service uses the following configuration options:
 
 ## 9. Other Resources
 
-[Block Assembly Reference](../../references/services/blockassembly_reference.md)
+- [Block Assembly Reference](../../references/services/blockassembly_reference.md)
+- [Handling Double Spends](../architecture/understandingDoubleSpends.md)
