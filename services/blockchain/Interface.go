@@ -123,7 +123,7 @@ type ClientI interface {
 	CatchUpBlocks(ctx context.Context) error
 	LegacySync(ctx context.Context) error
 	Idle(ctx context.Context) error
-	SetFSMState(ctx context.Context, state FSMStateType) error
+	SendFSMEvent(ctx context.Context, event FSMEventType) error
 
 	// Legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
@@ -318,7 +318,7 @@ func (s *MockBlockchain) LegacySync(ctx context.Context) error {
 func (s *MockBlockchain) Idle(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) SetFSMState(ctx context.Context, state FSMStateType) error {
+func (s *MockBlockchain) SendFSMEvent(ctx context.Context, event FSMEventType) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {

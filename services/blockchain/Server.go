@@ -1429,12 +1429,6 @@ func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty
 	return &emptypb.Empty{}, nil
 }
 
-func (b *Blockchain) SetFSMState(ctx context.Context, req *blockchain_api.SetFSMStateRequest) (*emptypb.Empty, error) {
-	b.finiteStateMachine.SetState(req.State.String())
-
-	return &emptypb.Empty{}, nil
-}
-
 // Legacy endpoints
 
 // GetBlockLocator retrieves a block locator for synchronization purposes.

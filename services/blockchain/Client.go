@@ -57,11 +57,19 @@ type NotificationMetadata = blockchain_api.NotificationMetadata
 // FSMStateType is an alias for blockchain_api.FSMStateType
 type FSMStateType = blockchain_api.FSMStateType
 
+// FSMEventType is an alias for blockchain_api.FSMEventType
+type FSMEventType = blockchain_api.FSMEventType
+
 const (
 	FSMStateIDLE           = blockchain_api.FSMStateType_IDLE
 	FSMStateRUNNING        = blockchain_api.FSMStateType_RUNNING
 	FSMStateCATCHINGBLOCKS = blockchain_api.FSMStateType_CATCHINGBLOCKS
 	FSMStateLEGACYSYNCING  = blockchain_api.FSMStateType_LEGACYSYNCING
+
+	FSMEventIDLE          = blockchain_api.FSMEventType_STOP
+	FSMEventRUN           = blockchain_api.FSMEventType_RUN
+	FSMEventCATCHUPBLOCKS = blockchain_api.FSMEventType_CATCHUPBLOCKS
+	FSMEventLEGACYSYNC    = blockchain_api.FSMEventType_LEGACYSYNC
 )
 
 // NewClient creates a new blockchain client with default address settings.
@@ -1036,17 +1044,6 @@ func (c *Client) Idle(ctx context.Context) error {
 	c.logger.Infof("[Blockchain Client] Sending IDLE event")
 
 	_, err := c.client.Idle(ctx, &emptypb.Empty{})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *Client) SetFSMState(ctx context.Context, state FSMStateType) error {
-	_, err := c.client.SetFSMState(ctx, &blockchain_api.SetFSMStateRequest{
-		State: state,
-	})
 	if err != nil {
 		return err
 	}

@@ -135,9 +135,6 @@ service BlockchainAPI {
   // Idle marks the service as idle.
   rpc Idle(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
-  // SetFSMState sets the FSM state.
-  rpc SetFSMState(SetFSMStateRequest) returns (google.protobuf.Empty) {}
-
   // GetFSMState retrieves the FSM state.
   rpc GetFSMState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
@@ -452,12 +449,6 @@ message WaitFSMToTransitionRequest {
 message SendFSMEventRequest {
   FSMEventType event = 1;  // FSM event to trigger
 }
-
-// swagger:model SetFSMStateRequest
-message SetFSMStateRequest {
-  FSMStateType state = 1;
-}
-
 
 // swagger:enum FSMEventType
 enum FSMEventType {

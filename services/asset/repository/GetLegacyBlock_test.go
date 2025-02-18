@@ -392,7 +392,7 @@ func (s *mockStore) CatchUpBlocks(ctx context.Context) error {
 func (s *mockStore) LegacySync(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *mockStore) SetFSMState(ctx context.Context, state blockchain.FSMStateType) error {
+func (s *mockStore) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
 	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain.FSMStateType, error) {

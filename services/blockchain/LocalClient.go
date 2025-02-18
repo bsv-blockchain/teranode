@@ -248,10 +248,6 @@ func (c LocalClient) Idle(ctx context.Context) error {
 	return nil
 }
 
-func (c LocalClient) SetFSMState(ctx context.Context, state FSMStateType) error {
-	return nil
-}
-
 func (c LocalClient) CatchUpBlocks(ctx context.Context) error {
 	return nil
 }

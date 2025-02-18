@@ -17,19 +17,19 @@ func SetFSMState(targetFsmState string) {
 	logger := ulogger.NewGoCoreLogger("Command Line Tool", ulogger.WithLevel("WARN"))
 	tSettings := settings.NewSettings()
 
-	var targetState blockchain.FSMStateType
+	var targetEvent blockchain.FSMEventType
 
 	inputLowerCase := strings.ToLower(targetFsmState)
 
 	switch inputLowerCase {
-	case "running":
-		targetState = blockchain.FSMStateRUNNING
 	case "idle":
-		targetState = blockchain.FSMStateIDLE
+		targetEvent = blockchain.FSMEventIDLE
+	case "running":
+		targetEvent = blockchain.FSMEventRUN
 	case "catchingblocks":
-		targetState = blockchain.FSMStateCATCHINGBLOCKS
+		targetEvent = blockchain.FSMEventCATCHUPBLOCKS
 	case "legacysyncing":
-		targetState = blockchain.FSMStateLEGACYSYNCING
+		targetEvent = blockchain.FSMEventLEGACYSYNC
 	default:
 		fmt.Println("Error: invalid fsm state")
 		fmt.Println("\nAccepted FSM States:")
@@ -53,11 +53,11 @@ func SetFSMState(targetFsmState string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("Current FSM state:", currentState, ", target FSM state:", targetFsmState)
+	fmt.Println("Current FSM state:", currentState, ", target FSM state:", targetFsmState, ", sending event:", targetEvent)
 
-	err = blockchainClient.SetFSMState(ctx, targetState)
+	err = blockchainClient.SendFSMEvent(ctx, targetEvent)
 	if err != nil {
-		log.Fatalf("Failed to set FSM state to %s: %v", targetState, err)
+		log.Fatalf("Failed to send FSM event: %v", err)
 		os.Exit(1)
 	}
 
