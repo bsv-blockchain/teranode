@@ -90,7 +90,7 @@ Teranode's double spend handling involves several important concepts:
     - Five-phase commit process for resolving conflicts:
       - Mark original transaction and children as conflicting
       - Unspend original transaction and children, temporarily marking its parent txs as not spendable (to prevent re-spending)
-      - Spend double-spend transaction
+      - Spend the conficting transaction (the "double spend")
       - Mark double-spend as non-conflicting
       - Mark parents as spendable again (remove temporary marking)
 
@@ -134,7 +134,7 @@ When transactions arrive through the Validator component (Propagation Service):
 #### 2.1.3 Detection During Block Validation
 
 Double spend detection behaves differently when the transactions are detected as part of the validation of a block with proof of work.
-In this scenario, Teranode understand that the conflicting transaction has been treated as valid by the network and included in a block. A remote node has invested work in creating the block, and it can become part of the longest honest chain. The conflicting transaction can no longer be ignored, and it must be processed - but flagged as "conflicting".
+In this scenario, Teranode understands that the conflicting transaction has been treated as valid by the network and included in a block. A remote node has invested work in creating the block, and it can become part of the longest honest chain. The conflicting transaction can no longer be ignored, and it must be processed - but flagged as "conflicting".
 
 1. **Block-Level Processing**:
     - Double spends in valid blocks must be processed.
