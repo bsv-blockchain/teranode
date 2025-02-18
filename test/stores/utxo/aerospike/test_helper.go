@@ -101,7 +101,7 @@ func initAerospike(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store,
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-7.2.0.3_1"))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

@@ -97,7 +97,7 @@ func initAerospike() (string, func() error, error) {
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-7.2.0.3_1"))
 	if err != nil {
 		return "", nil, err
 	}

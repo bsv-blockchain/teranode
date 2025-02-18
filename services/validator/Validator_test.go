@@ -480,7 +480,7 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-7.2.0.3_1"))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
