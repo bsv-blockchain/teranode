@@ -267,7 +267,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	)
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewProcessingError("recovered in prepareSubtrees: %v", r, err)
+			err = errors.NewProcessingError("[prepareSubtrees] recovered in prepareSubtrees: %v", r, err)
 		}
 
 		deferFn(err)
@@ -275,102 +275,74 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	subtrees = make([]*chainhash.Hash, 0)
 
-	var subtree *util.Subtree
+	var (
+		subtree        *util.Subtree
+		txMap          map[chainhash.Hash]*txMapWrapper
+		legacyMode     bool
+		catchingBlocks bool
+	)
 
 	// create 1 subtree + subtree.subtreeData
 	// then validate the subtree through the subtreeValidation service
 	if len(block.Transactions()) > 1 {
-		subtree, err = util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
-		if err != nil {
-			return nil, errors.NewSubtreeError("failed to create subtree", err)
+		if subtree, err = util.NewIncompleteTreeByLeafCount(len(block.Transactions())); err != nil {
+			return nil, errors.NewSubtreeError("[prepareSubtrees] failed to create subtree", err)
 		}
 
 		if err = subtree.AddCoinbaseNode(); err != nil {
-			return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
+			return nil, errors.NewSubtreeError("[prepareSubtrees] failed to add coinbase placeholder", err)
 		}
 
 		// subtreeData contains the extended tx bytes of all transactions references in the subtree
 		// except the coinbase transaction
 		subtreeData := util.NewSubtreeData(subtree)
+		subtreeMetaData := util.NewSubtreeMeta(subtree)
 
-		var txMap map[chainhash.Hash]*txMapWrapper
-
-		txMap, err = sm.createTxMap(ctx, block)
-		if err != nil {
+		if txMap, err = sm.createTxMap(ctx, block); err != nil {
 			return nil, err
 		}
 
 		// extend all the transactions in the block
-		err = sm.extendTransactions(ctx, block, txMap)
-		if err != nil {
+		if err = sm.extendTransactions(ctx, block, txMap); err != nil {
 			return nil, err
 		}
 
 		// create the subtree and subtreeData for the block
-		err = sm.createSubtree(ctx, block, txMap, subtree, subtreeData)
-		if err != nil {
+		if err = sm.createSubtree(ctx, block, txMap, subtree, subtreeData, subtreeMetaData); err != nil {
 			return nil, err
 		}
 
-		legacyMode, err := sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_LEGACYSYNCING)
-		if err != nil {
-			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+		if legacyMode, err = sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_LEGACYSYNCING); err != nil {
+			sm.logger.Errorf("[prepareSubtrees] Failed to get current state: %s", err)
 		}
 
-		catchingBlocks, err := sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_CATCHINGBLOCKS)
-		if err != nil {
-			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+		if catchingBlocks, err = sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_CATCHINGBLOCKS); err != nil {
+			sm.logger.Errorf("[prepareSubtrees] Failed to get current state: %s", err)
 		}
 
-		if legacyMode || catchingBlocks {
-			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
+		// quick validation mode is used when we are in legacy mode or catching blocks mode
+		// we can skip some of the processing since we assume the block is valid
+		quickValidationMode := legacyMode || catchingBlocks
+
+		if quickValidationMode {
+			// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
 			if err = sm.validateTransactionsLegacyMode(ctx, txMap, block); err != nil {
 				return nil, err
 			}
-			// } else {
-			// do not validate transactions, just create the subtree and send to block validation
-			// maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
-			//
-			//	if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
-			//		return nil, err
-			//	}
 		}
 
-		var subtreeBytes []byte
-
-		subtreeBytes, err = subtree.Serialize()
-		if err != nil {
-			return nil, errors.NewStorageError("failed to serialize subtree", err)
+		// write all the subtree data to the subtree store
+		if err = sm.writeSubtree(ctx, block, subtree, subtreeData, subtreeMetaData, quickValidationMode); err != nil {
+			return nil, err
 		}
 
-		if err = sm.subtreeStore.Set(ctx,
-			subtree.RootHash()[:],
-			subtreeBytes,
-			options.WithFileExtension("subtreeToCheck"),
-			options.WithTTL(120*time.Minute),
-		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-			return nil, errors.NewStorageError("failed to store subtree", err)
-		}
-
-		var subtreeDataBytes []byte
-
-		subtreeDataBytes, err = subtreeData.Serialize()
-		if err != nil {
-			return nil, errors.NewStorageError("failed to serialize subtree data", err)
-		}
-
-		if err = sm.subtreeStore.Set(ctx,
-			subtreeData.RootHash()[:],
-			subtreeDataBytes,
-			options.WithFileExtension("subtreeData"),
-			options.WithTTL(120*time.Minute),
-		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-			return nil, errors.NewStorageError("failed to store subtree data", err)
-		}
-
-		if err = sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil { // nolint:gosec
-			return nil, errors.NewSubtreeError("failed to check subtree", err)
+		// we don't need to check the subtree in the subtree validation in legacy or catching blocks mode,
+		// since we already validated the transactions and created all the subtree files needed
+		if !quickValidationMode {
+			if err = sm.checkSubtreeFromBlock(ctx, block, subtree); err != nil {
+				return nil, err
+			}
 		}
 
 		subtrees = append(subtrees, subtree.RootHash())
@@ -379,10 +351,102 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
+func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil.Block, subtree *util.Subtree) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtreeFromBlock",
+		tracing.WithLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
+	)
+
+	defer deferFn()
+
+	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil { // nolint:gosec
+		return errors.NewSubtreeError("failed to check subtree", err)
+	}
+
+	return nil
+}
+
+func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, subtree *util.Subtree,
+	subtreeData *util.SubtreeData, subtreeMetaData *util.SubtreeMeta, quickValidationMode bool) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "writeSubtree",
+		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
+	)
+
+	subtreeFileExtension := "subtreeToCheck"
+	if quickValidationMode {
+		subtreeFileExtension = "subtree"
+	}
+
+	defer deferFn()
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		subtreeBytes, err := subtree.Serialize()
+		if err != nil {
+			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree", subtree.RootHash().String(), err)
+		}
+
+		if err = sm.subtreeStore.Set(gCtx,
+			subtree.RootHash()[:],
+			subtreeBytes,
+			options.WithFileExtension(subtreeFileExtension),
+			options.WithTTL(120*time.Minute),
+		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree", subtree.RootHash().String(), err)
+		}
+
+		return nil
+	})
+
+	g.Go(func() error {
+		subtreeBytes, err := subtreeData.Serialize()
+		if err != nil {
+			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
+		}
+
+		if err = sm.subtreeStore.Set(gCtx,
+			subtreeData.RootHash()[:],
+			subtreeBytes,
+			options.WithFileExtension("subtreeData"),
+			options.WithTTL(120*time.Minute),
+		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree data", subtree.RootHash().String(), err)
+		}
+
+		return nil
+	})
+
+	// if we are not in quickValidationMode, we don't need to store the subtree meta data
+	// it will be stored by the subtree validation service
+	if quickValidationMode {
+		g.Go(func() error {
+			subtreeBytes, err := subtreeMetaData.Serialize()
+			if err != nil {
+				return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
+			}
+
+			if err = sm.subtreeStore.Set(ctx,
+				subtreeData.RootHash()[:],
+				subtreeBytes,
+				options.WithFileExtension("meta"),
+				options.WithTTL(120*time.Minute),
+			); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
+			}
+
+			return nil
+		})
+	}
+
+	return g.Wait()
+}
+
 func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
+		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
 	)
+
 	defer func() {
 		deferFn(err)
 	}()
@@ -394,8 +458,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", len(txMap))
 
 	if err = sm.preValidateTransactions(ctx, txMap, block); err != nil {
-		sm.logger.Errorf("[validateTransactionsLegacyMode] failed to pre-validate transactions: %s", err)
-		return err
+		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to pre-validate transactions", err)
 	}
 
 	return nil
@@ -442,7 +505,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	}
 
 	// wait for all utxos to be created
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("failed to create utxos", err)
 	}
 
@@ -617,7 +680,8 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	return nil
 }
 
-func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) (err error) {
+func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper,
+	subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMetaData *util.SubtreeMeta) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createSubtree",
 		tracing.WithLogMessage(sm.logger, "[createSubtree] called for block %s / height %d", block.Hash(), block.Height()),
 	)
@@ -653,6 +717,10 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 			// store the extended transaction in our subtree tx data file
 			if err = subtreeData.AddTx(tx, currentIdx); err != nil {
 				return errors.NewTxError("failed to add tx to subtree data", err)
+			}
+
+			if err = subtreeMetaData.SetParentTxHashesFromTx(tx, currentIdx); err != nil {
+				return errors.NewTxError("failed to add tx to subtree meta data", err)
 			}
 		}
 	}
