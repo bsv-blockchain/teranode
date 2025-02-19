@@ -8,26 +8,33 @@ import (
 	"github.com/ordishs/go-utils/expiringmap"
 )
 
+type expiringConcurrentCacheWait[V any] struct {
+	wg     *sync.WaitGroup
+	result *V
+}
+
 type ExpiringConcurrentCache[K comparable, V any] struct {
 	mu        sync.RWMutex
 	cache     *expiringmap.ExpiringMap[K, V]
-	wg        map[K]*sync.WaitGroup
+	wg        map[K]*expiringConcurrentCacheWait[V]
 	ZeroValue V
 }
 
 func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *ExpiringConcurrentCache[K, V] {
 	return &ExpiringConcurrentCache[K, V]{
 		cache: expiringmap.New[K, V](expiration),
-		wg:    make(map[K]*sync.WaitGroup),
+		wg:    make(map[K]*expiringConcurrentCacheWait[V]),
 	}
 }
 
-func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, error)) (V, error) {
+func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, bool, error)) (V, error) {
 	var (
-		val   V
-		found bool
-		err   error
-		wg    *sync.WaitGroup
+		val        V
+		found      bool
+		allowCache bool
+		err        error
+		wg         *sync.WaitGroup
+		wgw        *expiringConcurrentCacheWait[V]
 	)
 
 	// Start by acquiring a read lock
@@ -50,12 +57,17 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 	}
 
 	// If not, check if there is an ongoing request
-	if wg, found = c.wg[key]; found {
+	if wgw, found = c.wg[key]; found {
 		c.mu.Unlock()
-		wg.Wait() // Wait for the other goroutine to finish
+		wgw.wg.Wait() // Wait for the other goroutine to finish
 
 		if val, found = c.cache.Get(key); found {
 			return val, nil
+		}
+
+		// check the result in the wait group
+		if wgw.result != nil {
+			return *wgw.result, nil
 		}
 
 		return c.ZeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
@@ -64,7 +76,9 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 	// Create a new WaitGroup for the key
 	wg = &sync.WaitGroup{}
 	wg.Add(1)
-	c.wg[key] = wg
+	c.wg[key] = &expiringConcurrentCacheWait[V]{
+		wg: wg,
+	}
 
 	// Release the global lock, for others to wait on the wait group
 	c.mu.Unlock()
@@ -80,13 +94,17 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 	}()
 
 	// Perform the fetch
-	result, err := fetchFunc()
+	val, allowCache, err = fetchFunc()
 	if err != nil {
 		return c.ZeroValue, err
 	}
 
 	// Cache the result
-	c.cache.Set(key, result)
+	if allowCache {
+		c.cache.Set(key, val)
+	}
 
-	return result, nil
+	c.wg[key].result = &val
+
+	return val, nil
 }

@@ -659,7 +659,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			if previousTx, err = s.GetTxFromExternalStore(s.ctx, previousTxHash); err != nil {
+			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -707,16 +707,67 @@ func sendErrorAndClose(errCh chan error, err error) {
 	close(errCh)
 }
 
-func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "GetTxFromExternalStore",
+func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	ctx, _, _ = tracing.StartTracing(ctx, "GetOutpointsFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
 	if s.externalTxCache != nil {
-		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, error) {
-			return s.getExternalTransaction(ctx, previousTxHash)
+		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
+			tx, numberOfActiveOutputs, err := s.getExternalOutpoints(ctx, previousTxHash)
+			if err != nil {
+				return nil, false, err
+			}
+
+			// determine whether to cache the tx or just return it once
+			allowCaching := true
+
+			if numberOfActiveOutputs < 2 {
+				// do not cache 1 output transactions, they are not going to be requested again
+				allowCaching = false
+			}
+
+			return tx, allowCaching, nil
 		})
 	}
+
+	tx, _, err := s.getExternalOutpoints(ctx, previousTxHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, int, error) {
+	// get the full transaction from the external store
+	tx, err := s.getExternalTransaction(ctx, previousTxHash)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// remove inputs, don't need them for outpoints
+	tx.Inputs = nil
+
+	numberOfActiveOutputs := 0
+
+	// remove all non-spendable (OP_RETURN) outputs
+	for i, output := range tx.Outputs {
+		script := *output.LockingScript
+		if script[0] == 0x00 || script[0] == 0x6a {
+			tx.Outputs[i] = nil
+		} else {
+			numberOfActiveOutputs++
+		}
+	}
+
+	return tx, numberOfActiveOutputs, nil
+}
+
+func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	ctx, _, _ = tracing.StartTracing(ctx, "GetTxFromExternalStore",
+		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
+	)
 
 	return s.getExternalTransaction(ctx, previousTxHash)
 }
@@ -725,7 +776,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	ext := "tx"
 
 	// Get the raw transaction from the externalStore...
-	reader, err := s.externalStore.GetIoReader(
+	txBytes, err := s.externalStore.Get(
 		ctx,
 		previousTxHash[:],
 		options.WithFileExtension(ext),
@@ -734,7 +785,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		// Try to get the data from an output file instead
 		ext = "outputs"
 
-		reader, err = s.externalStore.GetIoReader(
+		txBytes, err = s.externalStore.Get(
 			ctx,
 			previousTxHash[:],
 			options.WithFileExtension(ext),
@@ -744,20 +795,16 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		}
 	}
 
-	defer func() {
-		_ = reader.Close()
-	}()
-
 	tx := &bt.Tx{}
 
-	// create a buffer for the reader
-	bufferedReader := bufio.NewReaderSize(reader, 1*1024*1024) // 1MB buffer
-
 	if ext == "tx" {
-		if _, err = tx.ReadFrom(bufferedReader); err != nil {
-			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from reader", previousTxHash.String(), err)
+		tx, err = bt.NewTxFromBytes(txBytes)
+		if err != nil {
+			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from bytes", previousTxHash.String(), err)
 		}
 	} else {
+		bufferedReader := bufio.NewReader(bytes.NewReader(txBytes))
+
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
