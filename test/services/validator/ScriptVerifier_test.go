@@ -26,7 +26,7 @@ import (
 
 // go test -v -tags test_validator ./test/...
 
-var testStoreURL = "https://teranode-public.s3.eu-west-1.amazonaws.com/testdata"
+var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
 
 type TxsExtended struct {
 	Txs    []*bt.Tx
