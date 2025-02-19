@@ -90,7 +90,6 @@ Teranode's double spend handling involves several important concepts:
     - Five-phase commit process for resolving conflicts:
       - Mark original transaction and children as conflicting
       - Unspend original transaction and children, temporarily marking its parent txs as not spendable (to prevent re-spending)
-      - Spend the conficting transaction (the "double spend")
       - Mark double-spend as non-conflicting
       - Mark parents as spendable again (remove temporary marking)
 

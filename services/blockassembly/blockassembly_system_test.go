@@ -67,7 +67,7 @@ func startKafka(logFile string) error {
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
 
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.blockassembly")
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test")
 
 	appLog, err := os.Create(logFile)
 	if err != nil {
@@ -540,7 +540,8 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		err = baService.Start(ctx)
+		readyChan := make(chan struct{})
+		err = baService.Start(ctx, readyChan)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
 		}
@@ -662,60 +663,6 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	assert.Equal(t, 3, foundTxs, "All transactions should be included in the mining candidate")
 }
 
-// CallRPC performs an RPC call to a Bitcoin node.
-//
-// Parameters:
-//   - url: RPC endpoint URL
-//   - method: RPC method to call
-//   - params: Parameters for the RPC call
-//
-// Returns:
-//   - string: RPC response
-//   - error: Any error encountered during the call
-func CallRPC(url string, method string, params []interface{}) (string, error) {
-	// Create the request payload
-	requestBody, err := json.Marshal(map[string]interface{}{
-		"method": method,
-		"params": params,
-	})
-	if err != nil {
-		return "", errors.NewProcessingError("failed to marshal request body", err)
-	}
-
-	// Create the HTTP request
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
-	if err != nil {
-		return "", errors.NewProcessingError("failed to create request", err)
-	}
-
-	// Set the appropriate headers
-	req.SetBasicAuth("bitcoin", "bitcoin")
-	req.Header.Set("Content-Type", "application/json")
-
-	// Perform the request
-	client := &http.Client{}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", errors.NewProcessingError("failed to perform request", err)
-	}
-	defer resp.Body.Close()
-
-	// Check the status code
-	if resp.StatusCode != http.StatusOK {
-		return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
-	}
-
-	// Read the response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", errors.NewProcessingError("failed to read response body", err)
-	}
-
-	// Return the response as a string
-	return string(body), nil
-}
-
 // TestShouldHandleReorg verifies blockchain reorganization handling.
 func TestShouldHandleReorg(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
@@ -742,10 +689,14 @@ func TestShouldHandleReorg(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		err = baService.Start(ctx)
+		readyChan := make(chan struct{})
+
+		err = baService.Start(ctx, readyChan)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
 		}
+
+		<-readyChan
 	}()
 
 	time.Sleep(5 * time.Second)
@@ -826,7 +777,7 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// check the previous hash of the mining candidate
 	prevHash := chainhash.Hash(mc1.PreviousHash)
-	t.Logf("Mining candidate built on block with previous hash: %s", prevHash)
+	t.Logf("Mining candidate built on block with previous hash: %s", prevHash.String())
 	assert.Equal(t, chainAHeader1.Hash().String(), prevHash.String(), "Mining candidate should be built on Chain A")
 
 	// Now trigger reorg by adding Chain B block with higher difficulty
@@ -898,10 +849,14 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		err = baService.Start(ctx)
+		readyChan := make(chan struct{})
+
+		err = baService.Start(ctx, readyChan)
 		if err != nil {
 			t.Errorf("Error starting service: %v", err)
 		}
+
+		<-readyChan
 	}()
 
 	time.Sleep(5 * time.Second)
@@ -1113,7 +1068,9 @@ func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	go func() {
-		err = ba.Start(ctx)
+		readyChan := make(chan struct{})
+
+		err = ba.Start(ctx, readyChan)
 		require.NoError(t, err)
 	}()
 	time.Sleep(1 * time.Second)
@@ -1121,4 +1078,184 @@ func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
 	_, err = ba.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
 	require.Error(t, err, "Should return error for bad coinbase length")
 	require.Contains(t, err.Error(), "bad coinbase length")
+}
+
+// TestReset verifies that the Reset() function properly triggers a state reset
+// and updates the block assembler state correctly.
+func TestReset(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	defer cancel()
+
+	memStore := memory.New()
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
+	require.NoError(t, err)
+
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, ba)
+
+	err = ba.Init(ctx)
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	// Generate initial 101 blocks
+	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate initial blocks")
+	time.Sleep(5 * time.Second)
+
+	// Get initial block height and hash
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get initial block header")
+
+	initialHeight := initialMetadata.Height
+	t.Logf("Initial block height: %d", initialHeight)
+
+	// Create a new block with different difficulty
+	newBits, _ := model.NewNBitFromString("1d00ffff")
+	newHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *newBits,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+	}
+
+	// Create coinbase transaction for the new block
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	// Create and add the new block
+	newBlock := &model.Block{
+		Header:           newHeader,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	t.Log("Adding new block...")
+
+	err = ba.blockchainClient.AddBlock(ctx, newBlock, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Call Reset to trigger state update
+	t.Log("Calling Reset...")
+	ba.blockAssembler.Reset()
+	time.Sleep(1 * time.Second)
+
+	// Verify the state was updated by checking with blockchain client
+	finalHeader, finalMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get final block header")
+
+	finalHeight := finalMetadata.Height
+
+	// Verify the height increased
+	require.Greater(t, finalHeight, initialHeight, "Block height should have increased")
+
+	// Verify we're on the new block
+	require.Equal(t, newHeader.Hash(), finalHeader.Hash(), "Should be on the new block after reset")
+
+	// Create a new block with different difficulty
+	newBits2, _ := model.NewNBitFromString("1d00ffff")
+	newHeader2 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  newHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2,
+		Bits:           *newBits2,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+	}
+
+	// Create coinbase transaction for the new block
+	coinbaseTx2, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	// Create and add the new block
+	newBlock2 := &model.Block{
+		Header:           newHeader2,
+		CoinbaseTx:       coinbaseTx2,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	t.Log("Adding new block...")
+
+	err = ba.blockchainClient.AddBlock(ctx, newBlock2, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Call Reset to trigger state update
+	t.Log("Calling Reset...")
+	ba.blockAssembler.Reset()
+	time.Sleep(1 * time.Second)
+
+	// Verify the state was updated by checking with blockchain client
+	finalHeader2, finalMetadata2, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get final block header")
+
+	finalHeight2 := finalMetadata2.Height
+
+	// Verify the height increased
+	require.Greater(t, finalHeight2, finalHeight, "Block height should have increased")
+
+	// Verify we're on the new block
+	require.Equal(t, newHeader2.Hash(), finalHeader2.Hash(), "Should be on the new block after reset")
+}
+
+// CallRPC performs an RPC call to a Bitcoin node.
+//
+// Parameters:
+//   - url: RPC endpoint URL
+//   - method: RPC method to call
+//   - params: Parameters for the RPC call
+//
+// Returns:
+//   - string: RPC response
+//   - error: Any error encountered during the call
+func CallRPC(url string, method string, params []interface{}) (string, error) {
+	// Create the request payload
+	requestBody, err := json.Marshal(map[string]interface{}{
+		"method": method,
+		"params": params,
+	})
+	if err != nil {
+		return "", errors.NewProcessingError("failed to marshal request body", err)
+	}
+
+	// Create the HTTP request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", errors.NewProcessingError("failed to create request", err)
+	}
+
+	// Set the appropriate headers
+	req.SetBasicAuth("bitcoin", "bitcoin")
+	req.Header.Set("Content-Type", "application/json")
+
+	// Perform the request
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.NewProcessingError("failed to perform request", err)
+	}
+	defer resp.Body.Close()
+
+	// Check the status code
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
+	}
+
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", errors.NewProcessingError("failed to read response body", err)
+	}
+
+	// Return the response as a string
+	return string(body), nil
 }
