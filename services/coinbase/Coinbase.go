@@ -1000,6 +1000,9 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 		return errors.NewStorageError("unsupported database engine: %s", c.engine)
 	}
 
+	found := false
+	outputAddresses := make([]string, 0, len(tx.Outputs))
+
 	for vout, output := range tx.Outputs {
 		if !output.LockingScript.IsP2PKH() {
 			c.logger.Warnf("only p2pkh coinbase outputs are supported: %s:%d", tx.TxIDChainHash().String(), vout)
@@ -1011,7 +1014,11 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 			return err
 		}
 
+		outputAddresses = append(outputAddresses, addresses[0])
+
 		if addresses[0] == c.address {
+			found = true
+
 			if _, err = stmt.ExecContext(ctx, blockId, hash, vout, output.LockingScript, output.Satoshis); err != nil {
 				return errors.NewStorageError("could not insert coinbase utxo", err)
 			}
@@ -1032,6 +1039,10 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 		if err := txn.Commit(); err != nil {
 			return err
 		}
+	}
+
+	if !found {
+		c.logger.Warnf("no coinbase utxo rows inserted - coinbase tx did not have any output addresses matching our address: %s (tx output addresses: %v)", c.address, outputAddresses)
 	}
 
 	return nil
