@@ -415,7 +415,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		utxoWrapper.Height,
 		utxo.WithTXID(&utxoWrapper.TxID),
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
-		utxo.WithBlockIDs(0),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: 0, SubtreeIdx: 0}),
 	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			return nil

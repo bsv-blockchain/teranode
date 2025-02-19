@@ -195,9 +195,9 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return err
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
-	err := s.store.SetMinedMulti(ctx, hashes, blockID)
-	s.logger.Debugf("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, blockID, err, caller())
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+	err := s.store.SetMinedMulti(ctx, hashes, minedBlockInfo)
+	s.logger.Debugf("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, minedBlockInfo.BlockID, err, caller())
 
 	return err
 }

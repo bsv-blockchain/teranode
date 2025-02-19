@@ -273,11 +273,11 @@ func readTransaction(t *testing.T, filePath string) *bt.Tx {
 	return tx
 }
 
-func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx, blockHeight uint32, blockIDs []uint32) (*teranode_aerospike.BatchStoreItem, [][]*aerospike.Bin, bool) {
+func prepareBatchStoreItem(t *testing.T, s *teranode_aerospike.Store, tx *bt.Tx, blockHeight uint32, blockIDs []uint32, blockHeights []uint32, subtreeIdxs []int) (*teranode_aerospike.BatchStoreItem, [][]*aerospike.Bin, bool) {
 	txHash := tx.TxIDChainHash()
 	isCoinbase := tx.IsCoinbase()
 
-	binsToStore, hasUtxos, err := s.GetBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase, false)
+	binsToStore, hasUtxos, err := s.GetBinsToStore(tx, blockHeight, blockIDs, blockHeights, subtreeIdxs, true, txHash, isCoinbase, false)
 	require.NoError(t, err)
 	require.NotNil(t, binsToStore)
 

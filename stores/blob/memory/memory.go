@@ -184,6 +184,9 @@ func (m *Memory) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 
 	storeKey := hashKey(hash, merged)
 
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if _, ok := m.blobs[storeKey]; !ok {
 		return 0, errors.ErrNotFound
 	}

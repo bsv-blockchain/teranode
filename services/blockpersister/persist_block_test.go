@@ -106,11 +106,7 @@ func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Da
 	return nil, nil
 }
 
-func (m *MockStore) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
-	return nil
-}
-
-func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	return nil
 }
 

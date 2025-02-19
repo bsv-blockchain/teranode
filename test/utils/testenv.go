@@ -280,10 +280,7 @@ func getPortFromAddress(address string) (string, error) {
 }
 
 func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
-	port, err := getPortFromAddress(node.Settings.RPC.RPCListenerURL)
-	if err != nil {
-		return err
-	}
+	port := node.Settings.RPC.RPCListenerURL.Port()
 
 	rpcPort := fmt.Sprintf("%s/tcp", port)
 

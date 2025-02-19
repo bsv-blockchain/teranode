@@ -234,6 +234,26 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 }
 
+func SetMined(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	err := db.SetBlockHeight(101)
+	require.NoError(t, err)
+
+	_, err = db.Create(ctx, Tx, 0)
+	require.NoError(t, err)
+
+	err = db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 123, BlockHeight: 101, SubtreeIdx: 2})
+	require.NoError(t, err)
+
+	resp, err := db.Get(ctx, testSpend0.TxID)
+	require.NoError(t, err)
+
+	require.Equal(t, []uint32{123}, resp.BlockIDs)
+	require.Equal(t, []uint32{101}, resp.BlockHeights)
+	require.Equal(t, []int{2}, resp.SubtreeIdxs)
+}
+
 func Conflicting(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 

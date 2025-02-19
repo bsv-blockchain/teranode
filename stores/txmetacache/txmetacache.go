@@ -277,14 +277,14 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	// do not update the aerospike tx meta store, it kills the aerospike server
 	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
 	// if err != nil {
 	//   return err
 	// }
 	for _, hash := range hashes {
-		err = t.setMinedInCache(ctx, hash, blockID)
+		err = t.setMinedInCache(ctx, hash, minedBlockInfo)
 		if err != nil {
 			return err
 		}
@@ -304,13 +304,13 @@ func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chain
 	return nil
 }
 
-func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
-	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, blockID)
+func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
 		return err
 	}
 
-	err = t.setMinedInCache(ctx, hash, blockID)
+	err = t.setMinedInCache(ctx, hash, minedBlockInfo)
 	if err != nil {
 		return err
 	}
@@ -318,7 +318,7 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockI
 	return nil
 }
 
-func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
+func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	var txMeta *meta.Data
 	txMeta, err = t.Get(ctx, hash)
 
@@ -332,10 +332,10 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 
 	if txMeta.BlockIDs == nil {
 		txMeta.BlockIDs = []uint32{
-			blockID,
+			minedBlockInfo.BlockID,
 		}
 	} else {
-		txMeta.BlockIDs = append(txMeta.BlockIDs, blockID)
+		txMeta.BlockIDs = append(txMeta.BlockIDs, minedBlockInfo.BlockID)
 	}
 
 	txMeta.Tx = nil

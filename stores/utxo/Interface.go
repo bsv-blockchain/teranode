@@ -102,18 +102,22 @@ type CreateOption func(*CreateOptions)
 
 // CreateOptions holds optional parameters for UTXO creation.
 type CreateOptions struct {
-	BlockIDs    []uint32
-	TxID        *chainhash.Hash
-	IsCoinbase  *bool
-	Frozen      bool
-	Conflicting bool
+	MinedBlockInfos []MinedBlockInfo
+	TxID            *chainhash.Hash
+	IsCoinbase      *bool
+	Frozen          bool
+	Conflicting     bool
 }
 
-// WithBlockIDs returns a CreateOption that sets the block IDs for a UTXO.
+// WithBlockMetas returns a CreateOption that sets the block IDs for a UTXO.
 // Multiple block IDs can be specified in case of a transaction that appears in multiple blocks.
-func WithBlockIDs(blockIDs ...uint32) CreateOption {
+func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption { //nolint:unparams ...uint32) CreateOption {
 	return func(o *CreateOptions) {
-		o.BlockIDs = blockIDs
+		if o.MinedBlockInfos == nil {
+			o.MinedBlockInfos = make([]MinedBlockInfo, 0)
+		}
+
+		o.MinedBlockInfos = append(o.MinedBlockInfos, minedBlockInfos...)
 	}
 }
 
@@ -143,6 +147,12 @@ func WithConflicting(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.Conflicting = b
 	}
+}
+
+type MinedBlockInfo struct {
+	BlockID     uint32
+	BlockHeight uint32
+	SubtreeIdx  int
 }
 
 // Store defines the interface for UTXO management operations.
@@ -179,7 +189,7 @@ type Store interface {
 	Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error
 
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
-	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
+	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
 
 	// these functions are not pure as they will update the data object in place
 
@@ -274,7 +284,7 @@ func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable
 func (mu *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error {
 	return nil
 }
-func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error {
 	return nil
 }
 

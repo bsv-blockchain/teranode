@@ -80,7 +80,7 @@ func (m *NullStore) Unspend(ctx context.Context, spends []*utxostore.Spend, flag
 	return nil
 }
 
-func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -16,7 +17,7 @@ import (
 )
 
 type txMinedStatus interface {
-	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
+	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error
 }
 
 type txMinedMessage struct {
@@ -126,6 +127,12 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		subtreeIdx := subtreeIdx
 		subtree := subtree
 
+		minedBlockInfo := utxo.MinedBlockInfo{
+			BlockID:     blockID,
+			BlockHeight: block.Height,
+			SubtreeIdx:  subtreeIdx,
+		}
+
 		g.Go(func() error {
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 
@@ -146,7 +153,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					retries := 0
 
 					for {
-						if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
+						if err := txMetaStore.SetMinedMulti(gCtx, hashes, minedBlockInfo); err != nil {
 							if retries >= maxRetries {
 								return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting mined tx", block.Hash().String(), err)
 							} else {
@@ -171,7 +178,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 				for {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
 
-					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
+					if err := txMetaStore.SetMinedMulti(gCtx, hashes, minedBlockInfo); err != nil {
 						if retries >= maxRetries {
 							return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx", block.Hash().String(), err)
 						} else {

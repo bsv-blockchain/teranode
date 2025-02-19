@@ -160,7 +160,11 @@ func TestGetBlockIDs(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0, utxo.WithBlockIDs(1, 2, 3))
+	_, err := store.Create(ctx, tx, 0, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 123, SubtreeIdx: 1},
+		utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 124, SubtreeIdx: 2},
+		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 125, SubtreeIdx: 3},
+	))
 	require.NoError(t, err)
 
 	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
@@ -277,14 +281,22 @@ func TestSetMinedMulti(t *testing.T) {
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID:     1,
+		BlockHeight: 1,
+		SubtreeIdx:  0,
+	})
 	require.NoError(t, err)
 
-	meta, err := store.Get(ctx, tx.TxIDChainHash(), []string{"blockIDs"})
+	meta, err := store.Get(ctx, tx.TxIDChainHash(), []string{"blockIDs", "blockHeights", "subtreeIdxs"})
 	require.NoError(t, err)
 
 	assert.Len(t, meta.BlockIDs, 1)
 	assert.Equal(t, uint32(1), meta.BlockIDs[0])
+	assert.Len(t, meta.BlockHeights, 1)
+	assert.Equal(t, uint32(1), meta.BlockHeights[0])
+	assert.Len(t, meta.SubtreeIdxs, 1)
+	assert.Equal(t, 0, meta.SubtreeIdxs[0])
 }
 
 func TestBatchDecorate(t *testing.T) {
@@ -470,6 +482,15 @@ func Test_SmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.ReAssign(t, db)
+	})
+
+	t.Run("set mined", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMined(t, db)
 	})
 
 	t.Run("sql conflicting tx", func(t *testing.T) {

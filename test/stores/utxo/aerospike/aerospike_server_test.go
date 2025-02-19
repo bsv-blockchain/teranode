@@ -82,7 +82,7 @@ func TestAerospike(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, errors.ErrTxExists))
 
-		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, blockID)
+		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: 101, SubtreeIdx: 3})
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -90,16 +90,20 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(2), value.Generation)
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 1)
 		assert.Equal(t, []interface{}{int(blockID)}, value.Bins["blockIDs"].([]interface{}))
+		assert.Equal(t, []interface{}{101}, value.Bins["blockHeights"].([]interface{}))
+		assert.Equal(t, []interface{}{3}, value.Bins["subtreeIdxs"].([]interface{}))
 
-		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, blockID2)
+		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: blockID2, BlockHeight: 102, SubtreeIdx: 4})
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 		require.Equal(t, uint32(3), value.Generation)
+		assert.False(t, value.Bins["isCoinbase"].(bool))
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 2)
 		assert.Equal(t, []interface{}{int(blockID), int(blockID2)}, value.Bins["blockIDs"].([]interface{}))
-		assert.False(t, value.Bins["isCoinbase"].(bool))
+		assert.Equal(t, []interface{}{int(101), int(102)}, value.Bins["blockHeights"].([]interface{}))
+		assert.Equal(t, []interface{}{3, 4}, value.Bins["subtreeIdxs"].([]interface{}))
 	})
 
 	t.Run("aerospike store conflicting", func(t *testing.T) {
@@ -164,7 +168,7 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, value.BlockIDs, 0)
 		assert.Nil(t, value.BlockIDs)
 
-		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, blockID2)
+		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: blockID2, BlockHeight: 102, SubtreeIdx: 4})
 		require.NoError(t, err)
 
 		value, err = db.Get(context.Background(), tx.TxIDChainHash())
@@ -172,6 +176,9 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, uint64(215), value.Fee)
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{blockID2}, value.BlockIDs)
+
+		assert.Equal(t, []uint32{102}, value.BlockHeights)
+		assert.Equal(t, []int{4}, value.SubtreeIdxs)
 	})
 
 	t.Run("aerospike get", func(t *testing.T) {
@@ -393,7 +400,11 @@ func TestAerospike(t *testing.T) {
 
 	t.Run("aerospike 1 record spend 1 and not expire", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx, 0, utxo.WithBlockIDs(1, 2, 3)) // Important that blockIDs are set
+		txMeta, err := db.Create(context.Background(), tx, 0, utxo.WithMinedBlockInfo(
+			utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 123, SubtreeIdx: 1},
+			utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 124, SubtreeIdx: 2},
+			utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 125, SubtreeIdx: 3},
+		))
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -444,7 +455,9 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not yet been mined
 
 		// Now call SetMinedMulti
-		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID: 1, BlockHeight: 123, SubtreeIdx: 1,
+		})
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -598,7 +611,11 @@ func TestAerospike(t *testing.T) {
 
 		var blockHeight uint32
 
-		txMeta, err := db.Create(context.Background(), tx, blockHeight, utxo.WithBlockIDs(1, 2, 3))
+		txMeta, err := db.Create(context.Background(), tx, blockHeight, utxo.WithMinedBlockInfo(
+			utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 123, SubtreeIdx: 1},
+			utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 124, SubtreeIdx: 2},
+			utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 125, SubtreeIdx: 3},
+		))
 		require.NoError(t, err)
 		assert.NotNil(t, txMeta)
 
@@ -1273,7 +1290,9 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
 
 	// No set mined to see the TTL is set
-	err = s.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+	err = s.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID: 1, BlockHeight: 123, SubtreeIdx: 1,
+	})
 	require.NoError(t, err)
 
 	response, err = client.Get(nil, key)

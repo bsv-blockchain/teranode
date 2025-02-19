@@ -395,7 +395,7 @@ type RPCSettings struct {
 	RPCLimitPass   string
 	RPCMaxClients  int
 	RPCQuirks      bool
-	RPCListenerURL string
+	RPCListenerURL *url.URL
 }
 
 type FaucetSettings struct {

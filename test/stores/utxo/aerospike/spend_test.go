@@ -67,7 +67,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// mine the tx
-		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 101)
+		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
 		require.NoError(t, err)
 
 		utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))

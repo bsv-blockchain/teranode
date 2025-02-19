@@ -364,6 +364,16 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 		}
 	}
 
+	if slices.Contains(bins, "blockIDs") {
+		if !slices.Contains(bins, "blockHeights") {
+			bins = append(bins, "blockHeights")
+		}
+
+		if !slices.Contains(bins, "subtreeIdxs") {
+			bins = append(bins, "subtreeIdxs")
+		}
+	}
+
 	return bins
 }
 
@@ -497,6 +507,30 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 					}
 
 					items[idx].Data.BlockIDs = blockIDs
+
+				case "blockHeights":
+					temp := value.([]interface{})
+
+					var blockHeights []uint32
+
+					for _, val := range temp {
+						// nolint: gosec
+						blockHeights = append(blockHeights, uint32(val.(int)))
+					}
+
+					items[idx].Data.BlockHeights = blockHeights
+
+				case "subtreeIdxs":
+					temp := value.([]interface{})
+
+					var subtreeIdxs []int
+
+					for _, val := range temp {
+						// nolint: gosec
+						subtreeIdxs = append(subtreeIdxs, val.(int))
+					}
+
+					items[idx].Data.SubtreeIdxs = subtreeIdxs
 
 				case "isCoinbase":
 					coinbaseBool, ok := value.(bool)

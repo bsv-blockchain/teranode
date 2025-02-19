@@ -95,6 +95,12 @@ type BatchStoreItem struct {
 	// BlockIDs contains all blocks where this transaction appears
 	blockIDs []uint32
 
+	// BlockHeights contains all blocks where this transaction appears
+	blockHeights []uint32
+
+	// subtreeIdxs contains all subtree indexes where this transaction appears
+	subtreeIdxs []int
+
 	// LockTime is the transaction's lock time
 	lockTime uint32
 
@@ -163,15 +169,29 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *createOptions.IsCoinbase
 	}
 
+	blockIds := make([]uint32, 0)
+	blockHeights := make([]uint32, 0)
+	subtreeIdxs := make([]int, 0)
+
+	if len(createOptions.MinedBlockInfos) > 0 {
+		for _, blockMeta := range createOptions.MinedBlockInfos {
+			blockIds = append(blockIds, blockMeta.BlockID)
+			blockHeights = append(blockHeights, blockMeta.BlockHeight)
+			subtreeIdxs = append(subtreeIdxs, blockMeta.SubtreeIdx)
+		}
+	}
+
 	item := &BatchStoreItem{
-		txHash:      txHash,
-		isCoinbase:  isCoinbase,
-		tx:          tx,
-		blockHeight: blockHeight,
-		lockTime:    tx.LockTime,
-		blockIDs:    createOptions.BlockIDs,
-		conflicting: createOptions.Conflicting,
-		done:        errCh,
+		txHash:       txHash,
+		isCoinbase:   isCoinbase,
+		tx:           tx,
+		blockHeight:  blockHeight,
+		lockTime:     tx.LockTime,
+		blockIDs:     blockIds,
+		blockHeights: blockHeights,
+		subtreeIdxs:  subtreeIdxs,
+		conflicting:  createOptions.Conflicting,
+		done:         errCh,
 	}
 
 	if s.storeBatcher != nil {
@@ -286,7 +306,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting) // false is to say this is a normal record, not external.
+		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -443,7 +463,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting) // true is to say this is a big record
+					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -542,7 +562,7 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 //   - Array of bin batches
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
-func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool, isConflicting bool) ([][]*aerospike.Bin, bool, error) {
+func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool, txHash *chainhash.Hash, isCoinbase bool, isConflicting bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -654,6 +674,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 
 	batches[0] = append(batches[0], aerospike.NewBin("nrRecords", aerospike.NewIntegerValue(len(batches))))
 	batches[0] = append(batches[0], aerospike.NewBin("blockIDs", blockIDs))
+	batches[0] = append(batches[0], aerospike.NewBin("blockHeights", blockHeights))
+	batches[0] = append(batches[0], aerospike.NewBin("subtreeIdxs", subtreeIdxs))
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
