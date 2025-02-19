@@ -156,7 +156,8 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	require.NoError(t, err)
 
-	blockStore := testEnv.Nodes[0].Blockstore
+	blockStore := testEnv.Nodes[0].ClientBlockstore
+	subtreeStore := testEnv.Nodes[0].ClientSubtreestore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
@@ -168,10 +169,10 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
 		require.NoError(t, err)
 
-		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		header, _, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
 		require.NoError(t, err)
 
 		if bl {

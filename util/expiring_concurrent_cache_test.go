@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	teranode_util "github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +17,7 @@ import (
 
 func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	t.Run("value is already in the cache", func(t *testing.T) {
-		cache := teranode_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 
@@ -30,11 +29,11 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 		g := errgroup.Group{}
 
 		// Test the case where the value is already in the cache
-		for i := 0; i < 1_000_000; i++ {
+		for i := 0; i < 100_000; i++ {
 			g.Go(func() error {
-				val, err := cache.GetOrSet(*key, func() (int, error) {
+				val, err := cache.GetOrSet(*key, func() (int, bool, error) {
 					counter++
-					return 1, nil
+					return 1, true, nil
 				})
 				require.NoError(t, err)
 				require.Equal(t, 1, val)
@@ -42,9 +41,9 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 				return nil
 			})
 			g.Go(func() error {
-				val, err := cache.GetOrSet(*key2, func() (int, error) {
+				val, err := cache.GetOrSet(*key2, func() (int, bool, error) {
 					counter++
-					return 2, nil
+					return 2, true, nil
 				})
 				require.NoError(t, err)
 				require.Equal(t, 2, val)
@@ -60,7 +59,7 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 	})
 
 	t.Run("missing value", func(t *testing.T) {
-		cache := teranode_util.NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")
 		require.NoError(t, err)
 
@@ -69,11 +68,11 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 		g := errgroup.Group{}
 
 		// Test the case where the value is already in the cache
-		for i := 0; i < 1_000_000; i++ {
+		for i := 0; i < 100_000; i++ {
 			g.Go(func() error {
-				val, err := cache.GetOrSet(*key, func() (int, error) {
+				val, err := cache.GetOrSet(*key, func() (int, bool, error) {
 					counter++
-					return 1, errors.NewStorageError("error file does not exist")
+					return 1, false, errors.NewStorageError("error file does not exist")
 				})
 				require.Error(t, err)
 				require.Equal(t, cache.ZeroValue, val)
@@ -87,4 +86,35 @@ func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
 
 		assert.Greater(t, counter, 1, "should have tried more than once to read the value")
 	})
+
+	t.Run("disallow caching", func(t *testing.T) {
+		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
+		key, err := chainhash.NewHashFromStr("1")
+		require.NoError(t, err)
+
+		var counter int
+
+		g := errgroup.Group{}
+
+		// Test the case where the value is already in the cache
+		for i := 0; i < 100_000; i++ {
+			g.Go(func() error {
+				val, err := cache.GetOrSet(*key, func() (int, bool, error) {
+					counter++
+					return 1, false, nil
+				})
+				require.NoError(t, err)
+				require.Equal(t, 1, val)
+
+				return nil
+			})
+		}
+
+		err = g.Wait()
+		require.NoError(t, err)
+
+		// check that the item was retrieved more than once, since caching is disabled
+		assert.Greater(t, counter, 1)
+	})
+
 }

@@ -3,8 +3,6 @@ package utils
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"reflect"
 	"testing"
 	"time"
@@ -59,22 +57,6 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 
 func (suite *TeranodeTestSuite) setupLocalTestEnv() {
 	var err error
-
-	// isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-
-	suite.T().Log("Removing data directory")
-
-	// err = removeDataDirectory("../../data/test", isGitHubActions)
-	// if err != nil {
-	// 	suite.T().Fatal(err)
-	// }
-
-	suite.T().Log("Cleaning up test containers")
-
-	// err = cleanUpE2EContainers(isGitHubActions)
-	// if err != nil {
-	// 	suite.T().Fatal(err)
-	// }
 
 	suite.T().Log("Setting up TeranodeTestEnv")
 
@@ -177,53 +159,6 @@ func (suite *TeranodeTestSuite) setupLocalTestEnv() {
 
 func TestTeranodeTestSuite(t *testing.T) {
 	suite.Run(t, new(TeranodeTestSuite))
-}
-
-func removeDataDirectory(dir string, useSudo bool) error {
-	var cmd *exec.Cmd
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil
-	}
-
-	if !useSudo {
-		cmd = exec.Command("rm", "-rf", dir)
-	} else {
-		cmd = exec.Command("sudo", "rm", "-rf", dir)
-	}
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func cleanUpE2EContainers(isGitHubActions bool) (err error) {
-	if isGitHubActions {
-		return nil
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			err = nil
-		}
-	}()
-
-	cmd := exec.Command("bash", "-c", "docker ps -a -q --filter label=com.docker.compose.project=e2e | xargs docker rm -f")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err = cmd.Run()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func setupLocalTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error) {

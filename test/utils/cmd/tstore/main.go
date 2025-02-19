@@ -9,19 +9,21 @@ import (
 
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/test/utils/tstore"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 // To start the TStore server
 //
-//	go run test/utils/cmd/tstore/main.go --config-file=./test/utils/cmd/tstore/localhost.env
+//	go run test/utils/cmd/tstore/main.go --tconfig-file=./test/utils/cmd/tstore/localhost.env
 func main() {
 	tconfig := tconfig.LoadTConfig(nil, tconfig.LoadConfigLocalSystem())
 	tconfigYAML := tconfig.StringYAML()
 	fmt.Printf("\n###  Config for tstore server  ###\n\n%v", tconfigYAML)
 
-	tstoreService := tstore.NewTStoreService(tconfig.LocalSystem.TStoreRootDir)
+	logger := ulogger.New("tstore-server", ulogger.WithLevel("DEBUG"))
+	tstoreService := tstore.NewTStoreService(tconfig.LocalSystem.TStoreRootDir, logger)
 
 	// Listen on a specific port.
 	lis, err := net.Listen("tcp", tconfig.LocalSystem.TStoreURL)

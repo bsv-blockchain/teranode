@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,7 +24,6 @@ import (
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -153,106 +151,70 @@ func GetBlockHeight(url string) (uint32, error) {
 	return blocks[0].Height, nil
 }
 
-func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) { //nolint:stylecheck
-	switch ext {
-	case "subtree":
-		bl := ReadSubtree(r, logger, true, queryTxId)
-		return bl, nil
+func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store, blockReader io.Reader, queryTxId chainhash.Hash) (bool, error) { //nolint:stylecheck
+	block, err := block_model.NewBlockFromReader(blockReader, nil)
+	if err != nil {
+		return false, errors.NewProcessingError("error reading block", err)
+	}
 
-	case "":
-		blockHeaderBytes := make([]byte, 80)
-		// read the first 80 bytes as the block header
-		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
-			return false, errors.NewBlockInvalidError("error reading block header", err)
+	l.Infof("Block hash: %s\n", block.Hash())
+	l.Infof("%s", block.Header.StringDump())
+	l.Infof("Number of transactions: %d\n", block.TransactionCount)
+
+	for _, subtree := range block.Subtrees {
+		filename := fmt.Sprintf("%s.subtree", subtree.String())
+		l.Infof("Reading subtree from %s\n", filename)
+
+		ext := filepath.Ext(filename)
+		fileWithoutExtension := strings.TrimSuffix(filename, ext)
+
+		if ext[0] == '.' {
+			ext = ext[1:]
 		}
 
-		txCount, err := wire.ReadVarInt(r, 0)
+		stHash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
+		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], options.WithFileExtension(ext))
+
 		if err != nil {
-			return false, errors.NewBlockInvalidError("error reading transaction count", err)
+			return false, errors.NewProcessingError("error getting subtree reader from store", err)
 		}
 
-		fmt.Printf("\t%d transactions\n", txCount)
+		ok, err := isTxInSubtree(l, stReader, queryTxId)
 
-	case "block": // here
-		block, err := block_model.NewBlockFromReader(r, nil)
 		if err != nil {
-			return false, errors.NewProcessingError("error reading block", err)
+			return false, errors.NewProcessingError("error getting subtree reader from store", err)
 		}
 
-		fmt.Printf("Block hash: %s\n", block.Hash())
-		fmt.Printf("%s", block.Header.StringDump())
-		fmt.Printf("Number of transactions: %d\n", block.TransactionCount)
-
-		for _, subtree := range block.Subtrees {
-			if true {
-				filename := fmt.Sprintf("%s.subtree", subtree.String())
-				fmt.Printf("Reading subtree from %s\n", filename)
-
-				_, _, stReader, err := GetReader(ctx, filename, dir, logger)
-				if err != nil {
-					return false, err
-				}
-
-				return ReadSubtree(stReader, logger, true, queryTxId), nil
-			}
+		// First found is the desired result
+		if ok {
+			return ok, nil
 		}
-
-	default:
-		return false, errors.NewProcessingError("unknown file type")
 	}
 
 	return false, nil
 }
 
-func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId chainhash.Hash) bool { //nolint:stylecheck
-	var num uint32
+// isTxInSubtree read the subtree binary and check if a tx with specified txid exist
+func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Hash) (bool, error) { //nolint:stylecheck
+	st := util.Subtree{}
+	err := st.DeserializeFromReader(stReader)
 
-	if err := binary.Read(r, binary.LittleEndian, &num); err != nil {
-		logger.Errorf("error reading transaction count: %v", err)
-		return false
+	if err != nil {
+		return false, errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
 	}
 
-	if verbose {
-		for i := uint32(0); i < num; i++ {
-			var tx bt.Tx
+	txHashes := make([]chainhash.Hash, len(st.Nodes))
+	for i := 0; i < len(st.Nodes); i++ {
+		txHashes[i] = st.Nodes[i].Hash
+	}
 
-			_, err := tx.ReadFrom(r)
-			if err != nil {
-				fmt.Printf("error reading transaction: %v\n", err)
-				os.Exit(1)
-			}
-
-			if *tx.TxIDChainHash() == queryTxId {
-				fmt.Printf(" (test txid) %v found\n", queryTxId)
-				return true
-			}
+	for _, txHash := range txHashes {
+		if txHash == queryTxId {
+			return true, nil
 		}
 	}
 
-	return false
-}
-
-func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Logger) (*url.URL, string, io.Reader, error) {
-	ext := filepath.Ext(file)
-	fileWithoutExtension := strings.TrimSuffix(file, ext)
-
-	if ext[0] == '.' {
-		ext = ext[1:]
-	}
-
-	hash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
-
-	store, err := blob.NewStore(logger, dir)
-	if err != nil {
-		return nil, "", nil, errors.NewProcessingError("error creating block store", err)
-	}
-
-	r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
-	if err != nil {
-		return nil, "", nil, errors.NewProcessingError("error getting reader from store", err)
-	}
-
-	return dir, ext, r, nil
+	return false, nil
 }
 
 func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
@@ -974,45 +936,26 @@ func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int,
 	return resp, nil
 }
 
-func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url.URL, block []byte, blockHeight uint32, tx chainhash.Hash, logger ulogger.Logger) (bool, error) {
-	r, err := store.GetIoReader(ctx, block, options.WithFileExtension("block"))
+func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.Store, storeSubtree blob.Store, blockHash []byte, tx chainhash.Hash) (bool, error) {
+	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, options.WithFileExtension("block"))
 	if err != nil {
 		return false, errors.NewProcessingError("error getting block reader", err)
 	}
 
-	if bl, err := ReadFile(ctx, "block", logger, r, tx, storeURL); err != nil {
+	if ok, err := isTxInBlock(ctx, logger, storeSubtree, blockReader, tx); err != nil {
 		return false, errors.NewProcessingError("error reading block", err)
 	} else {
-		logger.Infof("Block at height (%d): was tested for the test Tx\n", blockHeight)
-		return bl, nil
+		return ok, nil
 	}
 }
 
-func CheckIfTxExistsInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
+func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
 	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, options.WithFileExtension("subtree"))
 	if err != nil {
 		return false, errors.NewProcessingError("error getting subtree reader", err)
 	}
 
-	st := util.Subtree{}
-
-	err = st.DeserializeFromReader(subtreeReader)
-	if err != nil {
-		return false, errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
-	}
-
-	txHashes := make([]chainhash.Hash, len(st.Nodes))
-	for i := 0; i < len(st.Nodes); i++ {
-		txHashes[i] = st.Nodes[i].Hash
-	}
-
-	for _, txHash := range txHashes {
-		if txHash == tx {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return isTxInSubtree(logger, subtreeReader, tx)
 }
 
 func Unzip(src, dest string) error {
@@ -1022,6 +965,7 @@ func Unzip(src, dest string) error {
 	return err
 }
 
+// TODO TO delete
 func CopyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {

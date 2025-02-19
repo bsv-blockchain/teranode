@@ -74,7 +74,7 @@ func (suite *TNC1_1TestSuite) TestVerifyMerkleRootCalculation() {
 	block, err := helper.GetBestBlockV2(ctx, node)
 	require.NoError(t, err)
 	require.NotNil(t, block)
-	err = block.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, logger, node.ClientSubtreestore, nil)
 	require.NoError(t, err)
 	err = block.CheckMerkleRoot(ctx)
 	require.NoError(t, err)

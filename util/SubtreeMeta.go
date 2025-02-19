@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -126,6 +127,22 @@ func (s *SubtreeMeta) SetParentTxHash(index int, parentTxHash chainhash.Hash) er
 func (s *SubtreeMeta) SetParentTxHashes(index int, parentTxHashes []chainhash.Hash) error {
 	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
 		return errors.NewProcessingError("node at index %d is not set in subtree", index)
+	}
+
+	s.ParentTxHashes[index] = parentTxHashes
+
+	return nil
+}
+
+// SetParentTxHashesFromTx sets the parent tx hashes for a given node in the subtree, using the transaction
+func (s *SubtreeMeta) SetParentTxHashesFromTx(tx *bt.Tx, index int) error {
+	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
+		return errors.NewProcessingError("node at index %d is not set in subtree", index)
+	}
+
+	parentTxHashes := make([]chainhash.Hash, 0, len(tx.Inputs))
+	for _, input := range tx.Inputs {
+		parentTxHashes = append(parentTxHashes, *input.PreviousTxIDChainHash())
 	}
 
 	s.ParentTxHashes[index] = parentTxHashes

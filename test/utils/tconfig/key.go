@@ -30,5 +30,7 @@ const (
 	KeyLocalSystemSkipTeardown  = "localsystem.skipteardown"
 
 	// Keys for Teranodes setup
-	KeyTeranodeContexts = "teranode.contexts"
+	KeyTeranodeContexts     = "teranode.contexts"
+	KeyURLBlobBlockstores   = "teranode.urlblobblockstores"
+	KeyURLBlobSubtreestores = "teranode.urlblobsubtreestores"
 )

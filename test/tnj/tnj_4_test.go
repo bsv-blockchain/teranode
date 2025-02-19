@@ -89,12 +89,12 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 	amount := coinbaseTX.TotalOutputSatoshis()
 	assert.Greater(t, amount, uint64(5000000000))
 
-	newTx, errCBTx := helper.UseCoinbaseUtxoV2(ctx, testEnv.Nodes[0], coinbaseTX)
+	newTxHash, errCBTx := helper.UseCoinbaseUtxoV2(ctx, testEnv.Nodes[0], coinbaseTX)
 	if errCBTx != nil {
 		t.Errorf("Failed to use coinbase utxo: %v", errCBTx)
 	}
 
-	fmt.Printf("Transaction sent: %s \n", newTx)
+	fmt.Printf("Transaction sent: %s \n", newTxHash)
 	time.Sleep(10 * time.Second)
 
 	_, err := helper.GenerateBlocks(ctx, testEnv.Nodes[0], 100, logger)
@@ -102,13 +102,13 @@ func (suite *TNJ4TestSuite) TestBlockSubsidy() {
 		t.Errorf("Failed to generate blocks: %v", err)
 	}
 
-	blockStore := testEnv.Nodes[0].Blockstore
-
+	blockStore := testEnv.Nodes[0].ClientBlockstore
+	subtreeStore := testEnv.Nodes[0].ClientSubtreestore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
-	header, meta, _ := blockchainClient.GetBestBlockHeader(ctx)
+	header, _, _ := blockchainClient.GetBestBlockHeader(ctx)
 	testEnv.Logger.Infof("Best block header: %v", header.String())
 
-	bl, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header.Hash()[:], meta.Height, newTx, logger)
+	bl, err := helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header.Hash()[:], newTxHash)
 	if err != nil {
 		t.Errorf("error checking if tx exists in block: %v", err)
 	}

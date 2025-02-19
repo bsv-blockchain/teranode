@@ -25,15 +25,21 @@ func main() {
 	serverURL := os.Getenv("BSERVER_URL")
 	subdir := os.Getenv("BSERVER_SUBDIR")
 	hPrefixStr := os.Getenv("BSERVER_HASHPREFIX")
+	logLevel := os.Getenv("BSERVER_LOGLEVEL")
 
 	// Default serverURL if not set
 	if len(serverURL) < 1 {
-		serverURL = "localhost:8080"
+		serverURL = ":8080"
 	}
 
 	// Default subdir if not set
 	if len(subdir) < 1 {
 		subdir = "default_blob_dir"
+	}
+
+	// Default logLevel if not set
+	if len(logLevel) < 1 {
+		logLevel = "DEBUG"
 	}
 
 	// Default prefixLength if not set
@@ -48,7 +54,7 @@ func main() {
 	}
 
 	// Create a blob server, with relative path, and eventually with hash prefix
-	logger := ulogger.New("test-blob-server")
+	logger := ulogger.New("test-blob-server", ulogger.WithLevel(logLevel))
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://./%s", subdir))
 
 	if err != nil {

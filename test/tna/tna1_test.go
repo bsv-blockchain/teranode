@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/bitcoin-sv/teranode/test/utils/tstore"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -96,8 +97,6 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		t.Log("hashes is empty!")
 	}
 
-	baseDir := filepath.Join(testEnv.TConfig.LocalSystem.DataDir, testEnv.TConfig.Suite.TestID)
-
 	t.Logf("num of subtrees: %d", len(hashes))
 
 	// Keep track of which transactions we've found
@@ -106,7 +105,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 	// Search inside teranode1, teranode2 and teranode3 subfolders
 	for _, subtreeHash := range hashes {
-		t.Logf("Subtree hash: %v", subtreeHash)
+		t.Logf("Subtree hash: %v,   subtreeHash string %v", subtreeHash, subtreeHash.String())
 
 		for i := 1; i <= 3; i++ {
 			subDir := fmt.Sprintf("teranode%d/subtreestore", i)
@@ -115,15 +114,15 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 			t.Logf("Checking directory: %s", subDir)
 			t.Logf("Subdirectory: %s", subSubDir)
 
-			filePath := filepath.Join(baseDir, subDir, subSubDir, subtreeHash.String())
+			filePath := filepath.Join(testEnv.TConfig.LocalSystem.DataDir, subDir, subSubDir, subtreeHash.String())
 			t.Logf("Full path: %s", filePath)
 
-			if matches, err := filepath.Glob(filePath + "*"); err == nil {
-				if len(matches) > 0 {
+			if resp, err := suite.TeranodeTestEnv.ComposeSharedStorage.Glob(ctx, &tstore.GlobRequest{RootPath: filePath}); err == nil {
+				if len(resp.Paths) > 0 {
 					t.Logf("Subtree %s exists.", filePath)
 					found += 1
 
-					subtreeStore := testEnv.Nodes[0].SubtreeStore
+					subtreeStore := testEnv.Nodes[0].ClientSubtreestore
 
 					// Check only transactions that haven't been found yet
 					for _, txHash := range hashesTx {
@@ -131,7 +130,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 							continue // Skip if we already found this tx
 						}
 
-						exists, err := helper.CheckIfTxExistsInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), txHash)
+						exists, err := helper.TestTxInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), txHash)
 						require.NoError(t, err)
 
 						if exists {
@@ -142,9 +141,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 					}
 				}
 			} else if os.IsNotExist(err) {
-				t.Logf("Subtree %s doesn't exists %s.", subtreeHash.String(), subDir)
+				t.Logf("Subtree %s doesn't exists %s, filePath %v", subtreeHash.String(), subDir, filePath)
 			} else {
-				t.Logf("Error checking the file %s in %s: %v", subtreeHash.String(), subDir, err)
+				t.Logf("Error checking the file %s in %s filePath %v : %v ", subtreeHash.String(), subDir, filePath, err)
 			}
 		}
 	}

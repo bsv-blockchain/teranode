@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -14,28 +15,30 @@ import (
 	bc "github.com/bitcoin-sv/teranode/services/blockchain"
 	cb "github.com/bitcoin-sv/teranode/services/coinbase"
 	"github.com/bitcoin-sv/teranode/settings"
-	blob "github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	bhttp "github.com/bitcoin-sv/teranode/stores/blob/http"
 	bcs "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/bitcoin-sv/teranode/test/utils/tstore"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	distributor "github.com/bitcoin-sv/teranode/util/distributor"
 	"github.com/docker/go-connections/nat"
-	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Teranode test environment is a compose stack of 3 teranode instances.
 type TeranodeTestEnv struct {
-	TConfig     tconfig.TConfig
-	Context     context.Context
-	Compose     tc.ComposeStack
-	Nodes       []TeranodeTestClient
-	LegacyNodes []SVNodeTestClient
-	Logger      ulogger.Logger
-	Cancel      context.CancelFunc
-	Daemon      daemon.Daemon
+	TConfig              tconfig.TConfig
+	Context              context.Context
+	Compose              tc.ComposeStack
+	ComposeSharedStorage tstore.TStoreClient
+	Nodes                []TeranodeTestClient
+	LegacyNodes          []SVNodeTestClient
+	Logger               ulogger.Logger
+	Cancel               context.CancelFunc
+	Daemon               daemon.Daemon
 }
 
 type TeranodeTestClient struct {
@@ -45,11 +48,9 @@ type TeranodeTestClient struct {
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
 	DistributorClient   distributor.Distributor
-	Blockstore          blob.Store
-	SubtreeStore        blob.Store
-	BlockstoreURL       *url.URL
+	ClientBlockstore    *bhttp.HTTPStore
+	ClientSubtreestore  *bhttp.HTTPStore
 	UtxoStore           *utxostore.Store
-	SubtreesKafkaURL    *url.URL
 	AssetURL            string
 	RPCURL              string
 	IPAddress           string
@@ -106,11 +107,15 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 			return err
 		}
 
+		t.Compose = compose
 		// time.Sleep(30 * time.Second)
 
-		t.Compose = compose
-		mapSettings := t.TConfig.Teranode.SettingsMap()
+		// Setup shared volume client for local docker-compose
+		if err := t.setupSharedStorageClient(); err != nil {
+			return err
+		}
 
+		mapSettings := t.TConfig.Teranode.SettingsMap()
 		for key, val := range mapSettings {
 			settings := settings.NewSettings(val)
 			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
@@ -131,8 +136,29 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 	return nil
 }
 
+func (t *TeranodeTestEnv) setupSharedStorageClient() error {
+	teststorageServiceName := "teststorage"
+	teststorageInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 50051))
+	teststorageMappedPort, _ := t.GetMappedPort(teststorageServiceName, teststorageInternalPort)
+	teststorageURL := fmt.Sprintf("localhost:%d", teststorageMappedPort.Int())
+
+	conn, err := grpc.NewClient(teststorageURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+
+	// defer conn.Close()
+	t.ComposeSharedStorage = tstore.NewTStoreClient(conn)
+
+	return nil
+}
+
 // InitializeNodeClients sets up all the necessary client connections for the nodes.
 func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
+	if err := t.setupBlobStores(); err != nil {
+		return err
+	}
+
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
 		svNode := &t.LegacyNodes[i]
@@ -398,57 +424,84 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 	return nil
 }
 
+// Setup all blob http store client for blockstore and subtreestore
+func (t *TeranodeTestEnv) setupBlobStores() error {
+	if len(t.TConfig.Teranode.URLBlobBlockstores) != len(t.TConfig.Teranode.Contexts) {
+		t.Logger.Warnf("inconsistent length of teranodes contexts[%v]  and blob block store[%v]", len(t.TConfig.Teranode.Contexts), len(t.TConfig.Teranode.URLBlobBlockstores))
+		return nil
+	}
+
+	if len(t.TConfig.Teranode.URLBlobSubtreestores) != len(t.TConfig.Teranode.Contexts) {
+		t.Logger.Warnf("inconsistent length of teranodes contexts[%v]  and blob subtree store[%v]", len(t.TConfig.Teranode.Contexts), len(t.TConfig.Teranode.URLBlobSubtreestores))
+		return nil
+	}
+
+	for i := range t.TConfig.Teranode.Contexts {
+		node := &t.Nodes[i]
+
+		// Set the blob blockstore client
+		blobblockstoreServiceName := fmt.Sprintf("blobblockstore%v", i+1)
+		blobblockstoreInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 8080))
+		blobblockstoreMappedPort, err := t.GetMappedPort(blobblockstoreServiceName, blobblockstoreInternalPort)
+
+		if err != nil {
+			return err
+		}
+
+		blobBlockstoreURL := fmt.Sprintf("localhost:%d", blobblockstoreMappedPort.Int())
+		bbURL, err := url.Parse(fmt.Sprintf("http://%v", blobBlockstoreURL))
+
+		if err != nil {
+			return err
+		}
+
+		node.ClientBlockstore, err = bhttp.New(t.Logger, bbURL)
+		if err != nil {
+			return err
+		}
+
+		if eCode, _, err := node.ClientBlockstore.Health(context.Background(), true); eCode != http.StatusOK || err != nil {
+			return errors.NewProcessingError("unhealthy blob block store http client, error : %v", err.Error())
+		}
+
+		// Set the blob subtree client
+		blobSubtreestoreServiceName := fmt.Sprintf("blobsubtreestore%v", i+1)
+		blobSubtreestoreInternalPort := nat.Port(fmt.Sprintf("%d/tcp", 8080))
+		blobSubtreestoreMappedPort, err := t.GetMappedPort(blobSubtreestoreServiceName, blobSubtreestoreInternalPort)
+
+		if err != nil {
+			return err
+		}
+
+		blobSubtreestoreURL := fmt.Sprintf("localhost:%d", blobSubtreestoreMappedPort.Int())
+		bsURL, err := url.Parse(fmt.Sprintf("http://%v", blobSubtreestoreURL))
+
+		if err != nil {
+			return err
+		}
+
+		node.ClientSubtreestore, err = bhttp.New(t.Logger, bsURL)
+		if err != nil {
+			return err
+		}
+
+		if eCode, _, err := node.ClientSubtreestore.Health(context.Background(), true); eCode != http.StatusOK || err != nil {
+			return errors.NewProcessingError("unhealthy blob subtree store http client")
+		}
+	}
+
+	return nil
+}
+
 func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 	isContainerMode := os.Getenv(testEnvKey) == containerMode
 
 	var (
-		blockStoreURL, subtreeStoreURL, utxoStoreURL, blockchainStoreURL *url.URL
-		err                                                              error
+		utxoStoreURL, blockchainStoreURL *url.URL
+		err                              error
 	)
 
 	if !isContainerMode {
-		// In local mode, use test runner context for relative paths
-		settingsContext := fmt.Sprintf("docker.%s.test.context.testrunner", node.Name)
-
-		var found bool
-
-		blockStoreURL, err, found = gocore.Config().GetURL(fmt.Sprintf("blockstore.%s", settingsContext))
-		if err != nil || !found {
-			return errors.NewConfigurationError("error getting blockstore url:", err)
-		}
-
-		// Modify the path to include test ID
-		// Original path is like: file://./../../data/test/teranode1/blockstore
-		// We want: file://./../../data/test/<test-id>/teranode1/blockstore
-		// if blockStoreURL.Scheme == "file" {
-		path := blockStoreURL.Path
-		// Insert test ID into the path
-		parts := strings.Split(path, "/test/")
-		if len(parts) == 2 {
-			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TConfig.Suite.TestID, parts[1])
-			t.Logger.Infof("Modified blockstore path: %s", path)
-			blockStoreURL.Path = path
-		}
-		// }
-
-		subtreeStoreURL, err, found = gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s", settingsContext))
-		if err != nil || !found {
-			return errors.NewConfigurationError("error getting subtreestore url:", err)
-		}
-
-		// Do the same for subtree store
-		// if subtreeStoreURL.Scheme == "file" {
-
-		path = subtreeStoreURL.Path
-
-		parts = strings.Split(path, "/test/")
-		if len(parts) == 2 {
-			path = fmt.Sprintf("%s/test/%s/%s", parts[0], t.TConfig.Suite.TestID, parts[1])
-			t.Logger.Infof("Modified subtreestore path: %s", path)
-			subtreeStoreURL.Path = path
-		}
-		// }
-
 		// Get utxoStoreURL from node settings
 		utxoStoreURL = node.Settings.UtxoStore.UtxoStore
 
@@ -527,16 +580,6 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		// In container mode, use the mounted volume paths
 		nodePath := fmt.Sprintf("/app/data/%s", node.Name)
 
-		blockStoreURL, err = url.Parse(fmt.Sprintf("file://%s/blockstore", nodePath))
-		if err != nil {
-			return errors.NewConfigurationError("error parsing blockstore url:", err)
-		}
-
-		subtreeStoreURL, err = url.Parse(fmt.Sprintf("file://%s/subtreestore", nodePath))
-		if err != nil {
-			return errors.NewConfigurationError("error parsing subtreestore url:", err)
-		}
-
 		// For UTXO store, we use the node's settings but modify the external store path
 		utxoStoreURL = node.Settings.UtxoStore.UtxoStore
 
@@ -549,23 +592,6 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 
 		blockchainStoreURL = node.Settings.BlockChain.StoreURL
 	}
-
-	// Create blockstore
-	blockStore, err := blob.NewStore(t.Logger, blockStoreURL)
-	if err != nil {
-		return errors.NewConfigurationError("error creating blockstore:", err)
-	}
-
-	node.Blockstore = blockStore
-	node.BlockstoreURL = blockStoreURL
-
-	// Create subtree store
-	subtreeStore, err := blob.NewStore(t.Logger, subtreeStoreURL, options.WithHashPrefix(2))
-	if err != nil {
-		return errors.NewConfigurationError("error creating subtreestore:", err)
-	}
-
-	node.SubtreeStore = subtreeStore
 
 	// Create UTXO store
 	utxoStore, err := utxostore.New(t.Context, t.Logger, node.Settings, utxoStoreURL)
