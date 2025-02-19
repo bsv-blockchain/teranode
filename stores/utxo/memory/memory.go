@@ -51,6 +51,8 @@ type memoryData struct {
 	blockHeight         uint32                             // Block height where tx appears
 	lockTime            uint32                             // Transaction lock time
 	blockIDs            []uint32                           // Block heights where tx appears
+	blockHeights        []uint32                           // Block heights where tx appears
+	subtreeIdxs         []int                              // Subtree indexes where tx appears
 	utxoMap             map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
 	utxoSpendableIn     map[uint32]uint32                  // Maps output index to spendable height
 	frozenMap           map[chainhash.Hash]bool            // Tracks frozen UTXOs
@@ -115,6 +117,8 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 		blockHeight:     blockHeight,
 		lockTime:        tx.LockTime,
 		blockIDs:        make([]uint32, 0),
+		blockHeights:    make([]uint32, 0),
+		subtreeIdxs:     make([]int, 0),
 		utxoMap:         make(map[chainhash.Hash]*chainhash.Hash),
 		utxoSpendableIn: map[uint32]uint32{},
 		frozenMap:       make(map[chainhash.Hash]bool),
@@ -122,8 +126,12 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 		conflicting:     options.Conflicting,
 	}
 
-	if len(options.BlockIDs) > 0 {
-		m.txs[*txHash].blockIDs = options.BlockIDs
+	if len(options.MinedBlockInfos) > 0 {
+		for _, blockMeta := range options.MinedBlockInfos {
+			m.txs[*txHash].blockIDs = append(m.txs[*txHash].blockIDs, blockMeta.BlockID)
+			m.txs[*txHash].blockHeights = append(m.txs[*txHash].blockHeights, blockMeta.BlockHeight)
+			m.txs[*txHash].subtreeIdxs = append(m.txs[*txHash].subtreeIdxs, blockMeta.SubtreeIdx)
+		}
 	}
 
 	txMetaData, err := util.TxMetaDataFromTx(tx)
@@ -176,6 +184,8 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string
 		}
 
 		txMeta.BlockIDs = data.blockIDs
+		txMeta.BlockHeights = data.blockHeights
+		txMeta.SubtreeIdxs = data.subtreeIdxs
 		txMeta.Conflicting = data.conflicting
 		txMeta.ConflictingChildren = data.conflictingChildren
 		txMeta.Frozen = data.frozen
@@ -367,7 +377,7 @@ func (m *Memory) unspendUnlocked(spends []*utxo.Spend) error {
 }
 
 // SetMinedMulti records which blocks a transaction appears in.
-func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -376,7 +386,9 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, bloc
 			return errors.NewTxNotFoundError("%v not found", hash)
 		}
 
-		m.txs[*hash].blockIDs = append(m.txs[*hash].blockIDs, blockID)
+		m.txs[*hash].blockIDs = append(m.txs[*hash].blockIDs, minedBlockInfo.BlockID)
+		m.txs[*hash].blockHeights = append(m.txs[*hash].blockHeights, minedBlockInfo.BlockHeight)
+		m.txs[*hash].subtreeIdxs = append(m.txs[*hash].subtreeIdxs, minedBlockInfo.SubtreeIdx)
 	}
 
 	return nil
@@ -402,6 +414,8 @@ func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utx
 		}
 
 		txMeta.BlockIDs = m.txs[unresolvedMetaData.Hash].blockIDs
+		txMeta.BlockHeights = m.txs[unresolvedMetaData.Hash].blockHeights
+		txMeta.SubtreeIdxs = m.txs[unresolvedMetaData.Hash].subtreeIdxs
 		txMeta.LockTime = m.txs[unresolvedMetaData.Hash].lockTime
 
 		unresolvedMetaData.Data = txMeta

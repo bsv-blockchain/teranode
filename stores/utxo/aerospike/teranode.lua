@@ -275,7 +275,7 @@ end
 -- \__ \  __/ |_| |  | | | | | |  __/ (_| |
 -- |___/\___|\__|_|  |_|_|_| |_|\___|\__,_|
 --
-function setMined(rec, blockID, ttl)
+function setMined(rec, blockID, blockHeight, subtreeIdx, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
@@ -284,11 +284,25 @@ function setMined(rec, blockID, ttl)
     if rec['blockIDs'] == nil then
         rec['blockIDs'] = list()
     end
+    if rec['blockHeights'] == nil then
+        rec['blockHeights'] = list()
+    end
+    if rec['subtreeIdxs'] == nil then
+        rec['subtreeIdxs'] = list()
+    end
 
     -- Append the value to the list in the specified bin
     local blocks = rec['blockIDs']
     blocks[#blocks + 1] = blockID
     rec['blockIDs'] = blocks
+
+    local heights = rec['blockHeights']
+    heights[#heights + 1] = blockHeight
+    rec['blockHeights'] = heights
+
+    local subtreeIdxs = rec['subtreeIdxs']
+    subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
+    rec['subtreeIdxs'] = subtreeIdxs
 
     local signal = setTTL(rec, ttl)
 

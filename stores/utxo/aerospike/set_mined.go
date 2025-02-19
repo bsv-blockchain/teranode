@@ -62,6 +62,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -120,7 +121,7 @@ import (
 //   - prometheusTxMetaAerospikeMapSetMinedBatch: Batch operation count
 //   - prometheusTxMetaAerospikeMapSetMinedBatchN: Successful updates
 //   - prometheusTxMetaAerospikeMapSetMinedBatchErrN: Failed updates
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:SetMinedMulti2")
 	defer deferFn()
 
@@ -145,7 +146,9 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 			key,
 			LuaPackage,
 			"setMined",
-			aerospike.NewValue(blockID),
+			aerospike.NewValue(minedBlockInfo.BlockID),
+			aerospike.NewValue(minedBlockInfo.BlockHeight),
+			aerospike.NewValue(minedBlockInfo.SubtreeIdx),
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		)
 	}

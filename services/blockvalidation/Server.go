@@ -426,7 +426,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
-	//nolint
+	// nolint
 	var baseUrl string
 
 	if len(msg.Value) > 32 {
@@ -1139,7 +1139,7 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
 		batches = append(batches, blockBatchGet{
 			hash: *lastHash,
-			//nolint
+			// nolint
 			size: uint32(len(useBlockHeaders)),
 		})
 	}
@@ -1313,7 +1313,12 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 
 	prometheusBlockValidationSetMinedMulti.Inc()
 
-	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
+	// TODO add the height and subtree index to the request
+	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, utxo.MinedBlockInfo{
+		BlockID:     request.BlockId,
+		BlockHeight: 0,
+		SubtreeIdx:  0,
+	})
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data", err))
 	}

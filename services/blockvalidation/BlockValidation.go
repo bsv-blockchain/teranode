@@ -627,12 +627,12 @@ func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMeta
 //   - blockID: ID of the block containing these transactions
 //
 // Returns an error if the update fails.
-func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
 		defer deferFn()
 
-		return cache.SetMinedMulti(ctx, hashes, blockID)
+		return cache.SetMinedMulti(ctx, hashes, minedBlockInfo)
 	}
 
 	return nil
@@ -716,7 +716,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// check the size of the block
 	// 0 is unlimited so don't check the size
 	if u.settings.Policy.ExcessiveBlockSize > 0 {
-		//nolint
+		// nolint
 		if block.SizeInBytes > uint64(u.settings.Policy.ExcessiveBlockSize) {
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
@@ -831,7 +831,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 					// 		Consider enabling the invalidation in the future
 					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
-					//}
+					// }
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 				}
 			}
@@ -954,7 +954,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	if useOptimisticMining {
 		// run the bloom filter creation in the background
 		go func() {
-			/// create bloom filter for the block and store
+			// / create bloom filter for the block and store
 			u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block in background", block.Hash().String())
 			// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
 			// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,

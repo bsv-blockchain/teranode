@@ -361,20 +361,24 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}
 	}
 
-	if len(options.BlockIDs) > 0 {
+	if len(options.MinedBlockInfos) > 0 {
 		// Insert the block_ids...
 		q = `
 			INSERT INTO block_ids (
 		 	 transaction_id
 			,block_id
+			,block_height
+			,subtree_idx
 			) VALUES (
 			 $1
 			,$2
+			,$3
+			,$4
 			)
 		`
 
-		for _, blockID := range options.BlockIDs {
-			_, err = txn.ExecContext(ctx, q, transactionId, blockID)
+		for _, blockMeta := range options.MinedBlockInfos {
+			_, err = txn.ExecContext(ctx, q, transactionId, blockMeta.BlockID, blockMeta.BlockHeight, blockMeta.SubtreeIdx)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 					return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -551,7 +555,15 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	}
 
 	if contains(bins, "blockIDs") {
-		q := `SELECT block_id FROM block_ids WHERE transaction_id = $1 ORDER BY block_id`
+		q := `
+			SELECT 
+			    block_id,
+				block_height,
+				subtree_idx
+			FROM block_ids 
+			WHERE transaction_id = $1 
+			ORDER BY block_id
+		`
 
 		rows, err := s.db.QueryContext(ctx, q, id)
 		if err != nil {
@@ -560,13 +572,19 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		defer rows.Close()
 
 		for rows.Next() {
-			var blockID uint32
+			var (
+				blockID     uint32
+				blockHeight uint32
+				subtreeIdx  int
+			)
 
-			if err := rows.Scan(&blockID); err != nil {
+			if err := rows.Scan(&blockID, &blockHeight, &subtreeIdx); err != nil {
 				return nil, err
 			}
 
 			data.BlockIDs = append(data.BlockIDs, blockID)
+			data.BlockHeights = append(data.BlockHeights, blockHeight)
+			data.SubtreeIdxs = append(data.SubtreeIdxs, subtreeIdx)
 		}
 	}
 
@@ -1068,7 +1086,7 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -1087,15 +1105,20 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 		INSERT INTO block_ids (
 		 transaction_id
 		,block_id
+		,block_height
+		,subtree_idx
 		) VALUES (
 		 (SELECT id FROM transactions WHERE hash = $1)
 		,$2
+		,$3
+		,$4
 		)
 		ON CONFLICT DO NOTHING
 	`
 
 	for _, hash := range hashes {
-		_, err = txn.ExecContext(ctx, q, hash[:], blockID)
+		// TODO set all the values from minedBlockInfo
+		_, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx)
 		if err != nil {
 			return errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
 		}
@@ -1456,6 +1479,8 @@ func createPostgresSchema(db *usql.DB) error {
       CREATE TABLE IF NOT EXISTS block_ids (
           transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
          ,block_id       BIGINT NOT NULL
+         ,block_height   BIGINT NOT NULL
+         ,subtree_idx  BIGINT NOT NULL
          ,PRIMARY KEY (transaction_id, block_id)
 	  );
 	`); err != nil {
@@ -1547,6 +1572,8 @@ func createSqliteSchema(db *usql.DB) error {
       CREATE TABLE IF NOT EXISTS block_ids (
          transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
         ,block_id 			 BIGINT NOT NULL
+        ,block_height        BIGINT NOT NULL
+        ,subtree_idx       BIGINT NOT NULL
         ,PRIMARY KEY (transaction_id, block_id)
 	  );
 	`); err != nil {

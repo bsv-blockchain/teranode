@@ -174,9 +174,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			})
 
 			// this waits for the batch to be sent and the response to be received from the batch operation
-			err = <-errCh
+			batchErr := <-errCh
 
-			if err != nil && errors.Is(err, errors.ErrTxNotFound) {
+			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
 				mu.Lock()
 				exists := txAlreadyExists
 				mu.Unlock()
@@ -185,11 +185,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 				// blessed. In this case we can just return early.
 				if exists {
 					// we've previously validated that this tx already exists, no point doing a lookup again or logging anything
-					err = nil
-				} else if _, err = s.Get(ctx, tx.TxIDChainHash()); err == nil {
+					batchErr = nil
+				} else if _, batchErr = s.Get(ctx, tx.TxIDChainHash()); batchErr == nil {
 					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
 
-					err = nil
+					batchErr = nil
 
 					mu.Lock()
 					txAlreadyExists = true
@@ -197,12 +197,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 				}
 			}
 
-			if err != nil {
-				spends[idx].Err = err
+			if batchErr != nil {
+				spends[idx].Err = batchErr
 
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
 
-				if errors.As(err, &errSpent) {
+				if errors.As(batchErr, &errSpent) {
 					spends[idx].ConflictingTxID = &errSpent.SpendingTxHash
 				}
 

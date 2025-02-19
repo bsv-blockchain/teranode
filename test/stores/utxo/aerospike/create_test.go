@@ -28,7 +28,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false)
 		require.Error(t, err)
 		require.Nil(t, bins)
 		require.False(t, hasUtxos)
@@ -44,7 +44,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, false, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)
@@ -55,6 +55,8 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		utxos, _ := utxo.GetUtxoHashes(tx)
 
 		var blockIDs []uint32
+		var blockHeights []uint32
+		var subtreeIdxs []int
 
 		expectedBinValues := map[string]aerospike.Value{
 			"version":      aerospike.NewIntegerValue(int(tx.Version)),
@@ -78,7 +80,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 				tx.Outputs[0].Bytes(),
 				tx.Outputs[1].Bytes(),
 			}),
-			"blockIDs": aerospike.NewValue(blockIDs),
+			"blockIDs":     aerospike.NewValue(blockIDs),
+			"blockHeights": aerospike.NewValue(blockHeights),
+			"subtreeIdxs":  aerospike.NewValue(subtreeIdxs),
 		}
 
 		// check the bin values
@@ -105,7 +109,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, external, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)
@@ -127,7 +131,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
+		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 		require.True(t, hasUtxos)
 
 		go s.StoreTransactionExternally(ctx, bItem, binsToStore, hasUtxos)
@@ -166,7 +170,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		tx.Outputs = []*bt.Output{}
 		_ = tx.AddOpReturnOutput([]byte("test"))
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
+		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 		require.False(t, hasUtxos)
 
 		go s.StoreTransactionExternally(ctx, bItem, binsToStore, hasUtxos)
@@ -210,7 +214,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		teranode_aerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
+		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 		require.True(t, hasUtxos)
 
 		go s.StorePartialTransactionExternally(ctx, bItem, binsToStore, hasUtxos)

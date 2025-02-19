@@ -1143,11 +1143,11 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 	rpc.rpcQuirks = tSettings.RPC.RPCQuirks
 
 	rpcListenerURL := tSettings.RPC.RPCListenerURL
-	if rpcListenerURL == "" {
+	if rpcListenerURL == nil {
 		return nil, errors.NewConfigurationError("rpc_listener_url not set in config")
 	}
 
-	listener, err := net.Listen("tcp", rpcListenerURL)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", rpcListenerURL.Port()))
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		os.Exit(1)

@@ -1537,7 +1537,17 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	stp.logger.Debugf("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s blockID %d", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String(), block.ID)
 	// we pass in the block height we are working on here, since the utxo store will recognize the tx as
 	// a coinbase and add the correct spending height, which should be + 99
-	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight, utxostore.WithBlockIDs(block.ID)); err != nil {
+	if _, err = stp.utxoStore.Create(
+		ctx,
+		block.CoinbaseTx,
+		blockHeight,
+		utxostore.WithMinedBlockInfo(
+			utxostore.MinedBlockInfo{
+				BlockID:     block.ID,
+				BlockHeight: blockHeight,
+				SubtreeIdx:  0, // Coinbase is always the first transaction in the first subtree
+			}),
+	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// This will also be called for the 2 coinbase transactions that are duplicated on the network
 			// These transactions were created twice:

@@ -64,6 +64,14 @@ func TestMemory(t *testing.T) {
 
 		tests.Conflicting(t, db)
 	})
+
+	t.Run("memory set mined", func(t *testing.T) {
+		db := New(ulogger.TestLogger{})
+		err := db.delete(tests.Hash)
+		require.NoError(t, err)
+
+		tests.SetMined(t, db)
+	})
 }
 
 func TestMemorySanity(t *testing.T) {

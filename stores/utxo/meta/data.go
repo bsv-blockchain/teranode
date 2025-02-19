@@ -28,6 +28,12 @@ type Data struct {
 	// BlockIDs contains the block heights where this transaction appears
 	BlockIDs []uint32 `json:"blockIDs"`
 
+	// BlockHeights contains the block heights where this transaction appears
+	BlockHeights []uint32 `json:"blockHeights"`
+
+	// SubtreeIdxs contains the subtree indexes where this transaction appears
+	SubtreeIdxs []int `json:"subtreeIdxs"`
+
 	// Fee is the total transaction fee in satoshis
 	Fee uint64 `json:"fee"`
 
