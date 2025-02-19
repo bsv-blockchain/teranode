@@ -26,6 +26,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/tstore"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -180,7 +181,8 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 
 	logger.Infof("Second Transaction created with output[1] of faucet sent %s %s\n", secondTx.TxIDChainHash(), secondTx.TxID())
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
@@ -196,10 +198,10 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *secondTx.TxIDChainHash(), framework.Logger)
 
+		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *secondTx.TxIDChainHash())
 		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
+			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 		}
 
 		if bl {
@@ -263,7 +265,8 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Split outputs into two parts
@@ -349,15 +352,15 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
 		if !blTx1 {
-			blTx1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx1.TxIDChainHash(), framework.Logger)
+			blTx1, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx1.TxIDChainHash())
 		}
 
 		if !blTx2 {
-			blTx2, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx2.TxIDChainHash(), framework.Logger)
+			blTx2, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx2.TxIDChainHash())
 		}
 
 		if err != nil {
-			logger.Errorf("Error checking if tx exists in block: %v", err)
+			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 		}
 
 		if blTx1 && blTx2 {
@@ -565,7 +568,8 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	assert.NoError(t, err, "Failed to mine block")
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Verify both transactions are in blocks
@@ -581,10 +585,9 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
 
-			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
-
+			found, err := helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
 			if err != nil {
-				logger.Warnf("Error checking if tx exists in block: %v", err)
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 			}
 
 			if found {
@@ -708,7 +711,8 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
@@ -723,9 +727,9 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
 		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
+			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 		}
 
 		if bl {
@@ -795,7 +799,8 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Split outputs into two parts
@@ -914,10 +919,10 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Testing on Best block header: %v", header[0].Hash())
-			bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
 
+			bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
 			if err != nil {
-				logger.Errorf("Error checking if tx exists in block: %v", err)
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 			}
 
 			if bl {
@@ -966,12 +971,17 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 
 	time.Sleep(10 * time.Second)
 
-	srcFile := fmt.Sprintf("%s/%s/teranode1/external/%s.tx", framework.TConfig.LocalSystem.DataDir, framework.TConfig.Suite.TestID, faucetTx.TxID())
+	srcFile := fmt.Sprintf("teranode1/external/%s.tx", faucetTx.TxID())
+	destFile := fmt.Sprintf("teranode2/external/%s.tx", faucetTx.TxID())
+	resp, err := suite.TeranodeTestEnv.ComposeSharedStorage.Copy(
+		ctx,
+		&tstore.CopyRequest{
+			SrcPath:  srcFile,
+			DestPath: destFile,
+		},
+	)
 
-	destFile := fmt.Sprintf("%s/%s/teranode2/external/%s.tx", framework.TConfig.LocalSystem.DataDir, framework.TConfig.Suite.TestID, faucetTx.TxID())
-
-	err = helper.CopyFile(srcFile, destFile)
-	if err != nil {
+	if err != nil || !resp.Ok {
 		t.Errorf("Failed to copy file from %s to %s: %v", srcFile, destFile, err)
 	}
 
@@ -1273,7 +1283,8 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
 	require.NoError(t, err)
 
-	blockStore := framework.Nodes[0].Blockstore
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
 	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Function to verify a transaction is in a block
@@ -1289,9 +1300,9 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
 
-			found, err := helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
+			found, err := helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
 			if err != nil {
-				logger.Warnf("Error checking if tx exists in block: %v", err)
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 			}
 
 			if found {

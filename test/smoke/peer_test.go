@@ -142,7 +142,6 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	blockStore := testEnv.Nodes[0].Blockstore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	blNode1 := false
 	blNode3 := false
@@ -165,18 +164,22 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
 
 		if !blNode1 {
-			blNode1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+			blockStore := testEnv.Nodes[0].ClientBlockstore
+			subtreeStore := testEnv.Nodes[0].ClientSubtreestore
+			blNode1, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
 
 			if err != nil {
-				t.Errorf("error checking if tx exists in block: %v", err)
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 			}
 		}
 
 		if !blNode3 {
-			blNode3, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[2].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+			blockStore := testEnv.Nodes[2].ClientBlockstore
+			subtreeStore := testEnv.Nodes[2].ClientSubtreestore
+			blNode3, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
 
 			if err != nil {
-				t.Errorf("error checking if tx exists in block: %v", err)
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 			}
 		}
 

@@ -157,7 +157,8 @@ loop:
 	time.Sleep(5 * time.Second)
 	require.NoError(t, err, "Failed to generate blocks: %v", err)
 
-	blockStore := testEnv.Nodes[0].Blockstore
+	blockStore := testEnv.Nodes[0].ClientBlockstore
+	subtreeStore := testEnv.Nodes[0].ClientSubtreestore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
@@ -176,11 +177,10 @@ loop:
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
 
 		t.Logf("Testing on Best block meta: %v", meta[0].Height)
-		t.Logf("Testing on BlockstoreURL: %v", testEnv.Nodes[0].BlockstoreURL)
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
+		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
 		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v", err)
+			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 		}
 
 		if bl {

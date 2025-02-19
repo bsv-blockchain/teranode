@@ -15,6 +15,14 @@ type ConfigTeranode struct {
 	// These values are to be populated to the environment SETTINGS_CONTEXT_<i> to get the
 	// ith setting context for the ith node
 	Contexts []string `mapstructure:"contexts" json:"contexts" yaml:"contexts"`
+
+	// URLBlobBlockstores hold the url to the block store blob http server (host:port)
+	// for all teranodes in docker-compose. It allow data access remotely using blob http client
+	URLBlobBlockstores []string `mapstructure:"urlblobblockstores" json:"urlblobblockstores" yaml:"urlblobblockstores"`
+
+	// URLBlobSubtreestores hold the url to the subtree store blob http server (host:port)
+	// for all teranodes in docker-compose. It allow data access remotely using blob http client
+	URLBlobSubtreestores []string `mapstructure:"urlblobsubtreestores" json:"urlblobsubtreestores" yaml:"urlblobsubtreestores"`
 }
 
 // SettingsMap return the transformed context list to the map, to be used in environments for docker-compose.
@@ -39,6 +47,12 @@ func LoadConfigTeranode() TConfigLoader {
 	return func(s *TConfig) error {
 		s.viper.SetDefault(KeyTeranodeContexts, []string{"docker.teranode1.test", "docker.teranode2.test", "docker.teranode3.test"})
 		s.Teranode.Contexts = s.viper.GetStringSlice(KeyTeranodeContexts)
+
+		s.viper.SetDefault(KeyURLBlobBlockstores, []string{"127.0.0.1:8081", "127.0.0.1:8082", "127.0.0.1:8083"})
+		s.Teranode.URLBlobBlockstores = s.viper.GetStringSlice(KeyURLBlobBlockstores)
+
+		s.viper.SetDefault(KeyURLBlobSubtreestores, []string{"127.0.0.1:8084", "127.0.0.1:8085", "127.0.0.1:8086"})
+		s.Teranode.URLBlobSubtreestores = s.viper.GetStringSlice(KeyURLBlobSubtreestores)
 
 		return nil
 	}

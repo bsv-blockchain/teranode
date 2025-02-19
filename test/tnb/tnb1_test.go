@@ -95,7 +95,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
 
-					subtreeReader, err = testEnv.Nodes[0].SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+					subtreeReader, err = testEnv.Nodes[0].ClientSubtreestore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 					require.NoError(t, err)
 
 					defer func() {
@@ -194,7 +194,7 @@ func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
 	require.NoError(t, err)
 
 	// Get and validate subtrees
-	err = block102.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	err = block102.GetAndValidateSubtrees(ctx, logger, node.ClientSubtreestore, nil)
 	require.NoError(t, err)
 
 	// Check if transaction exists in the block's subtrees
@@ -244,7 +244,7 @@ func (suite *TNB1TestSuite) TestNoReformattingRequired() {
 	require.NotNil(t, block)
 
 	// Get and validate subtrees
-	err = block.GetAndValidateSubtrees(ctx, logger, node.SubtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, logger, node.ClientSubtreestore, nil)
 	require.NoError(t, err)
 
 	// Create a map to track which transactions we've found

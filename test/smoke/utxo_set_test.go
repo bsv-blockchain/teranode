@@ -172,10 +172,10 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 		t.Logf("Verifying UTXO files for block %s", blockModel.Hash().String())
 
 		// Verify UTXO additions and deletions files exist
-		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].Blockstore, *blockModel.Hash(), "utxo-additions")
+		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), "utxo-additions")
 		require.NoError(t, err, "Failed to verify UTXO additions file")
 
-		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].Blockstore, *blockModel.Hash(), "utxo-deletions")
+		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), "utxo-deletions")
 		require.NoError(t, err, "Failed to verify UTXO deletions file")
 	}
 }

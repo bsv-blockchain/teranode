@@ -23,7 +23,7 @@ services:
     image: teranode:latest
     build:
       context: .
-      dockerfile: ci.Dockerfile
+      dockerfile: Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-db1a6f0
@@ -198,7 +198,8 @@ services:
       - "11905:9905"
       - "11292:9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ./settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
@@ -225,7 +226,8 @@ services:
       - "13905:9905"
       - "13292:9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ./settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
@@ -255,7 +257,8 @@ services:
       - "15905:9905"
       - "15292:9292"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
+      - ./settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore

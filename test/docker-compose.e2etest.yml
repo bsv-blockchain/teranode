@@ -4,40 +4,42 @@ x-teranode-base: &teranode-base
     - postgres
     - kafka-shared
   networks:
-    - teranode-network
-  volumes:
-    - ./data/test/${TEST_ID:-default}:/app/data
+    - e2etest
 
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
   networks:
-    - teranode-network
+    - e2etest
   command: --config-file /etc/aerospike.conf
 
-networks:
-  teranode-network:
-    name: teranode-network-test-${TEST_ID:-default}
+x-blobblockstore-base: &blobblockstore-base
+  build:
+    context: ..
+    dockerfile: test/utils/cmd/blob/server/Dockerfile
+  image: blobserver
+  networks:
+    - e2etest
 
 services:
   teranode-builder:
     image: teranode:latest
     build:
-      context: .
-      dockerfile: ci.Dockerfile
+      context: ..
+      dockerfile: Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-db1a6f0
     networks:
-      - teranode-network
+      - e2etest
     entrypoint: [ "pwd" ]
     expose:
       - "8000"
 
   postgres:
-    container_name: postgres-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-postgres-test
     image: postgres:latest
     networks:
-      - teranode-network
+      - e2etest
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
@@ -47,8 +49,8 @@ services:
     expose:
       - "5432"
     volumes:
-      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
+      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - data-postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -57,11 +59,11 @@ services:
       retries: 5
 
   kafka-shared:
-    container_name: kafka-shared-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-kafka-shared-test
     image: redpandadata/redpanda:latest
     mem_limit: 256m
     networks:
-      - teranode-network
+      - e2etest
     command:
       - redpanda start
       - --smp 1
@@ -76,13 +78,13 @@ services:
       - "9092"
       - "9093"
     volumes:
-      - ./data/test/${TEST_ID:-default}/kafka:/var/lib/kafka
+      - data-kafka:/var/lib/kafka
 
   kafka-console-shared:
-    container_name: kafka-console-shared-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-kafka-console-shared-test
     image: docker.redpanda.com/redpandadata/console:latest
     networks:
-      - teranode-network
+      - e2etest
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
@@ -101,40 +103,40 @@ services:
 
   aerospike-1:
     <<: *aerospike-base
-    container_name: aerospike-1-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-aerospike-1-test
     ports:
       - "13100"
     expose:
       - "13100"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
-      - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
+      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf:ro
+      - data-aerospike1:/opt/aerospike/data
 
   aerospike-2:
     <<: *aerospike-base
-    container_name: aerospike-2-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-aerospike-2-test
     ports:
       - "13200"
     expose:
       - "13200"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
-      - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
+      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf:ro
+      - data-aerospike2:/opt/aerospike/data
 
   aerospike-3:
     <<: *aerospike-base
-    container_name: aerospike-3-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-aerospike-3-test
     ports:
       - "13300"
     expose:
       - "13300"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
-      - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
+      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf:ro
+      - data-aerospike3:/opt/aerospike/data
 
   teranode1:
     <<: *teranode-base
-    container_name: teranode1-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-teranode1-test
     depends_on:
       - aerospike-1
       - postgres
@@ -158,16 +160,13 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
-      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
-      - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
-      - ./data/test/${TEST_ID:-default}/teranode1/external:/app/data/teranode1/external
-      - ./wait.sh:/app/wait.sh
+      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
+      - data-teranode1:/app/data
 
   teranode2:
     <<: *teranode-base
-    container_name: teranode2-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-teranode2-test
     depends_on:
       - aerospike-2
       - postgres
@@ -191,16 +190,13 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
-      - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
-      - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
-      - ./data/test/${TEST_ID:-default}/teranode2/external:/app/data/teranode2/external
-      - ./wait.sh:/app/wait.sh
+      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
+      - data-teranode2:/app/data
 
   teranode3:
     <<: *teranode-base
-    container_name: teranode3-test-${TEST_ID:-default}
+    container_name: ${TEST_ID:-undefined}-teranode3-test
     depends_on:
       - aerospike-3
       - postgres
@@ -227,9 +223,138 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
-      - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
-      - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
-      - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external
-      - ./wait.sh:/app/wait.sh
+      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ./wait.sh:/app/wait.sh:ro
+      - data-teranode3:/app/data
+
+  #####################################################################################
+  ##                         Storegae helper for testing                             ##
+  #####################################################################################
+  blobblockstore1:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore1
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - data-teranode1:/app/data
+
+  blobblockstore2:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore2
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode2
+    volumes:
+      - data-teranode2:/app/data
+
+  blobblockstore3:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore3
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode3
+    volumes:
+      - data-teranode3:/app/data
+
+  blobsubtreestore1:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore1
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - data-teranode1:/app/data
+
+  blobsubtreestore2:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore2
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode2
+    volumes:
+      - data-teranode2:/app/data
+
+  blobsubtreestore3:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore3
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode3
+    volumes:
+      - data-teranode3:/app/data
+
+  teststorage:
+    container_name: ${TEST_ID:-undefined}-storage-test
+    build:
+      context: ..
+      dockerfile: test/utils/cmd/tstore/Dockerfile
+    image: tstore
+    environment:
+      LOCALSYSTEM_TSTOREURL: ":50051"
+      LOCALSYSTEM_TSTOREROOTDIR: /data/test
+    ports:
+      - "50051"
+    expose:
+      - "50051"
+    volumes:
+      - data-postgres:/data/test/postgres
+      - data-kafka:/data/test/kafka
+      - data-aerospike1:/data/test/aerospike1
+      - data-aerospike2:/data/test/aerospike2
+      - data-aerospike3:/data/test/aerospike3
+      - data-teranode1:/data/test/teranode1
+      - data-teranode2:/data/test/teranode2
+      - data-teranode3:/data/test/teranode3
+
+volumes:
+  data-postgres:
+  data-kafka:
+  data-aerospike1:
+  data-aerospike2:
+  data-aerospike3:
+  data-teranode1:
+  data-teranode2:
+  data-teranode3:
+
+networks:
+  e2etest:
