@@ -229,11 +229,14 @@ func NewBlockFromReader(blockReader io.Reader, optionalSettings *settings.Settin
 func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	var err error
 
+	fmt.Printf("[readBlockFromReader] \tbuf %x\n", buf)
 	// read the transaction count
 	block.TransactionCount, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error reading transaction count", err)
 	}
+
+	fmt.Printf("[readBlockFromReader] \t%d transactions\n", block.TransactionCount)
 
 	// read the size in bytes
 	block.SizeInBytes, err = wire.ReadVarInt(buf, 0)
@@ -241,11 +244,15 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("error reading size in bytes", err)
 	}
 
+	fmt.Printf("[readBlockFromReader] \t%d bytes\n", block.SizeInBytes)
+
 	// read the length of the subtree list
 	block.subtreeLength, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error reading subtree length", err)
 	}
+
+	fmt.Printf("[readBlockFromReader] \t%d subtrees\n", block.subtreeLength)
 
 	// read the subtree list
 	var (

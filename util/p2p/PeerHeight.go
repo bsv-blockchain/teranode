@@ -48,7 +48,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 		StaticPeers:     staticPeers,
 	}
 
-	peerConnection, err := NewP2PNode(logger, tSettings, config)
+	peerConnection, err := NewP2PNode(logger, tSettings, config, nil)
 	if err != nil {
 		return nil, errors.NewServiceError("[PeerHeight] Error creating P2PNode", err)
 	}
@@ -115,11 +115,11 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 		return true // continue iterating
 	})
 
-	previousBlockMessage, ok := p.lastMsgByPeerId.Load(blockMessage.PeerId)
+	previousBlockMessage, ok := p.lastMsgByPeerId.Load(blockMessage.PeerID)
 	if ok && previousBlockMessage.(BlockMessage).Height > blockMessage.Height {
 		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(BlockMessage).Height)
 	} else {
-		p.lastMsgByPeerId.Store(blockMessage.PeerId, blockMessage)
+		p.lastMsgByPeerId.Store(blockMessage.PeerID, blockMessage)
 	}
 
 	after := 0
@@ -152,7 +152,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 			p.logger.Infof("[PeerHeight] Not enough peers to check if at same block height %d/%d", size, p.numberOfExpectedPeers)
 			p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
 				block := value.(BlockMessage)
-				p.logger.Infof("[PeerHeight] peer=%s %s=%d", block.PeerId, block.DataHubUrl, block.Height)
+				p.logger.Infof("[PeerHeight] peer=%s %s=%d", block.PeerID, block.DataHubURL, block.Height)
 
 				return true
 			})
@@ -168,7 +168,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > block.Height {
-			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", block.PeerId, block.DataHubUrl, block.Height, height)
+			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", block.PeerID, block.DataHubURL, block.Height, height)
 
 			result = false
 

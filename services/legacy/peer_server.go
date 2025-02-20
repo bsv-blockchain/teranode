@@ -165,6 +165,19 @@ type updatePeerHeightsMsg struct {
 	originPeer *peer.Peer
 }
 
+type banPeerForDurationMsg struct {
+	peer  *serverPeer
+	until int64
+}
+
+// a custom type for banned peer addresses
+type bannedPeerAddr string
+
+// a struct to represent an unban request
+type unbanPeerReq struct {
+	addr bannedPeerAddr
+}
+
 // peerState maintains state of inbound, persistent, outbound peers as well
 // as banned peers and outbound groups.
 type peerState struct {
@@ -196,12 +209,16 @@ func (ps *peerState) CountIP(host string) int {
 func (ps *peerState) forAllOutboundPeers(closure func(sp *serverPeer)) {
 	ps.outboundPeers.Iterate(func(i int32, peer *serverPeer) bool {
 		closure(peer)
-		return false // continue always
+		peer.server.logger.Debugf("outboundPeers: %+v", peer)
+
+		return true // continue always
 	})
 
 	ps.persistentPeers.Iterate(func(i int32, peer *serverPeer) bool {
 		closure(peer)
-		return false // continue always
+		peer.server.logger.Debugf("persistentPeers: %+v", peer)
+
+		return true // continue always
 	})
 }
 
@@ -210,7 +227,9 @@ func (ps *peerState) forAllOutboundPeers(closure func(sp *serverPeer)) {
 func (ps *peerState) forAllPeers(closure func(sp *serverPeer)) {
 	ps.inboundPeers.Iterate(func(i int32, peer *serverPeer) bool {
 		closure(peer)
-		return false // continue always
+		peer.server.logger.Debugf("inboundPeers: %+v", peer)
+
+		return true
 	})
 
 	ps.forAllOutboundPeers(closure)
@@ -246,6 +265,8 @@ type server struct {
 	newPeers             chan *serverPeer
 	donePeers            chan *serverPeer
 	banPeers             chan *serverPeer
+	banPeerForDuration   chan *banPeerForDurationMsg
+	unbanPeer            chan unbanPeerReq
 	query                chan interface{}
 	relayInv             chan relayMsg
 	broadcast            chan broadcastMsg
@@ -1593,6 +1614,62 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	s.logger.Infof("Banned peer %s (%s) for %v", host, direction, cfg.BanDuration)
 
 	state.banned.Set(host, time.Now().Add(cfg.BanDuration))
+	s.banChan <- p2p.BanEvent{
+		Action: "add",
+		IP:     host,
+	}
+
+	err = s.banList.Add(sp.ctx, host, time.Now().Add(cfg.BanDuration))
+	if err != nil {
+		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)
+	}
+}
+
+// handleBanPeerForDurationMsg deals with banning peers for a specific duration.  It is invoked from the
+// peerHandler goroutine.
+func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, banUntil int64) {
+	host, _, err := net.SplitHostPort(sp.Addr())
+	if err != nil {
+		sp.server.logger.Debugf("can't split ban peer %s %v", sp.Addr(), err)
+		return
+	}
+
+	direction := directionString(sp.Inbound())
+
+	s.logger.Infof("Banned peer %s (%s) for %v", host, direction, banUntil)
+
+	// convert int64 to time.Time
+	banUntilTime := time.Unix(banUntil, 0)
+
+	state.banned.Set(host, banUntilTime)
+	s.banChan <- p2p.BanEvent{
+		Action: "add",
+		IP:     host,
+	}
+
+	err = s.banList.Add(sp.ctx, host, banUntilTime)
+	if err != nil {
+		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)
+	}
+}
+
+// handleUnbanPeerMsg deals with un-banning peers.  It is invoked from the
+// peerHandler goroutine.
+func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
+	host, _, err := net.SplitHostPort(string(spAddr))
+	if err != nil {
+		s.logger.Errorf("can't split ban peer %s %v", spAddr, err)
+		return
+	}
+
+	s.logger.Infof("Un-banned peer %s ", host)
+
+	state.banned.Delete(host)
+
+	err = s.banList.Remove(s.ctx, host)
+	if err != nil {
+		s.logger.Errorf("Failed to remove ban for peer %s: %v", host, err)
+	}
 }
 
 // handleRelayInvMsg deals with relaying inventory to peers that are not already
@@ -1731,14 +1808,17 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		msg.reply <- nconnected
 
 	case getPeersMsg:
+		s.logger.Debugf("getPeers: Query message received successfully")
+
 		peers := make([]*serverPeer, 0, state.Count())
 		state.forAllPeers(func(sp *serverPeer) {
-			if !sp.Connected() {
-				return
+			if sp.Connected() {
+				peers = append(peers, sp)
 			}
-
-			peers = append(peers, sp)
 		})
+
+		s.logger.Debugf("getPeers: Sending reply with %d peers", len(peers))
+		s.logger.Debugf("getPeers: %+v", peers)
 		msg.reply <- peers
 		// peers := make([]*serverPeer, 0, state.Count())
 		// state.forAllPeers(func(sp *serverPeer) {
@@ -2057,6 +2137,13 @@ out:
 		// Peer to ban.
 		case p := <-s.banPeers:
 			s.handleBanPeerMsg(state, p)
+		// Peer to ban for duration.
+		case p := <-s.banPeerForDuration:
+			s.handleBanPeerForDurationMsg(state, p.peer, p.until)
+
+		// Peer to unban.
+		case p := <-s.unbanPeer:
+			s.handleUnbanPeerMsg(state, p.addr)
 
 		// New inventory to potentially be relayed to other peers.
 		case invMsg := <-s.relayInv:
@@ -2532,6 +2619,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
 		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
 		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
+		banPeerForDuration:   make(chan *banPeerForDurationMsg, cfg.MaxPeers),
+		unbanPeer:            make(chan unbanPeerReq, cfg.MaxPeers),
 		query:                make(chan interface{}),
 		relayInv:             make(chan relayMsg, cfg.MaxPeers),
 		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),

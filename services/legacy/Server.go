@@ -169,6 +169,12 @@ func (s *Server) Init(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeerCountResponse, error) {
+	pc := s.server.ConnectedCount()
+
+	return &peer_api.GetPeerCountResponse{Count: pc}, nil
+}
+
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
@@ -215,6 +221,52 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 	return resp, nil
 }
 
+func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
+	ok := s.banPeer(peer.Addr, peer.Until)
+	if ok != nil {
+		return &peer_api.BanPeerResponse{Ok: false}, ok
+	}
+
+	return &peer_api.BanPeerResponse{Ok: true}, nil
+}
+
+func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
+	// remove from the ban list
+	err := s.server.banList.Remove(ctx, peer.Addr)
+	if err != nil {
+		return &peer_api.UnbanPeerResponse{Ok: false}, err
+	}
+
+	s.server.unbanPeer <- unbanPeerReq{addr: bannedPeerAddr(peer.Addr)}
+	s.logger.Infof("Unbanned peer %s", peer.Addr)
+
+	return &peer_api.UnbanPeerResponse{Ok: true}, nil
+}
+
+func (s *Server) banPeer(peerAddr string, until int64) error {
+	var foundPeer *serverPeer
+
+	peers := s.server.getPeers()
+
+	s.logger.Infof("Peer length: %d", len(peers))
+
+	for _, sp := range peers {
+		if sp.Addr() == peerAddr {
+			foundPeer = sp
+			break
+		}
+	}
+
+	if foundPeer == nil {
+		s.logger.Warnf("Attempted to ban peer %s but peer not found", peerAddr)
+		return errors.New(errors.ERR_INVALID_IP, "tried to ban peer but peer not found")
+	}
+	s.server.banPeerForDuration <- &banPeerForDurationMsg{peer: foundPeer, until: until}
+	s.logger.Infof("Banned peer %s for %d seconds", peerAddr, until)
+
+	return nil
+}
+
 // Start function
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
@@ -239,7 +291,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
-	s.server.Start()
+	go s.server.Start()
 	s.logger.Infof("[Legacy Server] Internal server started")
 
 	// this will block

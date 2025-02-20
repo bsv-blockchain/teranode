@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -28,21 +30,23 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/ordishs/gocore"
 )
 
 type P2PNode struct {
-	config            P2PConfig
-	settings          *settings.Settings
-	host              host.Host
-	pubSub            *pubsub.PubSub
-	topics            map[string]*pubsub.Topic
-	logger            ulogger.Logger
-	bitcoinProtocolID string
-	handlerByTopic    map[string]Handler
-	startTime         time.Time
+	config                    P2PConfig
+	settings                  *settings.Settings
+	host                      host.Host
+	pubSub                    *pubsub.PubSub
+	topics                    map[string]*pubsub.Topic
+	logger                    ulogger.Logger
+	bitcoinProtocolID         string
+	handlerByTopic            map[string]Handler
+	startTime                 time.Time
+	blocksKafkaProducerClient kafka.KafkaAsyncProducerI
 
 	// The following variables must only be used atomically.
 	bytesReceived uint64
@@ -65,7 +69,7 @@ type P2PConfig struct {
 	StaticPeers     []string
 }
 
-func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig) (*P2PNode, error) {
+func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig, blocksKafkaProducerClient kafka.KafkaAsyncProducerI) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var (
@@ -134,13 +138,14 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 	}
 
 	node := &P2PNode{
-		config:            config,
-		logger:            logger,
-		settings:          tSettings,
-		host:              h,
-		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
-		handlerByTopic:    make(map[string]Handler),
-		startTime:         time.Now(),
+		config:                    config,
+		logger:                    logger,
+		settings:                  tSettings,
+		host:                      h,
+		bitcoinProtocolID:         "teranode/bitcoin/1.0.0",
+		handlerByTopic:            make(map[string]Handler),
+		startTime:                 time.Now(),
+		blocksKafkaProducerClient: blocksKafkaProducerClient,
 	}
 
 	// Set up connection notifications
@@ -278,6 +283,14 @@ func (s *P2PNode) GetTopic(topicName string) *pubsub.Topic {
 }
 
 func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte) error {
+	if len(s.topics) == 0 {
+		return errors.NewServiceError("[P2PNode][Publish] topics not initialised")
+	}
+
+	if _, ok := s.topics[topicName]; !ok {
+		return errors.NewServiceError("[P2PNode][Publish] topic not found: %s", topicName)
+	}
+
 	if err := s.topics[topicName].Publish(ctx, msgBytes); err != nil {
 		return errors.NewServiceError("[P2PNode][Publish] publish error", err)
 	}
@@ -653,6 +666,33 @@ func (s *P2PNode) streamHandler(ns network.Stream) {
 	if len(buf) > 0 {
 		atomic.StoreInt64(&s.lastRecv, time.Now().Unix())
 		s.logger.Debugf("[P2PNode] Received message: %s", string(buf))
+
+		// try to decode it to a block message
+		var blockMessage BlockMessage
+
+		err := json.Unmarshal(buf, &blockMessage)
+		if err != nil {
+			s.logger.Errorf("[P2PNode] error unmarshalling block message: %v", err)
+			return
+		}
+
+		// send block to kafka, if configured
+		hash, err := chainhash.NewHashFromStr(blockMessage.Hash)
+		if err != nil {
+			s.logger.Errorf("[P2PNode] error parsing hash from string: %v", err)
+			return
+		}
+
+		if s.blocksKafkaProducerClient != nil {
+			value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubURL))
+			value = append(value, hash.CloneBytes()...)
+			value = append(value, []byte(blockMessage.DataHubURL)...)
+			s.blocksKafkaProducerClient.Publish(&kafka.Message{
+				Value: value,
+			})
+		}
+
+		s.logger.Debugf("[P2PNode] Received block message: %+v", blockMessage)
 	}
 }
 

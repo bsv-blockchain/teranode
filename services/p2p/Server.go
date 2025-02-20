@@ -147,7 +147,7 @@ func NewServer(
 		StaticPeers:     staticPeers,
 	}
 
-	p2pNode, err := p2p.NewP2PNode(logger, tSettings, config)
+	p2pNode, err := p2p.NewP2PNode(logger, tSettings, config, blocksKafkaProducerClient)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}
@@ -257,9 +257,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), reason)
 
 		rejectedTxMessage := p2p.RejectedTxMessage{
-			TxId:   hash.String(),
+			TxID:   hash.String(),
 			Reason: reason,
-			PeerId: s.P2PNode.HostID().String(),
+			PeerID: s.P2PNode.HostID().String(),
 		}
 
 		msgBytes, err := json.Marshal(rejectedTxMessage)
@@ -351,7 +351,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
-	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerId: s.P2PNode.HostID().String()})
+	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerID: s.P2PNode.HostID().String()})
 	if err != nil {
 		s.logger.Errorf("[sendBestBlockMessage] json marshal error: %v", err)
 	}
@@ -412,8 +412,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				blockMessage = p2p.BlockMessage{
 					Hash:       hash.String(),
 					Height:     meta.Height,
-					DataHubUrl: s.AssetHTTPAddressURL,
-					PeerId:     s.P2PNode.HostID().String(),
+					DataHubURL: s.AssetHTTPAddressURL,
+					PeerID:     s.P2PNode.HostID().String(),
 				}
 
 				msgBytes, err = json.Marshal(blockMessage)
@@ -435,8 +435,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				miningOnMessage = p2p.MiningOnMessage{
 					Hash:         header.Hash().String(),
 					PreviousHash: header.HashPrevBlock.String(),
-					DataHubUrl:   s.AssetHTTPAddressURL,
-					PeerId:       s.P2PNode.HostID().String(),
+					DataHubURL:   s.AssetHTTPAddressURL,
+					PeerID:       s.P2PNode.HostID().String(),
 					Height:       meta.Height,
 					Miner:        meta.Miner,
 					SizeInBytes:  meta.SizeInBytes,
@@ -458,8 +458,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = p2p.SubtreeMessage{
 					Hash:       hash.String(),
-					DataHubUrl: s.AssetHTTPAddressURL,
-					PeerId:     s.P2PNode.HostID().String(),
+					DataHubURL: s.AssetHTTPAddressURL,
+					PeerID:     s.P2PNode.HostID().String(),
 				}
 
 				msgBytes, err = json.Marshal(subtreeMessage)
@@ -552,6 +552,12 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
+	// is it from a banned peer
+	if s.banList.IsBanned(from) {
+		s.logger.Debugf("[handleBestBlockTopic] got p2p best block notification from banned peer %s", from)
+		return
+	}
+
 	// decode request
 	bestBlockMessage = p2p.BestBlockMessage{}
 
@@ -561,13 +567,13 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
-	pid, err = peer.Decode(bestBlockMessage.PeerId)
+	pid, err = peer.Decode(bestBlockMessage.PeerID)
 	if err != nil {
 		s.logger.Errorf("[handleBestBlockTopic] error decoding peerId: %v", err)
 		return
 	}
 
-	s.logger.Debugf("got p2p best block notification from %s", bestBlockMessage.PeerId)
+	s.logger.Debugf("got p2p best block notification from %s", bestBlockMessage.PeerID)
 
 	// get best block from blockchain service
 	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
@@ -584,7 +590,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	blockMessage = p2p.BlockMessage{
 		Hash:       bh.Hash().String(),
 		Height:     bhMeta.Height,
-		DataHubUrl: s.AssetHTTPAddressURL,
+		DataHubURL: s.AssetHTTPAddressURL,
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)
@@ -618,18 +624,24 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerId)
+	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerID)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      "block",
 		Hash:      blockMessage.Hash,
 		Height:    blockMessage.Height,
-		BaseURL:   blockMessage.DataHubUrl,
-		PeerID:    blockMessage.PeerId,
+		BaseURL:   blockMessage.DataHubURL,
+		PeerID:    blockMessage.PeerID,
 	}
 
 	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
+	// is it from a banned peer
+	if s.banList.IsBanned(from) {
+		s.logger.Debugf("[handleBlockTopic] got p2p block notification from banned peer %s", from)
 		return
 	}
 
@@ -641,9 +653,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
-		value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubUrl))
+		value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubURL))
 		value = append(value, hash.CloneBytes()...)
-		value = append(value, []byte(blockMessage.DataHubUrl)...)
+		value = append(value, []byte(blockMessage.DataHubURL)...)
 		s.blocksKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
@@ -666,17 +678,23 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerId)
+	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      "subtree",
 		Hash:      subtreeMessage.Hash,
-		BaseURL:   subtreeMessage.DataHubUrl,
-		PeerID:    subtreeMessage.PeerId,
+		BaseURL:   subtreeMessage.DataHubURL,
+		PeerID:    subtreeMessage.PeerID,
 	}
 
 	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
+	// is it from a banned peer
+	if s.banList.IsBanned(from) {
+		s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification from banned peer %s", from)
 		return
 	}
 
@@ -687,9 +705,9 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 	}
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
-		value := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
+		value := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubURL))
 		value = append(value, hash.CloneBytes()...)
-		value = append(value, []byte(subtreeMessage.DataHubUrl)...)
+		value = append(value, []byte(subtreeMessage.DataHubURL)...)
 		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
@@ -711,14 +729,24 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		return
 	}
 
-	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerId)
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
+	// is it from a banned peer
+	if s.banList.IsBanned(from) {
+		s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
+		return
+	}
+
+	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerID)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp:    time.Now().UTC().Format(isoFormat),
 		Type:         "mining_on",
 		Hash:         miningOnMessage.Hash,
-		BaseURL:      miningOnMessage.DataHubUrl,
-		PeerID:       miningOnMessage.PeerId,
+		BaseURL:      miningOnMessage.DataHubURL,
+		PeerID:       miningOnMessage.PeerID,
 		PreviousHash: miningOnMessage.PreviousHash,
 		Height:       miningOnMessage.Height,
 		Miner:        miningOnMessage.Miner,

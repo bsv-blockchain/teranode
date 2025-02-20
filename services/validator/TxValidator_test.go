@@ -191,11 +191,29 @@ func TestMaxTxSizePolicy(t *testing.T) {
 
 func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
-	tSettings.Policy.MaxOpsPerScriptPolicy = 1 // insanely low
+
+	tSettings.Policy.MaxOpsPerScriptPolicy = 2       // insanely low
+	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
+	tSettings.ChainCfgParams.GenesisActivationHeight = 100
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(largeTx, 720808, &Options{disableConsensus: true})
+
+	err := txValidator.ValidateTransaction(largeTx, 101, &Options{disableConsensus: true})
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
+}
+
+func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
+	tSettings.Policy.MaxOpsPerScriptPolicy = 2       // insanely low
+	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
+	tSettings.ChainCfgParams.GenesisActivationHeight = 100
+
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+
+	err := txValidator.ValidateTransaction(largeTx, 101, &Options{disableConsensus: false})
+	assert.NoError(t, err)
 }
 
 func Test_MinFeePolicy(t *testing.T) {

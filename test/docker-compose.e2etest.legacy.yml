@@ -43,7 +43,7 @@ services:
     ports:
       - "7432:5432"
     volumes:
-      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
@@ -101,7 +101,7 @@ services:
     ports:
       - "13100:13100"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
 
   aerospike-2:
@@ -110,7 +110,7 @@ services:
     ports:
       - "13200:13200"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
 
   aerospike-3:
@@ -119,7 +119,7 @@ services:
     ports:
       - "13300:13300"
     volumes:
-      - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
 
   svnode1:
@@ -135,8 +135,8 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./test/config/bitcoin.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/legacy/node1-data:/data
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      # - ./data/test/${TEST_ID:-default}/legacy/node1-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node2:18333", "-connect=node3:18333" ]
     networks:
     - teranode-network
@@ -153,8 +153,8 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./test/config/bitcoin.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/legacy/node2-data:/data
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      # - ./data/test/${TEST_ID:-default}/legacy/node2-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node3:18333" ]
     networks:
     - teranode-network
@@ -171,8 +171,8 @@ services:
     healthcheck:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
-      - ./test/config/bitcoin.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/legacy/node3-data:/data
+      - ./config/bitcoin.conf:/data/bitcoin.conf
+      # - ./data/test/${TEST_ID:-default}/legacy/node3-data:/data
     command: [ "/entrypoint.sh", "bitcoind", "-connect=node1:18333", "-connect=node2:18333" ]
     networks:
     - teranode-network

@@ -317,6 +317,234 @@ func (x *GetPeersResponse) GetPeers() []*Peer {
 	return nil
 }
 
+type GetPeerCountResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPeerCountResponse) Reset() {
+	*x = GetPeerCountResponse{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPeerCountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPeerCountResponse) ProtoMessage() {}
+
+func (x *GetPeerCountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPeerCountResponse.ProtoReflect.Descriptor instead.
+func (*GetPeerCountResponse) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GetPeerCountResponse) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+type BanPeerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Addr          string                 `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
+	Until         int64                  `protobuf:"varint,2,opt,name=until,proto3" json:"until,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BanPeerRequest) Reset() {
+	*x = BanPeerRequest{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanPeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanPeerRequest) ProtoMessage() {}
+
+func (x *BanPeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanPeerRequest.ProtoReflect.Descriptor instead.
+func (*BanPeerRequest) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *BanPeerRequest) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *BanPeerRequest) GetUntil() int64 {
+	if x != nil {
+		return x.Until
+	}
+	return 0
+}
+
+type BanPeerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BanPeerResponse) Reset() {
+	*x = BanPeerResponse{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanPeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanPeerResponse) ProtoMessage() {}
+
+func (x *BanPeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanPeerResponse.ProtoReflect.Descriptor instead.
+func (*BanPeerResponse) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *BanPeerResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+type UnbanPeerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Addr          string                 `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnbanPeerRequest) Reset() {
+	*x = UnbanPeerRequest{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnbanPeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnbanPeerRequest) ProtoMessage() {}
+
+func (x *UnbanPeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnbanPeerRequest.ProtoReflect.Descriptor instead.
+func (*UnbanPeerRequest) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *UnbanPeerRequest) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+type UnbanPeerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnbanPeerResponse) Reset() {
+	*x = UnbanPeerResponse{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnbanPeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnbanPeerResponse) ProtoMessage() {}
+
+func (x *UnbanPeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnbanPeerResponse.ProtoReflect.Descriptor instead.
+func (*UnbanPeerResponse) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *UnbanPeerResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 var File_services_legacy_peer_api_peer_api_proto protoreflect.FileDescriptor
 
 var file_services_legacy_peer_api_peer_api_proto_rawDesc = []byte{
@@ -379,14 +607,36 @@ var file_services_legacy_peer_api_peer_api_proto_rawDesc = []byte{
 	0x74, 0x65, 0x72, 0x22, 0x38, 0x0a, 0x10, 0x47, 0x65, 0x74, 0x50, 0x65, 0x65, 0x72, 0x73, 0x52,
 	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x24, 0x0a, 0x05, 0x70, 0x65, 0x65, 0x72, 0x73,
 	0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x0e, 0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70,
-	0x69, 0x2e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x05, 0x70, 0x65, 0x65, 0x72, 0x73, 0x32, 0x4f, 0x0a,
-	0x0b, 0x50, 0x65, 0x65, 0x72, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x40, 0x0a, 0x08,
-	0x47, 0x65, 0x74, 0x50, 0x65, 0x65, 0x72, 0x73, 0x12, 0x16, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c,
-	0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x45, 0x6d, 0x70, 0x74, 0x79,
-	0x1a, 0x1a, 0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x2e, 0x47, 0x65, 0x74, 0x50,
-	0x65, 0x65, 0x72, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x42, 0x0d,
-	0x5a, 0x0b, 0x2e, 0x2f, 0x3b, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x62, 0x06, 0x70,
-	0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x69, 0x2e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x05, 0x70, 0x65, 0x65, 0x72, 0x73, 0x22, 0x2c, 0x0a,
+	0x14, 0x47, 0x65, 0x74, 0x50, 0x65, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x52, 0x65, 0x73,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x05, 0x52, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0x3a, 0x0a, 0x0e, 0x42,
+	0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12, 0x0a,
+	0x04, 0x61, 0x64, 0x64, 0x72, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x61, 0x64, 0x64,
+	0x72, 0x12, 0x14, 0x0a, 0x05, 0x75, 0x6e, 0x74, 0x69, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x03,
+	0x52, 0x05, 0x75, 0x6e, 0x74, 0x69, 0x6c, 0x22, 0x21, 0x0a, 0x0f, 0x42, 0x61, 0x6e, 0x50, 0x65,
+	0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x22, 0x26, 0x0a, 0x10, 0x55, 0x6e,
+	0x62, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12,
+	0x0a, 0x04, 0x61, 0x64, 0x64, 0x72, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x61, 0x64,
+	0x64, 0x72, 0x22, 0x23, 0x0a, 0x11, 0x55, 0x6e, 0x62, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x32, 0xd9, 0x01, 0x0a, 0x0b, 0x50, 0x65, 0x65, 0x72,
+	0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x40, 0x0a, 0x08, 0x47, 0x65, 0x74, 0x50, 0x65,
+	0x65, 0x72, 0x73, 0x12, 0x16, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x45, 0x6d, 0x70, 0x74, 0x79, 0x1a, 0x1a, 0x2e, 0x70, 0x65,
+	0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x2e, 0x47, 0x65, 0x74, 0x50, 0x65, 0x65, 0x72, 0x73, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x40, 0x0a, 0x07, 0x42, 0x61, 0x6e,
+	0x50, 0x65, 0x65, 0x72, 0x12, 0x18, 0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x2e,
+	0x42, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19,
+	0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x2e, 0x42, 0x61, 0x6e, 0x50, 0x65, 0x65,
+	0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x46, 0x0a, 0x09, 0x55,
+	0x6e, 0x62, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x12, 0x1a, 0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f,
+	0x61, 0x70, 0x69, 0x2e, 0x55, 0x6e, 0x62, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61, 0x70, 0x69, 0x2e,
+	0x55, 0x6e, 0x62, 0x61, 0x6e, 0x50, 0x65, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x22, 0x00, 0x42, 0x0d, 0x5a, 0x0b, 0x2e, 0x2f, 0x3b, 0x70, 0x65, 0x65, 0x72, 0x5f, 0x61,
+	0x70, 0x69, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -401,18 +651,27 @@ func file_services_legacy_peer_api_peer_api_proto_rawDescGZIP() []byte {
 	return file_services_legacy_peer_api_peer_api_proto_rawDescData
 }
 
-var file_services_legacy_peer_api_peer_api_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_services_legacy_peer_api_peer_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_services_legacy_peer_api_peer_api_proto_goTypes = []any{
-	(*Peer)(nil),             // 0: peer_api.Peer
-	(*GetPeersResponse)(nil), // 1: peer_api.GetPeersResponse
-	(*emptypb.Empty)(nil),    // 2: google.protobuf.Empty
+	(*Peer)(nil),                 // 0: peer_api.Peer
+	(*GetPeersResponse)(nil),     // 1: peer_api.GetPeersResponse
+	(*GetPeerCountResponse)(nil), // 2: peer_api.GetPeerCountResponse
+	(*BanPeerRequest)(nil),       // 3: peer_api.BanPeerRequest
+	(*BanPeerResponse)(nil),      // 4: peer_api.BanPeerResponse
+	(*UnbanPeerRequest)(nil),     // 5: peer_api.UnbanPeerRequest
+	(*UnbanPeerResponse)(nil),    // 6: peer_api.UnbanPeerResponse
+	(*emptypb.Empty)(nil),        // 7: google.protobuf.Empty
 }
 var file_services_legacy_peer_api_peer_api_proto_depIdxs = []int32{
 	0, // 0: peer_api.GetPeersResponse.peers:type_name -> peer_api.Peer
-	2, // 1: peer_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
-	1, // 2: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
+	7, // 1: peer_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
+	3, // 2: peer_api.PeerService.BanPeer:input_type -> peer_api.BanPeerRequest
+	5, // 3: peer_api.PeerService.UnbanPeer:input_type -> peer_api.UnbanPeerRequest
+	1, // 4: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
+	4, // 5: peer_api.PeerService.BanPeer:output_type -> peer_api.BanPeerResponse
+	6, // 6: peer_api.PeerService.UnbanPeer:output_type -> peer_api.UnbanPeerResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -429,7 +688,7 @@ func file_services_legacy_peer_api_peer_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_services_legacy_peer_api_peer_api_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

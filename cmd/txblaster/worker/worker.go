@@ -314,7 +314,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 					continue
 				}
 
-				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
+				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxID)
 				// if w.sentTxCache != nil && w.sentTxCache.Contains(rejectedTxMsg.TxId) {
 				//	w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
 				//	// TODO (I think) use error channel to kill worker

@@ -113,6 +113,18 @@ func WithCreateConflicting(create bool) Option {
 	}
 }
 
+// WithDisableConsensus creates an option to control consensus
+// Parameters:
+//   - disable: When true, consensus will be disabled
+//
+// Returns:
+//   - Option: Function that sets the disableConsensus option
+func WithDisableConsensus(disable bool) Option {
+	return func(o *Options) {
+		o.disableConsensus = disable
+	}
+}
+
 // TxValidatorOptions defines configuration options specific to transaction validation
 type TxValidatorOptions struct {
 	skipPolicyChecks bool

@@ -46,3 +46,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 func (c *Client) GetPeers(ctx context.Context) (*peer_api.GetPeersResponse, error) {
 	return c.client.GetPeers(ctx, &emptypb.Empty{})
 }
+
+func (c *Client) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
+	return c.client.BanPeer(ctx, peer)
+}
+
+func (c *Client) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
+	return c.client.UnbanPeer(ctx, peer)
+}

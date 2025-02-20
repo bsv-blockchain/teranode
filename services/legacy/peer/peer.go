@@ -324,7 +324,7 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 			ip = net.ParseIP("0.0.0.0")
 		}
 
-		port := uint16(proxiedAddr.Port)
+		port := uint16(proxiedAddr.Port) //nolint:gosec
 		na := wire.NewNetAddressIPPort(ip, port, services)
 
 		return na, nil
@@ -345,7 +345,7 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 		return nil, err
 	}
 
-	na := wire.NewNetAddressIPPort(ip, uint16(port), services)
+	na := wire.NewNetAddressIPPort(ip, uint16(port), services) //nolint:gosec
 
 	return na, nil
 }
@@ -1730,6 +1730,7 @@ out:
 		val := pendingMsgs.Remove(e)
 
 		msg := val.(outMsg)
+
 		if msg.doneChan != nil {
 			msg.doneChan <- struct{}{}
 		}
@@ -2105,7 +2106,7 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	msg.Services = p.cfg.Services
 
 	// Advertise our max supported protocol version.
-	msg.ProtocolVersion = int32(p.cfg.ProtocolVersion)
+	msg.ProtocolVersion = int32(p.cfg.ProtocolVersion) //nolint:gosec
 
 	// Advertise if inv messages for transactions are desired.
 	msg.DisableRelayTx = p.cfg.DisableRelayTx
@@ -2163,10 +2164,12 @@ func (p *Peer) start() error {
 	select {
 	case err := <-negotiateErr:
 		if err != nil {
+			p.logger.Debugf("Unable to negotiate protocol with %s: %v", p, err)
 			p.Disconnect()
 			return err
 		}
 	case <-time.After(negotiateTimeout):
+		p.logger.Debugf("Protocol negotiation timeout with %s", p)
 		p.Disconnect()
 		return errors.New("protocol negotiation timeout")
 	}
@@ -2304,14 +2307,14 @@ func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *C
 	}
 
 	if cfg.HostToNetAddress != nil {
-		na, err := cfg.HostToNetAddress(host, uint16(port), 0)
+		na, err := cfg.HostToNetAddress(host, uint16(port), 0) //nolint:gosec
 		if err != nil {
 			return nil, err
 		}
 
 		p.na = na
 	} else {
-		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), uint16(port), 0)
+		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), uint16(port), 0) //nolint:gosec
 	}
 
 	return p, nil

@@ -181,6 +181,7 @@ type BlockAssemblySettings struct {
 	MaxGetReorgHashes                   int
 	MinerWalletPrivateKeys              []string
 	DifficultyCache                     bool
+	UseDynamicSubtreeSize               bool
 }
 
 type BlockValidationSettings struct {

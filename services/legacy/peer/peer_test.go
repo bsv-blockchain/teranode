@@ -6,20 +6,29 @@
 package peer_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/require"
 )
 
 // fixedExcessiveBlockSize should not be the default -we want to ensure it will work in all cases
@@ -949,4 +958,210 @@ func TestDuplicateVersionMsg(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("peer did not disconnect")
 	}
+}
+
+// TestBanPeer tests banning peers.
+func TestBanPeer(t *testing.T) {
+	t.Skip("skipping ban peer test")
+
+	tSettings := test.CreateBaseTestSettings()
+	verack := make(chan struct{})
+	peer1Cfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) {
+				verack <- struct{}{}
+			},
+			OnWrite: func(p *peer.Peer, bytesWritten int, msg wire.Message,
+				err error) {
+				if _, ok := msg.(*wire.MsgVerAck); ok {
+					verack <- struct{}{}
+				}
+			},
+		},
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		UserAgentComments:      []string{"comment"},
+		ChainParams:            &chaincfg.MainNetParams,
+		ProtocolVersion:        wire.RejectVersion, // Configure with older version
+		Services:               0,
+		TrickleInterval:        time.Second * 10,
+		TstAllowSelfConnection: true,
+	}
+	peer2Cfg := &peer.Config{
+		Listeners:              peer1Cfg.Listeners,
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		UserAgentComments:      []string{"comment"},
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        time.Second * 10,
+		TstAllowSelfConnection: true,
+	}
+
+	wantStats1 := peerStats{
+		wantUserAgent:       "peer:1.0(comment)/",
+		wantServices:        0,
+		wantProtocolVersion: wire.RejectVersion,
+		wantConnected:       true,
+		wantVersionKnown:    true,
+		wantVerAckReceived:  true,
+		wantLastPingTime:    time.Time{},
+		wantLastPingNonce:   uint64(0),
+		wantLastPingMicros:  int64(0),
+		wantTimeOffset:      int64(0),
+		wantBytesSent:       152, // 128 version + 24 verack
+		wantBytesReceived:   152,
+	}
+	wantStats2 := peerStats{
+		wantUserAgent:       "peer:1.0(comment)/",
+		wantServices:        wire.SFNodeNetwork,
+		wantProtocolVersion: wire.RejectVersion,
+		wantConnected:       true,
+		wantVersionKnown:    true,
+		wantVerAckReceived:  true,
+		wantLastPingTime:    time.Time{},
+		wantLastPingNonce:   uint64(0),
+		wantLastPingMicros:  int64(0),
+		wantTimeOffset:      int64(0),
+		wantBytesSent:       152, // 128 version + 24 verack
+		wantBytesReceived:   152,
+	}
+
+	tests := []struct {
+		name  string
+		setup func() (*peer.Peer, *peer.Peer, error)
+	}{
+		{
+			"basic handshake",
+			func() (*peer.Peer, *peer.Peer, error) {
+				inConn, outConn := pipe(
+					&conn{raddr: "10.0.0.1:8333"},
+					&conn{raddr: "10.0.0.2:8333"},
+				)
+				inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, peer1Cfg)
+				inPeer.AssociateConnection(inConn)
+
+				outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peer2Cfg, "10.0.0.2:8333")
+				if err != nil {
+					return nil, nil, err
+				}
+				outPeer.AssociateConnection(outConn)
+
+				for i := 0; i < 4; i++ {
+					select {
+					case <-verack:
+					case <-time.After(time.Second):
+						return nil, nil, errors.New("verack timeout")
+					}
+				}
+				return inPeer, outPeer, nil
+			},
+		},
+		{
+			"socks proxy",
+			func() (*peer.Peer, *peer.Peer, error) {
+				inConn, outConn := pipe(
+					&conn{raddr: "10.0.0.1:8333", proxy: true},
+					&conn{raddr: "10.0.0.2:8333"},
+				)
+				inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, peer1Cfg)
+				inPeer.AssociateConnection(inConn)
+
+				outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peer2Cfg, "10.0.0.2:8333")
+				if err != nil {
+					return nil, nil, err
+				}
+				outPeer.AssociateConnection(outConn)
+
+				for i := 0; i < 4; i++ {
+					select {
+					case <-verack:
+					case <-time.After(time.Second):
+						return nil, nil, errors.New("verack timeout")
+					}
+				}
+				return inPeer, outPeer, nil
+			},
+		},
+	}
+	t.Logf("Running %d tests", len(tests))
+
+	for i, test := range tests {
+		inPeer, outPeer, err := test.setup()
+		if err != nil {
+			t.Errorf("TestPeerConnection setup #%d: unexpected err %v", i, err)
+			return
+		}
+
+		testPeer(t, inPeer, wantStats2)
+		testPeer(t, outPeer, wantStats1)
+
+		ctx := context.Background()
+
+		s, err := NewTestServer(t)
+		require.NoError(t, err)
+
+		err = s.Init(ctx)
+		require.NoError(t, err)
+
+		ready := make(chan struct{})
+		errc := make(chan error)
+
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errc <- errors.New("server startup panicked")
+				}
+			}()
+
+			err = s.Start(ctx, ready)
+			if err != nil {
+				panic(err)
+			}
+		}()
+
+		select {
+		case <-ready:
+			// Server started successfully
+		case err := <-errc:
+			// Handle the error
+			t.Fatalf("server startup failed: %v", err)
+		}
+
+		time.Sleep(1 * time.Second)
+
+		r, err := s.BanPeer(ctx, &peer_api.BanPeerRequest{Addr: outPeer.Addr()})
+		require.NoError(t, err)
+		require.True(t, r.Ok)
+
+		inPeer.Disconnect()
+		outPeer.Disconnect()
+		inPeer.WaitForDisconnect()
+		outPeer.WaitForDisconnect()
+	}
+}
+
+func NewTestServer(t *testing.T) (*legacy.Server, error) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Legacy.ListenAddresses = []string{"127.0.0.1:9876"}
+	// tSettings.Legacy.ConnectPeers = []string{"78.110.160.26:8333", "13.231.149.50:8333", "54.249.171.1:8333", "3.68.157.171:37890"}
+	tSettings.Legacy.ConnectPeers = []string{"10.0.0.1:8333", "10.0.0.2:8333"}
+
+	blockchainStoreURL, _ := url.Parse("sqlitememory://")
+
+	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, tSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	memStore := memory.New()
+	utxoStore := utxostore.New(logger)
+
+	return legacy.New(logger, tSettings, blockchainClient, nil, memStore, memStore, utxoStore, nil, nil, nil), nil
 }

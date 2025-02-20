@@ -20,7 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PeerService_GetPeers_FullMethodName = "/peer_api.PeerService/GetPeers"
+	PeerService_GetPeers_FullMethodName  = "/peer_api.PeerService/GetPeers"
+	PeerService_BanPeer_FullMethodName   = "/peer_api.PeerService/BanPeer"
+	PeerService_UnbanPeer_FullMethodName = "/peer_api.PeerService/UnbanPeer"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -30,6 +32,8 @@ const (
 // Add new service for peer operations
 type PeerServiceClient interface {
 	GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeersResponse, error)
+	BanPeer(ctx context.Context, in *BanPeerRequest, opts ...grpc.CallOption) (*BanPeerResponse, error)
+	UnbanPeer(ctx context.Context, in *UnbanPeerRequest, opts ...grpc.CallOption) (*UnbanPeerResponse, error)
 }
 
 type peerServiceClient struct {
@@ -50,6 +54,26 @@ func (c *peerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opt
 	return out, nil
 }
 
+func (c *peerServiceClient) BanPeer(ctx context.Context, in *BanPeerRequest, opts ...grpc.CallOption) (*BanPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BanPeerResponse)
+	err := c.cc.Invoke(ctx, PeerService_BanPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) UnbanPeer(ctx context.Context, in *UnbanPeerRequest, opts ...grpc.CallOption) (*UnbanPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnbanPeerResponse)
+	err := c.cc.Invoke(ctx, PeerService_UnbanPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -57,6 +81,8 @@ func (c *peerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opt
 // Add new service for peer operations
 type PeerServiceServer interface {
 	GetPeers(context.Context, *emptypb.Empty) (*GetPeersResponse, error)
+	BanPeer(context.Context, *BanPeerRequest) (*BanPeerResponse, error)
+	UnbanPeer(context.Context, *UnbanPeerRequest) (*UnbanPeerResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -69,6 +95,12 @@ type UnimplementedPeerServiceServer struct{}
 
 func (UnimplementedPeerServiceServer) GetPeers(context.Context, *emptypb.Empty) (*GetPeersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeers not implemented")
+}
+func (UnimplementedPeerServiceServer) BanPeer(context.Context, *BanPeerRequest) (*BanPeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BanPeer not implemented")
+}
+func (UnimplementedPeerServiceServer) UnbanPeer(context.Context, *UnbanPeerRequest) (*UnbanPeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnbanPeer not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -109,6 +141,42 @@ func _PeerService_GetPeers_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_BanPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BanPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).BanPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_BanPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).BanPeer(ctx, req.(*BanPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_UnbanPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnbanPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).UnbanPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_UnbanPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).UnbanPeer(ctx, req.(*UnbanPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -119,6 +187,14 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPeers",
 			Handler:    _PeerService_GetPeers_Handler,
+		},
+		{
+			MethodName: "BanPeer",
+			Handler:    _PeerService_BanPeer_Handler,
+		},
+		{
+			MethodName: "UnbanPeer",
+			Handler:    _PeerService_UnbanPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/p2p"
@@ -946,7 +947,10 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	// Handle the command
 	switch c.Command {
 	case "add":
+		var success bool
+
 		var expirationTime time.Time
+
 		if c.Absolute != nil && *c.Absolute {
 			expirationTime = time.Unix(*c.BanTime, 0)
 		} else {
@@ -958,21 +962,74 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			expirationTime = time.Now().Add(24 * time.Hour)
 		}
 
+		// ban teranode peers
 		err = banList.Add(ctx, c.IPOrSubnet, expirationTime)
+		if err == nil {
+			success = true
+
+			s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+		}
+
+		// and ban legacy peers
+		until := expirationTime.Unix()
+
+		resp, err := s.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+			Addr:  c.IPOrSubnet,
+			Until: until,
+		})
+
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInvalidParameter,
-				Message: "Failed to add ban",
+			s.logger.Errorf("Error while trying to ban legacy peer: %v", err)
+
+			if !success {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParameter,
+					Message: "Failed to add ban",
+				}
+			}
+		}
+
+		if !resp.Ok {
+			if !success {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParameter,
+					Message: "Failed to ban peer",
+				}
 			}
 		}
 
 		s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 	case "remove":
+		var success bool
+
 		err = banList.Remove(ctx, c.IPOrSubnet)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInvalidParameter,
-				Message: "Failed to remove ban",
+			s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
+
+			success = false
+		}
+
+		// unban legacy peer
+		resp, err := s.peerClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+			Addr: c.IPOrSubnet,
+		})
+		if err != nil {
+			s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
+
+			if !success {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParameter,
+					Message: "Error while trying to unban peer",
+				}
+			}
+		}
+
+		if !resp.Ok {
+			if !success {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParameter,
+					Message: "Failed to unban peer",
+				}
 			}
 		}
 
