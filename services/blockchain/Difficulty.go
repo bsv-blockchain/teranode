@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 )
@@ -254,7 +255,10 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		newTarget.Set(d.settings.ChainCfgParams.PowLimit)
 	}
 
-	nBitsUint := BigToCompact(newTarget)
+	nBitsUint, err := BigToCompact(newTarget)
+	if err != nil {
+		return nil, err
+	}
 
 	nb, err := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
 	if err != nil {
@@ -268,29 +272,43 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 // an unsigned 32-bit number.  The compact representation only provides 23 bits
 // of precision, so values larger than (2^23 - 1) only encode the most
 // significant digits of the number.  Seepadding, padding)ToBig for details.
-func BigToCompact(n *big.Int) uint32 {
+func BigToCompact(n *big.Int) (uint32, error) {
 	// No need to do any work if it's zero.
 	if n.Sign() == 0 {
-		return 0
+		return 0, nil
 	}
 
 	// Since the base for the exponent is 256, the exponent can be treated
 	// as the number of bytes.  So, shift the number right or left
 	// accordingly.  This is equivalent to:
 	// mantissa = mantissa / 256^(exponent-3)
-	var mantissa uint32
+	var (
+		mantissa uint32
+		err      error
+	)
 
 	exponent := uint(len(n.Bytes()))
 	if exponent <= 3 {
-		//nolint:gosec // Ignore G115: integer overflow conversion
-		mantissa = uint32(n.Bits()[0])
+		mantissa, err = util.SafeBigWordToUint32(n.Bits()[0])
+		if err != nil {
+			return 0, err
+		}
+
 		mantissa <<= 8 * (3 - exponent)
 	} else {
 		// Use a copy to avoid modifying the caller's original number.
-		//nolint:gosec // Ignore G115: integer overflow conversion
 		tn := new(big.Int).Set(n)
-		//nolint:gosec // Ignore G115: integer overflow conversion
-		mantissa = uint32(tn.Rsh(tn, 8*(exponent-3)).Bits()[0])
+
+		shiftedBits := tn.Rsh(tn, 8*(exponent-3)).Bits()
+		// if shiftedBits is not empty, convert the first bit to uint32
+		if len(shiftedBits) > 0 {
+			mantissa, err = util.SafeBigWordToUint32(shiftedBits[0])
+			if err != nil {
+				return 0, err
+			}
+		} else { // if  shiftedBits is empty (i.e. len(shiftedBits) == 0), the shifted result is zero, so mantissa is 0
+			mantissa = 0
+		}
 	}
 
 	// When the mantissa already has the sign bit set, the number is too
@@ -303,13 +321,20 @@ func BigToCompact(n *big.Int) uint32 {
 
 	// Pack the exponent, sign bit, and mantissa into an unsigned 32-bit
 	// int and return it.
-	//nolint:gosec // Ignore G115: integer overflow conversion
-	compact := uint32(exponent<<24) | mantissa
+
+	var exponentUint32 uint32
+
+	exponentUint32, err = util.SafeUintToUint32(exponent << 24)
+	if err != nil {
+		return 0, err
+	}
+
+	compact := exponentUint32 | mantissa
 	if n.Sign() < 0 {
 		compact |= 0x00800000
 	}
 
-	return compact
+	return compact, nil
 }
 
 // uint32ToBytes converts a uint32 to a little-endian byte slice.

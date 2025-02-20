@@ -129,9 +129,14 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
+		vout, err := util.SafeIntToUint32(fund.TxOut.Vout)
+		if err != nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+			continue
+		}
+
 		// calculate the utxo hash from the output script
-		//nolint:gosec
-		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[fund.TxOut.Vout], uint32(fund.TxOut.Vout))
+		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[fund.TxOut.Vout], vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
 			continue
@@ -139,9 +144,8 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 
 		// create a spend object
 		spend := &utxo.Spend{
-			TxID: txHash,
-			//nolint:gosec
-			Vout:     uint32(fund.TxOut.Vout),
+			TxID:     txHash,
+			Vout:     vout,
 			UTXOHash: utxoHash,
 		}
 

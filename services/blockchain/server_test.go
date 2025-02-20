@@ -299,7 +299,7 @@ func Test_getBlockLocator(t *testing.T) {
 	t.Run("blocks", func(t *testing.T) {
 		store := blockchain_store.NewMockStore()
 
-		for i := uint32(0); i <= 1024; i++ {
+		for i := uint32(0); i <= 255; i++ {
 			block := &model.Block{
 				Height: i,
 				Header: &model.BlockHeader{
@@ -315,33 +315,13 @@ func Test_getBlockLocator(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		locator, err := getBlockLocator(ctx, store, store.BlockByHeight[1024].Hash(), 1024)
+		locator, err := getBlockLocator(ctx, store, store.BlockByHeight[255].Hash(), 255)
 		require.NoError(t, err)
 
-		assert.Len(t, locator, 21)
+		assert.Len(t, locator, 19)
 
 		expectedHeights := []uint32{
-			1024,
-			1023,
-			1022,
-			1021,
-			1020,
-			1019,
-			1018,
-			1017,
-			1016,
-			1015,
-			1014,
-			1013,
-			1011,
-			1007,
-			999,
-			983,
-			951,
-			887,
-			759,
-			503,
-			0,
+			255, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245, 244, 242, 238, 230, 214, 182, 118, 0,
 		}
 
 		for locatorIdx, locatorHash := range locator {

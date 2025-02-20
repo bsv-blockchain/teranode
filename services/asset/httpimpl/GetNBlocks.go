@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -147,8 +148,13 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 		}
 
 		// get all the blocks from the repository
-		//nolint:gosec
-		blocks, err := h.repository.GetBlocks(ctx, hash, uint32(numberOfBlocks))
+
+		numberOfBlocksUint32, err := util.SafeIntToUint32(numberOfBlocks)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of blocks", err).Error())
+		}
+
+		blocks, err := h.repository.GetBlocks(ctx, hash, numberOfBlocksUint32)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("blocks not found").Error())

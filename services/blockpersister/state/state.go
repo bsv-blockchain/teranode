@@ -12,6 +12,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 const maxInt = int(^uint(0) >> 1)
@@ -130,7 +131,13 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 	}
 
 	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
-	return uint32(height), nil // nolint:gosec
+
+	heightUint32, err := util.SafeUint64ToUint32(height)
+	if err != nil {
+		return 0, err
+	}
+
+	return heightUint32, nil
 }
 
 // AddBlock records a new block in the state file.
@@ -195,7 +202,10 @@ func (s *State) lockFile(file *os.File, lockType int) (func(), error) {
 		return nil, errors.NewProcessingError("file descriptor too large", nil)
 	}
 
-	fdi := int(fd) // nolint:gosec
+	fdi, err := util.SafeUintptrToInt(fd)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := syscall.Flock(fdi, lockType); err != nil {
 		return nil, errors.NewProcessingError("failed to lock file", err)

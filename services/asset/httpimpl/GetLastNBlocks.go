@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 )
 
@@ -123,8 +124,12 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	includeOrphans := c.QueryParam("includeOrphans") == "true"
 
-	//nolint:gosec
-	blocks, err := h.repository.GetLastNBlocks(ctx, n, includeOrphans, uint32(fromHeight))
+	fromHeightUint32, err := util.SafeUint64ToUint32(fromHeight)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid 'fromHeight' parameter", err).Error())
+	}
+
+	blocks, err := h.repository.GetLastNBlocks(ctx, n, includeOrphans, fromHeightUint32)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())

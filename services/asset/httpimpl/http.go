@@ -239,9 +239,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	if h.settings.Dashboard.Enabled {
-		e.GET("*", func(c echo.Context) error { // nolint
-			return dashboard.AppHandler(c)
-		})
+		e.GET("*", dashboard.AppHandler)
 	} else {
 		e.GET("*", func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "Not Found")

@@ -90,17 +90,27 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		// block height was not set in the msgBlock, set it from our lookup
 		blockHeight = previousBlockHeaderMeta.Height + 1
 
-		// nolint: gosec
-		block.SetHeight(int32(blockHeight))
+		blockHeightInt32, err := util.SafeUint32ToInt32(blockHeight)
+		if err != nil {
+			return errors.NewProcessingError("failed to convert block height to int32", err)
+		}
+
+		block.SetHeight(blockHeightInt32)
 	} else {
 		// check whether the block height being reported is the correct block height
-		//nolint:gosec
-		if block.Height() != int32(previousBlockHeaderMeta.Height+1) {
+		previousBlockHeightInt32, err := util.SafeUint32ToInt32(previousBlockHeaderMeta.Height + 1)
+		if err != nil {
+			return errors.NewProcessingError("failed to convert block height to int32", err)
+		}
+
+		if block.Height() != previousBlockHeightInt32 {
 			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
 		}
 
-		//nolint:gosec
-		blockHeight = uint32(block.Height())
+		blockHeight, err = util.SafeInt32ToUint32(block.Height())
+		if err != nil {
+			return errors.NewProcessingError("failed to convert block height to uint32", err)
+		}
 	}
 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
@@ -175,7 +185,12 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// create valid teranode block, with the subtree hash
 	blockSize := block.MsgBlock().SerializeSize()
 
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight, 0, sm.settings) //nolint:gosec
+	blockSizeUint64, err := util.SafeIntToUint64(blockSize)
+	if err != nil {
+		return err
+	}
+
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), blockSizeUint64, blockHeight, 0, sm.settings)
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
@@ -545,11 +560,15 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}()
 
+			blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+			if err != nil {
+				return err
+			}
+
 			// call the validator to validate the transaction, but skip the utxo creation
 			_, err = sm.validationClient.Validate(gCtx,
 				txMap[txHash].tx,
-				// nolint:gosec
-				uint32(block.Height()),
+				blockHeightUint32,
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),
 				validator.WithSkipPolicyChecks(true),
@@ -593,9 +612,14 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		if len(blockTxsPerLevel[i]) < 10 {
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
+				blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+				if err != nil {
+					return err
+				}
+
 				timeStart = time.Now()
-				//nolint:gosec
-				_, _ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
+
+				_, _ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true))
 
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
@@ -615,9 +639,13 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 						prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 					}()
 
+					blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+					if err != nil {
+						return err
+					}
+
 					// send to validation, but only if the parent is not in the same block
-					//nolint:gosec
-					_, _ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()), validator.WithSkipPolicyChecks(true))
+					_, _ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true))
 
 					return nil
 				})
@@ -701,7 +729,11 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 		// the coinbase transaction is not part of the txMap
 		if txWrapper, found := txMap[txHash]; found {
 			tx := txWrapper.tx
-			txSize := uint64(tx.Size()) // nolint:gosec
+
+			txSize, err := util.SafeIntToUint64(tx.Size())
+			if err != nil {
+				return err
+			}
 
 			fee, err := calculateTransactionFee(tx)
 			if err != nil {

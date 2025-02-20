@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -175,8 +176,12 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	//nolint:gosec // limit can only be max 100
-	blockHeaders, metas, err := h.repository.GetBlockHeadersFromHeight(ctx, meta.Height, uint32(limit))
+	limitUint32, err := util.SafeIntToUint32(limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid limit parameter", err).Error())
+	}
+
+	blockHeaders, metas, err := h.repository.GetBlockHeadersFromHeight(ctx, meta.Height, limitUint32)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -192,6 +197,16 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		metasMap[*blockHeader.Hash()] = metas[idx]
 	}
 
+	txCountUint32, err := util.SafeUint64ToUint32(metasMap[*blockHash].TxCount)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid tx count parameter", err).Error())
+	}
+
+	sizeUint32, err := util.SafeUint64ToUint32(metasMap[*blockHash].SizeInBytes)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid size parameter", err).Error())
+	}
+
 	// add the root block to the forks
 	blockForks := forks{
 		Tree: forksTree{
@@ -199,8 +214,8 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 			ID:        metasMap[*blockHash].ID,
 			Miner:     metasMap[*blockHash].Miner,
 			Height:    metasMap[*blockHash].Height,
-			TxCount:   uint32(metasMap[*blockHash].TxCount),
-			Size:      uint32(metasMap[*blockHash].SizeInBytes),
+			TxCount:   txCountUint32,
+			Size:      sizeUint32,
 			BlockTime: metasMap[*blockHash].BlockTime,
 			Timestamp: metasMap[*blockHash].Timestamp,
 			Link: forksLink{

@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 )
 
@@ -94,8 +95,12 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("a valid period is required").Error())
 	}
 
-	//nolint:gosec
-	dataPoints, err := h.repository.GetBlockGraphData(ctx, uint64(periodMillis))
+	periodMillisUint64, err := util.SafeInt64ToUint64(periodMillis)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid period parameter", err).Error())
+	}
+
+	dataPoints, err := h.repository.GetBlockGraphData(ctx, periodMillisUint64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

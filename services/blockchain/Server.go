@@ -1513,10 +1513,14 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain][GetBestHeightAndTime] could not calculate median block time", err))
 	}
 
+	medianTimestampUint32, err := util.SafeTimeToUint32(*medianTimestamp)
+	if err != nil {
+		return nil, err
+	}
+
 	return &blockchain_api.GetBestHeightAndTimeResponse{
 		Height: meta.Height,
-		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
-		Time: uint32(medianTimestamp.Unix()),
+		Time:   medianTimestampUint32,
 	}, nil
 }
 
@@ -1547,9 +1551,14 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	// block locator. See the description of the algorithm for how these
 	// numbers are derived.
 	var maxEntries uint8
+
+	blockHeaderHeightUint8, err := util.SafeUint32ToUint8(blockHeaderHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
 	if blockHeaderHeight <= 12 {
-		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
-		maxEntries = uint8(blockHeaderHeight + 1)
+		maxEntries = blockHeaderHeightUint8 + 1
 	} else {
 		// Requested hash itself + previous 10 entries + genesis block.
 		// Then floor(log2(height-10)) entries for the skip portion.

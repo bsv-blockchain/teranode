@@ -283,8 +283,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	if expirationStr != "" {
 		expirationVal, err := strconv.ParseUint(expirationStr, 10, 64)
 		if err == nil {
+			expirationInt64, err := util.SafeUint64ToInt64(expirationVal)
+			if err != nil {
+				return err
+			}
+
 			// We have a valid expiration value, so we can use it. We assume it is in seconds.
-			expiration = time.Duration(expirationVal) * time.Second // nolint:gosec
+			expiration = time.Duration(expirationInt64) * time.Second
 		} else {
 			// We do not have a valid expiration value, so we see if we can parse it as a duration.
 			d, err := time.ParseDuration(expirationStr)
@@ -426,11 +431,10 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
-	// nolint
-	var baseUrl string
+	var baseURL string
 
 	if len(msg.Value) > 32 {
-		baseUrl = string(msg.Value[32:])
+		baseURL = string(msg.Value[32:])
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -439,7 +443,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseURL),
 	)
 	defer deferFn()
 
@@ -459,7 +463,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
-		baseURL: baseUrl,
+		baseURL: baseURL,
 		errCh:   errCh,
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
@@ -1137,10 +1141,15 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 		}
 
 		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
+
+		useBlockHeadersSizeUint32, err := util.SafeIntToUint32(len(useBlockHeaders))
+		if err != nil {
+			return nil
+		}
+
 		batches = append(batches, blockBatchGet{
 			hash: *lastHash,
-			// nolint
-			size: uint32(len(useBlockHeaders)),
+			size: useBlockHeadersSizeUint32,
 		})
 	}
 

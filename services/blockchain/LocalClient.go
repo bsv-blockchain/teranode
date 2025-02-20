@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -286,5 +287,10 @@ func (c LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, 
 		return 0, 0, errors.NewProcessingError("[Blockchain] could not calculate median block time", err)
 	}
 
-	return meta.Height, uint32(medianTimestamp.Unix()), nil //nolint:gosec
+	medianTimestampUint32, err := util.SafeTimeToUint32(*medianTimestamp)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return meta.Height, medianTimestampUint32, nil
 }

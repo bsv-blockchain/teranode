@@ -716,8 +716,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// check the size of the block
 	// 0 is unlimited so don't check the size
 	if u.settings.Policy.ExcessiveBlockSize > 0 {
-		// nolint
-		if block.SizeInBytes > uint64(u.settings.Policy.ExcessiveBlockSize) {
+		excessiveBlockSizeUint64, err := util.SafeIntToUint64(u.settings.Policy.ExcessiveBlockSize)
+		if err != nil {
+			return err
+		}
+
+		if block.SizeInBytes > excessiveBlockSizeUint64 {
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
 	}

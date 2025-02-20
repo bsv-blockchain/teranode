@@ -370,7 +370,13 @@ func (sm *SyncManager) startSync() {
 
 		// Add any peers on the same block to okPeers. These should
 		// only be used as a last resort.
-		if peer.LastBlock() == int32(bestBlockHeaderMeta.Height) { // nolint:gosec
+
+		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		if err != nil {
+			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		}
+
+		if peer.LastBlock() == bestBlockHeightInt32 {
 			okPeers = append(okPeers, peer)
 			sm.logger.Debugf("[startSync][%v] peer is at the same height %d as us (%d), added to okPeers", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 
@@ -379,7 +385,7 @@ func (sm *SyncManager) startSync() {
 
 		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
-		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) { // nolint:gosec
+		if peer.LastBlock() < bestBlockHeightInt32 {
 			sm.logger.Debugf("[startSync][%v] peer is behind us at height %d (us: %d), skipping", peer.String(), peer.LastBlock(), bestBlockHeaderMeta.Height)
 
 			continue
@@ -407,9 +413,13 @@ func (sm *SyncManager) startSync() {
 	if bestPeer != nil {
 		sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
 
+		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		if err != nil {
+			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		}
+
 		// check whether we are in sync with this peer and send RUNNING FSM state
-		// nolint:gosec // the height will never exceed int32.Max
-		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
+		if bestPeer.LastBlock() == bestBlockHeightInt32 {
 			sm.logger.Debugf("peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
 			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
@@ -433,8 +443,7 @@ func (sm *SyncManager) startSync() {
 		sm.logger.Infof("Syncing from block height %d to block height %d using peer %v", bestBlockHeaderMeta.Height, bestPeer.LastBlock(), bestPeer.String())
 
 		// If we are behind the peer more than 10 blocks, move to CATCHING BLOCKS
-		//nolint:gosec
-		if bestPeer.LastBlock()-int32(bestBlockHeaderMeta.Height) > 10 {
+		if bestPeer.LastBlock()-bestBlockHeightInt32 > 10 {
 			// move FSM state to CATCHING BLOCKS, we are behind the peer more than 10 blocks
 			if err = sm.blockchainClient.CatchUpBlocks(sm.ctx); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to catching blocks: %v", err)
@@ -459,7 +468,7 @@ func (sm *SyncManager) startSync() {
 		// not support the headers-first approach so do normal block
 		// downloads when in regression test mode.
 		if sm.nextCheckpoint != nil &&
-			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height && // nolint:gosec
+			bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
 			sm.chainParams != &chaincfg.RegressionNetParams {
 			if err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
 				sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", bestPeer.String(), err)
@@ -592,8 +601,13 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
+	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+	}
+
 	// check whether this sync peer is still valid, if its height is the same or higher than ours
-	if sm.topBlock() >= int32(bestBlockHeaderMeta.Height) { // nolint:gosec
+	if sm.topBlock() >= bestBlockHeightInt32 {
 		// Update the time and violations to prevent disconnects.
 		sm.syncPeerState.updateLastBlockTime()
 		sm.syncPeerState.setViolations(0)
@@ -686,8 +700,13 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 		return
 	}
 
+	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+	}
+
 	if sm.headersFirstMode {
-		sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height)) // nolint:gosec
+		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
 	}
 
 	sm.startSync()
@@ -853,8 +872,13 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	// Not current if the latest main (best) chain height is before the
 	// latest known good checkpoint (when checkpoints are enabled).
 	if len(sm.chainParams.Checkpoints) > 0 {
+		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		if err != nil {
+			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		}
+
 		checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
-		if int32(bestBlockHeaderMeta.Height) < checkpoint.Height { // nolint:gosec
+		if bestBlockHeightInt32 < checkpoint.Height {
 			return false
 		}
 	}
@@ -888,8 +912,13 @@ func (sm *SyncManager) current() bool {
 		return true
 	}
 
+	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+	}
+
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() { // nolint:gosec
+	if bestBlockHeightInt32 < sm.syncPeer.LastBlock() {
 		return false
 	}
 
@@ -1022,8 +1051,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if err != nil {
 			sm.logger.Errorf("Failed to get block header for block %v: %v", bmsg.blockHash, err)
 		} else {
-			//nolint:gosec
-			heightUpdate = int32(blockHeaderMeta.Height)
+			blockHeightInt32, err := util.SafeUint32ToInt32(blockHeaderMeta.Height)
+			if err != nil {
+				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			}
+
+			heightUpdate = blockHeightInt32
 		}
 	}
 
@@ -1366,7 +1399,12 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if lastBlock != -1 && sm.current() {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
-			peer.UpdateLastBlockHeight(int32(blockHeaderMeta.Height)) // nolint:gosec
+			blockHeightInt32, err := util.SafeUint32ToInt32(blockHeaderMeta.Height)
+			if err != nil {
+				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			}
+
+			peer.UpdateLastBlockHeight(blockHeightInt32)
 		}
 	}
 
@@ -1945,10 +1983,15 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	if !config.DisableCheckpoints {
+		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		if err != nil {
+			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		}
+
 		// Initialize the next checkpoint based on the current height.
-		sm.nextCheckpoint = sm.findNextHeaderCheckpoint(int32(bestBlockHeaderMeta.Height)) // nolint:gosec
+		sm.nextCheckpoint = sm.findNextHeaderCheckpoint(bestBlockHeightInt32)
 		if sm.nextCheckpoint != nil {
-			sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height)) // nolint:gosec
+			sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
 		}
 	} else {
 		sm.logger.Infof("Checkpoints are disabled")

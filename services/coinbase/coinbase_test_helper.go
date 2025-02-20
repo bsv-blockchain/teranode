@@ -286,10 +286,15 @@ func TrySpendUTXOs(tx *bt.Tx, privateKey *bec.PrivateKey) error {
 
 	// Add all outputs from the input tx as inputs to our spending tx
 	for i, output := range tx.Outputs {
+		iUint32, err := util.SafeIntToUint32(i)
+		if err != nil {
+			return err
+		}
+
 		// Create UTXO from the output
 		utxo := &bt.UTXO{
 			TxIDHash:      tx.TxIDChainHash(),
-			Vout:          uint32(i), //nolint:gosec // G115: integer overflow conversion int -> uint32
+			Vout:          iUint32,
 			LockingScript: output.LockingScript,
 			Satoshis:      output.Satoshis,
 		}

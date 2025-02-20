@@ -1037,12 +1037,27 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	)
 	defer deferFn()
 
+	resetWaitCountUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitCount.Load())
+	if err != nil {
+		return nil, errors.NewProcessingError("error converting reset wait count", err)
+	}
+
+	resetWaitTimeUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitTime.Load())
+	if err != nil {
+		return nil, errors.NewProcessingError("error converting reset wait time", err)
+	}
+
+	subtreeCountUint32, err := util.SafeIntToUint32(ba.blockAssembler.SubtreeCount())
+	if err != nil {
+		return nil, errors.NewProcessingError("error converting subtree count", err)
+	}
+
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
 		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),
-		ResetWaitCount:        uint32(ba.blockAssembler.resetWaitCount.Load()), // nolint:gosec
-		ResetWaitTime:         uint32(ba.blockAssembler.resetWaitTime.Load()),  // nolint:gosec
-		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),        // nolint:gosec
+		ResetWaitCount:        resetWaitCountUint32,
+		ResetWaitTime:         resetWaitTimeUint32,
+		SubtreeCount:          subtreeCountUint32,
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
