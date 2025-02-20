@@ -1417,7 +1417,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
-		,tombstone_millis BIGINT
+        ,tombstone_millis BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -1453,6 +1453,35 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create inputs table - [%+v]", err)
 	}
 
+	// Drop and recreate the foreign key constraint for inputs table if it exists
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.table_constraints 
+				WHERE table_name = 'inputs' 
+				AND constraint_type = 'FOREIGN KEY'
+				AND constraint_name = 'inputs_transaction_id_fkey'
+			) THEN
+				ALTER TABLE inputs DROP CONSTRAINT inputs_transaction_id_fkey;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop existing foreign key constraint on inputs table - [%+v]", err)
+	}
+
+	// Add the new foreign key constraint with ON DELETE CASCADE for inputs
+	if _, err := db.Exec(`
+		ALTER TABLE inputs 
+		ADD CONSTRAINT inputs_transaction_id_fkey 
+		FOREIGN KEY (transaction_id) 
+		REFERENCES transactions(id) ON DELETE CASCADE;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add new foreign key constraint with CASCADE on inputs table - [%+v]", err)
+	}
+
 	// All fields are NOT NULL except for the spending_transaction_id which is NULL for unspent outputs.
 	// The utxo_hash is a hash of the transaction_id, idx, locking_script and satoshis and is used as a checksum of a utxo.
 	// The spending_transaction_id is the transaction_id of the transaction that spends this utxo but we do not use referential integrity here as
@@ -1475,6 +1504,35 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create outputs table - [%+v]", err)
 	}
 
+	// Drop and recreate the foreign key constraint for outputs table if it exists
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.table_constraints 
+				WHERE table_name = 'outputs' 
+				AND constraint_type = 'FOREIGN KEY'
+				AND constraint_name = 'outputs_transaction_id_fkey'
+			) THEN
+				ALTER TABLE outputs DROP CONSTRAINT outputs_transaction_id_fkey;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop existing foreign key constraint on outputs table - [%+v]", err)
+	}
+
+	// Add the new foreign key constraint with ON DELETE CASCADE for outputs
+	if _, err := db.Exec(`
+		ALTER TABLE outputs 
+		ADD CONSTRAINT outputs_transaction_id_fkey 
+		FOREIGN KEY (transaction_id) 
+		REFERENCES transactions(id) ON DELETE CASCADE;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add new foreign key constraint with CASCADE on outputs table - [%+v]", err)
+	}
+
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS block_ids (
           transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
@@ -1486,6 +1544,51 @@ func createPostgresSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create block_ids table - [%+v]", err)
+	}
+
+	// Add new columns to block_ids table if they don't exist
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'block_ids' AND column_name = 'block_height') THEN
+				ALTER TABLE block_ids ADD COLUMN block_height BIGINT NOT NULL;
+			END IF;
+
+			IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'block_ids' AND column_name = 'subtree_idx') THEN
+				ALTER TABLE block_ids ADD COLUMN subtree_idx BIGINT NOT NULL;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add new columns to block_ids table - [%+v]", err)
+	}
+
+	// Drop the existing foreign key constraint if it exists
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.table_constraints 
+				WHERE table_name = 'block_ids' 
+				AND constraint_type = 'FOREIGN KEY'
+			) THEN
+				ALTER TABLE block_ids DROP CONSTRAINT block_ids_transaction_id_fkey;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop existing foreign key constraint - [%+v]", err)
+	}
+
+	// Add the new foreign key constraint with ON DELETE CASCADE
+	if _, err := db.Exec(`
+		ALTER TABLE block_ids 
+		ADD CONSTRAINT block_ids_transaction_id_fkey 
+		FOREIGN KEY (transaction_id) 
+		REFERENCES transactions(id) ON DELETE CASCADE;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add new foreign key constraint with CASCADE - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`
@@ -1537,7 +1640,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,previous_tx_idx           BIGINT NOT NULL
         ,previous_tx_satoshis      BIGINT NOT NULL
         ,previous_tx_script        BLOB
-        ,unlocking_script          BYTEA NOT NULL
+        ,unlocking_script          BLOB NOT NULL
         ,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
 	  );
@@ -1590,6 +1693,133 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create conflicting_children table - [%+v]", err)
+	}
+
+	// Check if we need to migrate the block_ids table in SQLite
+	rows, err := db.Query(`
+		SELECT COUNT(*) 
+		FROM pragma_table_info('block_ids') 
+		WHERE name IN ('block_height', 'subtree_idx')
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check block_ids columns - [%+v]", err)
+	}
+
+	var columnCount int
+
+	if rows.Next() {
+		if err := rows.Scan(&columnCount); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not scan column count - [%+v]", err)
+		}
+	}
+
+	rows.Close()
+
+	// Only perform migration if the new columns don't exist
+	if columnCount < 2 {
+		// For SQLite, we just recreate the tables with the correct constraints
+		// SQLite doesn't support dropping foreign key constraints directly
+		if _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS block_ids_new (
+				transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
+				,block_id     INTEGER NOT NULL
+				,block_height INTEGER NOT NULL
+				,subtree_idx  INTEGER NOT NULL
+				,PRIMARY KEY (transaction_id, block_id)
+			);
+
+			INSERT OR IGNORE INTO block_ids_new 
+			SELECT transaction_id, block_id, 0, 0 
+			FROM block_ids;
+
+			DROP TABLE block_ids;
+
+			ALTER TABLE block_ids_new RENAME TO block_ids;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not migrate block_ids table - [%+v]", err)
+		}
+	}
+
+	// Check if we need to migrate the inputs table (check if ON DELETE CASCADE is missing)
+	rows, err = db.Query(`
+		SELECT sql FROM sqlite_master 
+		WHERE type='table' AND name='inputs' 
+		AND sql NOT LIKE '%ON DELETE CASCADE%'
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check inputs table - [%+v]", err)
+	}
+
+	needsInputsMigration := rows.Next()
+
+	rows.Close()
+
+	if needsInputsMigration {
+		if _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS inputs_new (
+				transaction_id               INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
+				,idx                        INTEGER NOT NULL
+				,previous_transaction_hash  BLOB NOT NULL
+				,previous_tx_idx           INTEGER NOT NULL
+				,previous_tx_satoshis      INTEGER NOT NULL
+				,previous_tx_script        BLOB
+				,unlocking_script          BLOB NOT NULL
+				,sequence_number           INTEGER NOT NULL
+				,PRIMARY KEY (transaction_id, idx)
+			);
+
+			INSERT OR IGNORE INTO inputs_new 
+			SELECT * FROM inputs;
+
+			DROP TABLE inputs;
+			
+			ALTER TABLE inputs_new RENAME TO inputs;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not migrate inputs table - [%+v]", err)
+		}
+	}
+
+	// Check if we need to migrate the outputs table (check if ON DELETE CASCADE is missing)
+	rows, err = db.Query(`
+		SELECT sql FROM sqlite_master 
+		WHERE type='table' AND name='outputs' 
+		AND sql NOT LIKE '%ON DELETE CASCADE%'
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check outputs table - [%+v]", err)
+	}
+
+	needsOutputsMigration := rows.Next()
+
+	rows.Close()
+
+	if needsOutputsMigration {
+		if _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS outputs_new (
+				transaction_id    INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
+				,idx             INTEGER NOT NULL
+				,satoshis        INTEGER NOT NULL
+				,locking_script  BLOB NOT NULL
+				,utxo_hash       BLOB NOT NULL
+				,PRIMARY KEY (transaction_id, idx)
+			);
+
+			INSERT OR IGNORE INTO outputs_new 
+			SELECT * FROM outputs;
+
+			DROP TABLE outputs;
+			
+			ALTER TABLE outputs_new RENAME TO outputs;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not migrate outputs table - [%+v]", err)
+		}
 	}
 
 	return nil
