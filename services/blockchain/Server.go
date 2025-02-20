@@ -1552,12 +1552,12 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	// numbers are derived.
 	var maxEntries uint8
 
-	blockHeaderHeightUint8, err := util.SafeUint32ToUint8(blockHeaderHeight)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
 	if blockHeaderHeight <= 12 {
+		blockHeaderHeightUint8, err := util.SafeUint32ToUint8(blockHeaderHeight)
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+
 		maxEntries = blockHeaderHeightUint8 + 1
 	} else {
 		// Requested hash itself + previous 10 entries + genesis block.

@@ -328,6 +328,39 @@ func Test_getBlockLocator(t *testing.T) {
 			assert.Equal(t, store.BlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
 		}
 	})
+
+	t.Run("blocks from low height", func(t *testing.T) {
+		store := blockchain_store.NewMockStore()
+
+		for i := uint32(0); i <= 1024; i++ {
+			block := &model.Block{
+				Height: i,
+				Header: &model.BlockHeader{
+					Version:        i,
+					HashPrevBlock:  &chainhash.Hash{},
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      i,
+					Bits:           model.NBit{},
+					Nonce:          i,
+				},
+			}
+			_, _, err := store.StoreBlock(ctx, block, "")
+			require.NoError(t, err)
+		}
+
+		locator, err := getBlockLocator(ctx, store, store.BlockByHeight[1000].Hash(), 1000)
+		require.NoError(t, err)
+
+		assert.Len(t, locator, 21)
+
+		expectedHeights := []uint32{
+			1000, 999, 998, 997, 996, 995, 994, 993, 992, 991, 990, 989, 987, 983, 975, 959, 927, 863, 735, 479, 0,
+		}
+
+		for locatorIdx, locatorHash := range locator {
+			assert.Equal(t, store.BlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
+		}
+	})
 }
 
 func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
