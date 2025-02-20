@@ -263,7 +263,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			StoreBatcherConcurrency:        getInt("utxostore_storeBatcherConcurrency", 32, alternativeContext...),
 			StoreBatcherDurationMillis:     getInt("utxostore_storeBatcherDurationMillis", 100, alternativeContext...),
 			StoreBatcherSize:               getInt("utxostore_storeBatcherSize", 100, alternativeContext...),
-			UtxoBatchSize:                  getInt("utxostore_utxoBatchSize", 0, alternativeContext...),
+			UtxoBatchSize:                  getInt("utxostore_utxoBatchSize", 128, alternativeContext...),
 			IncrementBatcherSize:           getInt("utxostore_incrementBatcherSize", 256, alternativeContext...),
 			IncrementBatcherDurationMillis: getInt("utxostore_incrementBatcherDurationMillis", 10, alternativeContext...),
 			GetBatcherSize:                 getInt("utxostore_getBatcherSize", 1, alternativeContext...),

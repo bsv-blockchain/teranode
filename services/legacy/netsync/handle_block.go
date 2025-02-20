@@ -263,10 +263,10 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 	return nil
 }
 
-type txMapWrapper struct {
-	tx                 *bt.Tx
-	someParentsInBlock bool
-	childLevelInBlock  uint32
+type TxMapWrapper struct {
+	Tx                 *bt.Tx
+	SomeParentsInBlock bool
+	ChildLevelInBlock  uint32
 }
 
 func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, err error) {
@@ -292,7 +292,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	var (
 		subtree        *util.Subtree
-		txMap          map[chainhash.Hash]*txMapWrapper
+		txMap          map[chainhash.Hash]*TxMapWrapper
 		legacyMode     bool
 		catchingBlocks bool
 	)
@@ -456,7 +456,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	return g.Wait()
 }
 
-func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
 		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
@@ -482,7 +482,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 // createUtxos creates all the utxos for the transactions in the block in parallel
 // before any spending is done. This only occurs in legacy mode when we assume the
 // block is valid.
-func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos",
 		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
@@ -502,12 +502,17 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
 	g.SetLimit(storeBatcherSize * storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
+	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+	if err != nil {
+		return errors.NewProcessingError("failed to convert block height to uint32", err)
+	}
+
 	// create all the utxos first
 	for txHash := range txMap {
 		txHash := txHash
 
 		g.Go(func() error {
-			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, uint32(block.Height())); err != nil {
+			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].Tx, blockHeightUint32); err != nil {
 				if errors.Is(err, errors.ErrTxExists) {
 					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
 				} else {
@@ -529,7 +534,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 
 // preValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
-func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions",
 		tracing.WithLogMessage(sm.logger, "[preValidateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncPreValidateTransactions),
@@ -567,7 +572,8 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 
 			// call the validator to validate the transaction, but skip the utxo creation
 			_, err = sm.validationClient.Validate(gCtx,
-				txMap[txHash].tx,
+				txMap[txHash].Tx,
+				// nolint:gosec
 				blockHeightUint32,
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),
@@ -661,7 +667,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	return nil
 }
 
-func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (err error) {
+func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions",
 		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
@@ -686,11 +692,11 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 
 		// the coinbase transaction is not part of the txMap
 		if txWrapper, found := txMap[txHash]; found {
-			tx := txWrapper.tx
+			tx := txWrapper.Tx
 
 			if !tx.IsCoinbase() {
 				g.Go(func() error {
-					if err := sm.extendTransaction(gCtx, tx, txMap); err != nil {
+					if err := sm.ExtendTransaction(gCtx, tx, txMap); err != nil {
 						return errors.NewTxError("failed to extend transaction", err)
 					}
 
@@ -708,7 +714,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	return nil
 }
 
-func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper,
+func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper,
 	subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMetaData *util.SubtreeMeta) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createSubtree",
 		tracing.WithLogMessage(sm.logger, "[createSubtree] called for block %s / height %d", block.Hash(), block.Height()),
@@ -728,7 +734,7 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 
 		// the coinbase transaction is not part of the txMap
 		if txWrapper, found := txMap[txHash]; found {
-			tx := txWrapper.tx
+			tx := txWrapper.Tx
 
 			txSize, err := util.SafeIntToUint64(tx.Size())
 			if err != nil {
@@ -797,7 +803,7 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 	return inputValue - outputValue, nil
 }
 
-func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {
+func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (map[chainhash.Hash]*TxMapWrapper, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createTxMap",
 		tracing.WithDebugLogMessage(
 			sm.logger,
@@ -811,7 +817,7 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 	blockTransactions := block.Transactions()
 
 	// Create a map of all transactions in the block
-	txMap := make(map[chainhash.Hash]*txMapWrapper, len(blockTransactions))
+	txMap := make(map[chainhash.Hash]*TxMapWrapper, len(blockTransactions))
 
 	for _, wireTx := range blockTransactions {
 		txHash := *wireTx.Hash()
@@ -824,7 +830,7 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
 			tx.SetTxHash(&txHash)
-			txMap[txHash] = &txMapWrapper{tx: tx}
+			txMap[txHash] = &TxMapWrapper{Tx: tx}
 		}
 	}
 
@@ -833,7 +839,7 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 
 // prepareTxsPerLevel prepares the transactions per level for processing
 // levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (uint32, map[uint32][]*bt.Tx) {
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper) (uint32, map[uint32][]*bt.Tx) {
 	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 
@@ -844,24 +850,24 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 		if _, found := txMap[txHash]; found {
-			if txMap[txHash].someParentsInBlock {
-				for _, input := range txMap[txHash].tx.Inputs {
+			if txMap[txHash].SomeParentsInBlock {
+				for _, input := range txMap[txHash].Tx.Inputs {
 					parentTxHash := *input.PreviousTxIDChainHash()
 					if parentTxWrapper, found := txMap[parentTxHash]; found {
 						// if the parent from this input is at the same level or higher,
 						// we need to increase the child level of this transaction
-						if parentTxWrapper.childLevelInBlock >= txMap[txHash].childLevelInBlock {
-							txMap[txHash].childLevelInBlock = parentTxWrapper.childLevelInBlock + 1
+						if parentTxWrapper.ChildLevelInBlock >= txMap[txHash].ChildLevelInBlock {
+							txMap[txHash].ChildLevelInBlock = parentTxWrapper.ChildLevelInBlock + 1
 						}
 
-						if txMap[txHash].childLevelInBlock > maxLevel {
-							maxLevel = txMap[txHash].childLevelInBlock
+						if txMap[txHash].ChildLevelInBlock > maxLevel {
+							maxLevel = txMap[txHash].ChildLevelInBlock
 						}
 					}
 				}
 			}
 
-			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
+			sizePerLevel[txMap[txHash].ChildLevelInBlock] += 1
 		}
 	}
 
@@ -872,13 +878,13 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 
 	// put all transactions in a map per level for processing
 	for _, txWrapper := range txMap {
-		blockTxsPerLevel[txWrapper.childLevelInBlock] = append(blockTxsPerLevel[txWrapper.childLevelInBlock], txWrapper.tx)
+		blockTxsPerLevel[txWrapper.ChildLevelInBlock] = append(blockTxsPerLevel[txWrapper.ChildLevelInBlock], txWrapper.Tx)
 	}
 
 	return maxLevel, blockTxsPerLevel
 }
 
-func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
+func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap map[chainhash.Hash]*TxMapWrapper) error {
 	timeStart := time.Now()
 	defer func() {
 		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
@@ -898,10 +904,10 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 		prevTxHash := *input.PreviousTxIDChainHash()
 
 		if prevTxWrapper, found := txMap[prevTxHash]; found {
-			txWrapper.someParentsInBlock = true
+			txWrapper.SomeParentsInBlock = true
 
-			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].Satoshis
-			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].LockingScript)
+			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].Satoshis
+			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].LockingScript)
 		} else {
 			previousOutputs = append(previousOutputs, &meta.PreviousOutput{
 				PreviousTxID: prevTxHash,
