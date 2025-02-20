@@ -115,6 +115,8 @@ func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchain
 		return nil, errors.NewConfigurationError("can't create coinbase address", err)
 	}
 
+	logger.Infof("Coinbase will process all coinbase Tx with address: %s", coinbaseAddr.AddressString)
+
 	backoffDuration := tSettings.Coinbase.DistributorBackoffDuration
 
 	maxRetries := tSettings.Coinbase.DistributorMaxRetries
