@@ -511,7 +511,12 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 //   - UTXOs for that batch
 //   - Count of non-nil UTXOs in batch
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
-	var batches [][]*aerospike.Bin
+	// Pre-calculate number of batches to avoid reallocation
+	numBatches := (len(utxos) + s.utxoBatchSize - 1) / s.utxoBatchSize
+	batches := make([][]*aerospike.Bin, 0, numBatches)
+
+	// Pre-allocate the batch slice to avoid reallocation during append
+	batchCap := len(commonBins) + 2 // +2 for utxos and nrUtxos bins
 
 	for start := 0; start < len(utxos); start += s.utxoBatchSize {
 		end := start + s.utxoBatchSize
@@ -519,21 +524,22 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 			end = len(utxos)
 		}
 
-		batchUtxos := utxos[start:end]
-
-		// Count the number of non-nil utxos in this batch
-
+		// Count non-nil UTXOs while creating the batch slice
 		nrUtxos := 0
-
+		batchUtxos := utxos[start:end]
 		for _, utxo := range batchUtxos {
 			if utxo != nil {
 				nrUtxos++
 			}
 		}
 
-		batch := append([]*aerospike.Bin(nil), commonBins...)
-		batch = append(batch, aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)))
-		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)))
+		// Pre-allocate the batch with exact capacity needed
+		batch := make([]*aerospike.Bin, 0, batchCap)
+		batch = append(batch, commonBins...)
+		batch = append(batch,
+			aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)),
+			aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)),
+		)
 		batches = append(batches, batch)
 	}
 

@@ -578,7 +578,16 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 	return fileName, nil
 }
 
+// create a global limiting semaphore for setTTL file operations
+var setTTLFileSemaphore = make(chan struct{}, 256)
+
 func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.FileOption) error {
+	// limit the number of concurrent file operations
+	setTTLFileSemaphore <- struct{}{}
+	defer func() {
+		<-setTTLFileSemaphore
+	}()
+
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key)
