@@ -30,7 +30,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21.0"
+          go-version: '1.24.0'
           cache: "false"
 
       - name: Run Services Tests
@@ -57,7 +57,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21.0"
+          go-version: '1.24.0'
           cache: "false"
 
       - name: Run Model Tests
@@ -84,7 +84,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21.0"
+          go-version: '1.24.0'
           cache: "false"
 
       - name: Run Stores Tests
@@ -111,7 +111,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21.0"
+          go-version: '1.24.0'
           cache: "false"
 
       - name: Run Util Tests
@@ -138,7 +138,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21.0"
+          go-version: '1.24.0'
           cache: "false"
 
       - name: Run Double Spend Tests
