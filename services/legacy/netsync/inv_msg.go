@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 // invMsg packages a bitcoin inv message and the peer it came from together
@@ -28,16 +29,25 @@ func (i *invMsg) Bytes() []byte {
 	lenBytes := make([]byte, 8)
 
 	// first 8 bytes are the length of the peer address
-	// nolint: gosec
-	binary.LittleEndian.PutUint64(lenBytes, uint64(len(peerBytes)))
+
+	lenUint64, err := util.SafeIntToUint64(len(peerBytes))
+	if err != nil {
+		return nil
+	}
+
+	binary.LittleEndian.PutUint64(lenBytes, lenUint64)
 	msgBytes = append(msgBytes, lenBytes...)
 
 	// next bytes are the peer address
 	msgBytes = append(msgBytes, peerBytes...)
 
+	invLenUint64, err := util.SafeIntToUint64(invBytes.Len())
+	if err != nil {
+		return nil
+	}
+
 	// next 8 bytes are the length of the inv message
-	// nolint: gosec
-	binary.LittleEndian.PutUint64(lenBytes, uint64(invBytes.Len()))
+	binary.LittleEndian.PutUint64(lenBytes, invLenUint64)
 	msgBytes = append(msgBytes, lenBytes...)
 
 	// next bytes are the inv message

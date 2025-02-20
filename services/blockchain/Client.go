@@ -388,10 +388,14 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 
 // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	depthUint32, err := util.SafeIntToUint32(depth)
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
-		Hash: blockHash[:],
-		//nolint:gosec // Ignore G115: integer overflow conversion
-		Depth: uint32(depth),
+		Hash:  blockHash[:],
+		Depth: depthUint32,
 	})
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)

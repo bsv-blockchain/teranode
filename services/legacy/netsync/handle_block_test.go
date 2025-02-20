@@ -100,12 +100,12 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 				txHash := *wireTx.Hash()
 				// extend transaction
 				if txWrapper, found := txMap[txHash]; found {
-					tx := txWrapper.tx
+					tx := txWrapper.Tx
 
 					for _, input := range tx.Inputs {
 						prevTxHash := *input.PreviousTxIDChainHash()
 						if _, found := txMap[prevTxHash]; found {
-							txWrapper.someParentsInBlock = true
+							txWrapper.SomeParentsInBlock = true
 						}
 					}
 				}

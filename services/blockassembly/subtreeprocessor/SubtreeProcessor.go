@@ -759,8 +759,12 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	// reset the chained subtrees and the current subtree
 	stp.chainedSubtrees = stp.chainedSubtrees[:fromIndex]
 
-	//nolint:gosec
-	stp.chainedSubtreeCount.Store(int32(len(stp.chainedSubtrees)))
+	lenOriginalSubtreesInt32, err := util.SafeIntToInt32(len(originalSubtrees))
+	if err != nil {
+		return errors.NewProcessingError("error converting original subtrees length", err)
+	}
+
+	stp.chainedSubtreeCount.Store(lenOriginalSubtreesInt32)
 
 	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
@@ -878,12 +882,35 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Store(0)
 
+	var (
+		subtreeLen uint64
+		err        error
+	)
+
 	for _, subtree := range stp.chainedSubtrees {
-		stp.txCount.Add(uint64(subtree.Length())) // nolint:gosec
+		subtreeLen, err = util.SafeIntToUint64(subtree.Length())
+		if err != nil {
+			stp.logger.Errorf("error converting subtree length: %s", err)
+			continue
+		}
+
+		stp.txCount.Add(subtreeLen)
 	}
 
-	stp.txCount.Add(uint64(stp.currentSubtree.Length())) // nolint:gosec
-	stp.txCount.Add(uint64(stp.queue.length()))          // nolint:gosec
+	currSubtreeLenUint64, err := util.SafeIntToUint64(stp.currentSubtree.Length())
+	if err != nil {
+		stp.logger.Errorf("error converting current subtree length: %s", err)
+		return
+	}
+
+	queueLenUint64, err := util.SafeInt64ToUint64(stp.queue.length())
+	if err != nil {
+		stp.logger.Errorf("error converting queue length: %s", err)
+		return
+	}
+
+	stp.txCount.Add(currSubtreeLenUint64)
+	stp.txCount.Add(queueLenUint64)
 }
 
 // moveBackBlock processes a block during downward chain movement.
@@ -1460,7 +1487,13 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
-	deDuplicationMap := util.NewSplitSwissMapUint64(int(stp.txCount.Load())) // nolint:gosec
+	txCountInt, err := util.SafeUint64ToInt(stp.txCount.Load())
+	if err != nil {
+		stp.logger.Errorf("[DeDuplicateTransactions] error converting tx count: %s", err.Error())
+		return
+	}
+
+	deDuplicationMap := util.NewSplitSwissMapUint64(txCountInt)
 	removeMapLength := stp.removeMap.Length()
 
 	for subtreeIdx, subtree := range chainedSubtrees {
@@ -1470,7 +1503,13 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 					stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
 				}
 			} else {
-				if err = deDuplicationMap.Put(node.Hash, uint64(subtreeIdx*subtree.Size()+nodeIdx)); err != nil { // nolint:gosec
+				subtreeSizeUint64, err := util.SafeIntToUint64(subtreeIdx*subtree.Size() + nodeIdx)
+				if err != nil {
+					stp.logger.Errorf("[DeDuplicateTransactions] error converting subtree size: %s", err.Error())
+					return
+				}
+
+				if err = deDuplicationMap.Put(node.Hash, subtreeSizeUint64); err != nil {
 					stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
 				} else {
 					_ = stp.addNode(node, false)

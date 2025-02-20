@@ -4,16 +4,30 @@ package aerospike
 
 import (
 	"context"
+	"log"
+	"net/url"
 	"os"
+	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
+	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-bitcoin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -85,7 +99,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		g := errgroup.Group{}
 		for i := 0; i < 100; i++ {
 			g.Go(func() error {
-				fetchedTx, err := s.GetTxFromExternalStore(ctx, *txHash)
+				fetchedTx, err := s.GetOutpointsFromExternalStore(ctx, *txHash)
 				if err != nil {
 					return err
 				}
@@ -105,4 +119,218 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		assert.Equal(t, memStore.Counters["set"], 1)
 		assert.Equal(t, memStore.Counters["get"], 1)
 	})
+}
+
+func TestGetExternalFromLargeBlock(t *testing.T) {
+	// comment this to run test manually
+	t.Skip("Skipping test as it needs a lot of external data to be present in the store")
+
+	ctx := context.Background()
+
+	_, s, _, deferFn := initAerospike(t)
+	defer deferFn()
+
+	txStoreURL, _ := url.Parse("file://./data/txstore")
+	txStore, err := file.New(ulogger.TestLogger{}, txStoreURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	externalStoreURL, _ := url.Parse("file://./data/externalStore")
+	externalStore, err := file.New(ulogger.TestLogger{}, externalStoreURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.SetExternalStore(externalStore)
+	s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
+
+	// update with real data to access the bitcoin node
+	var (
+		rpcHost  = "localhost"
+		rpcPort  = 8332
+		username = "bitcoin"
+		password = "bitcoin"
+	)
+
+	// get the block we need 700908 - 00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7
+	blockHeight := uint32(700908)
+	blockHex := "00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7"
+
+	b, err := bitcoin.New(rpcHost, rpcPort, username, password, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Getting block %s", blockHex)
+	block, err := b.GetBlock(blockHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parentTxs := make(map[string]struct{})
+
+	txMap := make(map[chainhash.Hash]*netsync.TxMapWrapper)
+
+	t.Logf("Getting %d transactions from block %s", len(block.Tx), blockHex)
+	for idx, txID := range block.Tx {
+		t.Logf("Processing %s, %d of %d\r", txID, idx, len(block.Tx))
+		if idx == 0 {
+			// skip the coinbase
+			continue
+		}
+
+		tx, err = fetchTransaction(ctx, txStore, b, txID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		txMap[*tx.TxIDChainHash()] = &netsync.TxMapWrapper{
+			Tx: tx,
+		}
+
+		if err = ProcessTx(ctx, txStore, b, s, tx, blockHeight, &parentTxs); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
+	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
+
+	mockBlockchain := &blockchain.MockStore{}
+	mockBlockchain.BestBlock = &model.Block{
+		Height: blockHeight,
+		Header: &model.BlockHeader{},
+	}
+
+	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, mockBlockchain, nil, s)
+	require.NoError(t, err)
+
+	sm, err := netsync.New(ctx,
+		ulogger.TestLogger{},
+		s.GetSettings(),
+		blockchainClient,
+		nil,
+		s,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		&netsync.Config{
+			PeerNotifier:            nil,
+			ChainParams:             s.GetSettings().ChainCfgParams,
+			DisableCheckpoints:      false,
+			MaxPeers:                1,
+			MinSyncPeerNetworkSpeed: 1000,
+		},
+	)
+	require.NoError(t, err)
+
+	fCPU, _ := os.Create("cpu.prof")
+
+	defer fCPU.Close()
+
+	_ = pprof.StartCPUProfile(fCPU)
+	defer pprof.StopCPUProfile()
+
+	// we have now cached all transactions (for the next step) and inserted them into the aerospike store
+	// extend the transactions in parallel and check for any errors (the real test)
+	for idx, txID := range block.Tx {
+		if idx == 0 {
+			continue
+		}
+
+		tx, err := fetchTransaction(ctx, txStore, b, txID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		g.Go(func() error {
+			if err := sm.ExtendTransaction(gCtx, tx, txMap); err != nil {
+				return errors.NewTxError("failed to extend transaction", err)
+			}
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	fMem, _ := os.Create("mem.prof")
+	defer fMem.Close()
+
+	_ = pprof.WriteHeapProfile(fMem)
+}
+
+func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *teranode_aerospike.Store, tx *bt.Tx,
+	blockHeight uint32, parentTxs *map[string]struct{}) (err error) {
+
+	g, gCtx := errgroup.WithContext(ctx)
+	parentTxsMu := sync.Mutex{}
+
+	for _, input := range tx.Inputs {
+		parentTxsMu.Lock()
+		_, ok := (*parentTxs)[input.PreviousTxIDChainHash().String()]
+		if !ok {
+			// get the parent tx and store in the map
+			parentTxID := input.PreviousTxIDChainHash().String()
+
+			(*parentTxs)[parentTxID] = struct{}{}
+
+			g.Go(func() error {
+				parentTx, err := fetchTransaction(gCtx, txStore, b, parentTxID)
+				if err != nil {
+					return err
+				}
+
+				// store the parent tx in the aerospike store
+				// this will store the transactions externally if applicable
+				// set fake fees and input script
+				for idx, input := range parentTx.Inputs {
+					input.PreviousTxSatoshis = uint64(idx)
+					input.PreviousTxScript = bscript.NewFromBytes([]byte{0x00})
+				}
+
+				if _, err = s.Create(gCtx, parentTx, blockHeight); err != nil {
+					log.Fatalf("Failed to store parent tx %s: %s", parentTx.TxIDChainHash().String(), err)
+					return err
+				}
+
+				return nil
+			})
+		}
+		parentTxsMu.Unlock()
+	}
+
+	return g.Wait()
+}
+
+func fetchTransaction(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, txIDHex string) (*bt.Tx, error) {
+	// try the blob store
+	txHash, _ := chainhash.NewHashFromStr(txIDHex)
+	txBytes, _ := txStore.Get(ctx, txHash[:], options.WithFileExtension("tx"))
+	if txBytes != nil {
+		return bt.NewTxFromBytes(txBytes)
+	}
+
+	rawTx, err := b.GetRawTransaction(txIDHex)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := bt.NewTxFromString(rawTx.Hex)
+	if err != nil {
+		return nil, err
+	}
+
+	// store the tx in the blob store
+	err = txStore.Set(ctx, txHash[:], tx.Bytes(), options.WithFileExtension("tx"))
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
 }

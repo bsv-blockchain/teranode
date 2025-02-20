@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -216,31 +217,37 @@ func (s *MockBlockchain) GetBlockExists(ctx context.Context, blockHash *chainhas
 	return *s.Block.Hash() == *blockHash, nil
 }
 func (s *MockBlockchain) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	timeUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return s.Block.Header, &model.BlockHeaderMeta{
 		ID:          1,
 		Height:      s.Block.Height,
 		TxCount:     s.Block.TransactionCount,
 		SizeInBytes: s.Block.SizeInBytes,
 		Miner:       "test",
-		//nolint:gosec
-		BlockTime: uint32(time.Now().Unix()),
-		//nolint:gosec
-		Timestamp: uint32(time.Now().Unix()),
-		ChainWork: nil,
+		BlockTime:   timeUint32,
+		Timestamp:   timeUint32,
+		ChainWork:   nil,
 	}, nil
 }
 func (s *MockBlockchain) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	timeUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return s.Block.Header, &model.BlockHeaderMeta{
 		ID:          1,
 		Height:      s.Block.Height,
 		TxCount:     s.Block.TransactionCount,
 		SizeInBytes: s.Block.SizeInBytes,
 		Miner:       "test",
-		//nolint:gosec
-		BlockTime: uint32(time.Now().Unix()),
-		//nolint:gosec
-		Timestamp: uint32(time.Now().Unix()),
-		ChainWork: nil,
+		BlockTime:   timeUint32,
+		Timestamp:   timeUint32,
+		ChainWork:   nil,
 	}, nil
 }
 func (s *MockBlockchain) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {

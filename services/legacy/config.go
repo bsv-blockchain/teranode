@@ -702,7 +702,6 @@ func bsvdLookup(host string) ([]net.IP, error) {
 	return cfg.lookup(host)
 }
 
-// nolint: gocognit
 func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]string, cfg *config) {
 	for k, v := range settings {
 		// check whether the key is of the form "legacy_config_" + configKey

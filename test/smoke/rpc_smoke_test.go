@@ -87,6 +87,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
+	// Wait for transaction to be processed
 	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)

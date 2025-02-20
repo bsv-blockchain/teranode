@@ -284,8 +284,13 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
 				b.resetWaitCount.Store(2) // wait 2 blocks before starting to mine again
-				// nolint:gosec
-				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
+
+				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(20 * time.Minute).Unix())
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler][Reset] error converting reset wait time: %v", err)
+				}
+
+				b.resetWaitTime.Store(resetWaitTimeInt32)
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
@@ -302,8 +307,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
 
-				// nolint:gosec
-				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
+				timeNowInt32, err := util.SafeInt64ToInt32(time.Now().Unix())
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler][MiningCandidate] error converting time now: %v", err)
+				}
+
+				if b.resetWaitCount.Load() > 0 || timeNowInt32 <= b.resetWaitTime.Load() {
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: errors.NewProcessingError("waiting for reset to complete"),
@@ -628,8 +637,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
 
-	//nolint:gosec // G115: integer overflow conversion uint64 -> int (gosec)
-	if b.settings.Policy.BlockMaxSize > 0 && len(subtrees) > 0 && uint64(b.settings.Policy.BlockMaxSize) < subtrees[0].SizeInBytes {
+	blockMaxSizeUint64, err := util.SafeIntToUint64(b.settings.Policy.BlockMaxSize)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting block max size", err)
+	}
+
+	if b.settings.Policy.BlockMaxSize > 0 && len(subtrees) > 0 && blockMaxSizeUint64 < subtrees[0].SizeInBytes {
 		b.logger.Warnf("[BlockAssembler] max block size is less than the size of the subtree: %d < %d", b.settings.Policy.BlockMaxSize, subtrees[0].SizeInBytes)
 
 		return nil, nil, errors.NewProcessingError("max block size is less than the size of the subtree")
@@ -667,15 +680,19 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		}
 
 		for _, subtree := range subtrees {
-			//nolint:gosec // G115: integer overflow conversion uint64 -> int (gosec)
-			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= uint64(b.settings.Policy.BlockMaxSize) {
+			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= blockMaxSizeUint64 {
 				subtreesToInclude = append(subtreesToInclude, subtree)
 				subtreeBytesToInclude = append(subtreeBytesToInclude, subtree.RootHash().CloneBytes())
 				coinbaseValue += subtree.Fees
 				currentBlockSize += subtree.SizeInBytes
 				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
-				// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-				txCount += uint32(len(subtree.Nodes))
+
+				lenSubtreeNodesUint32, err := util.SafeIntToUint32(len(subtree.Nodes))
+				if err != nil {
+					return nil, nil, errors.NewProcessingError("error converting subtree nodes length", err)
+				}
+
+				txCount += lenSubtreeNodesUint32
 
 				sizeWithoutCoinbase += subtree.SizeInBytes
 			} else {
@@ -724,14 +741,24 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	} else {
 		b.currentDifficulty.Store(nBits)
 	}
-	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	timeNow := uint32(time.Now().Unix())
+
+	timeNowUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting time now", err)
+	}
+
 	timeBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(timeBytes, timeNow)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 
 	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load()+1, b.settings.ChainCfgParams)
 
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
+
+	lenSubtreesToIncludeUint32, err := util.SafeIntToUint32(len(subtreesToInclude))
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting subtree count", err)
+	}
+
 	miningCandidate := &model.MiningCandidate{
 		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
 		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
@@ -740,13 +767,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Version:             0x20000000,
 		NBits:               nBits.CloneBytes(),
 		Height:              b.bestBlockHeight.Load() + 1,
-		Time:                timeNow,
+		Time:                timeNowUint32,
 		MerkleProof:         coinbaseMerkleProofBytes,
 		NumTxs:              txCount,
 		SizeWithoutCoinbase: sizeWithoutCoinbase,
-		// nolint:gosec
-		SubtreeCount:  uint32(len(subtreesToInclude)),
-		SubtreeHashes: subtreeBytesToInclude,
+		SubtreeCount:        lenSubtreesToIncludeUint32,
+		SubtreeHashes:       subtreeBytesToInclude,
 	}
 
 	return miningCandidate, subtreesToInclude, nil

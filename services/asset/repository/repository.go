@@ -495,7 +495,12 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 	// read number of leaves
 	numNodes := binary.LittleEndian.Uint64(buf.Next(8))
 
-	return subtree, int(numNodes), nil // nolint:gosec
+	numNodesInt, err := util.SafeUint64ToInt(numNodes)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return subtree, numNodesInt, nil
 }
 
 // GetUtxoBytes retrieves the spending transaction ID for a specific UTXO.

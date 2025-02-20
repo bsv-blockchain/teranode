@@ -8,10 +8,12 @@ package peer
 import (
 	"bytes"
 	"container/list"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
+	"math/big"
 	"net"
 	"strconv"
 	"sync"
@@ -874,14 +876,19 @@ func (p *Peer) PushAddrMsg(addresses []*wire.NetAddress) ([]*wire.NetAddress, er
 
 	// Randomize the addresses sent if there are more than the maximum allowed.
 	if addressCount > wire.MaxAddrPerMsg {
-		// Shuffle the address list.
+		// Shuffle the address list using crypto/rand.
 		for i := 0; i < wire.MaxAddrPerMsg; i++ {
-			//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-			j := i + rand.IntN(addressCount-i)
+			// Generate a secure random integer in the range [0, addressCount-i)
+			nBig, err := rand.Int(rand.Reader, big.NewInt(int64(addressCount-i)))
+			if err != nil {
+				return nil, err
+			}
+
+			j := i + int(nBig.Int64())
 			msg.AddrList[i], msg.AddrList[j] = msg.AddrList[j], msg.AddrList[i]
 		}
 
-		// Truncate it to the maximum size.
+		// Truncate the list to the maximum size.
 		msg.AddrList = msg.AddrList[:wire.MaxAddrPerMsg]
 	}
 
@@ -2059,8 +2066,16 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// detected.  This is accomplished by adding it to a size-limited map of
 	// recently seen nonces.
 
-	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	nonce := uint64(rand.Int64())
+	var nonce uint64
+	{
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return nil, err
+		}
+
+		nonce = binary.LittleEndian.Uint64(b[:])
+	}
+
 	sentNonces.Add(nonce)
 
 	// Create a wire.NetAddress to use as "addrme" in the

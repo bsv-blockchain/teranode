@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -113,8 +114,12 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
 		}
 
-		//nolint:gosec
-		block, err := h.repository.GetBlockByHeight(ctx, uint32(height))
+		heightUint32, err := util.SafeUint64ToUint32(height)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
+		}
+
+		block, err := h.repository.GetBlockByHeight(ctx, heightUint32)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -132,8 +137,13 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 		if mode == JSON {
 			// get next hash to include in response
 			var nextBlockHash *chainhash.Hash
-			// nolint:gosec
-			nextBlock, _ := h.repository.GetBlockByHeight(ctx, uint32(height+1))
+
+			nextHeight, err := util.SafeUint64ToUint32(height + 1)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
+			}
+
+			nextBlock, _ := h.repository.GetBlockByHeight(ctx, nextHeight)
 			if nextBlock != nil {
 				nextBlockHash = nextBlock.Hash()
 			}

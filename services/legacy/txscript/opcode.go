@@ -6,7 +6,7 @@ package txscript
 
 import (
 	"bytes"
-	//nolint:gosec // G505: Block cipher mode of operation is not specified
+	//nolint:gosec // G505: Blocklisted import crypto/sha1: weak cryptographic primitive (gosec)
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"

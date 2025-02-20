@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -139,7 +140,14 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 		)
 
 		if len(hashes) == 0 {
-			headers, headerMetas, err = h.repository.GetBlockHeaders(ctx, hash, uint64(numberOfHeaders)) // nolint:gosec
+			var numberOfHeadersUint64 uint64
+
+			numberOfHeadersUint64, err = util.SafeIntToUint64(numberOfHeaders)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of headers", err).Error())
+			}
+
+			headers, headerMetas, err = h.repository.GetBlockHeaders(ctx, hash, numberOfHeadersUint64)
 		} else {
 			headers, headerMetas, err = h.repository.GetBlockHeadersToCommonAncestor(ctx, hash, hashes)
 		}

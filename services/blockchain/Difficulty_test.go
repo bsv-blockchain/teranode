@@ -325,7 +325,8 @@ func TestBigToCompact(t *testing.T) {
 	for x, test := range tests {
 		n := big.NewInt(test.in)
 
-		r := BigToCompact(n)
+		r, err := BigToCompact(n)
+		require.NoError(t, err)
 		if r != test.out {
 			t.Errorf("TestBigToCompact test #%d failed: got %d want %d\n",
 				x, r, test.out)

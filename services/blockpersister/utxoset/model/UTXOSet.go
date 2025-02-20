@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -77,17 +78,23 @@ func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) 
 
 // Write writes the UTXOSet to an io.Writer.
 func (us *UTXOSet) Write(w io.Writer) error {
-	if _, err := w.Write(us.BlockHash[:]); err != nil {
+	var err error
+
+	if _, err = w.Write(us.BlockHash[:]); err != nil {
 		return errors.NewProcessingError("error writing block hash", err)
 	}
 
-	// Write the number of UTXOs
-	// nolint:gosec
-	if err := binary.Write(w, binary.LittleEndian, uint32(us.Current.Length())); err != nil {
-		return errors.NewProcessingError("error writing number of UTXOs", err)
+	var lengthUint32 uint32
+
+	lengthUint32, err = util.SafeIntToUint32(us.Current.Length())
+	if err != nil {
+		return err
 	}
 
-	var err error
+	// Write the number of UTXOs
+	if err = binary.Write(w, binary.LittleEndian, lengthUint32); err != nil {
+		return errors.NewProcessingError("error writing number of UTXOs", err)
+	}
 
 	us.Current.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
 		if err = uk.Write(w); err != nil {

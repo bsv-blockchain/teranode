@@ -616,8 +616,13 @@ func (cm *ConnManager) Start() {
 				return
 			case <-ticker.C:
 				// try to connect to new address every minute, we might have disconnected or have new addresses
-				//nolint:gosec
-				connectionsOpen := uint32(cm.conns.Length())
+				connsLengthUint32, err := util.SafeIntToUint32(cm.conns.Length())
+				if err != nil {
+					cm.logger.Errorf("could not convert conns length to uint32: %v", err)
+					continue
+				}
+
+				connectionsOpen := connsLengthUint32
 				cm.logger.Debugf("checking active connections: %d", connectionsOpen)
 
 				for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound-connectionsOpen); i++ {

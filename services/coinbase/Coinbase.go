@@ -123,7 +123,12 @@ func NewCoinbase(logger ulogger.Logger, tSettings *settings.Settings, blockchain
 
 	failureTolerance := tSettings.Coinbase.DistributorFailureTolerance
 
-	d, err := distributor.NewDistributor(context.Background(), logger, tSettings, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance)) //nolint:gosec
+	maxRetriesInt32, err := util.SafeIntToInt32(maxRetries)
+	if err != nil {
+		return nil, err
+	}
+
+	d, err := distributor.NewDistributor(context.Background(), logger, tSettings, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(maxRetriesInt32), distributor.WithFailureTolerance(failureTolerance))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create distributor", err)
 	}
@@ -291,9 +296,8 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		`, idType, bType, bType)); err != nil {
 		return err
 	}
-	//nolint:gocritic
-	switch c.engine {
-	case util.Postgres:
+
+	if c.engine == util.Postgres {
 		if _, err := c.db.ExecContext(ctx, `
 			CREATE TABLE IF NOT EXISTS spendable_utxos_log (
 				id BIGSERIAL PRIMARY KEY,
@@ -550,7 +554,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	// ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	// defer cancelTimeout()
 
-	blockId, height, err := c.store.StoreBlock(ctx, block, "") //nolint:stylecheck
+	blockID, height, err := c.store.StoreBlock(ctx, block, "")
 	if err != nil {
 		return errors.NewStorageError("could not store block", err)
 	}
@@ -564,7 +568,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 		}
 	}
 
-	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+	err = c.processCoinbase(ctx, blockID, block.Hash(), block.CoinbaseTx)
 	if err != nil {
 		return errors.NewProcessingError("could not process coinbase", err)
 	}
@@ -572,7 +576,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	return nil
 }
 
-func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error { //nolint:stylecheck
+func (c *Coinbase) processCoinbase(ctx context.Context, blockID uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "processCoinbase")
 	defer deferFn()
 
@@ -581,7 +585,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
-	if err := c.insertCoinbaseUTXOs(ctx, blockId, coinbaseTx); err != nil {
+	if err := c.insertCoinbaseUTXOs(ctx, blockID, coinbaseTx); err != nil {
 		return errors.NewProcessingError("could not insert coinbase utxos", err)
 	}
 
@@ -735,6 +739,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 			totalOutputs++
 		}
 
+		if amountRemaining%splitSatoshis > 0 {
+			totalOutputs++
+		}
+
 		malformedCount = (totalOutputs * c.malformedConfig.Percentage) / 100
 	}
 
@@ -831,8 +839,12 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 	sats := utxo.Satoshis / splits
 	remainder := utxo.Satoshis % splits
 
-	//nolint:gosec
-	for i := 0; i < int(splits); i++ {
+	splitsInt, err := util.SafeUint64ToInt(splits)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < splitsInt; i++ {
 		if i == 0 && remainder > 0 {
 			if err = tx.PayToAddress(address, sats+remainder); err != nil {
 				return nil, errors.NewProcessingError("error paying to address", err)
@@ -959,7 +971,7 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, _ string) (*bt.UTXO, 
 	return utxo, nil
 }
 
-func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error { //nolint:stylecheck
+func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockID uint64, tx *bt.Tx) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "insertCoinbaseUTXOs")
 	defer deferFn()
 
@@ -1021,7 +1033,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 		if addresses[0] == c.address {
 			found = true
 
-			if _, err = stmt.ExecContext(ctx, blockId, hash, vout, output.LockingScript, output.Satoshis); err != nil {
+			if _, err = stmt.ExecContext(ctx, blockID, hash, vout, output.LockingScript, output.Satoshis); err != nil {
 				return errors.NewStorageError("could not insert coinbase utxo", err)
 			}
 		}
@@ -1135,9 +1147,8 @@ until this is a proven solution.
 func (c *Coinbase) aggregateBalance(ctx context.Context) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "aggregateBalance")
 	defer deferFn()
-	//nolint:gocritic
-	switch c.engine {
-	case util.Postgres:
+
+	if c.engine == util.Postgres {
 		if _, err := c.db.ExecContext(ctx, `
 				DO $$
 				DECLARE
@@ -1160,7 +1171,7 @@ func (c *Coinbase) aggregateBalance(ctx context.Context) error {
 			`); err != nil {
 			return err
 		}
-	} // switch
+	}
 
 	return nil
 }

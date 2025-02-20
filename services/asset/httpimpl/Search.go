@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -165,9 +166,13 @@ func (h *HTTP) Search(c echo.Context) error {
 			return sendError(c, http.StatusBadRequest, int32(errors.ERR_INVALID_ARGUMENT), errors.NewInvalidArgumentError("block height must be greater than or equal to 0"))
 		}
 
+		blockHeightUint32, err := util.SafeIntToUint32(blockHeight)
+		if err != nil {
+			return sendError(c, http.StatusBadRequest, int32(errors.ERR_INVALID_ARGUMENT), errors.NewInvalidArgumentError("invalid block height", err))
+		}
+
 		// Return matching block if height within valid range
-		//nolint:gosec
-		block, err := h.repository.GetBlockByHeight(ctx, uint32(blockHeight))
+		block, err := h.repository.GetBlockByHeight(ctx, blockHeightUint32)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return sendError(c, http.StatusNotFound, int32(errors.ERR_NOT_FOUND), errors.NewNotFoundError("block not found"))

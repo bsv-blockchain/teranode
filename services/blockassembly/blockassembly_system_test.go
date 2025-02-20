@@ -171,7 +171,7 @@ func TestHealth(t *testing.T) {
 }
 
 // TestCoinbaseSubsidyHeight verifies correct coinbase subsidy calculation at different heights.
-func TestCoinbaseSubsidyHeight(t *testing.T) {
+func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 

@@ -10,8 +10,6 @@ import (
 )
 
 // Prometheus metrics variables for monitoring block persister operations
-//
-//nolint:unused //TODO: enable these later
 var (
 	// prometheusBlockPersisterValidateSubtree tracks subtree validation duration
 	prometheusBlockPersisterValidateSubtree prometheus.Histogram

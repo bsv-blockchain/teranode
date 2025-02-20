@@ -112,7 +112,18 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 
 		// write the block size
 		sizeInBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(sizeInBytes, uint32(block.SizeInBytes+uint64(model.BlockHeaderSize+txCountVarIntLen))) // nolint:gosec
+
+		blockHeaderTransactionCountSizeUint64, err := util.SafeIntToUint64(model.BlockHeaderSize + txCountVarIntLen)
+		if err != nil {
+			return err
+		}
+
+		sizeUint32, err := util.SafeUint64ToUint32(block.SizeInBytes + blockHeaderTransactionCountSizeUint64)
+		if err != nil {
+			return err
+		}
+
+		binary.LittleEndian.PutUint32(sizeInBytes, sizeUint32)
 
 		if _, err := w.Write(sizeInBytes); err != nil {
 			return err
