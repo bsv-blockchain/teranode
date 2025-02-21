@@ -49,7 +49,7 @@ Please refer to the [Pre-shared Key Based Private Networks in libp2p](https://gi
 
 ## 3. Functionality
 
-The application code can be found in `p2pBoostrap/Server.go`.
+The application code can be found in `/teranode-p2pbootstrap/Server.go`.
 
 ![p2pBootstrap.svg](img%2Fplantuml%2Fp2pBootstrap%2Fp2pBootstrap.svg)
 
@@ -67,13 +67,13 @@ The application code can be found in `p2pBoostrap/Server.go`.
 ## 4. Directory Structure and Main Files
 
 ```
-/modules
-└── p2pBootstrap
+/
+└── teranode-p2pbootstrap
     ├── Dockerfile
-        # Contains Docker build instructions for the p2pBootstrap module.
+        # Contains Docker build instructions for the teranode-p2pbootstrap server.
         # Defines environment setup, dependencies installation, and runtime configurations.
     ├── Server.go
-        # Main Go source file for the p2pBootstrap server.
+        # Main Go source file for the teranode-p2pbootstrap server.
         # Initiates and manages peer-to-peer (P2P) network connections.
     ├── go.mod
         # Go module file for managing module dependencies.
@@ -82,7 +82,7 @@ The application code can be found in `p2pBoostrap/Server.go`.
         # Accompanies go.mod and contains checksums for dependencies.
         # Ensures integrity and consistency of module dependencies.
     ├── settings.conf
-        # Configuration file for the p2pBootstrap module.
+        # Configuration file for the teranode-p2pbootstrap server.
         # Stores default or global settings, used across various environments.
     └── settings_local.conf
         # Configuration file for local or specific environment settings.

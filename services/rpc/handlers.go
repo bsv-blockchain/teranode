@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -928,11 +930,6 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	)
 	defer deferFn()
 
-	banList, _, err := p2p.GetBanList(ctx, s.logger, s.settings)
-	if err != nil {
-		return nil, err
-	}
-
 	c := cmd.(*bsvjson.SetBanCmd)
 
 	s.logger.Debugf("in handleSetBan: c: %+v", *c)
@@ -942,6 +939,19 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "IPOrSubnet is required",
 		}
+	}
+
+	// validate ip or subnet
+	if !isIPOrSubnet(c.IPOrSubnet) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Invalid IP or subnet",
+		}
+	}
+
+	banList, _, err := p2p.GetBanList(ctx, s.logger, s.settings)
+	if err != nil {
+		return nil, err
 	}
 
 	// Handle the command
@@ -968,6 +978,8 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			success = true
 
 			s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+		} else {
+			s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
 		}
 
 		// and ban legacy peers
@@ -1095,4 +1107,16 @@ func messageToHex(msg wire.Message) (string, error) {
 
 func calculateHashRate(difficulty float64, blockTime float64) float64 {
 	return (difficulty * math.Pow(2, 32)) / blockTime
+}
+
+func isIPOrSubnet(ipOrSubnet string) bool {
+	// no slash means ip
+	if !strings.Contains(ipOrSubnet, "/") {
+		_, err := net.ResolveIPAddr("ip", ipOrSubnet)
+		return err == nil
+	}
+
+	_, _, err := net.ParseCIDR(ipOrSubnet)
+
+	return err == nil
 }

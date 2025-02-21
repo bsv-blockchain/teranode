@@ -3,7 +3,7 @@
 
 
 
-use postman
+##use postman
 
 `{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1]}`
 
@@ -26,7 +26,7 @@ curl --user bitcoin  -X POST http://localhost:9292 \
      -H "Content-Type: application/json" \
      -d '{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"]}'
 
-use curl
+##use curl
 
 curl --user bitcoin  -X POST http://localhost:19292 \
      -H "Content-Type: application/json" \
@@ -41,3 +41,18 @@ curl --user bitcoin  -X POST http://localhost:19292 \
      -d '{"method": "getblock", "params": ["003e8c9abde82685fdacfd6594d9de14801c4964e1dbe79397afa6299360b521", 1]}'
 
 
+
+
+##test ban
+
+docker compose build   
+
+cd test  
+
+docker compose -f docker-compose.e2etest.legacy.yml up -d  
+
+grpcurl -plaintext localhost:10087 blockchain_api.BlockchainAPI.LegacySync 
+
+curl --user bitcoin:bitcoin -X POST http://localhost:\11292  -H "Content-Type: application/json"   -d '{"method": "getpeerinfo", "params": []}'
+
+curl --user bitcoin:bitcoin -X POST http://localhost:\11292 -H "Content-Type: application/json"  -d '{"method": "setban", "params": ["172.19.0.8", "add", 1000000000000, false]}'
