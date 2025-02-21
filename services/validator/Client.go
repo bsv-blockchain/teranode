@@ -204,10 +204,10 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 			TransactionData:      tx.ExtendedBytes(),
 			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
-			AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
-			SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
-			CreateConflicting:    &validationOptions.createConflicting,
+			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
+			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
+			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
+			CreateConflicting:    &validationOptions.CreateConflicting,
 		})
 		if err != nil {
 			return nil, errors.UnwrapGRPC(err)
@@ -224,10 +224,10 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			req: &validator_api.ValidateTransactionRequest{
 				TransactionData:      tx.ExtendedBytes(),
 				BlockHeight:          blockHeight,
-				SkipUtxoCreation:     &validationOptions.skipUtxoCreation,
-				AddTxToBlockAssembly: &validationOptions.addTXToBlockAssembly,
-				SkipPolicyChecks:     &validationOptions.skipPolicyChecks,
-				CreateConflicting:    &validationOptions.createConflicting,
+				SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
+				AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
+				SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
+				CreateConflicting:    &validationOptions.CreateConflicting,
 			},
 			done: doneCh,
 		})

@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/p2p"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
@@ -29,6 +30,7 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -246,19 +248,23 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 	// Therefore, autocommit is set to true.
 	rejectedTxHandler := func(msg *kafka.KafkaMessage) error {
-		hash, err := chainhash.NewHash(msg.Value[:chainhash.HashSize])
-		if err != nil {
-			s.logger.Errorf("[Start] error getting chainhash from string %s: %v", msg.Value[:chainhash.HashSize], err)
+		var m kafkamessage.KafkaRejectedTxTopicMessage
+		if err := proto.Unmarshal(msg.Value, &m); err != nil {
+			s.logger.Errorf("[Start] error unmarshalling rejectedTxMessage: %v", err)
 			return err
 		}
 
-		reason := string(msg.Value[chainhash.HashSize:])
+		hash, err := chainhash.NewHash(m.TxHash)
+		if err != nil {
+			s.logger.Errorf("[Start] error getting chainhash from string %s: %v", m.TxHash, err)
+			return err
+		}
 
-		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), reason)
+		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), m.Reason)
 
 		rejectedTxMessage := p2p.RejectedTxMessage{
 			TxID:   hash.String(),
-			Reason: reason,
+			Reason: m.Reason,
 			PeerID: s.P2PNode.HostID().String(),
 		}
 
@@ -402,8 +408,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			switch notification.Type {
 			case model.NotificationType_Block:
 				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
-				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
+				// _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+				// // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
 				if err != nil {
 					s.logger.Errorf("[blockchainSubscriptionListener] error getting block header and meta for BlockMessage: %v", err)
 					continue
@@ -653,9 +659,17 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
-		value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubURL))
-		value = append(value, hash.CloneBytes()...)
-		value = append(value, []byte(blockMessage.DataHubURL)...)
+		msg := &kafkamessage.KafkaBlockTopicMessage{
+			Hash: hash.CloneBytes(),
+			URL:  blockMessage.DataHubURL,
+		}
+
+		value, err := proto.Marshal(msg)
+		if err != nil {
+			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
+			return
+		}
+
 		s.blocksKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
@@ -705,12 +719,21 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 	}
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
-		value := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubURL))
-		value = append(value, hash.CloneBytes()...)
-		value = append(value, []byte(subtreeMessage.DataHubURL)...)
+		msg := &kafkamessage.KafkaSubtreeTopicMessage{
+			Hash: hash.CloneBytes(),
+			URL:  subtreeMessage.DataHubURL,
+		}
+
+		value, err := proto.Marshal(msg)
+		if err != nil {
+			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
+			return
+		}
+
 		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
+
 	}
 }
 

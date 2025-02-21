@@ -28,12 +28,14 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // Server implements the validator gRPC service and manages validation operations
@@ -183,15 +185,14 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		data, err := NewTxValidationDataFromBytes(msg.Value)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
+		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
+		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+			v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
 
 			return err
 		}
 
-		tx, err := bt.NewTxFromBytes(data.Tx)
+		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
@@ -199,8 +200,17 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return err
 		}
 
+		height := kafkaMsg.Height
+
+		options := &Options{
+			SkipUtxoCreation:     kafkaMsg.Options.SkipUtxoCreation,
+			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
+			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
+			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
+		}
+
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(ctx, tx, 0, data.Options); err != nil {
+		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
@@ -319,19 +329,19 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 	validationOptions := NewDefaultOptions()
 	if req.SkipUtxoCreation != nil {
-		validationOptions.skipUtxoCreation = *req.SkipUtxoCreation
+		validationOptions.SkipUtxoCreation = *req.SkipUtxoCreation
 	}
 
 	if req.AddTxToBlockAssembly != nil {
-		validationOptions.addTXToBlockAssembly = *req.AddTxToBlockAssembly
+		validationOptions.AddTXToBlockAssembly = *req.AddTxToBlockAssembly
 	}
 
 	if req.SkipPolicyChecks != nil {
-		validationOptions.skipPolicyChecks = *req.SkipPolicyChecks
+		validationOptions.SkipPolicyChecks = *req.SkipPolicyChecks
 	}
 
 	if req.CreateConflicting != nil {
-		validationOptions.createConflicting = *req.CreateConflicting
+		validationOptions.CreateConflicting = *req.CreateConflicting
 	}
 
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)

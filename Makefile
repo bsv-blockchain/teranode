@@ -324,6 +324,14 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/p2p/p2p_api/p2p_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	util/kafka/kafka_message/kafka_messages.proto
+
 
 .PHONY: clean_gen
 clean_gen:

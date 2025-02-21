@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -41,12 +42,14 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -425,17 +428,22 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return nil
 	}
 
-	hash, err := chainhash.NewHash(msg.Value[:32])
-	if err != nil {
-		u.logger.Errorf("Failed to parse block hash from message: %v", err)
-		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
+	var kafkaMsg kafkamessage.KafkaBlockTopicMessage
+	if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+		u.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+		return err
 	}
 
-	// nolint
-	var baseURL string
+	hash, err := chainhash.NewHash(kafkaMsg.Hash)
+	if err != nil {
+		u.logger.Errorf("Failed to parse block hash from message: %v", err)
+		return err
+	}
 
-	if len(msg.Value) > 32 {
-		baseURL = string(msg.Value[32:])
+	baseURL, err := url.Parse(kafkaMsg.URL)
+	if err != nil {
+		u.logger.Errorf("Failed to parse block base url from message: %v", err)
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -444,7 +452,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseURL),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseURL.String()),
 	)
 	defer deferFn()
 
@@ -464,7 +472,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
-		baseURL: baseURL,
+		baseURL: baseURL.String(),
 		errCh:   errCh,
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))

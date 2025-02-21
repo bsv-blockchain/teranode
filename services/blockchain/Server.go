@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
@@ -27,6 +28,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -402,7 +404,21 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	if b.blocksFinalKafkaAsyncProducer != nil {
 		key := block.Header.Hash().CloneBytes()
 
-		value, err := block.Bytes()
+		subtreeHashes := make([][]byte, len(block.Subtrees))
+		for i, subtreeHash := range block.Subtrees {
+			subtreeHashes[i] = subtreeHash.CloneBytes()
+		}
+
+		message := &kafkamessage.KafkaBlocksFinalTopicMessage{
+			Header:           block.Header.Bytes(),
+			TransactionCount: block.TransactionCount,
+			SizeInBytes:      block.SizeInBytes,
+			SubtreeHashes:    subtreeHashes,
+			CoinbaseTx:       block.CoinbaseTx.Bytes(),
+			Height:           block.Height,
+		}
+
+		value, err := proto.Marshal(message)
 		if err != nil {
 			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
 			return nil, errors.WrapGRPC(err)

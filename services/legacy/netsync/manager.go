@@ -38,9 +38,11 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -1819,12 +1821,18 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		}
 
 		if len(invTxMsg.InvList) > 0 {
-			netsyncInvMsg := invMsg{inv: invTxMsg, peer: peer}
+			msg := sm.newKafkaMessageFromInv(invTxMsg, peer)
+
+			value, err := proto.Marshal(msg)
+			if err != nil {
+				sm.logger.Errorf("failed to marshal kafka inv topic message: %v", err)
+				return
+			}
 
 			// write to Kafka
-			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(netsyncInvMsg.inv.InvList))
+			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(value))
 			sm.legacyKafkaInvCh <- &kafka.Message{
-				Value: netsyncInvMsg.Bytes(),
+				Value: value,
 			}
 		}
 	} else {
@@ -2067,7 +2075,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, blocksFinalConfigURL, sm.kafkaBlocksListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, blocksFinalConfigURL, sm.kafkaBlocksFinalListener)
 	}
 
 	txmetaKafkaURL := sm.settings.Kafka.TxMetaConfig
@@ -2075,7 +2083,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
 	go func() {
@@ -2095,56 +2103,83 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 
 func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+		var message kafkamessage.KafkaInvTopicMessage
+
+		err := proto.Unmarshal(msg.Value, &message)
 		if err != nil {
-			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
+			sm.logger.Errorf("[kafkaINVListener] failed to unmarshal kafka inv topic message: %v", err)
 			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
 		}
 
-		sm.logger.Debugf("Received INV message from Kafka from peer %s", wireInvMsg.peer)
-
-		// Process the INV message directly, requesting data from other nodes will be queued on the outputQueue
-		go sm.handleInvMsg(wireInvMsg)
-
-		return nil
-	})
-}
-
-func (sm *SyncManager) kafkaBlocksListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		if msg.Key != nil {
-			hash, err := chainhash.NewHash(msg.Key)
-			if err != nil {
-				sm.logger.Errorf("[kafkaBlocksListener][%s] failed to parse block hash from message: %v", hash, err)
-				// not going to retry, if we cannot parse the message
-				return nil
-			}
-
-			// get the block from the msg value
-			block, err := model.NewBlockFromBytes(msg.Value, sm.settings)
-			if err != nil {
-				sm.logger.Errorf("[kafkaBlocksListener][%s] failed to create block from Kafka message: %v", hash, err)
-				// not going to retry, if we cannot parse the message
-				return nil
-			}
-
-			sm.logger.Infof("received block final message from Kafka: %s, %s", hash, block.Header.String())
-			sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), block.Header.ToWireBlockHeader())
+		invMsg, err := sm.newInvFromKafkaMessage(&message)
+		if err != nil {
+			sm.logger.Errorf("[kafkaINVListener] failed to create inv msg from kafka message: %v", err)
+			return nil
 		}
 
+		sm.logger.Debugf("[kafkaINVListener] Received INV message from Kafka from peer %s", message.PeerAddress)
+
+		// Process the INV message directly, requesting data from other nodes will be queued on the outputQueue
+		go sm.handleInvMsg(invMsg)
+
 		return nil
 	})
 }
 
-func (sm *SyncManager) kafkaTXListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
+func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		if msg.Key != nil {
-			hash, err := chainhash.NewHash(msg.Key)
-			if err != nil {
-				sm.logger.Errorf("Failed to parse tx hash from message: %v", err)
-				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx hash from message", err)
-			}
+		if msg.Key == nil {
+			sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
+			// not going to retry, if we don't have a key/hash
+			return nil
+		}
 
+		hash, err := chainhash.NewHash(msg.Key)
+		if err != nil {
+			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
+			// not going to retry, if we cannot parse the message
+			return nil
+		}
+
+		var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
+		if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
+			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
+			// not going to retry, if we cannot parse the message
+			return nil
+		}
+
+		header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
+		if err != nil {
+			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
+			// not going to retry, if we cannot parse the message
+			return nil
+		}
+
+		// create wireBlockHeader
+		wireBlockHeader := header.ToWireBlockHeader()
+
+		sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
+		sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
+
+		return nil
+	})
+}
+
+func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
+		var kafkaMsg kafkamessage.KafkaTxMetaTopicMessage
+		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+			sm.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to unmarshal kafka message", err)
+		}
+
+		hash, err := chainhash.NewHash(kafkaMsg.TxHash)
+		if err != nil {
+			sm.logger.Errorf("Failed to parse tx hash from message: %v", err)
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx hash from message", err)
+		}
+
+		if kafkaMsg.Action == kafkamessage.KafkaTxMetaActionType_ADD {
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 			sm.txAnnounceBatcher.Put(hash)
 		}

@@ -9,21 +9,21 @@ package validator
 
 // Options defines the configuration options for validation operations
 type Options struct {
-	// skipUtxoCreation determines whether UTXO creation should be skipped
+	// SkipUtxoCreation determines whether UTXO creation should be skipped
 	// When true, the validator won't create new UTXOs for transaction outputs
-	skipUtxoCreation bool
+	SkipUtxoCreation bool
 
-	// addTXToBlockAssembly determines whether transactions should be added to block assembly
+	// AddTXToBlockAssembly determines whether transactions should be added to block assembly
 	// When true, validated transactions are forwarded to the block assembly process
-	addTXToBlockAssembly bool
+	AddTXToBlockAssembly bool
 
-	// skipPolicyChecks determines whether policy checks should be skipped
+	// SkipPolicyChecks determines whether policy checks should be skipped
 	// this is done when validating transaction from a block that has been mined
-	skipPolicyChecks bool
+	SkipPolicyChecks bool
 
-	// createConflicting determines whether to allow conflicting transactions
+	// CreateConflicting determines whether to allow conflicting transactions
 	// this is done when validating transaction from a block that has been mined
-	createConflicting bool
+	CreateConflicting bool
 
 	// disableConsensus determine the consensus parameter to execute script interpreter
 	// By default it is false, meaning the consensus is true
@@ -43,10 +43,10 @@ type Option func(*Options)
 //   - *Options: New options instance with default settings
 func NewDefaultOptions() *Options {
 	return &Options{
-		skipUtxoCreation:     false,
-		addTXToBlockAssembly: true,
-		skipPolicyChecks:     false,
-		createConflicting:    false,
+		SkipUtxoCreation:     false,
+		AddTXToBlockAssembly: true,
+		SkipPolicyChecks:     false,
+		CreateConflicting:    false,
 	}
 }
 
@@ -73,7 +73,7 @@ func ProcessOptions(opts ...Option) *Options {
 //   - Option: Function that sets the skipUtxoCreation option
 func WithSkipUtxoCreation(skip bool) Option {
 	return func(o *Options) {
-		o.skipUtxoCreation = skip
+		o.SkipUtxoCreation = skip
 	}
 }
 
@@ -85,7 +85,7 @@ func WithSkipUtxoCreation(skip bool) Option {
 //   - Option: Function that sets the addTXToBlockAssembly option
 func WithAddTXToBlockAssembly(add bool) Option {
 	return func(o *Options) {
-		o.addTXToBlockAssembly = add
+		o.AddTXToBlockAssembly = add
 	}
 }
 
@@ -97,7 +97,7 @@ func WithAddTXToBlockAssembly(add bool) Option {
 //   - Option: Function that sets the skipPolicyChecks option
 func WithSkipPolicyChecks(skip bool) Option {
 	return func(o *Options) {
-		o.skipPolicyChecks = skip
+		o.SkipPolicyChecks = skip
 	}
 }
 
@@ -109,7 +109,7 @@ func WithSkipPolicyChecks(skip bool) Option {
 //   - Option: Function that sets the createConflicting option
 func WithCreateConflicting(create bool) Option {
 	return func(o *Options) {
-		o.createConflicting = create
+		o.CreateConflicting = create
 	}
 }
 

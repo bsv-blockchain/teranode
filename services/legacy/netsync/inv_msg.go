@@ -8,6 +8,8 @@ import (
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/util"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // invMsg packages a bitcoin inv message and the peer it came from together
@@ -82,4 +84,54 @@ func (sm *SyncManager) newInvFromBytes(invMsgBytes []byte) (*invMsg, error) {
 	}
 
 	return nil, errors.NewProcessingError("peer could not be found in peer list: %s", peerAddr)
+}
+
+func (sm *SyncManager) newKafkaMessageFromInv(i *wire.MsgInv, peer *peerpkg.Peer) *kafkamessage.KafkaInvTopicMessage {
+	n := kafkamessage.KafkaInvTopicMessage{
+		PeerAddress: peer.Addr(),
+	}
+
+	for _, invVect := range i.InvList {
+		n.Inv = append(n.Inv, &kafkamessage.Inv{
+			Type: kafkamessage.InvType(invVect.Type), // nolint:gosec
+			Hash: invVect.Hash.CloneBytes(),
+		})
+	}
+
+	return &n
+}
+
+func (sm *SyncManager) newInvFromKafkaMessage(message *kafkamessage.KafkaInvTopicMessage) (*invMsg, error) {
+	invM := wire.NewMsgInv()
+
+	for _, inv := range message.Inv {
+		invType := wire.InvType(inv.Type) //nolint:gosec
+
+		hash, err := chainhash.NewHash(inv.Hash)
+		if err != nil {
+			return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse inv hash from message", err)
+		}
+
+		if err = invM.AddInvVect(wire.NewInvVect(invType, hash)); err != nil {
+			return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to add inv vect from message", err)
+		}
+	}
+
+	var peer *peerpkg.Peer
+
+	for p := range sm.peerStates.Range() {
+		if p.Addr() == message.PeerAddress {
+			peer = p
+			break
+		}
+	}
+
+	if peer == nil {
+		return nil, errors.NewProcessingError("peer could not be found in peer list: %s", message.PeerAddress)
+	}
+
+	return &invMsg{
+		inv:  invM,
+		peer: peer,
+	}, nil
 }

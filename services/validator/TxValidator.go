@@ -147,7 +147,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 	}
 
 	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if !validationOptions.skipPolicyChecks {
+	if !validationOptions.SkipPolicyChecks {
 		if err := tv.checkTxSize(txSize); err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if !validationOptions.skipPolicyChecks {
+	if !validationOptions.SkipPolicyChecks {
 		if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
 			return err
 		}
@@ -315,7 +315,7 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {
 	maxSigOps := tv.settings.Policy.GetMaxTxSigopsCountsPolicy()
 
-	if maxSigOps == 0 || validationOptions.skipPolicyChecks {
+	if maxSigOps == 0 || validationOptions.SkipPolicyChecks {
 		maxSigOps = int64(MaxTxSigopsCountPolicyAfterGenesis)
 	}
 

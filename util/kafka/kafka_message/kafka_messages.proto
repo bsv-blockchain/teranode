@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+option go_package = "./;kafkamessage";
+
+package kafkamessage;
+
+message KafkaBlockTopicMessage {
+  bytes hash = 1;
+  string URL = 2;
+}
+
+message KafkaSubtreeTopicMessage {
+  bytes hash = 1;
+  string URL = 2;
+}
+
+message KafkaTxValidationTopicMessage {
+  bytes tx = 1;
+  uint32 height = 2;
+  KafkaTxValidationOptions options = 3;
+}
+
+message KafkaTxValidationOptions {
+  bool skipUtxoCreation = 1;
+  bool addTXToBlockAssembly = 2;
+  bool skipPolicyChecks = 3;
+  bool createConflicting = 4;
+}
+
+message KafkaRejectedTxTopicMessage {
+  bytes txHash = 1;
+  string reason = 2;
+}
+
+enum KafkaTxMetaActionType {
+  ADD = 0;
+  DELETE = 1;
+}
+
+message KafkaTxMetaTopicMessage {
+  bytes txHash = 1;
+  KafkaTxMetaActionType action = 2;
+  bytes content = 3;
+}
+
+message KafkaInvTopicMessage {
+  string peerAddress = 1;
+  repeated Inv inv = 2;
+}
+
+message Inv {
+  InvType type = 1;
+  bytes hash = 2;
+}
+
+enum InvType {
+	Error         = 0;
+	Tx            = 1;
+	Block         = 2;
+	FilteredBlock = 3;
+}
+
+message KafkaBlocksFinalTopicMessage {
+    bytes header = 1;                    // Block header bytes
+    uint64 transaction_count = 2;        // Number of transactions in block
+    uint64 size_in_bytes = 3;            // Size of block in bytes
+    repeated bytes subtree_hashes = 4;   // Merkle tree subtree hashes
+    bytes coinbase_tx = 5;               // Coinbase transaction bytes
+    uint32 height = 6;                   // Block height
+}

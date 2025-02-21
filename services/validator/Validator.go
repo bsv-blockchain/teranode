@@ -24,11 +24,13 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 )
 
 // Constants defining key validation parameters and limits.
@@ -210,8 +212,18 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()
 
+			m := &kafkamessage.KafkaRejectedTxTopicMessage{
+				TxHash: tx.TxIDChainHash().CloneBytes(),
+				Reason: err.Error(),
+			}
+
+			value, err := proto.Marshal(m)
+			if err != nil {
+				return nil, err
+			}
+
 			v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-				Value: append(tx.TxIDChainHash().CloneBytes(), err.Error()...),
+				Value: value,
 			})
 
 			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
@@ -316,7 +328,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			for _, spend := range spentUtxos {
 				if spend.Err != nil {
-					if validationOptions.createConflicting && (errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting)) {
+					if validationOptions.CreateConflicting && (errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting)) {
 						saveAsConflicting = true
 					}
 
@@ -359,7 +371,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 	}
 
-	if !validationOptions.skipUtxoCreation {
+	if !validationOptions.SkipUtxoCreation {
 		// TODO do we need to make this a 2 phase commit?
 		//      if the block assembly addition fails, the utxo should not be spendable yet
 		txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, false)
@@ -389,7 +401,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// the option blockAssemblyDisabled is false by default
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 
-	if blockAssemblyEnabled && validationOptions.addTXToBlockAssembly {
+	if blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly {
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
 		for i, input := range tx.Inputs {
 			parentTxHashes[i] = *input.PreviousTxIDChainHash()
@@ -494,8 +506,18 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 	if v.txmetaKafkaProducerClient != nil { // tests may not set this
 		startKafka := time.Now()
 
+		m := &kafkamessage.KafkaTxMetaTopicMessage{
+			TxHash: txHash.CloneBytes(),
+			Action: kafkamessage.KafkaTxMetaActionType_DELETE,
+		}
+
+		value, err := proto.Marshal(m)
+		if err != nil {
+			return err
+		}
+
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Value: append(txHash.CloneBytes(), []byte("delete")...),
+			Value: value,
 		})
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
@@ -521,8 +543,25 @@ func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 	if v.txmetaKafkaProducerClient != nil && !markAsConflicting { // tests may not set this
 		startKafka := time.Now()
 
+		metaBytes := data.MetaBytes()
+
+		m := &kafkamessage.KafkaTxMetaTopicMessage{
+			TxHash:  tx.TxIDChainHash().CloneBytes(),
+			Action:  kafkamessage.KafkaTxMetaActionType_ADD,
+			Content: metaBytes,
+		}
+
+		if len(metaBytes) > 2048 {
+			v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.ParentTxHashes))
+		}
+
+		value, err := proto.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Value: append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...),
+			Value: value,
 		})
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)

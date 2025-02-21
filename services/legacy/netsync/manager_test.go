@@ -27,10 +27,12 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // nullTime is an empty time defined for convenience
@@ -279,7 +281,12 @@ func TestSyncManager_QueueInv(t *testing.T) {
 
 		go func() {
 			msg := <-legacyKafkaInvCh
-			wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+
+			var value kafkamessage.KafkaInvTopicMessage
+			err := proto.Unmarshal(msg.Value, &value)
+			require.NoError(t, err)
+
+			wireInvMsg, err := sm.newInvFromKafkaMessage(&value)
 			require.NoError(t, err)
 			assert.Len(t, wireInvMsg.inv.InvList, 2)
 			wg.Done()
@@ -343,7 +350,12 @@ func TestSyncManager_QueueInv(t *testing.T) {
 
 		go func() {
 			msg := <-legacyKafkaInvCh
-			wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+
+			var value kafkamessage.KafkaInvTopicMessage
+			err := proto.Unmarshal(msg.Value, &value)
+			require.NoError(t, err)
+
+			wireInvMsg, err := sm.newInvFromKafkaMessage(&value)
 			require.NoError(t, err)
 			assert.Len(t, wireInvMsg.inv.InvList, 1)
 			wg.Done()

@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/coinbase"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/distributor"
-	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bitcoin-sv/teranode/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libsv/go-bk/bec"
@@ -117,8 +116,6 @@ type Worker struct {
 	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributors      []*distributor.Distributor
-	kafkaProducer     kafka.KafkaProducerI
-	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
 	ipv6MulticastChan chan Ipv6MulticastMsg
 	printProgress     uint64
@@ -139,8 +136,6 @@ func NewWorker(
 	iterations int,
 	coinbaseClient *coinbase.Client,
 	txDistributors []*distributor.Distributor,
-	kafkaProducer kafka.KafkaProducerI,
-	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,
 	printProgress uint64,
@@ -189,8 +184,6 @@ func NewWorker(
 		iterations:        iterations,
 		coinbaseClient:    coinbaseClient,
 		distributors:      txDistributors,
-		kafkaProducer:     kafkaProducer,
-		kafkaTopic:        kafkaTopic,
 		ipv6MulticastConn: ipv6MulticastConn,
 		ipv6MulticastChan: ipv6MulticastChan,
 		unlocker:          &unlockerGetter,

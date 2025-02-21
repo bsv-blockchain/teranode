@@ -35,12 +35,14 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -605,11 +607,26 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 
 	if ps.validatorKafkaProducerClient != nil {
 		validationOptions := validator.NewDefaultOptions()
-		validatorData := validator.NewTxValidationData(req.Tx, 0, validationOptions)
+
+		msg := &kafkamessage.KafkaTxValidationTopicMessage{
+			Tx:     req.Tx,
+			Height: 0,
+			Options: &kafkamessage.KafkaTxValidationOptions{
+				SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
+				AddTXToBlockAssembly: validationOptions.AddTXToBlockAssembly,
+				SkipPolicyChecks:     validationOptions.SkipPolicyChecks,
+				CreateConflicting:    validationOptions.CreateConflicting,
+			},
+		}
+
+		value, err := proto.Marshal(msg)
+		if err != nil {
+			return errors.NewProcessingError("[ProcessTransaction][%s] error marshaling KafkaTxValidationTopicMessage", btTx.TxID(), err, err)
+		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
 		ps.validatorKafkaProducerClient.Publish(&kafka.Message{
-			Value: validatorData.Bytes(),
+			Value: value,
 		})
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())

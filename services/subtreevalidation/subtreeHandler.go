@@ -5,11 +5,14 @@ package subtreevalidation
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"google.golang.org/protobuf/proto"
 )
 
 // consumerMessageHandler returns a function that processes Kafka messages for subtree validation.
@@ -69,23 +72,30 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			prometheusSubtreeValidationValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		}()
 
+		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
+		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+			u.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+			return err
+		}
+
+		hash, err := chainhash.NewHash(kafkaMsg.Hash)
+		if err != nil {
+			u.logger.Errorf("Failed to parse block hash from message: %v", err)
+			return err
+		}
+
+		baseURL, err := url.Parse(kafkaMsg.URL)
+		if err != nil {
+			u.logger.Errorf("Failed to parse block base url from message: %v", err)
+			return err
+		}
+
 		if len(msg.Value) < 32 {
 			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Value))
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Value))
 		}
 
-		hash, err := chainhash.NewHash(msg.Value[:32])
-		if err != nil {
-			u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
-		}
-
-		var baseURL string
-		if len(msg.Value) > 32 {
-			baseURL = string(msg.Value[32:])
-		}
-
-		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseURL)
+		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseURL.String())
 		defer u.logger.Infof("Finished processing subtree message for %s", hash.String())
 
 		gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash)
@@ -102,7 +112,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 
 		v := ValidateSubtree{
 			SubtreeHash:   *hash,
-			BaseURL:       baseURL,
+			BaseURL:       baseURL.String(),
 			TxHashes:      nil,
 			AllowFailFast: true, // allow subtrees to fail fast, when getting from the network, will be retried if in a block
 		}

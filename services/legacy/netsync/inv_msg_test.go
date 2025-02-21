@@ -45,6 +45,16 @@ func Test_invMsg(t *testing.T) {
 		assert.Equal(t, invMsg.inv, newInvMsg.inv)
 		assert.Equal(t, invMsg.peer.Addr(), newInvMsg.peer.Addr())
 		assert.Equal(t, invMsg.peer, newInvMsg.peer) // checks actual memory address of peer
+
+		// test kafka message marshall/un-marshall
+		kafkaMessage := sm.newKafkaMessageFromInv(invMsg.inv, invMsg.peer)
+
+		newInvMsg, err = sm.newInvFromKafkaMessage(kafkaMessage)
+		require.NoError(t, err)
+
+		assert.Equal(t, invMsg.inv, newInvMsg.inv)
+		assert.Equal(t, invMsg.peer.Addr(), newInvMsg.peer.Addr())
+		assert.Equal(t, invMsg.peer, newInvMsg.peer) // checks actual memory address of peer
 	})
 
 	t.Run("IPv6 short", func(t *testing.T) {
@@ -78,6 +88,15 @@ func Test_invMsg(t *testing.T) {
 		assert.Equal(t, invMsg.inv, newInvMsg.inv)
 		assert.Equal(t, invMsg.peer.Addr(), newInvMsg.peer.Addr())
 		assert.Equal(t, invMsg.peer, newInvMsg.peer) // checks actual memory address of peer
+
+		// test kafka message marshall/un-marshall
+		kafkaMessage := sm.newKafkaMessageFromInv(invMsg.inv, invMsg.peer)
+		newInvMsg, err = sm.newInvFromKafkaMessage(kafkaMessage)
+		require.NoError(t, err)
+
+		assert.Equal(t, invMsg.inv, newInvMsg.inv)
+		assert.Equal(t, invMsg.peer.Addr(), newInvMsg.peer.Addr())
+		assert.Equal(t, invMsg.peer, newInvMsg.peer) // checks actual memory address of peer
 	})
 
 	t.Run("IPv6 long", func(t *testing.T) {
@@ -106,6 +125,15 @@ func Test_invMsg(t *testing.T) {
 		assert.Len(t, invBytes, 98)
 
 		newInvMsg, err := sm.newInvFromBytes(invBytes)
+		require.NoError(t, err)
+
+		assert.Equal(t, invMsg.inv, newInvMsg.inv)
+		assert.Equal(t, invMsg.peer.Addr(), newInvMsg.peer.Addr())
+		assert.Equal(t, invMsg.peer, newInvMsg.peer) // checks actual memory address of peer
+
+		// test kafka message marshall/un-marshall
+		kafkaMessage := sm.newKafkaMessageFromInv(invMsg.inv, invMsg.peer)
+		newInvMsg, err = sm.newInvFromKafkaMessage(kafkaMessage)
 		require.NoError(t, err)
 
 		assert.Equal(t, invMsg.inv, newInvMsg.inv)

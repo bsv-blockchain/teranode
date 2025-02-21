@@ -18,7 +18,7 @@ func main() {
 		"kafka_blocksFinalConfig",
 		"kafka_subtreesConfig",
 		"kafka_txmetaConfig",
-		"kafka_rejectedTxsConfig",
+		"kafka_rejectedTxConfig",
 	}
 
 	for _, topic := range topics {
