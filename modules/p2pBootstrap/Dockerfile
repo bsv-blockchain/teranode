@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
 ARG GITHUB_SHA
 
 
@@ -16,7 +16,7 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 # Build the Go libraries of the project
 RUN go build .
 
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-db1a6f0
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-866edae
 
 RUN adduser --disabled-password --gecos '' appuser
 USER appuser

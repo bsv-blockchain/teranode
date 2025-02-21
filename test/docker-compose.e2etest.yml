@@ -27,8 +27,8 @@ services:
       context: ..
       dockerfile: Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-db1a6f0
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-db1a6f0
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
     networks:
       - e2etest
     entrypoint: [ "pwd" ]
