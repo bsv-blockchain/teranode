@@ -63,7 +63,7 @@ func Test_ScriptVerificationGoBDK(t *testing.T) {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
 		require.NoError(t, errTx)
 
-		err := verifier.VerifyScript(tx, test.BlockHeight, true)
+		err := verifier.VerifyScript(tx, test.BlockHeight, true, []uint32{test.BlockHeight})
 		require.NoError(t, err)
 	}
 }

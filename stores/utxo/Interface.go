@@ -39,7 +39,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -238,104 +237,4 @@ type Store interface {
 
 	// GetMedianBlockTime returns the current median block time from the store.
 	GetMedianBlockTime() uint32
-}
-
-var _ Store = &MockUtxostore{}
-
-// MockUtxostore provides a mock implementation of the Store interface for testing purposes.
-// All methods return nil values and no errors, except for PreviousOutputsDecorate which sets
-// default values for testing.
-type MockUtxostore struct{}
-
-func (mu *MockUtxostore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return 0, "Validator test", nil
-}
-func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error) {
-	options := &CreateOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	txMeta, err := util.TxMetaDataFromTx(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	return txMeta, nil
-}
-
-func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
-	return nil, nil
-}
-func (mu *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error {
-	return nil
-}
-
-func (mu *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) {
-	return nil, nil
-}
-func (mu *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
-}
-
-func (mu *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error) {
-	return nil, nil
-}
-func (mu *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error {
-	return nil
-}
-func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error {
-	return nil
-}
-
-func (mu *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error {
-	return nil
-}
-func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	for _, outpoint := range outpoints {
-		outpoint.LockingScript = []byte{}
-		outpoint.Satoshis = 32_280_613_550
-	}
-
-	return nil
-}
-
-func (mu *MockUtxostore) FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (mu *MockUtxostore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (mu *MockUtxostore) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (mu *MockUtxostore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error) {
-	return nil, nil, nil
-}
-func (mu *MockUtxostore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
-	return nil
-}
-
-func (mu *MockUtxostore) SetBlockHeight(_ uint32) error {
-	return nil
-}
-func (mu *MockUtxostore) GetBlockHeight() uint32 {
-	return 0
-}
-func (mu *MockUtxostore) SetMedianBlockTime(_ uint32) error {
-	return nil
-}
-func (mu *MockUtxostore) GetMedianBlockTime() uint32 {
-	return 10 * 60
 }

@@ -28,12 +28,14 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	utxoStore "github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -49,6 +51,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -216,6 +219,9 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
+
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{}, &Options{})
+	require.NoError(t, err)
 }
 
 func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840cda6(t *testing.T) {
@@ -242,6 +248,9 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	defer span.Finish()
 
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	require.NoError(t, err)
+
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 }
 
@@ -270,6 +279,9 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	defer span.Finish()
 
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	require.NoError(t, err)
+
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 }
 
@@ -352,6 +364,9 @@ func TestValidateTransactions(t *testing.T) {
 
 		err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 		require.NoError(t, err)
+
+		err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
+		require.NoError(t, err)
 	}
 }
 
@@ -380,6 +395,9 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
+
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
+	require.NoError(t, err)
 }
 
 func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a363b7(t *testing.T) {
@@ -406,6 +424,9 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	defer span.Finish()
 
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	require.NoError(t, err)
+
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 }
 
@@ -456,6 +477,9 @@ func Benchmark_validateInternal(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		err = v.validateTransaction(context.Background(), tx, 740975, &Options{})
+		require.NoError(b, err)
+
+		err = v.validateTransactionScripts(context.Background(), tx, 740975, []uint32{740975}, &Options{})
 		require.NoError(b, err)
 	}
 }
@@ -522,4 +546,75 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 	tx.Inputs[0].PreviousTxScript = bscript.NewFromBytes(previousOutput.LockingScript)
 
 	assert.True(t, tx.IsExtended())
+}
+
+func Test_getUtxoBlockHeights(t *testing.T) {
+	ctx := context.Background()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef03fe1a25c8774c1e827f9ebdae731fe609ff159d6f7c15094e1d467a99a01e03100000000002012affffffffa086010000000000018253a080075d834402e916390940782236b29d23db6f52dfc940a12b3eff99159c0000000000ffffffffa086010000000000100f5468616e6b7320456c69676975732161e4ed95239756bbb98d11dcf973146be0c17cc1cc94340deb8bc4d44cd88e92000000000a516352676a675168948cffffffff40548900000000000763516751676a680220aa4400000000001976a9149bc0bbdd3024da4d0c38ed1aecf5c68dd1d3fa1288ac20aa4400000000001976a914169ff4804fd6596deb974f360c21584aa1e19c9788ac00000000")
+	require.NoError(t, err)
+
+	tSettings := settings.NewSettings()
+
+	t.Run("not mined parent txs", func(t *testing.T) {
+		mockUtxoStore := utxoStore.MockUtxostore{}
+
+		v := &Validator{
+			settings:  tSettings,
+			utxoStore: &mockUtxoStore,
+		}
+
+		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+
+		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+			BlockHeights: make([]uint32, 0),
+		}, nil)
+
+		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		require.NoError(t, err)
+
+		expected := []uint32{1000, 1000, 1000}
+
+		if !reflect.DeepEqual(utxoHashes, expected) {
+			t.Errorf("getUtxoBlockHeights() got = %v, want %v", utxoHashes, expected)
+		}
+	})
+
+	t.Run("mined parent txs", func(t *testing.T) {
+		mockUtxoStore := utxoStore.MockUtxostore{}
+
+		v := &Validator{
+			settings:  tSettings,
+			utxoStore: &mockUtxoStore,
+		}
+
+		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{125, 126},
+		}, nil).Once()
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{},
+		}, nil).Once()
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{768, 769},
+		}, nil).Once()
+
+		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		require.NoError(t, err)
+
+		expected := []uint32{125, 1000, 768}
+
+		if !reflect.DeepEqual(utxoHashes, expected) {
+			t.Errorf("getUtxoBlockHeights() got = %v, want %v", utxoHashes, expected)
+		}
+	})
 }

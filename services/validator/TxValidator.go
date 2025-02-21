@@ -39,9 +39,19 @@ type TxValidatorI interface {
 	// Parameters:
 	//   - tx: The transaction to validate
 	//   - blockHeight: The current block height for validation context
+	//   - validationOptions: Optional validation options
 	// Returns:
 	//   - error: Any validation errors encountered
 	ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error
+
+	// ValidateTransactionScripts performs script validation for a transaction
+	// Parameters:
+	//   - tx: The transaction containing the scripts to validate
+	//   - blockHeight: Current block height for validation context
+	//   - validationOptions: Optional validation options
+	// Returns:
+	//   - error: Any script validation errors encountered
+	ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 }
 
 // TxValidator implements transaction validation logic
@@ -62,7 +72,7 @@ type TxScriptInterpreter interface {
 	// Logger return the encapsulated logger
 
 	// VerifyScript implement the method to verify a script for a transaction
-	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) error
+	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
 }
 
 // TxScriptInterpreterCreator defines a function type for creating script interpreters
@@ -185,12 +195,17 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 		}
 	}
 
+	return nil
+}
+
+func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	consensus := true
 	if validationOptions != nil && validationOptions.disableConsensus {
 		consensus = false
 	}
+
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.interpreter.VerifyScript(tx, blockHeight, consensus); err != nil {
+	if err := tv.interpreter.VerifyScript(tx, blockHeight, consensus, utxoHeights); err != nil {
 		return err
 	}
 

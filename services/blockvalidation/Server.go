@@ -431,6 +431,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
+	// nolint
 	var baseURL string
 
 	if len(msg.Value) > 32 {

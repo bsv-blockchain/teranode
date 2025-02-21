@@ -125,7 +125,7 @@ func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter
 	// verify the scripts of all the transactions in parallel
 	for _, tx := range txs {
 		g.Go(func() error {
-			return verifier.VerifyScript(tx, 725267, true)
+			return verifier.VerifyScript(tx, 725267, true, []uint32{725267})
 		})
 	}
 
@@ -135,7 +135,7 @@ func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter
 
 func testBlockSequential(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
 	for _, tx := range txs {
-		err := verifier.VerifyScript(tx, 725267, true)
+		err := verifier.VerifyScript(tx, 725267, true, []uint32{725267})
 		require.NoError(t, err)
 	}
 }

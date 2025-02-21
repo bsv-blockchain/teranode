@@ -73,7 +73,7 @@ type scriptVerifierGoSDK struct {
 //
 // Note: Contains special handling for negative shift amount errors
 // which are bypassed for historical compatibility
-func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) (err error) {
+func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed
@@ -90,6 +90,9 @@ func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 			err = errors.NewTxInvalidError("script execution failed: %v", r)
 		}
 	}()
+
+	// TODO add the utxo heights to the tx verifier
+	_ = utxoHeights
 
 	sdkTx := goBt2GoSDKTransaction(tx)
 	// sdkTx, _ := transaction.NewTransactionFromBytes(tx.Bytes())

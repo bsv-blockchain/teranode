@@ -117,13 +117,16 @@ type scriptVerifierGoBDK struct {
 //   - error: Any script verification errors encountered
 //
 // Note: Empty scripts and special cases are handled with appropriate logging
-func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) error {
+func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
 	txID := tx.TxID()
 	if _, has := v.whiteList[txID]; has {
 		return nil
 	}
 
 	eTxBytes := tx.ExtendedBytes()
+
+	// TODO add the utxo heights to the tx verifier
+	_ = utxoHeights
 
 	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1, consensus)
 	if err != nil {

@@ -28,6 +28,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 // Constants defining key validation parameters and limits.
@@ -270,8 +271,21 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 	}
 
+	// validate the transaction format, consensus rules etc.
+	// this does not validate the signatures in the transaction yet
 	if err = v.validateTransaction(ctx, tx, blockHeight, validationOptions); err != nil {
 		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+	}
+
+	// get the utxo heights for each input
+	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	if err != nil {
+		return nil, err
+	}
+
+	// validate the transaction scripts and signatures
+	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
@@ -406,6 +420,56 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	return txMetaData, nil
+}
+
+func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+	// get the block heights of the input transactions of the transaction
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(v.settings.UtxoStore.GetBatcherSize)
+
+	parentTxHashes := make(map[chainhash.Hash][]int)
+	utxoHeights := make([]uint32, len(tx.Inputs))
+
+	for idx, input := range tx.Inputs {
+		parentTxHash := input.PreviousTxIDChainHash()
+
+		if _, ok := parentTxHashes[*parentTxHash]; !ok {
+			parentTxHashes[*parentTxHash] = make([]int, 0)
+		}
+
+		parentTxHashes[*parentTxHash] = append(parentTxHashes[*parentTxHash], idx)
+	}
+
+	for parentTxHash, idxs := range parentTxHashes {
+		parentTxHash := parentTxHash
+		idxs := idxs
+
+		g.Go(func() error {
+			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, []string{"blockIDs", "blockHeights"})
+			if err != nil {
+				return errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
+			}
+
+			if len(txMeta.BlockHeights) == 0 {
+				// the parent has not been mined yet, which means it's recent
+				for _, idx := range idxs {
+					utxoHeights[idx] = v.utxoStore.GetBlockHeight()
+				}
+			} else {
+				for _, idx := range idxs {
+					utxoHeights[idx] = txMeta.BlockHeights[0]
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return utxoHeights, nil
 }
 
 func (v *Validator) TriggerBatcher() {
@@ -607,6 +671,29 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 
 	// run the internal tx validation, checking policies, scripts, signatures etc.
 	return v.txValidator.ValidateTransaction(tx, blockHeight, validationOptions)
+}
+
+// validateTransactionScripts performs script validation for a transaction
+// Returns error if validation fails
+func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32,
+	validationOptions *Options) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionScripts",
+		tracing.WithHistogram(prometheusTransactionValidateScripts),
+	)
+	defer deferFn()
+
+	// 0) Check whether we have a complete transaction in extended format, with all input information
+	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
+	if !tx.IsExtended() {
+		err := v.extendTransaction(ctx, tx)
+		if err != nil {
+			// error is already wrapped in our errors package
+			return err
+		}
+	}
+
+	// run the internal tx validation, checking policies, scripts, signatures etc.
+	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
 }
 
 // feesToBtFeeQuote converts a minimum mining fee rate to a bt.FeeQuote structure.

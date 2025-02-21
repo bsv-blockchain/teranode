@@ -64,7 +64,7 @@ type scriptVerifierGoBt struct {
 // Special Cases:
 //   - Handles negative shift amount errors for historical compatibility
 //   - Provides special handling for blocks before height 800,000
-func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool) (err error) {
+func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed
@@ -81,6 +81,9 @@ func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consens
 			err = errors.NewTxInvalidError("script execution failed: %v", r)
 		}
 	}()
+
+	// TODO add the utxo heights to the tx verifier
+	_ = utxoHeights
 
 	// Verify each input's script
 	for i, in := range tx.Inputs {

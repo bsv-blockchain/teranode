@@ -75,7 +75,7 @@ func TestScriptVerifierGoBt(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, []uint32{tt.args.blockHeight}), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -84,7 +84,7 @@ func TestScriptVerifierGoSDK(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, []uint32{tt.args.blockHeight}), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -95,7 +95,7 @@ func Test_Tx(t *testing.T) {
 	tx, _ := bt.NewTxFromString(txHex)
 
 	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
-	err := scriptInterpreter.VerifyScript(tx, 720899, true)
+	err := scriptInterpreter.VerifyScript(tx, 720899, true, []uint32{720899})
 	require.NoError(t, err)
 
 	txBytes := tx.ExtendedBytes()
@@ -110,7 +110,7 @@ func Test_Tx(t *testing.T) {
 
 	assert.Equal(t, hex.EncodeToString(tx.Bytes()), hex.EncodeToString(txE.Bytes()))
 
-	err = scriptInterpreter.VerifyScript(txE, 729000, true)
+	err = scriptInterpreter.VerifyScript(txE, 729000, true, []uint32{729000})
 	require.NoError(t, err)
 
 	assert.Equal(t, tx.TxID(), txE.TxID())
@@ -144,7 +144,7 @@ func BenchmarkVerifyTransactionGoBt(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
 		}
 	})
 }
@@ -158,7 +158,7 @@ func BenchmarkVerifyTransactionGoSDK(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
 		}
 	})
 }
@@ -172,7 +172,7 @@ func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = scriptInterpreter.VerifyScript(tx, 740975, true)
+			_ = scriptInterpreter.VerifyScript(tx, 740975, true, []uint32{740975})
 		}
 	})
 }
@@ -197,8 +197,11 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings.ChainCfgParams.GenesisActivationHeight = 100
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-
 	err := txValidator.ValidateTransaction(largeTx, 101, &Options{disableConsensus: true})
+	assert.NoError(t, err)
+
+	err = txValidator.ValidateTransactionScripts(largeTx, 101, []uint32{101}, &Options{disableConsensus: true})
+
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
 }
