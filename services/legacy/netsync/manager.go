@@ -937,15 +937,22 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	}
 
 	legacySyncMode := false
+	catchingBlocks := false
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("[handleBlockMsg][%s] Failed to get current FSM state: %v", bmsg.blockHash, err)
 		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
-	} else if fsmState != nil && *fsmState == teranodeblockchain.FSMStateLEGACYSYNCING {
-		legacySyncMode = true
+	}
+
+	if fsmState != nil {
+		switch *fsmState {
+		case teranodeblockchain.FSMStateLEGACYSYNCING:
+			legacySyncMode = true
+		case teranodeblockchain.FSMStateCATCHINGBLOCKS:
+			catchingBlocks = true
+		}
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
@@ -997,13 +1004,16 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
+	// if not in Legacy Sync mode, we need to potentially download the block,
+	// promote block to the block validation via kafka (p2p -> blockvalidation message),
+	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
-		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
+		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
 		} else {
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-			if !legacySyncMode && !serviceError {
+			if !legacySyncMode && !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
 			}
 
