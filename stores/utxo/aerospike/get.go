@@ -509,28 +509,36 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 					items[idx].Data.BlockIDs = blockIDs
 
 				case "blockHeights":
-					temp := value.([]interface{})
+					if value != nil {
+						temp := value.([]interface{})
 
-					var blockHeights []uint32
+						var blockHeights []uint32
 
-					for _, val := range temp {
-						// nolint: gosec
-						blockHeights = append(blockHeights, uint32(val.(int)))
+						for _, val := range temp {
+							// nolint: gosec
+							blockHeights = append(blockHeights, uint32(val.(int)))
+						}
+
+						items[idx].Data.BlockHeights = blockHeights
+					} else {
+						items[idx].Data.BlockHeights = []uint32{}
 					}
-
-					items[idx].Data.BlockHeights = blockHeights
 
 				case "subtreeIdxs":
-					temp := value.([]interface{})
+					if value != nil {
+						temp := value.([]interface{})
 
-					var subtreeIdxs []int
+						var subtreeIdxs []int
 
-					for _, val := range temp {
-						// nolint: gosec
-						subtreeIdxs = append(subtreeIdxs, val.(int))
+						for _, val := range temp {
+							// nolint: gosec
+							subtreeIdxs = append(subtreeIdxs, val.(int))
+						}
+
+						items[idx].Data.SubtreeIdxs = subtreeIdxs
+					} else {
+						items[idx].Data.SubtreeIdxs = []int{}
 					}
-
-					items[idx].Data.SubtreeIdxs = subtreeIdxs
 
 				case "isCoinbase":
 					coinbaseBool, ok := value.(bool)
