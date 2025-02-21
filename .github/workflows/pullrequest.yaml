@@ -73,7 +73,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -100,7 +100,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     needs: test
     steps:
       - name: Checkout

@@ -16,7 +16,7 @@ env:
 jobs:
   test-services:
     name: Services Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
 
   test-model:
     name: Model Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,7 +70,7 @@ jobs:
 
   test-stores:
     name: Stores Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -97,7 +97,7 @@ jobs:
 
   test-util:
     name: Util Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -124,7 +124,7 @@ jobs:
 
   test-double-spend:
     name: Double Spend Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
