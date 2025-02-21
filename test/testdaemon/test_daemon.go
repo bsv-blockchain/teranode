@@ -447,6 +447,7 @@ func (td *TestDaemon) CreateTestBlock(t *testing.T, txs []*bt.Tx, previousBlock 
 			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 			Bits:           previousBlock.Header.Bits,
 			Nonce:          nonce,
+			Version:        536870912,
 		},
 		Height: previousBlock.Height + 1,
 	}
