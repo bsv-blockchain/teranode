@@ -457,7 +457,7 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 		idxs := idxs
 
 		g.Go(func() error {
-			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, []string{"blockIDs", "blockHeights"})
+			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, []utxo.FieldName{utxo.FieldBlockIDs, utxo.FieldBlockHeights})
 			if err != nil {
 				return errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 			}

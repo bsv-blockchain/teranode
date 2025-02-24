@@ -72,9 +72,9 @@ type Spend struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting", "unspendable"}
+	MetaFields = []FieldName{FieldLockTime, FieldFee, FieldSizeInBytes, FieldParentTxHashes, FieldBlockIDs, FieldIsCoinbase, FieldFrozen, FieldConflicting, FieldUnspendable}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
-	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase", "frozen", "conflicting", "unspendable"}
+	MetaFieldsWithTx = []FieldName{FieldTx, FieldLockTime, FieldFee, FieldSizeInBytes, FieldParentTxHashes, FieldBlockIDs, FieldIsCoinbase, FieldFrozen, FieldConflicting, FieldUnspendable}
 )
 
 // UnresolvedMetaData represents a transaction's metadata that needs to be resolved.
@@ -90,7 +90,7 @@ type UnresolvedMetaData struct {
 	// Data holds the fetched metadata, nil until fetched
 	Data *meta.Data
 	// Fields specifies which metadata fields should be fetched
-	Fields []string
+	Fields []FieldName
 	// Err holds any error encountered while fetching the metadata
 	Err error
 }
@@ -108,7 +108,7 @@ type CreateOptions struct {
 	Conflicting     bool
 }
 
-// WithBlockMetas returns a CreateOption that sets the block IDs for a UTXO.
+// WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
 // Multiple block IDs can be specified in case of a transaction that appears in multiple blocks.
 func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption { //nolint:unparams ...uint32) CreateOption {
 	return func(o *CreateOptions) {
@@ -154,6 +154,49 @@ type MinedBlockInfo struct {
 	SubtreeIdx  int
 }
 
+// FieldName database bin names when getting data from utxo store
+type FieldName string
+
+const (
+	FieldTx                  FieldName = "tx"
+	FieldInputs              FieldName = "inputs"
+	FieldOutputs             FieldName = "outputs"
+	FieldExternal            FieldName = "external"
+	FieldLockTime            FieldName = "locktime"
+	FieldVersion             FieldName = "version"
+	FieldFee                 FieldName = "fee"
+	FieldSizeInBytes         FieldName = "sizeInBytes"
+	FieldExtendedSize        FieldName = "extendedSize"
+	FieldParentTxHashes      FieldName = "parentTxHashes"
+	FieldIsCoinbase          FieldName = "isCoinbase"
+	FieldFrozen              FieldName = "frozen"
+	FieldConflicting         FieldName = "conflicting"
+	FieldConflictingChildren FieldName = "conflictingCs" // bin name can only be max 15 chars in aerospike
+	FieldUnspendable         FieldName = "unspendable"
+	FieldUtxoSpendableIn     FieldName = "utxoSpendableIn"
+	FieldSpendingHeight      FieldName = "spendingHeight"
+	FieldUtxos               FieldName = "utxos"
+	FieldNrUtxos             FieldName = "nrUtxos"
+	FieldSpentUtxos          FieldName = "spentUtxos"
+	FieldNrRecords           FieldName = "nrRecords"
+	FieldBlockIDs            FieldName = "blockIDs"
+	FieldBlockHeights        FieldName = "blockHeights"
+	FieldSubtreeIdxs         FieldName = "subtreeIdxs"
+)
+
+func (f FieldName) String() string {
+	return string(f)
+}
+
+func FieldNamesToStrings(fieldNames []FieldName) []string {
+	fieldStrings := make([]string, len(fieldNames))
+	for i, fieldName := range fieldNames {
+		fieldStrings[i] = string(fieldName)
+	}
+
+	return fieldStrings
+}
+
 // Store defines the interface for UTXO management operations.
 // Implementations must be thread-safe as they will be accessed concurrently.
 type Store interface {
@@ -170,7 +213,7 @@ type Store interface {
 	// Get retrieves UTXO metadata for a given transaction hash.
 	// The fields parameter can be used to specify which metadata fields to retrieve.
 	// If fields is empty, all fields will be retrieved.
-	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
+	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]FieldName) (*meta.Data, error)
 
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
@@ -194,7 +237,7 @@ type Store interface {
 
 	// BatchDecorate efficiently fetches metadata for multiple transactions.
 	// The fields parameter specifies which metadata fields to retrieve.
-	BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
+	BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...FieldName) error
 
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
 	PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error

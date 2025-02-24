@@ -1236,7 +1236,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	// Attempt to fetch the requested transaction from the pool.  A
 	// call could be made to check for existence first, but simply trying
 	// to fetch a missing transaction results in the same behavior.
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, []string{"tx"})
+	txMeta, err := s.utxoStore.Get(s.ctx, hash, []utxostore.FieldName{utxostore.FieldTx})
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch tx %v from transaction pool: %v", hash, err)
 

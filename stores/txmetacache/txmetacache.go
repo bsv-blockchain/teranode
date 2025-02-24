@@ -190,7 +190,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]string) (*meta.Data, error) {
+func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
@@ -223,7 +223,7 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]stri
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}

@@ -1774,7 +1774,7 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := stp.utxoStore.Get(gCtx, &txHash, []string{"blockIDs"})
+			txMeta, err := stp.utxoStore.Get(gCtx, &txHash, []utxostore.FieldName{utxostore.FieldBlockIDs})
 			if err != nil {
 				return errors.NewServiceError("error getting utxos for tx %s", txHash.String())
 			}

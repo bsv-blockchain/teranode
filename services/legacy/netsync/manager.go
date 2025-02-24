@@ -1350,7 +1350,7 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 	case wire.InvTypeTx:
 		// check whether this transaction exists in the utxo store
 		// which means it has been processed completely at our end
-		utxo, err := sm.utxoStore.Get(sm.ctx, &invVect.Hash, []string{"fee"})
+		utxo, err := sm.utxoStore.Get(sm.ctx, &invVect.Hash, []utxostore.FieldName{utxostore.FieldFee})
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				return false, nil

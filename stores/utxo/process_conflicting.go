@@ -61,7 +61,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := s.Get(gCtx, &txHash, []string{"tx", "blockIDs", "conflicting"})
+			txMeta, err := s.Get(gCtx, &txHash, []FieldName{FieldTx, FieldBlockIDs, FieldConflicting})
 			if err != nil {
 				return err
 			}
@@ -185,7 +185,7 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 
 	defer deferFn()
 
-	txMeta, err := s.Get(ctx, &hash, []string{"utxos", "conflictingCs"}) // bin name can only be max 15 chars
+	txMeta, err := s.Get(ctx, &hash, []FieldName{FieldUtxos, FieldConflictingChildren})
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 
 	defer deferFn()
 
-	txMeta, err := s.Get(ctx, &txHash, []string{"tx"})
+	txMeta, err := s.Get(ctx, &txHash, []FieldName{FieldTx})
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	for parentTx := range parentTxs {
 		parentTxHash := &parentTx
 
-		parentTxMeta, err := s.Get(ctx, parentTxHash, []string{"utxos"})
+		parentTxMeta, err := s.Get(ctx, parentTxHash, []FieldName{FieldTx})
 		if err != nil {
 			return nil, err
 		}

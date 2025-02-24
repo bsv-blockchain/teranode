@@ -77,7 +77,7 @@ func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	return args.Error(0)
 }
 
-func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	args := m.Called(ctx, txs, fields)
 	return args.Error(0)
 }
@@ -91,7 +91,7 @@ func (m *mockCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, o
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *mockCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (m *mockCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	args := m.Called(ctx, hash, fields)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

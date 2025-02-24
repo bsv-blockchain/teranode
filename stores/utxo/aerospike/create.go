@@ -537,8 +537,8 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 		batch := make([]*aerospike.Bin, 0, batchCap)
 		batch = append(batch, commonBins...)
 		batch = append(batch,
-			aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)),
-			aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)),
+			aerospike.NewBin(utxo.FieldUtxos.String(), aerospike.NewListValue(batchUtxos)),
+			aerospike.NewBin(utxo.FieldNrUtxos.String(), aerospike.NewIntegerValue(nrUtxos)),
 		)
 		batches = append(batches, batch)
 	}
@@ -652,14 +652,14 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	}
 
 	commonBins := []*aerospike.Bin{
-		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
-		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
+		aerospike.NewBin(utxo.FieldVersion.String(), aerospike.NewIntegerValue(int(tx.Version))),
+		aerospike.NewBin(utxo.FieldLockTime.String(), aerospike.NewIntegerValue(int(tx.LockTime))),
 		// nolint: gosec
-		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
-		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
-		aerospike.NewBin("extendedSize", aerospike.NewIntegerValue(extendedSize)),
-		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
-		aerospike.NewBin("isCoinbase", isCoinbase),
+		aerospike.NewBin(utxo.FieldFee.String(), aerospike.NewIntegerValue(int(fee))),
+		aerospike.NewBin(utxo.FieldSizeInBytes.String(), aerospike.NewIntegerValue(size)),
+		aerospike.NewBin(utxo.FieldExtendedSize.String(), aerospike.NewIntegerValue(extendedSize)),
+		aerospike.NewBin(utxo.FieldSpentUtxos.String(), aerospike.NewIntegerValue(0)),
+		aerospike.NewBin(utxo.FieldIsCoinbase.String(), isCoinbase),
 	}
 
 	if isCoinbase {
@@ -668,20 +668,20 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		// Bitcoin has a 100 block coinbase maturity period and the block in which the coinbase transaction is included is block 0.
 		// counts as the 1st confirmation, so we need to wait for 99 more blocks to be mined before the coinbase outputs can be spent.
 		// So, for instance an output from the coinbase transaction in block 9 can be spent in block 109.
-		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+uint32(s.settings.ChainCfgParams.CoinbaseMaturity)))))
+		commonBins = append(commonBins, aerospike.NewBin(utxo.FieldSpendingHeight.String(), aerospike.NewIntegerValue(int(blockHeight+uint32(s.settings.ChainCfgParams.CoinbaseMaturity)))))
 	}
 
 	if isConflicting {
-		commonBins = append(commonBins, aerospike.NewBin("conflicting", true))
+		commonBins = append(commonBins, aerospike.NewBin(utxo.FieldConflicting.String(), true))
 	}
 
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)
 
-	batches[0] = append(batches[0], aerospike.NewBin("nrRecords", aerospike.NewIntegerValue(len(batches))))
-	batches[0] = append(batches[0], aerospike.NewBin("blockIDs", blockIDs))
-	batches[0] = append(batches[0], aerospike.NewBin("blockHeights", blockHeights))
-	batches[0] = append(batches[0], aerospike.NewBin("subtreeIdxs", subtreeIdxs))
+	batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldNrRecords.String(), aerospike.NewIntegerValue(len(batches))))
+	batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldBlockIDs.String(), blockIDs))
+	batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldBlockHeights.String(), blockHeights))
+	batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldSubtreeIdxs.String(), subtreeIdxs))
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
@@ -689,10 +689,10 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	}
 
 	if external {
-		batches[0] = append(batches[0], aerospike.NewBin("external", true))
+		batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldExternal.String(), true))
 	} else {
-		batches[0] = append(batches[0], aerospike.NewBin("inputs", inputs))
-		batches[0] = append(batches[0], aerospike.NewBin("outputs", outputs))
+		batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldInputs.String(), inputs))
+		batches[0] = append(batches[0], aerospike.NewBin(utxo.FieldOutputs.String(), outputs))
 	}
 
 	return batches, hasUtxos, nil

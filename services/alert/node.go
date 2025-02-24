@@ -123,7 +123,7 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 		}
 
 		// get the parent tx, to get the utxo hash of the spend
-		parentTxMeta, err := n.utxoStore.Get(ctx, txHash, []string{"tx"})
+		parentTxMeta, err := n.utxoStore.Get(ctx, txHash, []utxo.FieldName{utxo.FieldTx})
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
 			continue
@@ -202,7 +202,7 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 		// get the parent txs of all the inputs of this transaction
 		for _, txIn := range tx.Inputs {
 			// get the parent tx, to get the utxo hash of the spend
-			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), []string{"tx"})
+			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), []utxo.FieldName{utxo.FieldTx})
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
 				continue

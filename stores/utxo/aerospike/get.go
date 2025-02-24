@@ -92,7 +92,7 @@ type batchGetItemData struct {
 // batchGetItem represents a single item in a batch get operation
 type batchGetItem struct {
 	hash   chainhash.Hash        // Transaction hash
-	fields []string              // Fields to retrieve
+	fields []utxo.FieldName      // Fields to retrieve
 	done   chan batchGetItemData // Channel for result
 }
 
@@ -129,7 +129,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	policy := util.GetAerospikeReadPolicy(s.settings)
 	policy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
-	value, aErr := s.client.Get(policy, key, binNames...)
+	value, aErr := s.client.Get(policy, key, utxo.FieldNamesToStrings(binNames)...)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Get", aErr.Error()).Inc()
 
@@ -153,7 +153,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	)
 
 	if value != nil {
-		utxos, ok := value.Bins["utxos"].([]interface{})
+		utxos, ok := value.Bins[utxo.FieldUtxos.String()].([]interface{})
 		if ok {
 			b, ok := utxos[spend.Vout].([]byte)
 			if ok {
@@ -176,7 +176,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			}
 		}
 
-		utxoSpendableInBin, found := value.Bins["utxoSpendableIn"]
+		utxoSpendableInBin, found := value.Bins[utxo.FieldUtxoSpendableIn.String()]
 		if found {
 			utxoSpendableIn, ok := utxoSpendableInBin.(map[interface{}]interface{})
 			if !ok {
@@ -192,7 +192,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			}
 		}
 
-		frozenBin, found := value.Bins["frozen"]
+		frozenBin, found := value.Bins[utxo.FieldFrozen.String()]
 		if found {
 			frozen, ok = frozenBin.(bool)
 			if !ok {
@@ -200,7 +200,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			}
 		}
 
-		conflictingBin, found := value.Bins["conflicting"]
+		conflictingBin, found := value.Bins[utxo.FieldConflicting.String()]
 		if found {
 			conflicting, ok = conflictingBin.(bool)
 			if !ok {
@@ -256,7 +256,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, 
 // Returns:
 //   - Transaction metadata
 //   - Any error encountered
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
 		bins = fields[0]
@@ -265,7 +265,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	return s.get(ctx, hash, bins)
 }
 
-func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*meta.Data, error) {
+func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []utxo.FieldName) (*meta.Data, error) {
 	bins = s.addAbstractedBins(bins)
 
 	done := make(chan batchGetItemData)
@@ -293,11 +293,11 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*me
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	// nolint: gosec
 	tx = &bt.Tx{
-		Version:  uint32(bins["version"].(int)),
-		LockTime: uint32(bins["locktime"].(int)),
+		Version:  uint32(bins[utxo.FieldVersion.String()].(int)),
+		LockTime: uint32(bins[utxo.FieldLockTime.String()].(int)),
 	}
 
-	inputInterfaces, ok := bins["inputs"].([]interface{})
+	inputInterfaces, ok := bins[utxo.FieldInputs.String()].([]interface{})
 	if ok {
 		tx.Inputs = make([]*bt.Input, len(inputInterfaces))
 
@@ -312,7 +312,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 		}
 	}
 
-	outputInterfaces, ok := bins["outputs"].([]interface{})
+	outputInterfaces, ok := bins[utxo.FieldOutputs.String()].([]interface{})
 	if ok {
 		tx.Outputs = make([]*bt.Output, len(outputInterfaces))
 
@@ -333,44 +333,44 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
-func (s *Store) addAbstractedBins(bins []string) []string {
+func (s *Store) addAbstractedBins(bins []utxo.FieldName) []utxo.FieldName {
 	// add missing bins
-	if slices.Contains(bins, "parentTxHashes") {
-		if !slices.Contains(bins, "inputs") {
-			bins = append(bins, "inputs")
-			bins = append(bins, "external")
+	if slices.Contains(bins, utxo.FieldParentTxHashes) {
+		if !slices.Contains(bins, utxo.FieldInputs) {
+			bins = append(bins, utxo.FieldInputs)
+			bins = append(bins, utxo.FieldExternal)
 		}
 	}
 
-	if slices.Contains(bins, "tx") {
-		if !slices.Contains(bins, "inputs") {
-			bins = append(bins, "inputs")
+	if slices.Contains(bins, utxo.FieldTx) {
+		if !slices.Contains(bins, utxo.FieldInputs) {
+			bins = append(bins, utxo.FieldInputs)
 		}
 
-		if !slices.Contains(bins, "outputs") {
-			bins = append(bins, "outputs")
+		if !slices.Contains(bins, utxo.FieldOutputs) {
+			bins = append(bins, utxo.FieldOutputs)
 		}
 
-		if !slices.Contains(bins, "version") {
-			bins = append(bins, "version")
+		if !slices.Contains(bins, utxo.FieldVersion) {
+			bins = append(bins, utxo.FieldVersion)
 		}
 
-		if !slices.Contains(bins, "locktime") {
-			bins = append(bins, "locktime")
+		if !slices.Contains(bins, utxo.FieldLockTime) {
+			bins = append(bins, utxo.FieldLockTime)
 		}
 
-		if !slices.Contains(bins, "external") {
-			bins = append(bins, "external")
+		if !slices.Contains(bins, utxo.FieldExternal) {
+			bins = append(bins, utxo.FieldExternal)
 		}
 	}
 
-	if slices.Contains(bins, "blockIDs") {
-		if !slices.Contains(bins, "blockHeights") {
-			bins = append(bins, "blockHeights")
+	if slices.Contains(bins, utxo.FieldBlockIDs) {
+		if !slices.Contains(bins, utxo.FieldBlockHeights) {
+			bins = append(bins, utxo.FieldBlockHeights)
 		}
 
-		if !slices.Contains(bins, "subtreeIdxs") {
-			bins = append(bins, "subtreeIdxs")
+		if !slices.Contains(bins, utxo.FieldSubtreeIdxs) {
+			bins = append(bins, utxo.FieldSubtreeIdxs)
 		}
 	}
 
@@ -388,7 +388,7 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 //   - ctx: Context for cancellation
 //   - items: Transactions to fetch
 //   - fields: Optional fields to retrieve
-func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
@@ -404,7 +404,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
-		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+		bins := []utxo.FieldName{utxo.FieldTx, utxo.FieldFee, utxo.FieldSizeInBytes, utxo.FieldParentTxHashes, utxo.FieldBlockIDs, utxo.FieldIsCoinbase}
 		if len(item.Fields) > 0 {
 			bins = item.Fields
 		} else if len(fields) > 0 {
@@ -413,7 +413,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 		item.Fields = s.addAbstractedBins(bins)
 
-		record := aerospike.NewBatchRead(policy, key, item.Fields)
+		record := aerospike.NewBatchRead(policy, key, utxo.FieldNamesToStrings(item.Fields))
 		// Add to batch
 		batchRecords[idx] = record
 	}
@@ -441,7 +441,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 			var externalTx *bt.Tx
 
-			external, ok := bins["external"].(bool)
+			external, ok := bins[utxo.FieldExternal.String()].(bool)
 			if ok && external {
 				if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
 					items[idx].Err = err
@@ -451,10 +451,10 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 			}
 
 			for _, key := range items[idx].Fields {
-				value := bins[key]
+				value := bins[key.String()]
 
 				switch key {
-				case "tx":
+				case utxo.FieldTx:
 					if external {
 						items[idx].Data.Tx = externalTx
 					} else {
@@ -466,26 +466,26 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.Tx = tx
 					}
 
-				case "fee":
+				case utxo.FieldFee:
 					fee, ok := value.(int)
 					if ok {
 						items[idx].Data.Fee = uint64(fee)
 					}
 
-				case "sizeInBytes":
+				case utxo.FieldSizeInBytes:
 					sizeInBytes, ok := value.(int)
 					if ok {
 						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
 					}
 
-				case "parentTxHashes":
+				case utxo.FieldParentTxHashes:
 					if external {
 						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
 						for i, input := range externalTx.Inputs {
 							items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
 						}
 					} else {
-						inputInterfaces, ok := bins["inputs"].([]interface{})
+						inputInterfaces, ok := bins[utxo.FieldInputs.String()].([]interface{})
 						if ok {
 							items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
 
@@ -496,7 +496,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						}
 					}
 
-				case "blockIDs":
+				case utxo.FieldBlockIDs:
 					temp := value.([]interface{})
 
 					var blockIDs []uint32
@@ -508,7 +508,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 					items[idx].Data.BlockIDs = blockIDs
 
-				case "blockHeights":
+				case utxo.FieldBlockHeights:
 					if value != nil {
 						temp := value.([]interface{})
 
@@ -524,7 +524,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.BlockHeights = []uint32{}
 					}
 
-				case "subtreeIdxs":
+				case utxo.FieldSubtreeIdxs:
 					if value != nil {
 						temp := value.([]interface{})
 
@@ -540,19 +540,19 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.SubtreeIdxs = []int{}
 					}
 
-				case "isCoinbase":
+				case utxo.FieldIsCoinbase:
 					coinbaseBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.IsCoinbase = coinbaseBool
 					}
 
-				case "frozen":
+				case utxo.FieldFrozen:
 					frozenBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.Frozen = frozenBool
 					}
 
-				case "utxos":
+				case utxo.FieldUtxos:
 					utxos, ok := value.([]interface{})
 					if ok {
 						items[idx].Data.SpendingTxIDs = make([]*chainhash.Hash, len(utxos))
@@ -569,13 +569,13 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						}
 					}
 
-				case "conflicting":
+				case utxo.FieldConflicting:
 					conflictingBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.Conflicting = conflictingBool
 					}
 
-				case "conflictingCs": // bin name can only be max 15 chars
+				case utxo.FieldConflictingChildren:
 					conflictingChildren, ok := value.([]interface{})
 					if ok {
 						items[idx].Data.ConflictingChildren = make([]chainhash.Hash, len(conflictingChildren))
@@ -659,8 +659,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		bins := []string{"version", "locktime", "inputs", "outputs", "external"}
-		record := aerospike.NewBatchRead(policy, key, bins)
+		bins := []utxo.FieldName{utxo.FieldVersion, utxo.FieldLockTime, utxo.FieldInputs, utxo.FieldOutputs, utxo.FieldExternal}
+		record := aerospike.NewBatchRead(policy, key, utxo.FieldNamesToStrings(bins))
 
 		// Add to batch records
 		batchRecords = append(batchRecords, record)
@@ -699,7 +699,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		var previousTx *bt.Tx
 
-		external, ok := bins["external"].(bool)
+		external, ok := bins[utxo.FieldExternal.String()].(bool)
 		if ok && external {
 			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err

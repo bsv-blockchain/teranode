@@ -288,15 +288,11 @@ func TestSetMinedMulti(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	meta, err := store.Get(ctx, tx.TxIDChainHash(), []string{"blockIDs", "blockHeights", "subtreeIdxs"})
+	meta, err := store.Get(ctx, tx.TxIDChainHash(), []utxo.FieldName{utxo.FieldBlockIDs})
 	require.NoError(t, err)
 
 	assert.Len(t, meta.BlockIDs, 1)
 	assert.Equal(t, uint32(1), meta.BlockIDs[0])
-	assert.Len(t, meta.BlockHeights, 1)
-	assert.Equal(t, uint32(1), meta.BlockHeights[0])
-	assert.Len(t, meta.SubtreeIdxs, 1)
-	assert.Equal(t, 0, meta.SubtreeIdxs[0])
 }
 
 func TestBatchDecorate(t *testing.T) {

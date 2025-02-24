@@ -46,7 +46,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := s.get(gCtx, &txHash, []string{"tx", "conflictingCs", "utxos"}) // bin name can only be max 15 chars
+			txMeta, err := s.get(gCtx, &txHash, []utxo.FieldName{utxo.FieldTx, utxo.FieldConflictingChildren, utxo.FieldUtxos})
 			if err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ func (s *Store) SetUnspendable(_ context.Context, txHashes []chainhash.Hash, set
 			return errors.NewProcessingError("could not create aerospike key", err)
 		}
 
-		op := aerospike.PutOp(aerospike.NewBin("unspendable", setValue))
+		op := aerospike.PutOp(aerospike.NewBin(utxo.FieldUnspendable.String(), setValue))
 
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
 	}
@@ -177,8 +177,7 @@ func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
 		}
 
 		// update the conflictingChildren bin with the tx ID of this parent making sure it is unique in the list
-		// note: bin name can only be max 15 chars: conflictingCs = conflictingChildren
-		op := aerospike.ListAppendWithPolicyOp(listPolicy, "conflictingCs", tx.TxIDChainHash().CloneBytes())
+		op := aerospike.ListAppendWithPolicyOp(listPolicy, utxo.FieldConflictingChildren.String(), tx.TxIDChainHash().CloneBytes())
 
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
 	}

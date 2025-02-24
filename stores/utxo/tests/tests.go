@@ -267,14 +267,14 @@ func Conflicting(t *testing.T, db utxostore.Store) {
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxConflicting)
 
 	// get the conflicting info for the tx
-	txMeta, err := db.Get(ctx, Tx.TxIDChainHash(), []string{"conflicting", "conflictingCs"})
+	txMeta, err := db.Get(ctx, Tx.TxIDChainHash(), []utxostore.FieldName{utxostore.FieldConflicting, utxostore.FieldConflictingChildren})
 	require.NoError(t, err)
 
 	assert.True(t, txMeta.Conflicting)
 	require.Len(t, txMeta.ConflictingChildren, 0)
 
 	// get the conflicting info for the parent tx
-	txMeta, err = db.Get(ctx, Tx.Inputs[0].PreviousTxIDChainHash(), []string{"conflicting", "conflictingCs"})
+	txMeta, err = db.Get(ctx, Tx.Inputs[0].PreviousTxIDChainHash(), []utxostore.FieldName{utxostore.FieldConflicting, utxostore.FieldConflictingChildren})
 	require.NoError(t, err)
 
 	assert.False(t, txMeta.Conflicting)

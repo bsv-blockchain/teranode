@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
@@ -922,7 +923,7 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 			// we could not decorate the transaction. This could be because the parent transaction has been ttl'ed, which
 			// can only happen if this transaction has been processed. In that case, we can try getting the transaction
 			// itself.
-			txMeta, err := sm.utxoStore.Get(ctx, tx.TxIDChainHash(), []string{"tx"})
+			txMeta, err := sm.utxoStore.Get(ctx, tx.TxIDChainHash(), []utxo.FieldName{utxo.FieldTx})
 			if err == nil && txMeta != nil {
 				if txMeta.Tx != nil {
 					for i, input := range txMeta.Tx.Inputs {

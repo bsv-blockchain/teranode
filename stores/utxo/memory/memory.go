@@ -173,7 +173,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 	return txMetaData, nil
 }
 
-func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -396,7 +396,7 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, mine
 
 // BatchDecorate efficiently fetches metadata for multiple transactions.
 // Unlike other implementations, this always fetches full transaction data.
-func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *Memory) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

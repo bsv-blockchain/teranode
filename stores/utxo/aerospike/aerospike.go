@@ -71,6 +71,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
@@ -82,17 +83,17 @@ import (
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
 var (
-	binNames = []string{
-		"spendable",
-		"fee",
-		"size",
-		"locktime",
-		"utxos",
-		"parentTxHashes",
-		"blockIDs",
-		"utxoSpendableIn",
-		"frozen",
-		"conflicting",
+	binNames = []utxo.FieldName{
+		utxo.FieldUnspendable,
+		utxo.FieldFee,
+		utxo.FieldSizeInBytes,
+		utxo.FieldLockTime,
+		utxo.FieldUtxos,
+		utxo.FieldParentTxHashes,
+		utxo.FieldBlockIDs,
+		utxo.FieldUtxoSpendableIn,
+		utxo.FieldFrozen,
+		utxo.FieldConflicting,
 	}
 )
 

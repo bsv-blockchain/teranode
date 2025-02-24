@@ -76,7 +76,7 @@ func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 	return newReadCloserFromBytes(b), nil
 }
 
-func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	for _, missing := range hashes {
 		missing.Data = &meta.Data{
 			Tx: m.txs[missing.Idx],
@@ -98,7 +98,7 @@ func (m *MockStore) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (m *MockStore) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	return nil, nil
 }
 

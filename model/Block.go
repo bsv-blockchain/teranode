@@ -780,7 +780,7 @@ func (b *Block) GetCounterConflictingTxs(ctx context.Context, txMetaStore utxo.S
 
 	for _, subtree := range b.SubtreeSlices {
 		for _, conflictingNode := range subtree.ConflictingNodes {
-			tx, err := txMetaStore.Get(ctx, &conflictingNode, []string{"tx"})
+			tx, err := txMetaStore.Get(ctx, &conflictingNode, []utxo.FieldName{utxo.FieldTx})
 			if err != nil {
 				return nil, errors.NewStorageError("error getting transaction %s from txMetaStore", conflictingNode.String(), err)
 			}

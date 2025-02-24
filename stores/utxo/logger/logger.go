@@ -153,7 +153,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, 
 	return data, err
 }
 
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxostore.FieldName) (*meta.Data, error) {
 	data, err := s.store.Get(ctx, hash, fields...)
 	s.logger.Debugf("[UTXOStore][logger][Get] hash %s, fields %v data %v err %v : %s", hash.String(), fields, data, err, caller())
 
@@ -209,7 +209,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	return resp, err
 }
 
-func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...utxostore.FieldName) error {
 	err := s.store.BatchDecorate(ctx, unresolvedMetaDataSlice, fields...)
 	s.logger.Debugf("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v : %s", unresolvedMetaDataSlice, fields, err, caller())
 

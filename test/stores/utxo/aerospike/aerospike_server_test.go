@@ -739,7 +739,7 @@ func TestAerospike(t *testing.T) {
 		assert.True(t, txMeta.Conflicting)
 
 		// get the parent tx and make sure it has the conflicting tx flag and tx2 as a conflicting child
-		txMeta, err = db.Get(context.Background(), tx.TxIDChainHash(), []string{"conflicting", "conflictingCs"})
+		txMeta, err = db.Get(context.Background(), tx.TxIDChainHash(), []utxo.FieldName{utxo.FieldConflicting, utxo.FieldConflictingChildren})
 		require.NoError(t, err)
 
 		assert.True(t, txMeta.Conflicting)

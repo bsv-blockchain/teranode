@@ -437,7 +437,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, 
 //   - outputs: Transaction outputs
 //   - blockIDs: Block references
 //   - parentTxHashes: Previous transaction hashes
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
 		bins = fields[0]
@@ -446,7 +446,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	return s.get(ctx, hash, bins)
 }
 
-func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*meta.Data, error) {
+func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []utxo.FieldName) (*meta.Data, error) {
 	prometheusUtxoGet.Inc()
 
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
@@ -492,7 +492,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		LockTime: lockTime,
 	}
 
-	if contains(bins, "tx") || contains(bins, "inputs") || contains(bins, "parentTxHashes") || contains(bins, "utxos") {
+	if contains(bins, utxo.FieldTx) || contains(bins, utxo.FieldInputs) || contains(bins, utxo.FieldParentTxHashes) || contains(bins, utxo.FieldUtxos) {
 		q := `
 			SELECT
 			 previous_transaction_hash
@@ -534,7 +534,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "tx") || contains(bins, "outputs") || contains(bins, "utxos") {
+	if contains(bins, utxo.FieldTx) || contains(bins, utxo.FieldOutputs) || contains(bins, utxo.FieldUtxos) {
 		q := `SELECT locking_script, satoshis FROM outputs WHERE transaction_id = $1 ORDER BY idx`
 
 		rows, err := s.db.QueryContext(ctx, q, id)
@@ -554,7 +554,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "blockIDs") {
+	if contains(bins, utxo.FieldBlockIDs) {
 		q := `
 			SELECT 
 			    block_id,
@@ -588,7 +588,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "conflictingCs") {
+	if contains(bins, utxo.FieldConflictingChildren) {
 		q := `
 			SELECT conflicting_t.hash
 			FROM conflicting_children c
@@ -618,7 +618,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "utxos") {
+	if contains(bins, utxo.FieldUtxos) {
 		var idx int
 
 		// get all the spending tx ids for this tx
@@ -655,11 +655,11 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 		}
 	}
 
-	if contains(bins, "tx") {
+	if contains(bins, utxo.FieldTx) {
 		data.Tx = &tx
 	}
 
-	if contains(bins, "parentTxHashes") {
+	if contains(bins, utxo.FieldParentTxHashes) {
 		for _, input := range tx.Inputs {
 			data.ParentTxHashes = append(data.ParentTxHashes, *input.PreviousTxIDChainHash())
 		}
@@ -668,7 +668,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	return data, nil
 }
 
-func contains(slice []string, item string) bool {
+func contains(slice []utxo.FieldName, item utxo.FieldName) bool {
 	for _, v := range slice {
 		if v == item {
 			return true
@@ -1207,7 +1207,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 // BatchDecorate efficiently fetches metadata for multiple transactions.
 // This is used to optimize bulk operations on transactions.
-func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
