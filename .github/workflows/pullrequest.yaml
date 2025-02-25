@@ -117,9 +117,9 @@ jobs:
         run: |
           ./scripts/check_filenames.sh
 
-      # Re-run golangci separately without exiting on errors and generating a report for use in Sonar
+      # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v5
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
