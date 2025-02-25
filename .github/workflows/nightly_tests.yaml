@@ -42,7 +42,7 @@ jobs:
 
   run-tests:
     needs: pull-image
-    runs-on: ubuntu-latest
+    runs-on: teranode-runner
     strategy:
       matrix:
         test_config:

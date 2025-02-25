@@ -33,10 +33,12 @@ jobs:
           fi
     outputs:
       deployment_tag: ${{ steps.deployment_tag.outputs.id }}
+  
   # Tests and code lint
   test_and_lint:
     uses: ./.github/workflows/gke_tests.yaml
     secrets: inherit
+
   # Build for X86 (AMD64)
   build_amd64:
     needs: [ get_tag ]
@@ -47,6 +49,7 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
+  
   # Build for ARM64 (Graviton and Darwin)
   build_arm64:
     needs: [ get_tag ]
@@ -57,6 +60,7 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
+  
   # Create docker manifest for multiple architecture tags
   create_manifest:
     needs: [ test_and_lint, build_amd64, build_arm64, get_tag ]
@@ -67,6 +71,7 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
 
+  # Operations team notifications
   notify_on_failure:
     runs-on: ubuntu-latest
     if: always()
@@ -90,8 +95,9 @@ jobs:
             "link": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           }'
 
+  # Run long tests in a separate job
   trigger-long-tests:
-    runs-on: ubuntu-latest
+    runs-on: teranode-runner
     if: always()
     needs:
       - build_amd64

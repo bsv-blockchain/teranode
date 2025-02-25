@@ -11,7 +11,7 @@ jobs:
 
   go-buildtest:
     name: build non-unit tests
-    runs-on: ubuntu-latest
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -23,7 +23,7 @@ jobs:
 
   go-longtests:
     name: Go longtests
-    runs-on: ubuntu-latest
+    runs-on: teranode-runner
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: ubuntu-latest
+    runs-on: teranode-runner
     env:
       GITHUB_ACTIONS: true
     timeout-minutes: 15
