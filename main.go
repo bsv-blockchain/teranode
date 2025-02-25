@@ -3,11 +3,7 @@ package main
 import (
 	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 	"os"
-	"path"
 
-	"github.com/bitcoin-sv/teranode/cmd/miner/miner"
-	"github.com/bitcoin-sv/teranode/cmd/teranodecli/teranodecli"
-	"github.com/bitcoin-sv/teranode/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -36,21 +32,6 @@ func init() {
 
 func main() {
 	tSettings := settings.NewSettings()
-
-	switch path.Base(os.Args[0]) {
-	case "blaster.run":
-		// txblaster.Init()
-		txblaster.Start()
-
-		return
-	case "miner.run":
-		miner.Start()
-
-		return
-	case "teranode-cli":
-		teranodecli.Start(os.Args[1:], version, commit)
-		return
-	}
 
 	logger := initLogger(progname, tSettings)
 
