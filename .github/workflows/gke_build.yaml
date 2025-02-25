@@ -18,6 +18,11 @@ on:
         description: 'Architecture to build'
         required: true
         type: string
+      pull_request:
+        description: 'Is this a pull request?'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-docker:
@@ -55,6 +60,16 @@ jobs:
       - name: Get Cluster Run ID
         id: run
         run: echo "id=$(cat ./deploy/docker/CLUSTER_RUN_ID)" >> $GITHUB_OUTPUT
+      
+      # Set latest tag if not a pull request
+      - name: Set latest tag
+        id: latest
+        run: |
+          case ${{ inputs.pull_request }} in
+            "false")
+            echo "tag=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-${{ inputs.arch }}" >> $GITHUB_OUTPUT
+            ;;
+          esac
 
       # Build and push Docker image to AWS ECR
       - name: Build Docker image
@@ -74,4 +89,4 @@ jobs:
             RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-${{ inputs.arch }}
+            ${{ steps.latest.outputs.tag }}

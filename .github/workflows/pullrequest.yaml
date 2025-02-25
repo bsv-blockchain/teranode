@@ -163,6 +163,7 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
+      pull_request: true
 
   # Build for ARM64 (Graviton and Darwin)
   build_arm64:
@@ -174,6 +175,9 @@ jobs:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
       region: eu-north-1
+      pull_request: true
+
+  # Create docker manifest for multiple architecture tags
   create_manifest:
     needs: [ build_amd64, build_arm64, get_tag ]
     uses: ./.github/workflows/gke_manifest.yaml
@@ -182,3 +186,4 @@ jobs:
       region: eu-north-1
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      pull_request: true

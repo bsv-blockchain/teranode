@@ -14,6 +14,11 @@ on:
         description: 'AWS region'
         required: true
         type: string
+      pull_request:
+        description: 'Is this a pull request?'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build_manifest:
@@ -42,14 +47,22 @@ jobs:
       - name: Deployment message
         run: echo "Deploying Manifest for tag ${{ inputs.tag }}"
 
-      # Create docker manifest
+      # Set latest tag if not a pull request
+      - name: Set latest tag
+        id: latest
+        run: |
+          case ${{ inputs.pull_request }} in
+            "false")
+            echo "tag=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest" >> $GITHUB_OUTPUT
+            ;;
+          esac
 
+      # Create docker manifest
       - uses: int128/docker-manifest-create-action@v2
         with:
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}
+            ${{ steps.latest.outputs.tag }}
           sources: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-amd64
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-arm64
