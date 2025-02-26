@@ -5,6 +5,7 @@
 package bech32
 
 import (
+	"errors" //nolint:depguard
 	"fmt"
 	"strings"
 )
@@ -36,8 +37,7 @@ func Decode(bech string) (string, []byte, error) {
 	upper := strings.ToUpper(bech)
 
 	if bech != lower && bech != upper {
-		return "", nil, fmt.Errorf("string not all lowercase or all " +
-			"uppercase")
+		return "", nil, errors.New("string not all lowercase or all uppercase")
 	}
 
 	// We'll work with the lowercase string from now on.
@@ -49,7 +49,7 @@ func Decode(bech string) (string, []byte, error) {
 	// or if the string is more than 90 characters in total.
 	one := strings.LastIndexByte(bech, '1')
 	if one < 1 || one+7 > len(bech) {
-		return "", nil, fmt.Errorf("invalid index of 1")
+		return "", nil, errors.New("invalid index of 1")
 	}
 
 	// The human-readable part is everything before the last '1'.
@@ -60,8 +60,7 @@ func Decode(bech string) (string, []byte, error) {
 	// 'charset'.
 	decoded, err := toBytes(data)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed converting data to bytes: "+
-			"%v", err)
+		return "", nil, fmt.Errorf("failed converting data to bytes: %v", err)
 	}
 
 	if !bech32VerifyChecksum(hrp, decoded) {
@@ -75,7 +74,7 @@ func Decode(bech string) (string, []byte, error) {
 				expected, checksum)
 		}
 
-		return "", nil, fmt.Errorf("checksum failed. " + moreInfo)
+		return "", nil, fmt.Errorf("checksum failed. %s", moreInfo)
 	}
 
 	// We exclude the last 6 bytes, which is the checksum.
@@ -88,15 +87,14 @@ func Decode(bech string) (string, []byte, error) {
 func Encode(hrp string, data []byte) (string, error) {
 	// Calculate the checksum of the data and append it at the end.
 	checksum := bech32Checksum(hrp, data)
-	combined := append(data, checksum...)
+	combined := append(data, checksum...) //nolint:gocritic
 
 	// The resulting bech32 string is the concatenation of the hrp, the
 	// separator 1, data and checksum. Everything after the separator is
 	// represented using the specified charset.
 	dataChars, err := toChars(combined)
 	if err != nil {
-		return "", fmt.Errorf("unable to convert data bytes to chars: "+
-			"%v", err)
+		return "", fmt.Errorf("unable to convert data bytes to chars: %v", err)
 	}
 
 	return hrp + "1" + dataChars, nil
@@ -110,8 +108,7 @@ func toBytes(chars string) ([]byte, error) {
 	for i := 0; i < len(chars); i++ {
 		index := strings.IndexByte(charset, chars[i])
 		if index < 0 {
-			return nil, fmt.Errorf("invalid character not part of "+
-				"charset: %v", chars[i])
+			return nil, fmt.Errorf("invalid character not part of charset: %v", chars[i])
 		}
 
 		decoded = append(decoded, byte(index))
@@ -140,7 +137,7 @@ func toChars(data []byte) (string, error) {
 // to a byte slice where each byte is encoding toBits bits.
 func ConvertBits(data []byte, fromBits, toBits uint8, pad bool) ([]byte, error) {
 	if fromBits < 1 || fromBits > 8 || toBits < 1 || toBits > 8 {
-		return nil, fmt.Errorf("only bit groups between 1 and 8 allowed")
+		return nil, errors.New("only bit groups between 1 and 8 allowed")
 	}
 
 	// The final bytes, each byte encoding toBits bits.
@@ -153,7 +150,7 @@ func ConvertBits(data []byte, fromBits, toBits uint8, pad bool) ([]byte, error) 
 
 	for _, b := range data {
 		// Discard unused bits.
-		b <<= (8 - fromBits)
+		b <<= 8 - fromBits
 
 		// How many bits remaining to extract from the input data.
 		remFromBits := fromBits
@@ -190,7 +187,7 @@ func ConvertBits(data []byte, fromBits, toBits uint8, pad bool) ([]byte, error) 
 
 	// We pad any unfinished group if specified.
 	if pad && filledBits > 0 {
-		nextByte <<= (toBits - filledBits)
+		nextByte <<= toBits - filledBits
 		regrouped = append(regrouped, nextByte)
 		filledBits = 0
 		nextByte = 0
@@ -198,7 +195,7 @@ func ConvertBits(data []byte, fromBits, toBits uint8, pad bool) ([]byte, error) 
 
 	// Any incomplete group must be <= 4 bits, and all zeroes.
 	if filledBits > 0 && (filledBits > 4 || nextByte != 0) {
-		return nil, fmt.Errorf("invalid incomplete group")
+		return nil, errors.New("invalid incomplete group")
 	}
 
 	return regrouped, nil
@@ -220,7 +217,7 @@ func bech32Checksum(hrp string, data []byte) []byte {
 	var res []byte
 
 	for i := 0; i < 6; i++ {
-		res = append(res, byte((polymod>>uint(5*(5-i)))&31))
+		res = append(res, byte((polymod>>uint(5*(5-i)))&31)) //nolint:gosec
 	}
 
 	return res
@@ -234,7 +231,7 @@ func bech32Polymod(values []int) int {
 		chk = (chk&0x1ffffff)<<5 ^ v
 
 		for i := 0; i < 5; i++ {
-			if (b>>uint(i))&1 == 1 {
+			if (b>>uint(i))&1 == 1 { //nolint:gosec
 				chk ^= gen[i]
 			}
 		}

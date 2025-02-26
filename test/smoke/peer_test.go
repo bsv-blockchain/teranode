@@ -53,8 +53,6 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	txDistributor := testEnv.Nodes[0].DistributorClient
 
 	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
-	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
-	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
 	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
@@ -132,9 +130,6 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	height, _ := helper.GetBlockHeight(url)
 	t.Logf("Block height before mining: %d\n", height)
-
-	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
 	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 

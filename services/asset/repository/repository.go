@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -65,8 +64,6 @@ type Repository struct {
 	SubtreeStore        blob.Store
 	BlockPersisterStore blob.Store
 	BlockchainClient    blockchain.ClientI
-	// coinbaseAvailable bool
-	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -86,25 +83,11 @@ type Repository struct {
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
-	var cbc coinbase_api.CoinbaseAPIClient
-
-	coinbaseGrpcAddress := tSettings.Coinbase.GRPCAddress
-	if len(coinbaseGrpcAddress) > 0 {
-		baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
-			MaxRetries: 3,
-		}, tSettings)
-		if err != nil {
-			return nil, err
-		}
-
-		cbc = coinbase_api.NewCoinbaseAPIClient(baConn)
-	}
 
 	return &Repository{
 		logger:              logger,
 		settings:            tSettings,
 		BlockchainClient:    blockchainClient,
-		CoinbaseProvider:    cbc,
 		UtxoStore:           utxoStore,
 		TxStore:             txStore,
 		SubtreeStore:        subtreeStore,

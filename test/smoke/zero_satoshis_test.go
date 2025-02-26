@@ -13,9 +13,8 @@ import (
 	"testing"
 	"time"
 
-	// "github.com/bitcoin-sv/teranode/services/coinbase"
-	"github.com/bitcoin-sv/teranode/services/coinbase"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/stubs"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -71,7 +70,7 @@ func (suite *ZeroSatoshisTestSuite) TestZeroSatoshisOutput() {
 
 	timeout := time.After(10 * time.Second)
 
-	err2 := coinbaseClient.SetMalformedUTXOConfig(ctx, 100, coinbase.ZeroSatoshis)
+	err2 := coinbaseClient.SetMalformedUTXOConfig(ctx, 100, stubs.MalformationType(0))
 	errorUnwrap := errors.Unwrap(err2)
 	t.Logf("err: %v", errorUnwrap)
 	require.NoError(t, errorUnwrap, "Failed to set malformed utxo config: %v", errorUnwrap)

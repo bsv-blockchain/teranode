@@ -488,7 +488,7 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	remoteAddr := sp.NA()
 	addrManager := sp.server.addrManager
 
-	if !cfg.SimNet && !isInbound {
+	if !isInbound {
 		addrManager.SetServices(remoteAddr, msg.Services)
 	}
 
@@ -526,7 +526,7 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// on the simulation test network since it is only intended to connect
 	// to specified peers and actively avoids advertising and connecting to
 	// discovered peers.
-	if !cfg.SimNet && !isInbound {
+	if !isInbound {
 		// Advertise the local address when the server accepts incoming
 		// connections and it believes itself to be close to the best known tip.
 		if !cfg.DisableListen && sp.server.syncManager.IsCurrent() {
@@ -1024,14 +1024,6 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 		tracing.WithHistogram(peerServerMetrics["OnGetAddr"]),
 	)
 
-	// Don't return any addresses when running on the simulation test
-	// network.  This helps prevent the network from becoming another
-	// public test network since it will not be able to learn about other
-	// peers that have not specifically been provided.
-	if cfg.SimNet {
-		return
-	}
-
 	// Do not accept getaddr requests from outbound peers.  This reduces
 	// fingerprinting attacks.
 	if !sp.Inbound() {
@@ -1075,14 +1067,6 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnAddr",
 		tracing.WithHistogram(peerServerMetrics["OnAddr"]),
 	)
-
-	// Ignore addresses when running on the simulation test network.  This
-	// helps prevent the network from becoming another public test network
-	// since it will not be able to learn about other peers that have not
-	// specifically been provided.
-	if cfg.SimNet {
-		return
-	}
 
 	// Ignore old style addresses which don't include a timestamp.
 	if sp.ProtocolVersion() < wire.NetAddressTimeVersion {
@@ -2694,7 +2678,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	// discovered peers in order to prevent it from becoming a public test
 	// network.
 	var newAddressFunc func() (net.Addr, error)
-	if !cfg.SimNet && len(cfg.ConnectPeers) == 0 {
+	if len(cfg.ConnectPeers) == 0 {
 		newAddressFunc = func() (net.Addr, error) {
 			for tries := 0; tries < 100; tries++ {
 				addr := s.addrManager.GetAddress()

@@ -1,8 +1,6 @@
 module github.com/bitcoin-sv/teranode
 
-go 1.22.6
-
-toolchain go1.23.0
+go 1.24.0
 
 replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.16
 
@@ -50,7 +48,6 @@ require (
 	github.com/mrz1836/go-datastore v0.7.3
 	github.com/mrz1836/go-logger v0.3.5
 	github.com/multiformats/go-multiaddr v0.14.0
-	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.51
 	github.com/ordishs/gocore v1.0.77
@@ -77,7 +74,7 @@ require (
 	golang.org/x/sys v0.29.0
 	golang.org/x/term v0.28.0
 	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.6.0
+	golang.org/x/time v0.6.0 // indirect
 	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.36.4
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
@@ -452,7 +449,7 @@ require (
 require (
 	github.com/labstack/echo/v4 v4.11.1
 	github.com/labstack/gommon v0.4.0
-	github.com/spf13/cobra v1.8.1
+	github.com/spf13/cobra v1.8.1 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 )
 

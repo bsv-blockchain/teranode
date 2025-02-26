@@ -147,34 +147,6 @@ var testNetGenesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
-// simNetGenesisHash is the hash of the first block in the block chain for the
-// simulation test network.
-var simNetGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
-	0xf6, 0x7a, 0xd7, 0x69, 0x5d, 0x9b, 0x66, 0x2a,
-	0x72, 0xff, 0x3d, 0x8e, 0xdb, 0xbb, 0x2d, 0xe0,
-	0xbf, 0xa6, 0x7b, 0x13, 0x97, 0x4b, 0xb9, 0x91,
-	0x0d, 0x11, 0x6d, 0x5c, 0xbd, 0x86, 0x3e, 0x68,
-})
-
-// simNetGenesisMerkleRoot is the hash of the first transaction in the genesis
-// block for the simulation test network.  It is the same as the merkle root for
-// the main network.
-var simNetGenesisMerkleRoot = genesisMerkleRoot
-
-// simNetGenesisBlock defines the genesis block of the block chain which serves
-// as the public transaction ledger for the simulation test network.
-var simNetGenesisBlock = wire.MsgBlock{
-	Header: wire.BlockHeader{
-		Version:    1,
-		PrevBlock:  chainhash.Hash{},         // 0000000000000000000000000000000000000000000000000000000000000000
-		MerkleRoot: simNetGenesisMerkleRoot,  // 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
-		Timestamp:  time.Unix(1401292357, 0), // 2014-05-28 15:52:37 +0000 UTC
-		Bits:       0x207fffff,               // 545259519 [7fffff0000000000000000000000000000000000000000000000000000000000]
-		Nonce:      2,
-	},
-	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
-}
-
 // stnGenesisHash is the hash of the first block in the block chain for the
 // stn network.
 var stnGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
@@ -192,7 +164,7 @@ var stnGenesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{
 		Version:    1,
 		PrevBlock:  chainhash.Hash{},         // 0000000000000000000000000000000000000000000000000000000000000000
-		MerkleRoot: regTestGenesisMerkleRoot, // 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
+		MerkleRoot: stnGenesisMerkleRoot,     // 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
 		Timestamp:  time.Unix(1296688602, 0), // 2011-02-02 23:16:42 +0000 UTC
 		Bits:       0x1d00ffff,               // 545259519 [7fffff0000000000000000000000000000000000000000000000000000000000]
 		Nonce:      0x0a5bac18,               // 414098458

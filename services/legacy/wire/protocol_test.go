@@ -48,7 +48,6 @@ func TestBitcoinNetStringer(t *testing.T) {
 		{MainNet, "MainNet"},
 		{RegTestNet, "RegTest"},
 		{TestNet, "TestNet"},
-		// {SimNet, "SimNet"},
 		{0xffffffff, "Unknown BitcoinNet (4294967295)"},
 	}
 

@@ -46,10 +46,3 @@ var testNetParams = params{
 	Params:  &chaincfg.TestNetParams,
 	rpcPort: "18334",
 }
-
-// simNetParams contains parameters specific to the simulation test network
-// (wire.SimNet).
-// var simNetParams = params{
-// 	Params:  &chaincfg.SimNetParams,
-// 	rpcPort: "18556",
-// }

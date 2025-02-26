@@ -19,8 +19,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
-	"github.com/bitcoin-sv/teranode/services/coinbase"
-	"github.com/bitcoin-sv/teranode/services/faucet"
 	"github.com/bitcoin-sv/teranode/services/legacy"
 	"github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/services/propagation"
@@ -225,8 +223,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	startPropagation := shouldStart("Propagation", args)
 	startP2P := shouldStart("P2P", args)
 	startAsset := shouldStart("Asset", args)
-	startCoinbase := shouldStart("Coinbase", args)
-	startFaucet := shouldStart("Faucet", args)
 	startBlockPersister := shouldStart("BlockPersister", args)
 	startUTXOPersister := shouldStart("UTXOPersister", args)
 	startLegacy := shouldStart("Legacy", args)
@@ -701,37 +697,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			)); err != nil {
 				return err
 			}
-		}
-	}
-
-	// coinbase tracker server
-	if startCoinbase {
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "coinbase")
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("Coinbase", coinbase.New(
-			logger.New("coinB"),
-			tSettings,
-			blockchainClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	if startFaucet {
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "faucet")
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("Faucet", faucet.New(
-			logger.New("faucet"),
-			tSettings,
-			blockchainClient,
-		)); err != nil {
-			return err
 		}
 	}
 

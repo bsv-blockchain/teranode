@@ -13,11 +13,11 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	bc "github.com/bitcoin-sv/teranode/services/blockchain"
-	cb "github.com/bitcoin-sv/teranode/services/coinbase"
 	"github.com/bitcoin-sv/teranode/settings"
 	bhttp "github.com/bitcoin-sv/teranode/stores/blob/http"
 	bcs "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	stubs "github.com/bitcoin-sv/teranode/test/utils/stubs"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/test/utils/tstore"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -44,13 +44,13 @@ type TeranodeTestEnv struct {
 type TeranodeTestClient struct {
 	Name                string
 	SettingsContext     string
-	CoinbaseClient      cb.Client
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
 	DistributorClient   distributor.Distributor
 	ClientBlockstore    *bhttp.HTTPStore
 	ClientSubtreestore  *bhttp.HTTPStore
 	UtxoStore           *utxostore.Store
+	CoinbaseClient      *stubs.CoinbaseClient
 	AssetURL            string
 	RPCURL              string
 	IPAddress           string
@@ -159,9 +159,13 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		return err
 	}
 
-	for i := range t.Nodes {
+	t.Nodes = make([]TeranodeTestClient, 3)
+	for i := 0; i < 3; i++ {
 		node := &t.Nodes[i]
-		svNode := &t.LegacyNodes[i]
+		node.Name = fmt.Sprintf("teranode%d", i+1)
+		node.SettingsContext = fmt.Sprintf("teranode%d", i+1)
+		node.CoinbaseClient = stubs.NewCoinbaseClient()
+
 		t.Logger.Infof("Initializing node %s", node.Name)
 		t.Logger.Infof("Settings context: %s", node.SettingsContext)
 
@@ -170,12 +174,17 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		}
 
 		if t.TConfig.Suite.IsLegacyTest {
+			svNode := &t.LegacyNodes[i]
 			if err := t.GetLegacyContainerIPAddress(svNode); err != nil {
 				return err
 			}
 		}
 
-		if err := t.setupCoinbaseClient(node); err != nil {
+		if err := t.setupRPCURL(node); err != nil {
+			return err
+		}
+
+		if err := t.setupAssetURL(node); err != nil {
 			return err
 		}
 
@@ -192,14 +201,6 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		}
 
 		if err := t.setupStores(node); err != nil {
-			return err
-		}
-
-		if err := t.setupRPCURL(node); err != nil {
-			return err
-		}
-
-		if err := t.setupAssetURL(node); err != nil {
 			return err
 		}
 	}
@@ -303,29 +304,6 @@ func (t *TeranodeTestEnv) setupAssetURL(node *TeranodeTestClient) error {
 	}
 
 	node.AssetURL = assetURL
-
-	return nil
-}
-
-func (t *TeranodeTestEnv) setupCoinbaseClient(node *TeranodeTestClient) error {
-	port, err := getPortFromAddress(node.Settings.Coinbase.GRPCAddress)
-	if err != nil {
-		return err
-	}
-
-	coinbaseGRPCPort := fmt.Sprintf("%s/tcp", port)
-
-	coinbaseGrpcAddress, err := t.getServiceAddress(node.Name, coinbaseGRPCPort)
-	if err != nil {
-		return errors.NewConfigurationError("error getting coinbase grpc address:", err)
-	}
-
-	coinbaseClient, err := cb.NewClientWithAddress(t.Context, t.Logger, node.Settings, coinbaseGrpcAddress)
-	if err != nil {
-		return errors.NewConfigurationError("error creating coinbase client:", err)
-	}
-
-	node.CoinbaseClient = *coinbaseClient
 
 	return nil
 }

@@ -66,7 +66,7 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 //
 // Returns the calculated NBit target difficulty.
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32, testnetArgs ...int64) (*model.NBit, error) {
-	// If regest or simnet we don't adjust the difficulty
+	// If regtest we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &bestBlockHeader.Bits, nil
 	}
@@ -159,7 +159,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 //   - testnetArgs: Optional arguments for testnet difficulty calculation
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock, testnetArgs ...int64) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
-	// If regest or simnet we don't adjust the difficulty
+	// If regtest we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil

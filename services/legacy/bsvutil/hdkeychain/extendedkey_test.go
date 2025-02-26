@@ -684,25 +684,6 @@ func TestNet(t *testing.T) {
 		newPub    string
 		isPrivate bool
 	}{
-		// Private extended keys.
-		// {
-		// 	name:      "mainnet -> simnet",
-		// 	key:       "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi",
-		// 	origNet:   &chaincfg.MainNetParams,
-		// 	newNet:    &chaincfg.SimNetParams,
-		// 	newPriv:   "sprv8Erh3X3hFeKunvVdAGQQtambRPapECWiTDtvsTGdyrhzhbYgnSZajRRWbihzvq4AM4ivm6uso31VfKaukwJJUs3GYihXP8ebhMb3F2AHu3P",
-		// 	newPub:    "spub4Tr3T2ab61tD1Qa6GHwRFiiKyRRJdfEZpSpXfqgFYCEyaPsqKysqHDjzSzMJSiUEGbcsG3w2SLMoTqn44B8x6u3MLRRkYfACTUBnHK79THk",
-		// 	isPrivate: true,
-		// },
-		// {
-		// 	name:      "simnet -> mainnet",
-		// 	key:       "sprv8Erh3X3hFeKunvVdAGQQtambRPapECWiTDtvsTGdyrhzhbYgnSZajRRWbihzvq4AM4ivm6uso31VfKaukwJJUs3GYihXP8ebhMb3F2AHu3P",
-		// 	origNet:   &chaincfg.SimNetParams,
-		// 	newNet:    &chaincfg.MainNetParams,
-		// 	newPriv:   "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi",
-		// 	newPub:    "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
-		// 	isPrivate: true,
-		// },
 		{
 			name:      "mainnet -> regtest",
 			key:       "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi",
@@ -722,23 +703,6 @@ func TestNet(t *testing.T) {
 			isPrivate: true,
 		},
 
-		// Public extended keys.
-		// {
-		// 	name:      "mainnet -> simnet",
-		// 	key:       "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
-		// 	origNet:   &chaincfg.MainNetParams,
-		// 	newNet:    &chaincfg.SimNetParams,
-		// 	newPub:    "spub4Tr3T2ab61tD1Qa6GHwRFiiKyRRJdfEZpSpXfqgFYCEyaPsqKysqHDjzSzMJSiUEGbcsG3w2SLMoTqn44B8x6u3MLRRkYfACTUBnHK79THk",
-		// 	isPrivate: false,
-		// },
-		// {
-		// 	name:      "simnet -> mainnet",
-		// 	key:       "spub4Tr3T2ab61tD1Qa6GHwRFiiKyRRJdfEZpSpXfqgFYCEyaPsqKysqHDjzSzMJSiUEGbcsG3w2SLMoTqn44B8x6u3MLRRkYfACTUBnHK79THk",
-		// 	origNet:   &chaincfg.SimNetParams,
-		// 	newNet:    &chaincfg.MainNetParams,
-		// 	newPub:    "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
-		// 	isPrivate: false,
-		// },
 		{
 			name:      "mainnet -> regtest",
 			key:       "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",

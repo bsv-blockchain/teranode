@@ -92,13 +92,11 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	url := "http://" + testEnv.Nodes[0].AssetURL
+	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 
 	logger := testEnv.Logger
 
 	txDistributor := testEnv.Nodes[0].DistributorClient
-
-	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
-	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 
 	// Generate private keys and addresses
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
@@ -149,9 +147,6 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
-
-	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
 	_, err = helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
 	require.NoError(t, err)
