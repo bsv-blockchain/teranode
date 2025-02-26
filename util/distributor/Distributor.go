@@ -229,8 +229,14 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		// Write the length of the transaction to buffer
 		var buf bytes.Buffer
-		//nolint:gosec
-		err = binary.Write(&buf, binary.BigEndian, uint32(tx.Size()))
+
+		txSizeUint32, err := util.SafeIntToUint32(tx.Size())
+		if err != nil {
+			d.logger.Errorf("Error converting transaction size to int32: %v", err)
+			return nil, err
+		}
+
+		err = binary.Write(&buf, binary.BigEndian, txSizeUint32)
 		if err != nil {
 			d.logger.Errorf("Error writing transaction length: %v", err)
 			return nil, err

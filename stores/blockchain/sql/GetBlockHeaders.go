@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -116,8 +117,12 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 
-		// nolint:gosec
-		blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
+		insertedAtUint32, err := util.SafeInt64ToUint32(insertedAt.Unix())
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("failed to convert insertedAt", err)
+		}
+
+		blockHeaderMeta.Timestamp = insertedAtUint32
 
 		// Set the block time to the timestamp in the meta
 		blockHeaderMeta.BlockTime = blockHeader.Timestamp

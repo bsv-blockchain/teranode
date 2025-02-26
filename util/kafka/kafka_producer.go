@@ -44,12 +44,23 @@ func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
 }
 
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
-	partition := binary.LittleEndian.Uint32(key) % uint32(k.Partitions)
-	_, _, err := k.Producer.SendMessage(&sarama.ProducerMessage{
+	kPartitionsUint32, err := util.SafeInt32ToUint32(k.Partitions)
+	if err != nil {
+		return err
+	}
+
+	partition := binary.LittleEndian.Uint32(key) % kPartitionsUint32
+
+	partitionInt32, err := util.SafeUint32ToInt32(partition)
+	if err != nil {
+		return err
+	}
+
+	_, _, err = k.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic:     k.Topic,
 		Key:       sarama.ByteEncoder(key),
 		Value:     sarama.ByteEncoder(data),
-		Partition: int32(partition), //nolint:gosec
+		Partition: partitionInt32,
 	})
 
 	return err
@@ -73,9 +84,19 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	topic := kafkaURL.Path[1:]
 
+	partitionsInt32, err := util.SafeIntToInt32(partitions)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	replicationFactorInt16, err := util.SafeIntToInt16(replicationFactor)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-		NumPartitions:     int32(partitions),        //nolint:gosec
-		ReplicationFactor: int16(replicationFactor), //nolint:gosec
+		NumPartitions:     partitionsInt32,
+		ReplicationFactor: replicationFactorInt16,
 		ConfigEntries: map[string]*string{
 			"retention.ms":        &retentionPeriod, // Set the retention period
 			"delete.retention.ms": &retentionPeriod,
@@ -90,7 +111,7 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	flushBytes := util.GetQueryParamInt(kafkaURL, "flush_bytes", 1024)
 
-	producer, err := ConnectProducer(brokersURL, topic, int32(partitions), flushBytes) //nolint:gosec
+	producer, err := ConnectProducer(brokersURL, topic, partitionsInt32, flushBytes)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("unable to connect to kafka", err)
 	}

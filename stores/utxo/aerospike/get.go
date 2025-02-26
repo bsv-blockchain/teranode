@@ -115,8 +115,12 @@ type batchOutpoint struct {
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
-	// nolint: gosec
-	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		return nil, err
+	}
+
+	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/sUtxoBatchSizeUint32)
 
 	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {
@@ -145,7 +149,6 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	var (
-		err          error
 		spendingTxID *chainhash.Hash
 		spendableIn  int
 		frozen       bool
@@ -291,10 +294,19 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []utxo.FieldNa
 }
 
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
-	// nolint: gosec
+	versionUint32, err := util.SafeIntToUint32(bins[utxo.FieldVersion.String()].(int))
+	if err != nil {
+		return nil, err
+	}
+
+	locktimeUint32, err := util.SafeIntToUint32(bins[utxo.FieldLockTime.String()].(int))
+	if err != nil {
+		return nil, err
+	}
+
 	tx = &bt.Tx{
-		Version:  uint32(bins[utxo.FieldVersion.String()].(int)),
-		LockTime: uint32(bins[utxo.FieldLockTime.String()].(int)),
+		Version:  versionUint32,
+		LockTime: locktimeUint32,
 	}
 
 	inputInterfaces, ok := bins[utxo.FieldInputs.String()].([]interface{})
@@ -502,8 +514,12 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 					var blockIDs []uint32
 
 					for _, val := range temp {
-						// nolint: gosec
-						blockIDs = append(blockIDs, uint32(val.(int)))
+						valUint32, err := util.SafeIntToUint32(val.(int))
+						if err != nil {
+							return err
+						}
+
+						blockIDs = append(blockIDs, valUint32)
 					}
 
 					items[idx].Data.BlockIDs = blockIDs

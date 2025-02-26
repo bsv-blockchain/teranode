@@ -122,6 +122,34 @@ func SafeBigWordToUint32(value big.Word) (uint32, error) {
 	return uint32(valueUint64), nil
 }
 
+// SafeIntToUint16 safely converts an int to uint16.
+// Checks if the value is non-negative and within the uint16 range.
+func SafeIntToUint16(value int) (uint16, error) {
+	if value < 0 {
+		return 0, errors.NewProcessingError("negative value cannot be converted to uint16: %d", value)
+	}
+
+	if value > math.MaxUint16 {
+		return 0, errors.NewProcessingError("value exceeds uint16 range: %d", value)
+	}
+
+	return uint16(value), nil
+}
+
+// SafeIntToInt16 safely converts an int to int16.
+// Checks if the value is within the valid int16 range.
+func SafeIntToInt16(value int) (int16, error) {
+	const MinInt16 = -1 << 15 // -32768
+
+	const MaxInt16 = 1<<15 - 1 // 32767
+
+	if value < MinInt16 || value > MaxInt16 {
+		return 0, errors.NewProcessingError("value out of int16 range: %d", value)
+	}
+
+	return int16(value), nil
+}
+
 // SafeUintToUint32 safely converts a uint to uint32.
 // Checks if the value exceeds the uint32 range.
 func SafeUintToUint32(value uint) (uint32, error) {
@@ -195,4 +223,26 @@ func SafeUint64ToInt32(value uint64) (int32, error) {
 	}
 
 	return int32(value), nil
+}
+
+// SafeUint32ToInt64 safely converts a uint32 to int64.
+// Since all uint32 values are within the valid int64 range, the conversion is always safe.
+func SafeUint32ToInt64(value uint32) (int64, error) {
+	return int64(value), nil
+}
+
+// SafeUint32ToUint64 safely converts a uint32 to uint64.
+// Since all uint32 values fit within the uint64 range, the conversion is always safe.
+func SafeUint32ToUint64(value uint32) (uint64, error) {
+	return uint64(value), nil
+}
+
+// SafeUint64ToUint16 safely converts a uint64 to uint16.
+// Checks if the value exceeds the uint16 range.
+func SafeUint64ToUint16(value uint64) (uint16, error) {
+	if value > math.MaxUint16 {
+		return 0, errors.NewProcessingError("value exceeds uint16 range: %d", value)
+	}
+
+	return uint16(value), nil
 }

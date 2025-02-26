@@ -104,8 +104,18 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 
 		copy(key[:hashLength], batchItem.hash[:])
 
-		binary.BigEndian.PutUint32(key[hashLength:hashLength+4], uint32(currentPos)) // nolint:gosec
-		binary.BigEndian.PutUint32(key[hashLength+4:hashLength+8], uint32(dataSize)) // nolint:gosec
+		currentPosUint32, err := util.SafeIntToUint32(currentPos)
+		if err != nil {
+			return err
+		}
+
+		dataSizeUint32, err := util.SafeIntToUint32(dataSize)
+		if err != nil {
+			return err
+		}
+
+		binary.BigEndian.PutUint32(key[hashLength:hashLength+4], currentPosUint32)
+		binary.BigEndian.PutUint32(key[hashLength+4:hashLength+8], dataSizeUint32)
 
 		hexKey := hex.EncodeToString(key)
 		hexKey += "\n"
@@ -119,8 +129,14 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 
 func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	batchKey := make([]byte, 4)
+
+	timeUint32, err := util.SafeIntToUint32(int(time.Now().Unix()))
+	if err != nil {
+		return err
+	}
+
 	// add the current time as the first bytes
-	binary.BigEndian.PutUint32(batchKey, uint32(time.Now().Unix())) // nolint:gosec
+	binary.BigEndian.PutUint32(batchKey, timeUint32)
 	// add a random string as the next bytes, to prevent conflicting filenames from other pods
 	randBytes := make([]byte, 4)
 	_, _ = rand.Read(randBytes)

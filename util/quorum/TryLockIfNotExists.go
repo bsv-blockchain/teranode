@@ -79,7 +79,6 @@ func New(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...Q
 	return q, nil
 }
 
-// nolint:gocognit
 func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (bool, bool, func(), error) {
 	b, err := q.exister.Exists(ctx, hash[:], q.existerOpts...)
 	if err != nil {

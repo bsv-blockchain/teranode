@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 // makeParams creates a slice of interface values for the given struct.
@@ -365,7 +367,12 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 				return makeError(ErrInvalidType, str)
 			}
 
-			if dest.OverflowInt(int64(srcUint)) { //nolint:gosec
+			srcInt64, err := util.SafeUint64ToInt64(srcUint)
+			if err != nil {
+				return makeError(ErrInvalidType, err.Error())
+			}
+
+			if dest.OverflowInt(srcInt64) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
 					"overflows destination type %v",
 					paramNum, fieldName, destBaseType)
@@ -373,7 +380,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 				return makeError(ErrInvalidType, str)
 			}
 
-			dest.SetInt(int64(srcUint)) //nolint:gosec
+			dest.SetInt(srcInt64)
 
 		// Destination is an unsigned integer of various magnitude.
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,

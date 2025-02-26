@@ -89,10 +89,16 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					// Return the error that caused the cancellation
 					return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 				default:
+					missingTxThresholdInt32, err := util.SafeIntToInt32(missingTxThreshold)
+					if err != nil {
+						return err
+					}
+
 					for _, data := range missingTxHashesCompacted {
 						if data.Data == nil || data.Err != nil {
 							newMissed := missed.Add(1)
-							if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) { //nolint:gosec
+
+							if failFast && missingTxThresholdInt32 > 0 && newMissed > missingTxThresholdInt32 {
 								return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 							}
 
@@ -127,6 +133,11 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					default:
 						txHash := txHashes[i+j]
 
+						missingTxThresholdInt32, err := util.SafeIntToInt32(missingTxThreshold)
+						if err != nil {
+							return err
+						}
+
 						if txHash.Equal(*util.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue
@@ -145,7 +156,8 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						}
 
 						newMissed := missed.Add(1)
-						if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) { //nolint:gosec
+
+						if failFast && missingTxThreshold > 0 && newMissed > missingTxThresholdInt32 {
 							return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 						}
 					}

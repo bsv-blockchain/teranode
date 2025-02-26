@@ -59,13 +59,23 @@ type KafkaAsyncProducer struct {
 }
 
 func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
+	partitionsInt32, err := util.SafeIntToInt32(util.GetQueryParamInt(url, "partitions", 1))
+	if err != nil {
+		return nil, err
+	}
+
+	replicationFactorInt16, err := util.SafeIntToInt16(util.GetQueryParamInt(url, "replication", 1))
+	if err != nil {
+		return nil, err
+	}
+
 	producerConfig := KafkaProducerConfig{
 		Logger:                logger,
 		URL:                   url,
 		BrokersURL:            strings.Split(url.Host, ","),
 		Topic:                 strings.TrimPrefix(url.Path, "/"),
-		Partitions:            int32(util.GetQueryParamInt(url, "partitions", 1)),     // nolint:gosec
-		ReplicationFactor:     int16(util.GetQueryParamInt(url, "replication", 1)),    // nolint:gosec
+		Partitions:            partitionsInt32,
+		ReplicationFactor:     replicationFactorInt16,
 		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),         // 10 minutes
 		SegmentBytes:          util.GetQueryParam(url, "segment_bytes", "1073741824"), // 1GB default
 		FlushBytes:            util.GetQueryParamInt(url, "flush_bytes", 1024*1024),
@@ -208,7 +218,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
-		c.Stop() // nolint:errcheck
+		_ = c.Stop()
 	}()
 
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel

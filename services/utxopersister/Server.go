@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -337,8 +338,12 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 		return 0, errors.NewProcessingError("failed to parse height from file", err)
 	}
 
-	// nolint:gosec
-	return uint32(height), nil
+	heightUint32, err := util.SafeUint64ToUint32(height)
+	if err != nil {
+		return 0, err
+	}
+
+	return heightUint32, nil
 }
 
 func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {

@@ -347,9 +347,13 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 						continue
 					}
 
-					// nolint: gosec
+					iUint32, err := util.SafeIntToUint32(i)
+					if err != nil {
+						s.logger.Errorf("Could not convert i (%d) to uint32", i)
+					}
+
 					wrapper.UTXOs = append(wrapper.UTXOs, &utxopersister.UTXO{
-						Index:  uint32(i),
+						Index:  iUint32,
 						Value:  output.Satoshis,
 						Script: *output.LockingScript,
 					})
@@ -651,11 +655,15 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		}
 	}
 
+	feeInt, err := util.SafeUint64ToInt(fee)
+	if err != nil {
+		return nil, hasUtxos, err
+	}
+
 	commonBins := []*aerospike.Bin{
 		aerospike.NewBin(utxo.FieldVersion.String(), aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin(utxo.FieldLockTime.String(), aerospike.NewIntegerValue(int(tx.LockTime))),
-		// nolint: gosec
-		aerospike.NewBin(utxo.FieldFee.String(), aerospike.NewIntegerValue(int(fee))),
+		aerospike.NewBin(utxo.FieldFee.String(), aerospike.NewIntegerValue(feeInt)),
 		aerospike.NewBin(utxo.FieldSizeInBytes.String(), aerospike.NewIntegerValue(size)),
 		aerospike.NewBin(utxo.FieldExtendedSize.String(), aerospike.NewIntegerValue(extendedSize)),
 		aerospike.NewBin(utxo.FieldSpentUtxos.String(), aerospike.NewIntegerValue(0)),
@@ -740,8 +748,12 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	for binIdx := len(binsToStore) - 1; binIdx >= 0; binIdx-- {
 		bins := binsToStore[binIdx]
 
-		// nolint: gosec
-		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(binIdx))
+		binIdxUint32, err := util.SafeIntToUint32(binIdx)
+		if err != nil {
+			s.logger.Errorf("Could not convert binIdx (%d) to uint32", binIdx)
+		}
+
+		keySource := uaerospike.CalculateKeySource(bItem.txHash, binIdxUint32)
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
@@ -796,9 +808,13 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 			continue
 		}
 
+		iUint32, err := util.SafeIntToUint32(i)
+		if err != nil {
+			s.logger.Errorf("Could not convert i (%d) to uint32", i)
+		}
+
 		wrapper.UTXOs = append(wrapper.UTXOs, &utxopersister.UTXO{
-			// nolint: gosec
-			Index:  uint32(i),
+			Index:  iUint32,
 			Value:  output.Satoshis,
 			Script: *output.LockingScript,
 		})
@@ -839,8 +855,12 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
-		// nolint: gosec
-		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
+		iUint32, err := util.SafeIntToUint32(i)
+		if err != nil {
+			s.logger.Errorf("Could not convert i (%d) to uint32", i)
+		}
+
+		keySource := uaerospike.CalculateKeySource(bItem.txHash, iUint32)
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {

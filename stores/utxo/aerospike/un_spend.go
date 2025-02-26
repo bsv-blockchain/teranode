@@ -154,8 +154,12 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 func (s *Store) unspendLua(spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
 
-	// nolint gosec
-	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		s.logger.Errorf("Could not convert utxoBatchSize (%d) to uint32", s.utxoBatchSize)
+	}
+
+	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/sUtxoBatchSizeUint32)
 
 	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {

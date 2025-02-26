@@ -100,11 +100,21 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 		return nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
 	}
 
+	versionUint32, err := util.SafeInt32ToUint32(msgBlock.Header.Version)
+	if err != nil {
+		return nil, errors.NewBlockInvalidError("failed to convert version to uint32", err)
+	}
+
+	timestampUint32, err := util.SafeInt64ToUint32(msgBlock.Header.Timestamp.Unix())
+	if err != nil {
+		return nil, errors.NewBlockInvalidError("failed to convert timestamp to uint32", err)
+	}
+
 	header := &BlockHeader{
-		Version:        uint32(msgBlock.Header.Version), // nolint: gosec
+		Version:        versionUint32,
 		HashPrevBlock:  &msgBlock.Header.PrevBlock,
 		HashMerkleRoot: &msgBlock.Header.MerkleRoot,
-		Timestamp:      uint32(msgBlock.Header.Timestamp.Unix()), // nolint: gosec
+		Timestamp:      timestampUint32,
 		Bits:           *nbits,
 		Nonce:          msgBlock.Header.Nonce,
 	}
@@ -124,7 +134,11 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 	}
 
 	txCount := uint64(len(msgBlock.Transactions))
-	sizeInBytes := uint64(msgBlock.SerializeSize()) // nolint: gosec
+
+	sizeInBytes, err := util.SafeIntToUint64(msgBlock.SerializeSize())
+	if err != nil {
+		return nil, errors.NewBlockInvalidError("failed to convert msgBlock size to uint64", err)
+	}
 
 	subtrees := make([]*chainhash.Hash, 0)
 
@@ -292,8 +306,10 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("error reading block height", err)
 	}
 
-	// nolint: gosec
-	block.Height = uint32(blockHeight64)
+	block.Height, err = util.SafeUint64ToUint32(blockHeight64)
+	if err != nil {
+		return nil, errors.NewBlockInvalidError("error converting block height to uint32", err)
+	}
 
 	return block, nil
 }
@@ -339,8 +355,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
-	// nolint: gosec
-	if b.Header.Timestamp > uint32(time.Now().Add(2*time.Hour).Unix()) {
+	twoHoursToTheFutureTimestampUint32, err := util.SafeInt64ToUint32(time.Now().Add(2 * time.Hour).Unix())
+	if err != nil {
+		return false, errors.NewBlockInvalidError("failed to convert two hours to the future timestamp to uint32", err)
+	}
+
+	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.Hash().String())
 	}
 
@@ -368,8 +388,10 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 			return false, err
 		}
 
-		// nolint: gosec
-		b.medianTimestamp = uint32(medianTimestamp.Unix())
+		b.medianTimestamp, err = util.SafeInt64ToUint32(medianTimestamp.Unix())
+		if err != nil {
+			return false, err
+		}
 
 		// validate that the block's timestamp is after the median timestamp
 		if b.Header.Timestamp <= b.medianTimestamp {
@@ -519,8 +541,12 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	g := errgroup.Group{}
 	g.SetLimit(concurrency)
 
-	// nolint: gosec
-	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
+	transactionCountUint32, err := util.SafeUint64ToUint32(b.TransactionCount)
+	if err != nil {
+		return errors.NewBlockInvalidError("failed to convert transaction count to int", err)
+	}
+
+	b.txMap = util.NewSplitSwissMapUint64(transactionCountUint32)
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
@@ -888,7 +914,6 @@ func getParentTxMeta(gCtx context.Context, txMetaStore utxo.Store, parentTxStruc
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			// fmt.Println("NOPE")
 			return nil, nil
 		}
 

@@ -229,7 +229,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	if options.withRetryAndMoveOn {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { // nolint:errcheck
+			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) {
 				return struct{}{}, originalFn(msg)
 			},
 				retry.WithRetryCount(options.maxRetries),
@@ -254,7 +254,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	if options.withRetryAndStop {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { // nolint:errcheck
+			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) {
 				return struct{}{}, originalFn(msg)
 			},
 				retry.WithRetryCount(options.maxRetries),
@@ -322,12 +322,13 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 						return
 					default:
 						if err := k.ConsumerGroup.Consume(internalCtx, topics, NewKafkaConsumer(k.Config, consumerFn)); err != nil {
-							if errors.Is(err, sarama.ErrClosedConsumerGroup) { // nolint:gocritic
+							switch {
+							case errors.Is(err, sarama.ErrClosedConsumerGroup):
 								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s closed", consumerIndex, k.Config.ConsumerGroupID)
 								return
-							} else if errors.Is(err, context.Canceled) {
+							case errors.Is(err, context.Canceled):
 								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.ConsumerGroupID)
-							} else {
+							default:
 								// Consider delay before retry or exit based on error type
 								k.Config.Logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 							}

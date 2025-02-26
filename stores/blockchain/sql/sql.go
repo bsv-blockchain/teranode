@@ -537,8 +537,10 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 		return nil, nil
 	}
 
-	// nolint: gosec
-	limit := int(numberOfHeaders)
+	limit, err := util.SafeUint64ToInt(numberOfHeaders)
+	if err != nil {
+		return nil, nil
+	}
 
 	for i, hash := range c.chain {
 		if hash == *blockHashFrom {

@@ -24,9 +24,9 @@ type SwissMap struct {
 	length int
 }
 
-func NewSwissMap(length int) *SwissMap {
+func NewSwissMap(length uint32) *SwissMap {
 	return &SwissMap{
-		m: swiss.NewMap[chainhash.Hash, struct{}](uint32(length)), //nolint:gosec
+		m: swiss.NewMap[chainhash.Hash, struct{}](length),
 	}
 }
 
@@ -110,9 +110,9 @@ type SwissMapUint64 struct {
 	length int
 }
 
-func NewSwissMapUint64(length int) *SwissMapUint64 {
+func NewSwissMapUint64(length uint32) *SwissMapUint64 {
 	return &SwissMapUint64{
-		m: swiss.NewMap[chainhash.Hash, uint64](uint32(length)), //nolint:gosec
+		m: swiss.NewMap[chainhash.Hash, uint64](length),
 	}
 }
 
@@ -247,7 +247,7 @@ func NewSplitSwissMap(length int) *SplitSwissMap {
 	}
 
 	for i := uint16(0); i <= m.nrOfBuckets; i++ {
-		m.m[i] = NewSwissMap(int(math.Ceil(float64(length) / float64(m.nrOfBuckets))))
+		m.m[i] = NewSwissMap(uint32(math.Ceil(float64(length) / float64(m.nrOfBuckets))))
 	}
 
 	return m
@@ -296,14 +296,14 @@ func (g *SplitSwissMapUint64) Keys() []chainhash.Hash {
 	return keys
 }
 
-func NewSplitSwissMapUint64(length int) *SplitSwissMapUint64 {
+func NewSplitSwissMapUint64(length uint32) *SplitSwissMapUint64 {
 	m := &SplitSwissMapUint64{
 		m:           make(map[uint16]*SwissMapUint64, 256),
 		nrOfBuckets: 1024,
 	}
 
 	for i := uint16(0); i <= m.nrOfBuckets; i++ {
-		m.m[i] = NewSwissMapUint64(length / int(m.nrOfBuckets))
+		m.m[i] = NewSwissMapUint64(length / uint32(m.nrOfBuckets))
 	}
 
 	return m

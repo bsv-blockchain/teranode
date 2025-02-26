@@ -92,9 +92,14 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				return nil, nil, err
 			}
 
+			iUint32, err := util.SafeIntToUint32(i)
+			if err != nil {
+				return nil, nil, err
+			}
+
 			spend := &utxo.Spend{
 				TxID:         input.PreviousTxIDChainHash(),
-				Vout:         uint32(i), // nolint:gosec
+				Vout:         iUint32,
 				UTXOHash:     utxoHash,
 				SpendingTxID: tx.TxIDChainHash(),
 			}
@@ -103,14 +108,19 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		for vOut, output := range tx.Outputs {
-			utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(vOut)) //nolint:gosec
+			vOutUint32, err := util.SafeIntToUint32(vOut)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, vOutUint32)
 			if err != nil {
 				return nil, nil, err
 			}
 
 			spend := &utxo.Spend{
 				TxID:     tx.TxIDChainHash(),
-				Vout:     uint32(vOut), // nolint:gosec
+				Vout:     vOutUint32,
 				UTXOHash: utxoHash,
 			}
 

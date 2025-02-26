@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/bytesize"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -246,8 +247,13 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 
 	for i, output := range tx.Outputs {
 		if utxo.ShouldStoreOutputAsUTXO(tx.IsCoinbase(), output, us.blockHeight) {
+			iUint32, err := util.SafeIntToUint32(i)
+			if err != nil {
+				return err
+			}
+
 			uw.UTXOs = append(uw.UTXOs, &UTXO{
-				uint32(i), // nolint:gosec
+				iUint32,
 				output.Satoshis,
 				*output.LockingScript,
 			})

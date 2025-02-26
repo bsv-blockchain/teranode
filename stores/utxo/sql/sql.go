@@ -253,7 +253,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		_ = txn.Rollback()
 	}()
 
-	var transactionId int //nolint:stylecheck
+	var transactionID int
 
 	var txHash *chainhash.Hash
 	if options.TxID != nil {
@@ -267,7 +267,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *options.IsCoinbase
 	}
 
-	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting).Scan(&transactionId)
+	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting).Scan(&transactionID)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -302,7 +302,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	`
 
 	for i, input := range tx.Inputs {
-		_, err = txn.ExecContext(ctx, q, transactionId, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
+		_, err = txn.ExecContext(ctx, q, transactionID, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 				return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -338,17 +338,22 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	var coinbaseSpendingHeight uint32
 
 	if isCoinbase {
-		coinbaseSpendingHeight = blockHeight + uint32(s.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec
+		coinbaseSpendingHeight = blockHeight + uint32(s.settings.ChainCfgParams.CoinbaseMaturity)
 	}
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			utxoHash, err := util.UTXOHashFromOutput(txHash, output, uint32(i)) //nolint:gosec
+			iUint32, err := util.SafeIntToUint32(i)
 			if err != nil {
 				return nil, err
 			}
 
-			_, err = txn.ExecContext(ctx, q, transactionId, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
+			utxoHash, err := util.UTXOHashFromOutput(txHash, output, iUint32)
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = txn.ExecContext(ctx, q, transactionID, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 					return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -378,7 +383,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		`
 
 		for _, blockMeta := range options.MinedBlockInfos {
-			_, err = txn.ExecContext(ctx, q, transactionId, blockMeta.BlockID, blockMeta.BlockHeight, blockMeta.SubtreeIdx)
+			_, err = txn.ExecContext(ctx, q, transactionID, blockMeta.BlockID, blockMeta.BlockHeight, blockMeta.SubtreeIdx)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 					return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -392,7 +397,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	if txMeta.Conflicting {
-		if err = s.updateParentConflictingChildren(ctx, transactionId, tx, txn); err != nil {
+		if err = s.updateParentConflictingChildren(ctx, transactionID, tx, txn); err != nil {
 			return nil, err
 		}
 	}
@@ -921,7 +926,7 @@ func (s *Store) setTTL(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 		if unspent == 0 || conflicting {
 			// Now mark the transaction as tombstoned if there are no more unspent outputs
-			_ = tombstoneTimeOrNull.Scan(time.Now().Add(s.expiration).UnixNano() / 1e6) //nolint:gosec
+			_ = tombstoneTimeOrNull.Scan(time.Now().Add(s.expiration).UnixNano() / 1e6)
 		}
 
 		if _, err := txn.ExecContext(ctx, qSetTTL, transactionID, tombstoneTimeOrNull); err != nil {
@@ -980,9 +985,9 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 				continue
 			}
 
-			var transactionId int //nolint:stylecheck
+			var transactionID int
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
@@ -991,11 +996,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 				return err
 			}
 
-			if _, err = txn.ExecContext(ctx, q2, transactionId, unspendable); err != nil {
+			if _, err = txn.ExecContext(ctx, q2, transactionID, unspendable); err != nil {
 				return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
 			}
 
-			if err = s.setTTL(ctx, txn, transactionId); err != nil {
+			if err = s.setTTL(ctx, txn, transactionID); err != nil {
 				return err
 			}
 
@@ -1175,16 +1180,16 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		return nil, errors.NewStorageError("utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	var spendingTxId *chainhash.Hash //nolint:stylecheck
+	var spendingTxID *chainhash.Hash
 
-	if len(spendingTransactionID) > 0 { //nolint:stylecheck
-		spendingTxId, err = chainhash.NewHash(spendingTransactionID)
+	if len(spendingTransactionID) > 0 {
+		spendingTxID, err = chainhash.NewHash(spendingTransactionID)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	utxoStatus := utxo.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())
+	utxoStatus := utxo.CalculateUtxoStatus(spendingTxID, coinbaseSpendingHeight, s.blockHeight.Load())
 
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
@@ -1200,7 +1205,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 	return &utxo.SpendResponse{
 		Status:       int(utxoStatus),
-		SpendingTxID: spendingTxId,
+		SpendingTxID: spendingTxID,
 		LockTime:     coinbaseSpendingHeight,
 	}, nil
 }
@@ -1296,7 +1301,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 
 	if s.expiration > 0 && setValue {
 		// Now mark the transaction as tombstoned if there are no more unspent outputs
-		tombstoneMillisValue := time.Now().Add(s.expiration).UnixNano() / 1e6 //nolint:gosec
+		tombstoneMillisValue := time.Now().Add(s.expiration).UnixNano() / 1e6
 		tombstoneMillis = &tombstoneMillisValue
 	}
 
@@ -1346,9 +1351,14 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				return nil, nil, err
 			}
 
+			iUint32, err := util.SafeIntToUint32(i)
+			if err != nil {
+				return nil, nil, err
+			}
+
 			spend := &utxo.Spend{
 				TxID:         input.PreviousTxIDChainHash(),
-				Vout:         uint32(i), // nolint:gosec
+				Vout:         iUint32,
 				UTXOHash:     utxoHash,
 				SpendingTxID: &conflictingTxHash,
 			}
@@ -1362,9 +1372,14 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				return nil, nil, err
 			}
 
+			vOutUint32, err := util.SafeIntToUint32(vOut)
+			if err != nil {
+				return nil, nil, err
+			}
+
 			spend := &utxo.Spend{
 				TxID:     &conflictingTxHash,
-				Vout:     uint32(vOut), // nolint:gosec
+				Vout:     vOutUint32,
 				UTXOHash: utxoHash,
 			}
 

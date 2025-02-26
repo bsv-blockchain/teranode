@@ -39,6 +39,7 @@ Here is a real example coinbase broken down...
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"log"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util"
@@ -221,15 +222,27 @@ func VarInt(i uint64) []byte {
 	}
 
 	if i < 0x10000 {
+		iUint16, err := util.SafeUint64ToUint16(i)
+		if err != nil {
+			log.Printf("failed to convert uint64 to uint16: %s", err)
+			return nil
+		}
+
 		b[0] = 0xfd
-		binary.LittleEndian.PutUint16(b[1:3], uint16(i)) //nolint:gosec
+		binary.LittleEndian.PutUint16(b[1:3], iUint16)
 
 		return b[:3]
 	}
 
 	if i < 0x100000000 {
+		iUint32, err := util.SafeUint64ToUint32(i)
+		if err != nil {
+			log.Printf("failed to convert uint64 to uint16: %s", err)
+			return nil
+		}
+
 		b[0] = 0xfe
-		binary.LittleEndian.PutUint32(b[1:5], uint32(i)) //nolint:gosec
+		binary.LittleEndian.PutUint32(b[1:5], iUint32)
 
 		return b[:5]
 	}

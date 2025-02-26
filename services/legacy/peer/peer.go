@@ -25,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -324,7 +325,11 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 			ip = net.ParseIP("0.0.0.0")
 		}
 
-		port := uint16(proxiedAddr.Port) //nolint:gosec
+		port, err := util.SafeIntToUint16(proxiedAddr.Port)
+		if err != nil {
+			return nil, err
+		}
+
 		na := wire.NewNetAddressIPPort(ip, port, services)
 
 		return na, nil
@@ -345,7 +350,12 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 		return nil, err
 	}
 
-	na := wire.NewNetAddressIPPort(ip, uint16(port), services) //nolint:gosec
+	portUint16, err := util.SafeUint64ToUint16(port)
+	if err != nil {
+		return nil, err
+	}
+
+	na := wire.NewNetAddressIPPort(ip, portUint16, services)
 
 	return na, nil
 }
@@ -2105,8 +2115,13 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// Advertise local services.
 	msg.Services = p.cfg.Services
 
+	protocolVersionInt32, err := util.SafeUint32ToInt32(p.cfg.ProtocolVersion)
+	if err != nil {
+		return nil, err
+	}
+
 	// Advertise our max supported protocol version.
-	msg.ProtocolVersion = int32(p.cfg.ProtocolVersion) //nolint:gosec
+	msg.ProtocolVersion = protocolVersionInt32
 
 	// Advertise if inv messages for transactions are desired.
 	msg.DisableRelayTx = p.cfg.DisableRelayTx
@@ -2306,15 +2321,20 @@ func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *C
 		return nil, err
 	}
 
+	portUint16, err := util.SafeUint64ToUint16(port)
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.HostToNetAddress != nil {
-		na, err := cfg.HostToNetAddress(host, uint16(port), 0) //nolint:gosec
+		na, err := cfg.HostToNetAddress(host, portUint16, 0)
 		if err != nil {
 			return nil, err
 		}
 
 		p.na = na
 	} else {
-		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), uint16(port), 0) //nolint:gosec
+		p.na = wire.NewNetAddressIPPort(net.ParseIP(host), portUint16, 0)
 	}
 
 	return p, nil

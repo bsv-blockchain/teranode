@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -174,8 +175,13 @@ func (u *UTXO) Bytes() []byte {
 	b = append(b, byte(u.Value), byte(u.Value>>8), byte(u.Value>>16), byte(u.Value>>24), byte(u.Value>>32), byte(u.Value>>40), byte(u.Value>>48), byte(u.Value>>56))
 
 	// Append little-endian script length
-	// nolint: gosec
-	scriptLen := uint32(len(u.Script))
+
+	// TODO: consider logging or returning an error
+	scriptLen, err := util.SafeIntToInt32(len(u.Script))
+	if err != nil {
+		return nil
+	}
+
 	b = append(b, byte(scriptLen), byte(scriptLen>>8), byte(scriptLen>>16), byte(scriptLen>>24))
 
 	// Append script

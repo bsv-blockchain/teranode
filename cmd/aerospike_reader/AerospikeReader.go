@@ -63,8 +63,13 @@ func AerospikeReader(txidStr string) {
 	if ok {
 		nrRecords, ok := nrRecordsIfc.(int)
 		if ok {
-			// nolint: gosec
-			for i := uint32(1); i < uint32(nrRecords); i++ {
+			nrRecordsUint32, err := util.SafeIntToUint32(nrRecords)
+			if err != nil {
+				fmt.Printf("Failed to convert nrRecords to uint32: %s\n", err)
+				os.Exit(1)
+			}
+
+			for i := uint32(1); i < nrRecordsUint32; i++ {
 				keySource := uaerospike.CalculateKeySource(hash, i)
 
 				key, err := aero.NewKey(namespace, setName, keySource)

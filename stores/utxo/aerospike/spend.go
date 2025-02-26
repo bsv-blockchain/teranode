@@ -294,8 +294,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	aeroKeyMap := make(map[string]*aerospike.Key)
 	batchesByKey := make(map[keyIgnoreUnspendable][]aerospike.MapValue, len(batch))
 
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		s.logger.Errorf("Could not convert utxoBatchSize (%d) to uint32", s.utxoBatchSize)
+	}
+
 	for idx, bItem := range batch {
-		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize)) //nolint:gosec
+		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/sUtxoBatchSizeUint32)
 		keySourceStr := string(keySource)
 
 		if key, ok = aeroKeyMap[keySourceStr]; !ok {

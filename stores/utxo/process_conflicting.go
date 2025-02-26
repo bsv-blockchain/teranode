@@ -79,7 +79,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 
 			winningTxs[idx] = txMeta.Tx
 
-			losingTxHashesPerConflictingTxCount.Add(int64(len(losingTxHashesPerConflictingTx[idx]))) //nolint:gosec
+			losingTxHashesPerConflictingTxCount.Add(int64(len(losingTxHashesPerConflictingTx[idx])))
 
 			return nil
 		})

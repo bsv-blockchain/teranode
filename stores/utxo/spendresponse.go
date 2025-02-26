@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -52,8 +53,12 @@ func (sr *SpendResponse) FromBytes(b []byte) (err error) {
 		return errors.NewInvalidArgumentError("invalid byte length")
 	}
 
-	//nolint:gosec
-	sr.Status = int(binary.LittleEndian.Uint64(b[:8]))
+	intFirstEightBytes, err := util.SafeUint64ToInt(binary.LittleEndian.Uint64(b[:8]))
+	if err != nil {
+		return errors.NewProcessingError("failed to convert first eight bytes", err)
+	}
+
+	sr.Status = intFirstEightBytes
 	sr.LockTime = binary.LittleEndian.Uint32(b[8:12])
 
 	if len(b) > 12 {

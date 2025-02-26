@@ -1487,13 +1487,13 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
-	txCountInt, err := util.SafeUint64ToInt(stp.txCount.Load())
+	txCountUint32, err := util.SafeUint64ToUint32(stp.txCount.Load())
 	if err != nil {
 		stp.logger.Errorf("[DeDuplicateTransactions] error converting tx count: %s", err.Error())
 		return
 	}
 
-	deDuplicationMap := util.NewSplitSwissMapUint64(txCountInt)
+	deDuplicationMap := util.NewSplitSwissMapUint64(txCountUint32)
 	removeMapLength := stp.removeMap.Length()
 
 	for subtreeIdx, subtree := range chainedSubtrees {

@@ -323,13 +323,18 @@ func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64,
 	return &rootHash, nil
 }
 
-func (st *Subtree) GetMap() TxMap {
-	m := NewSwissMapUint64(len(st.Nodes))
+func (st *Subtree) GetMap() (TxMap, error) {
+	lengthUint32, err := SafeIntToUint32(len(st.Nodes))
+	if err != nil {
+		return nil, err
+	}
+
+	m := NewSwissMapUint64(lengthUint32)
 	for idx, node := range st.Nodes {
 		_ = m.Put(node.Hash, uint64(idx))
 	}
 
-	return m
+	return m, nil
 }
 
 func (st *Subtree) NodeIndex(hash chainhash.Hash) int {
@@ -667,7 +672,13 @@ func DeserializeSubtreeConflictingFromReader(reader io.Reader) (conflictingNodes
 	}
 
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
-	_, _ = buf.Discard(int(48 * numLeaves)) //nolint:gosec
+
+	numLeavesInt, err := SafeUint64ToInt(numLeaves)
+	if err != nil {
+		return nil, err
+	}
+
+	_, _ = buf.Discard(48 * numLeavesInt)
 
 	// read number of conflicting nodes
 	if _, err = io.ReadFull(buf, bytes8); err != nil {

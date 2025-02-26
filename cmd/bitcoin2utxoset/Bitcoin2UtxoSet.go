@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb"
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -108,8 +109,13 @@ func Bitcoin2Utxoset(blockchainDir string, outputDir string, skipHeaders bool, s
 			return
 		}
 
-		// nolint:gosec
-		blockHeight = uint32(blockHeightUint)
+		blockHeightUint32, err := util.SafeUintToUint32(blockHeightUint)
+		if err != nil {
+			logger.Errorf("Could not convert block height to uint32: %v", err)
+			return
+		}
+
+		blockHeight = blockHeightUint32
 	} else {
 		indexDB, err := bitcoin.NewIndexDB(index)
 		if err != nil {
@@ -466,10 +472,14 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				}
 
 				if currentUTXOWrapper == nil {
-					// nolint:gosec
+					heightUint32, err := util.SafeInt64ToUint32(height)
+					if err != nil {
+						return err
+					}
+
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     *hash,
-						Height:   uint32(height),
+						Height:   heightUint32,
 						Coinbase: coinbase == 1,
 					}
 				} else if !currentUTXOWrapper.TxID.IsEqual(hash) {
@@ -482,18 +492,31 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
-					// nolint:gosec
+					heightUint32, err := util.SafeInt64ToUint32(height)
+					if err != nil {
+						return err
+					}
+
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     *hash,
-						Height:   uint32(height),
+						Height:   heightUint32,
 						Coinbase: coinbase == 1,
 					}
 				}
 
-				// nolint:gosec
+				voutUint32, err := util.SafeInt64ToUint32(vout)
+				if err != nil {
+					return err
+				}
+
+				amountUint64, err := util.SafeInt64ToUint64(amount)
+				if err != nil {
+					return err
+				}
+
 				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
-					Index:  uint32(vout),
-					Value:  uint64(amount),
+					Index:  voutUint32,
+					Value:  amountUint64,
 					Script: script,
 				})
 				utxosWritten2++
@@ -552,7 +575,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	}
 
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
-	//nolint:gosec
+
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
 		return errors.NewProcessingError("Couldn't write hash file", err)
 	}

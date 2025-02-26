@@ -374,7 +374,12 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil
 
 	defer deferFn()
 
-	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil { // nolint:gosec
+	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+	if err != nil {
+		return err
+	}
+
+	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", blockHeightUint32, block.Hash()); err != nil {
 		return errors.NewSubtreeError("failed to check subtree", err)
 	}
 
@@ -574,7 +579,6 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 			// call the validator to validate the transaction, but skip the utxo creation
 			_, err = sm.validationClient.Validate(gCtx,
 				txMap[txHash].Tx,
-				// nolint:gosec
 				blockHeightUint32,
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),

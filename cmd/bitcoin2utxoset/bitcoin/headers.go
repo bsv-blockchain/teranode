@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
+	teranodeUtil "github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -110,7 +111,30 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	// Now we are sorted, the last block in the slice is the highest
 	bestBlock := blocks[len(blocks)-1]
 
-	outFile := filepath.Join(outputDir, bestBlock.Hash.String()+".utxo-headers")
+	safeOutputDir := filepath.Clean(outputDir)
+
+	// Convert safeOutputDir to an absolute path if it's not already
+	if !filepath.IsAbs(safeOutputDir) {
+		absDir, err := filepath.Abs(safeOutputDir)
+		if err != nil {
+			return nil, errors.NewProcessingError("invalid output directory", err)
+		}
+
+		safeOutputDir = absDir
+	}
+
+	// Verify that safeOutputDir exists
+	info, err := os.Stat(safeOutputDir)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to access output directory", err)
+	}
+
+	// Verify that safeOutputDir is a directory
+	if !info.IsDir() {
+		return nil, errors.NewProcessingError("output path is not a directory")
+	}
+
+	outFile := filepath.Join(safeOutputDir, bestBlock.Hash.String()+".utxo-headers")
 
 	file, err := os.Create(outFile)
 	if err != nil {
@@ -173,7 +197,8 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	}
 
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), bestBlock.Hash.String()+".utxo-headers") // N.B. The 2 spaces is important for the hash to be valid
-	//nolint:gosec
+
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)go-golangci-lint
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
 		return nil, errors.NewProcessingError("Couldn't write hash file", err)
 	}
@@ -240,10 +265,19 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 		return nil, err
 	}
 
+	txCountUint64, err := teranodeUtil.SafeIntToUint64(txs)
+	if err != nil {
+		return nil, err
+	}
+
+	heightUint32, err := teranodeUtil.SafeIntToUint32(height)
+	if err != nil {
+		return nil, err
+	}
+
 	return &utxopersister.BlockIndex{
-		//nolint:gosec
-		Height:      uint32(height),
-		TxCount:     uint64(txs),
+		Height:      heightUint32,
+		TxCount:     txCountUint64,
 		BlockHeader: bh,
 	}, nil
 }

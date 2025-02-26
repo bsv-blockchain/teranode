@@ -332,6 +332,10 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
-	// nolint: gosec
-	return vout % uint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		s.logger.Errorf("Could not convert utxoBatchSize (%d) to uint32", s.utxoBatchSize)
+	}
+
+	return vout % sUtxoBatchSizeUint32
 }

@@ -110,7 +110,10 @@ func NewImprovedCache(maxBytes int, bucketType types.BucketType) (*ImprovedCache
 
 	var c ImprovedCache
 
-	maxBucketBytes := uint64(maxBytes / BucketsCount) //nolint:gosec
+	maxBucketBytes, err := util.SafeIntToUint64(maxBytes / BucketsCount)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to convert maxBytes", err)
+	}
 
 	if maxBucketBytes < chunkSize {
 		maxBucketBytes = chunkSize * 8

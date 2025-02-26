@@ -396,9 +396,6 @@ func WrapGRPC(err error) error {
 				}
 			}
 		}
-		// for i := 0; i < len(wrappedErrDetails); i++ {
-		//	fmt.Println("Details for the error is: ", wrappedErrDetails[i])
-		// }
 
 		st := status.New(ErrorCodeToGRPCCode(castedErr.code), castedErr.message)
 		st, detailsErr := st.WithDetails(wrappedErrDetails...)

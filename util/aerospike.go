@@ -284,7 +284,8 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 
 	for _, host := range urlHosts {
 		hostParts := strings.Split(host, ":")
-		if len(hostParts) == 2 { //nolint:gocritic
+		switch len(hostParts) {
+		case 2:
 			port, err := strconv.ParseInt(hostParts[1], 10, 32)
 			if err != nil {
 				return nil, errors.NewConfigurationError("invalid port %v", hostParts[1])
@@ -294,12 +295,12 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 				Name: hostParts[0],
 				Port: int(port),
 			})
-		} else if len(hostParts) == 1 {
+		case 1:
 			hosts = append(hosts, &aerospike.Host{
 				Name: hostParts[0],
 				Port: 3000,
 			})
-		} else {
+		default:
 			return nil, errors.NewConfigurationError("invalid host %v", host)
 		}
 	}

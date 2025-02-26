@@ -50,7 +50,6 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-// nolint: gocognit
 func Seeder(inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
 	var (
 		headerFile string
@@ -91,7 +90,6 @@ func Seeder(inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
 
 	// Start http server for the profiler
 	go func() {
-		// nolint:gosec
 		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
 	}()
 

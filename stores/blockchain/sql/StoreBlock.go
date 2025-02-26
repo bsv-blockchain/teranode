@@ -41,17 +41,25 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	}
 
+	newBlockIDUint32, err := util.SafeUint64ToUint32(newBlockID)
+	if err != nil {
+		return 0, height, errors.NewProcessingError("failed to convert newBlockID", err)
+	}
+
+	timeUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	if err != nil {
+		return 0, height, errors.NewProcessingError("failed to convert time", err)
+	}
+
 	meta := &model.BlockHeaderMeta{
-		// nolint: gosec
-		ID:          uint32(newBlockID),
+		ID:          newBlockIDUint32,
 		Height:      height,
 		TxCount:     block.TransactionCount,
 		SizeInBytes: block.SizeInBytes,
 		Miner:       miner,
 		ChainWork:   chainWork,
 		BlockTime:   block.Header.Timestamp,
-		// nolint:gosec
-		Timestamp: uint32(time.Now().Unix()),
+		Timestamp:   timeUint32,
 	}
 
 	ok := s.blocksCache.AddBlockHeader(block.Header, meta)

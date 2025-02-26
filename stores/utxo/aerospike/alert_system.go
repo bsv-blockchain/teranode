@@ -86,9 +86,13 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		return err
+	}
+
 	for _, spend := range spends {
-		// nolint: gosec
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/sUtxoBatchSizeUint32)
 
 		aeroKey, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if aErr != nil {
@@ -158,9 +162,13 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		return err
+	}
+
 	for _, spend := range spends {
-		// nolint: gosec
-		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/sUtxoBatchSizeUint32)
 
 		aeroKey, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if aErr != nil {
@@ -229,8 +237,12 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 //   - Original UTXO is not frozen
 //   - Reassignment fails
 func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	// nolint: gosec
-	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout/uint32(s.utxoBatchSize))
+	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	if err != nil {
+		return err
+	}
+
+	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout/sUtxoBatchSizeUint32)
 
 	aeroKey, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {

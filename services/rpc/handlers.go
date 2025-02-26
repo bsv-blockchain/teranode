@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/distributor"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -87,8 +88,13 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	c := cmd.(*bsvjson.GetBlockHashCmd)
 
+	indexUint32, err := util.SafeInt64ToUint32(c.Index)
+	if err != nil {
+		return nil, err
+	}
+
 	// Load the raw block bytes from the database.
-	b, err := s.blockchainClient.GetBlockByHeight(ctx, uint32(c.Index)) // nolint:gosec
+	b, err := s.blockchainClient.GetBlockByHeight(ctx, indexUint32)
 	if err != nil {
 		return nil, err
 	}
@@ -119,20 +125,40 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	}
 
 	if *c.Verbose {
+		versionInt32, err := util.SafeUint32ToInt32(b.Version)
+		if err != nil {
+			return nil, err
+		}
+
+		nonceUint64, err := util.SafeUint32ToUint64(b.Nonce)
+		if err != nil {
+			return nil, err
+		}
+
+		timeInt64, err := util.SafeUint32ToInt64(b.Timestamp)
+		if err != nil {
+			return nil, err
+		}
+
+		heightInt32, err := util.SafeUint32ToInt32(meta.Height)
+		if err != nil {
+			return nil, err
+		}
+
 		diff := b.Bits.CalculateDifficulty()
 		diffFloat, _ := diff.Float64()
 		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
 			Hash:         b.Hash().String(),
-			Version:      int32(b.Version), // nolint:gosec
+			Version:      versionInt32,
 			VersionHex:   fmt.Sprintf("%08x", b.Version),
 			PreviousHash: b.HashPrevBlock.String(),
-			Nonce:        uint64(b.Nonce),
-			Time:         int64(b.Timestamp),
+			Nonce:        nonceUint64,
+			Time:         timeInt64,
 			Bits:         b.Bits.String(),
 			Difficulty:   diffFloat,
 			MerkleRoot:   b.HashMerkleRoot.String(),
 			// Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
-			Height: int32(meta.Height), // nolint:gosec
+			Height: heightInt32,
 		}
 
 		return headerReply, nil
@@ -181,9 +207,19 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
+	versionInt32, err := util.SafeUint32ToInt32(b.Header.Version)
+	if err != nil {
+		return nil, err
+	}
+
+	blkBytesInt32, err := util.SafeIntToInt32(len(blkBytes))
+	if err != nil {
+		return nil, err
+	}
+
 	baseBlockReply := &bsvjson.GetBlockBaseVerboseResult{
 		Hash:          b.Hash().String(),
-		Version:       int32(b.Header.Version), // nolint:gosec
+		Version:       versionInt32,
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
 		MerkleRoot:    b.Header.HashMerkleRoot.String(),
 		PreviousHash:  b.Header.HashPrevBlock.String(),
@@ -191,7 +227,7 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 		Time:          int64(b.Header.Timestamp),
 		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
 		Height:        int64(b.Height),
-		Size:          int32(len(blkBytes)), // nolint:gosec
+		Size:          blkBytesInt32,
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
 		NextHash:      nextBlock.Hash().String(),
@@ -401,7 +437,12 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 
 	// Set the Locktime, if given.
 	if c.LockTime != nil {
-		mtx.LockTime = uint32(*c.LockTime) // nolint:gosec
+		lockTimeUint32, err := util.SafeInt64ToUint32(*c.LockTime)
+		if err != nil {
+			return nil, err
+		}
+
+		mtx.LockTime = lockTimeUint32
 	}
 
 	// Return the serialized and hex-encoded transaction.  Note that this
@@ -495,7 +536,12 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	err := s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(c.NumBlocks)}) //nolint:gosec
+	numblocksInt32, err := util.SafeUint32ToInt32(c.NumBlocks)
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: numblocksInt32})
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInternal.Code,
@@ -545,7 +591,7 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 		}
 	}
 
-	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: c.NumBlocks, Address: &c.Address, MaxTries: c.MaxTries}) //nolint:gosec
+	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: c.NumBlocks, Address: &c.Address, MaxTries: c.MaxTries})
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInternal.Code,

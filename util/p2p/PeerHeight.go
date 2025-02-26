@@ -17,7 +17,7 @@ type PeerHeight struct {
 	settings              *settings.Settings
 	P2PNode               P2PNode
 	numberOfExpectedPeers int
-	lastMsgByPeerId       sync.Map //nolint:stylecheck
+	lastMsgByPeerID       sync.Map
 	defaultTimeout        time.Duration
 }
 
@@ -58,7 +58,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 		settings:              tSettings,
 		P2PNode:               *peerConnection,
 		numberOfExpectedPeers: numberOfExpectedPeers,
-		lastMsgByPeerId:       sync.Map{},
+		lastMsgByPeerID:       sync.Map{},
 		defaultTimeout:        defaultTimeout,
 	}
 
@@ -110,21 +110,21 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 
 	before := 0
 
-	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+	p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
 		before++
 		return true // continue iterating
 	})
 
-	previousBlockMessage, ok := p.lastMsgByPeerId.Load(blockMessage.PeerID)
+	previousBlockMessage, ok := p.lastMsgByPeerID.Load(blockMessage.PeerID)
 	if ok && previousBlockMessage.(BlockMessage).Height > blockMessage.Height {
 		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(BlockMessage).Height)
 	} else {
-		p.lastMsgByPeerId.Store(blockMessage.PeerID, blockMessage)
+		p.lastMsgByPeerID.Store(blockMessage.PeerID, blockMessage)
 	}
 
 	after := 0
 
-	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+	p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
 		after++
 		return true // continue iterating
 	})
@@ -142,7 +142,7 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
 	size := 0
 
-	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+	p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
 		size++
 		return true // continue iterating
 	})
@@ -150,7 +150,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 	if size < p.numberOfExpectedPeers {
 		if first {
 			p.logger.Infof("[PeerHeight] Not enough peers to check if at same block height %d/%d", size, p.numberOfExpectedPeers)
-			p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+			p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
 				block := value.(BlockMessage)
 				p.logger.Infof("[PeerHeight] peer=%s %s=%d", block.PeerID, block.DataHubURL, block.Height)
 
@@ -163,7 +163,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 
 	result := true
 
-	p.lastMsgByPeerId.Range(func(key, value interface{}) bool {
+	p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
 		block := value.(BlockMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */

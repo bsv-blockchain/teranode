@@ -83,7 +83,12 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 				fees -= output.Satoshis
 			}
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, uint32(i)) // nolint:gosec
+			iUint32, err := util.SafeIntToUint32(i)
+			if err != nil {
+				return 0, nil, errors.NewProcessingError("failed to convert i", err)
+			}
+
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, iUint32)
 			if utxoErr != nil {
 				return 0, nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}
@@ -117,7 +122,12 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i)) // nolint:gosec
+			iUint32, err := util.SafeIntToUint32(i)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to convert i", err)
+			}
+
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, iUint32)
 			if utxoErr != nil {
 				return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}

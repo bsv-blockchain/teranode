@@ -328,8 +328,13 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// TODO document, what does this do?
 	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
+	subtreeWarmupCountInt32, err := util.SafeIntToInt32(subtreeWarmupCount)
+	if err != nil {
+		return err
+	}
+
 	// TODO document, what is the logic here?
-	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > int32(subtreeWarmupCount) // nolint:gosec
+	failFast := v.AllowFailFast && failFastValidation && u.subtreeCount.Add(1) > subtreeWarmupCountInt32
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	// in the retry attempts, only the tx hashes that are missing will be retried, not the whole subtree
@@ -846,7 +851,10 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		return nil, err
 	}
 
-	subtreeLookupMap := subtree.GetMap()
+	subtreeLookupMap, err := subtree.GetMap()
+	if err != nil {
+		return nil, err
+	}
 
 	// populate the missingTx slice with the tx data from the subtreeData
 	missingTxs = make([]missingTx, 0, len(missingTxHashes))

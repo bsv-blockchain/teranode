@@ -240,8 +240,8 @@ func TestTtlCache(t *testing.T) {
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
 	)
 
-	for _, txId := range txIds { //nolint:stylecheck
-		hash, _ := chainhash.NewHashFromStr(txId)
+	for _, txID := range txIds {
+		hash, _ := chainhash.NewHashFromStr(txID)
 		cache.Set(*hash, true, 1*time.Second)
 	}
 

@@ -110,7 +110,7 @@ type CreateOptions struct {
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
 // Multiple block IDs can be specified in case of a transaction that appears in multiple blocks.
-func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption { //nolint:unparams ...uint32) CreateOption {
+func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption {
 	return func(o *CreateOptions) {
 		if o.MinedBlockInfos == nil {
 			o.MinedBlockInfos = make([]MinedBlockInfo, 0)
