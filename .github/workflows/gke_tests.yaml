@@ -129,7 +129,6 @@ jobs:
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.prod.ubsv.dev
-      continue-on-error: true
 
     - name: SonarQube Quality Gate check New
       uses: sonarsource/sonarqube-quality-gate-action@master
@@ -137,4 +136,3 @@ jobs:
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.prod.ubsv.dev
-      continue-on-error: true
