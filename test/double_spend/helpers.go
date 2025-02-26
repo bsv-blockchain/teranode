@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block) {
+func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
 	td = testdaemon.New(t, testdaemon.TestOptions{
 		UtxoStoreOverride: utxoStoreOverride,
 	})
@@ -63,7 +63,16 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 
 	require.Equal(t, uint64(2), block102.TransactionCount)
 
-	return td, coinbaseTx1, txOriginal, txDoubleSpend, block102
+	// Create another transaction from block2
+	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 2)
+	require.NoError(t, err)
+
+	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 49e8)
+
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx2)
+	require.NoError(t, err)
+
+	return td, coinbaseTx1, txOriginal, txDoubleSpend, block102, tx2
 }
 
 // TODO should be moved into a test helper package

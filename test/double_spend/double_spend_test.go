@@ -52,6 +52,12 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("triple forked chain", func(t *testing.T) {
 		testTripleForkedChain(t, utxoStore)
 	})
+	t.Run("test non-conflicting tx after reorg", func(t *testing.T) {
+		testNonConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test non-conflicting tx after block assembly reset", func(t *testing.T) {
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
+	})
 }
 
 func TestDoubleSpendPostgres(t *testing.T) {
@@ -85,6 +91,12 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("triple forked chain", func(t *testing.T) {
 		testTripleForkedChain(t, utxoStore)
 	})
+	t.Run("test non-conflicting tx after reorg", func(t *testing.T) {
+		testNonConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test non-conflicting tx after block assembly reset", func(t *testing.T) {
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
+	})
 }
 
 func TestDoubleSpendAerospike(t *testing.T) {
@@ -116,6 +128,12 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	t.Run("triple forked chain", func(t *testing.T) {
 		testTripleForkedChain(t, utxoStore)
 	})
+	t.Run("test non-conflicting tx after reorg", func(t *testing.T) {
+		testNonConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test non-conflicting tx after block assembly reset", func(t *testing.T) {
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
+	})
 }
 
 // testSingleDoubleSpend tests the handling of double-spend transactions and their child
@@ -135,7 +153,7 @@ func TestDoubleSpendAerospike(t *testing.T) {
 //   - Child tx becomes non-conflicting (winning chain)
 func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t, utxoStore)
+	td, _, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer func() {
 		td.Stop()
 	}()
@@ -221,7 +239,7 @@ func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 // 2. The txDoubleSpend is in block 103 which means the block is invalid
 func testDoubleSpendInSubsequentBlock(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, _, txDoubleSpend, block102 := setupDoubleSpendTest(t, utxoStore)
+	td, _, _, txDoubleSpend, block102, _ := setupDoubleSpendTest(t, utxoStore)
 	defer td.Stop()
 
 	// Step 1: Create and validate block with double spend transaction
@@ -246,7 +264,7 @@ func testMarkAsConflictingMultipleSameBlock(t *testing.T, utxoStore string) {
 // 3. All conflicting transactions should be marked as conflicting
 func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, coinbaseTx1, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t, utxoStore)
+	td, coinbaseTx1, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer td.Stop()
 
 	// At this point we have:
@@ -296,7 +314,7 @@ func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 // 2. All transactions in both chains should be marked as conflicting
 func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t, utxoStore)
+	td, _, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer td.Stop()
 
 	// At this point we have:
@@ -394,7 +412,7 @@ func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 // 3. Verify transactions in losing chain are marked as conflicting
 func testDoubleSpendFork(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t, utxoStore)
+	td, _, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer td.Stop()
 
 	// Create chain A transactions
@@ -581,17 +599,20 @@ func createFork(t *testing.T, td *testdaemon.TestDaemon, originalBlock *model.Bl
 // Chain C: txTripleSpend -> txTripleSpend2 -> txTripleSpend3
 //
 // Block Structure:
-//                                txOriginal1
-//                    / 102a ---> txOriginal2 ---> 103a
-//                   /            txOriginal3
-//                  /
+//
+//	              txOriginal1
+//	  / 102a ---> txOriginal2 ---> 103a
+//	 /            txOriginal3
+//	/
+//
 // 0 -> 1 ... 101 -----> 102b -> txDoubleSpend  -> 103b -> 104b
-//                  \             txDoubleSpend2
-//                   \            txDoubleSpend3
-//                    \
-//                     \ 102c -> txTripleSpend  -> 103c -> 104c -> 105c (winning)
-//                               txTripleSpend2
-//                               txTripleSpend3
+//
+//	\             txDoubleSpend2
+//	 \            txDoubleSpend3
+//	  \
+//	   \ 102c -> txTripleSpend  -> 103c -> 104c -> 105c (winning)
+//	             txTripleSpend2
+//	             txTripleSpend3
 //
 // Test Flow:
 // 1. Initially chain A (102a->103a) is winning
@@ -600,7 +621,7 @@ func createFork(t *testing.T, td *testdaemon.TestDaemon, originalBlock *model.Bl
 // 4. Verify all transactions in losing chains are marked as conflicting
 func testTripleForkedChain(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txOriginal, txDoubleSpend, block102a := setupDoubleSpendTest(t, utxoStore)
+	td, _, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer td.Stop()
 
 	// Create chain A transactions
@@ -685,7 +706,7 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 		"Failed to process block102c")
 
 	// Create block103c with chain C transactions
-	subtree103c, block103c := td.CreateTestBlock(t, []*bt.Tx{txTripleSpend, txTripleSpend2, txTripleSpend3}, block102c,
+	_, block103c := td.CreateTestBlock(t, []*bt.Tx{txTripleSpend, txTripleSpend2, txTripleSpend3}, block102c,
 		10303,
 	)
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103c, block103c.Height),
@@ -775,5 +796,189 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 
 	// Verify all txs in chain C are not marked as conflicting (winning chain)
 	td.VerifyConflictingInUtxoStore(t, block103cTxHashes, false)
-	td.VerifyConflictingInSubtrees(t, subtree103c.RootHash(), block103cTxHashes)
+	td.VerifyConflictingInSubtrees(t, block103c.Subtrees[0], block103cTxHashes)
+}
+
+func testNonConflictingTxReorg(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txOriginal, txDoubleSpend, block102a, tx2 := setupDoubleSpendTest(t, utxoStore)
+	defer func() {
+		td.Stop()
+	}()
+
+	// At this point we have:
+	// 0 -> 1 ... 101 -> 102a (winning)
+
+	// Create block 102b with a double spend transaction
+	block102b := createConflictingBlock(t, td, block102a, []*bt.Tx{txDoubleSpend}, []*bt.Tx{txOriginal}, 10202)
+
+	// Create block 103b to make the longest chain...
+	_, block103b := td.CreateTestBlock(t, []*bt.Tx{tx2}, block102b, 10302)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state := td.WaitForBlockHeight(t, 103, blockWait)
+
+	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
+
+	// At this point we have:
+	//                   / 102a (losing)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> tx2 -> 103b (winning)
+
+	// Verify block 102b is now the block at height 102
+	td.VerifyBlockByHeight(t, block102b, 102)
+
+	// Verify block 103b is the block at height 103
+	td.VerifyBlockByHeight(t, block103b, 103)
+
+	// Check the txOriginal is marked as conflicting
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, true)
+
+	// check the txOriginal has been removed from block assembly
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txOriginal.TxIDChainHash()})
+
+	// Check the txDoubleSpend is no longer marked as conflicting
+	// it should still be marked as conflicting in the subtree
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, false)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been mined and removed
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// fork back to the original chain and check that everything is processed properly
+	_, block103a := td.CreateTestBlock(t, []*bt.Tx{}, block102a, 10301)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height),
+		"Failed to process block")
+
+	_, block104a := td.CreateTestBlock(t, []*bt.Tx{}, block103a, 10401)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state = td.WaitForBlockHeight(t, 104, blockWait)
+	assert.Equal(t, uint32(104), state.CurrentHeight, "Expected block assembly to reach height 104")
+
+	// Verify block 104a is the block at height 104
+	td.VerifyBlockByHeight(t, block104a, 104)
+
+	// At this point we have:
+	//                   / 102a -> 103a -> 104a (winning)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> 103b (losing)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been removed, since it was conflicting with chain a
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// check that txDoubleSpend has been marked again as conflicting
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, false)
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, true)
+
+	// check that both transactions are still marked as conflicting in the subtrees
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// create another block 105a with the tx2
+	_, block105a := td.CreateTestBlock(t, []*bt.Tx{tx2}, block104a, 10501)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height),
+		"Failed to process block")
+
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*tx2.TxIDChainHash()}, false)
+	td.VerifyConflictingInSubtrees(t, block105a.Subtrees[0], []chainhash.Hash{})
+}
+
+func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txOriginal, txDoubleSpend, block102a, tx2 := setupDoubleSpendTest(t, utxoStore)
+	defer func() {
+		td.Stop()
+	}()
+
+	// At this point we have:
+	// 0 -> 1 ... 101 -> 102a (winning)
+
+	// Create block 102b with a double spend transaction
+	block102b := createConflictingBlock(t, td, block102a, []*bt.Tx{txDoubleSpend}, []*bt.Tx{txOriginal}, 10202)
+
+	// Create block 103b to make the longest chain...
+	_, block103b := td.CreateTestBlock(t, []*bt.Tx{tx2}, block102b, 10302)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state := td.WaitForBlockHeight(t, 103, blockWait)
+
+	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
+
+	// At this point we have:
+	//                   / 102a (losing)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> tx2 -> 103b (winning)
+
+	// Verify block 102b is now the block at height 102
+	td.VerifyBlockByHeight(t, block102b, 102)
+
+	// Verify block 103b is the block at height 103
+	td.VerifyBlockByHeight(t, block103b, 103)
+
+	// Check the txOriginal is marked as conflicting
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, true)
+
+	// check the txOriginal has been removed from block assembly
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txOriginal.TxIDChainHash()})
+
+	// Check the txDoubleSpend is no longer marked as conflicting
+	// it should still be marked as conflicting in the subtree
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, false)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been mined and removed
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// fork back to the original chain and check that everything is processed properly
+	_, block103a := td.CreateTestBlock(t, []*bt.Tx{}, block102a, 10301)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height),
+		"Failed to process block")
+
+	_, block104a := td.CreateTestBlock(t, []*bt.Tx{}, block103a, 10401)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state = td.WaitForBlockHeight(t, 104, blockWait)
+	assert.Equal(t, uint32(104), state.CurrentHeight, "Expected block assembly to reach height 104")
+
+	// Verify block 104a is the block at height 104
+	td.VerifyBlockByHeight(t, block104a, 104)
+
+	// At this point we have:
+	//                   / 102a -> 103a -> 104a (winning)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> 103b (losing)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been removed, since it was conflicting with chain a
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// check that txDoubleSpend has been marked again as conflicting
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, false)
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, true)
+
+	// check that both transactions are still marked as conflicting in the subtrees
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	require.NoError(t, td.BlockAssemblyClient.ResetBlockAssembly(td.Ctx), "Failed to reset block assembly")
+
+	// create another block 105a with the tx2
+	_, block105a := td.CreateTestBlock(t, []*bt.Tx{tx2}, block104a, 10501)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height),
+		"Failed to process block")
+
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*tx2.TxIDChainHash()}, false)
+	td.VerifyConflictingInSubtrees(t, block105a.Subtrees[0], []chainhash.Hash{})
 }
