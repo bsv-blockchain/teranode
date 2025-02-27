@@ -12,10 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
+	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -121,14 +123,49 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 	})
 }
 
+// update with real data to access the bitcoin node
+var (
+	rpcHost  = "localhost"
+	rpcPort  = 8332
+	username = "bitcoin"
+	password = "bitcoin"
+)
+
+// TestGetExternalFromLargeTx simulates how the legacy service would process a large transaction in a block
+func TestGetExternalFromLargeTx(t *testing.T) {
+	// comment this to run test manually
+	t.Skip("Skipping test as it needs a lot of external data to be present in the store")
+
+	// get the block we need 367886 - 0000000000000000096aa43cd0d602b704bfa23f620141eea4006f179d40ce08
+	blockHeight := uint32(367886)
+	blockHex := "0000000000000000096aa43cd0d602b704bfa23f620141eea4006f179d40ce08"
+
+	runTestGetExternalFromLargeBlock(t, blockHex, blockHeight)
+}
+
+// TestGetExternalFromLargeBlock simulates how the legacy service would process a large block
 func TestGetExternalFromLargeBlock(t *testing.T) {
 	// comment this to run test manually
 	t.Skip("Skipping test as it needs a lot of external data to be present in the store")
 
+	// get the block we need 700908 - 00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7
+	blockHeight := uint32(700908)
+	blockHex := "00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7"
+
+	runTestGetExternalFromLargeBlock(t, blockHex, blockHeight)
+}
+
+func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight uint32) {
 	ctx := context.Background()
 
 	_, s, _, deferFn := initAerospike(t)
 	defer deferFn()
+
+	tSettings := s.GetSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.UtxoStore.GetBatcherSize = 8192
+	tSettings.UtxoStore.SpendBatcherSize = 8192
+	s.SetSettings(tSettings)
 
 	txStoreURL, _ := url.Parse("file://./data/txstore")
 	txStore, err := file.New(ulogger.TestLogger{}, txStoreURL)
@@ -144,18 +181,8 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 
 	s.SetExternalStore(externalStore)
 	s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
-
-	// update with real data to access the bitcoin node
-	var (
-		rpcHost  = "localhost"
-		rpcPort  = 8332
-		username = "bitcoin"
-		password = "bitcoin"
-	)
-
-	// get the block we need 700908 - 00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7
-	blockHeight := uint32(700908)
-	blockHex := "00000000000000000fb76af158b8d10896eb719625f45255e3ec11e8cdacb2e7"
+	_ = s.SetBlockHeight(blockHeight)
+	_ = s.SetMedianBlockTime(121233)
 
 	b, err := bitcoin.New(rpcHost, rpcPort, username, password, false)
 	if err != nil {
@@ -197,10 +224,20 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
 	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
 
+	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, s.GetSettings(), s, nil, nil)
+	require.NoError(t, err)
+
 	mockBlockchain := &blockchain.MockStore{}
 	mockBlockchain.BestBlock = &model.Block{
 		Height: blockHeight,
-		Header: &model.BlockHeader{},
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      1233232,
+			Bits:           model.NBit{},
+			Nonce:          12333,
+		},
 	}
 
 	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, mockBlockchain, nil, s)
@@ -210,7 +247,7 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 		ulogger.TestLogger{},
 		s.GetSettings(),
 		blockchainClient,
-		nil,
+		validationClient,
 		s,
 		nil,
 		nil,
@@ -226,13 +263,6 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-
-	fCPU, _ := os.Create("cpu.prof")
-
-	defer fCPU.Close()
-
-	_ = pprof.StartCPUProfile(fCPU)
-	defer pprof.StopCPUProfile()
 
 	// we have now cached all transactions (for the next step) and inserted them into the aerospike store
 	// extend the transactions in parallel and check for any errors (the real test)
@@ -259,6 +289,22 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	fCPU, _ := os.Create("cpu.prof")
+
+	defer fCPU.Close()
+
+	_ = pprof.StartCPUProfile(fCPU)
+	defer pprof.StopCPUProfile()
+
+	blockHash, err := chainhash.NewHashFromStr(blockHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = sm.PreValidateTransactions(ctx, txMap, *blockHash, uint32(block.Height)); err != nil {
+		t.Fatal(err)
+	}
+
 	fMem, _ := os.Create("mem.prof")
 	defer fMem.Close()
 
@@ -269,6 +315,8 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 	blockHeight uint32, parentTxs *map[string]struct{}) (err error) {
 
 	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(32)
+
 	parentTxsMu := sync.Mutex{}
 
 	for _, input := range tx.Inputs {
@@ -286,11 +334,17 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 					return err
 				}
 
+				// calculate a fake fee to be able to store the parent tx in the store without issues
+				neededFee := uint64(1)
+				for _, output := range parentTx.Outputs {
+					neededFee += output.Satoshis
+				}
+
 				// store the parent tx in the aerospike store
 				// this will store the transactions externally if applicable
 				// set fake fees and input script
-				for idx, input := range parentTx.Inputs {
-					input.PreviousTxSatoshis = uint64(idx)
+				for _, input := range parentTx.Inputs {
+					input.PreviousTxSatoshis = neededFee // set the needed fee to the child fee
 					input.PreviousTxScript = bscript.NewFromBytes([]byte{0x00})
 				}
 

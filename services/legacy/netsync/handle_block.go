@@ -478,6 +478,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 
 	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
 	if err != nil {
+		// already wrapped in a processing error
 		return err
 	}
 
