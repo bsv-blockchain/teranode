@@ -830,6 +830,9 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 	)
 	defer deferFn()
 
+	// remove the transaction from the orphan pool
+	sm.orphanTxs.Delete(*txHash)
+
 	// first we get all the orphan transactions, this will not block the orphan tx pool while processing
 	orphanTxs := sm.orphanTxs.Items()
 
@@ -844,7 +847,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		_, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) {
-				// silently exit, we will accept this transaction when the parent comes in
+				// silently exit, we will accept this transaction when the other parent(s) comes in
 				continue
 			}
 
@@ -856,9 +859,6 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 		// add the orphan transaction to the list of accepted transactions
 		*acceptedTxs = append(*acceptedTxs, orphanTx.tx.TxIDChainHash())
-
-		// remove the orphan transaction from the orphan pool
-		sm.orphanTxs.Delete(*txHash)
 
 		// add the time it took to process the orphan transaction to the histogram
 		prometheusLegacyNetsyncOrphanTime.Observe(float64(time.Since(orphanTx.addedAt).Microseconds()) / 1_000_000)

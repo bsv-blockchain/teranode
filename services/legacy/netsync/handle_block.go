@@ -208,12 +208,8 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return err
 	}
 
-	// remove all the transactions from this block from the orphan pool
-	for _, tx := range block.Transactions() {
-		sm.orphanTxs.Delete(*tx.Hash())
-	}
-
 	// process any orphan transactions that are now valid in background
+	// this will also remove the transactions from the orphan pool
 	go func() {
 		acceptedTxs := make([]*chainhash.Hash, 0)
 		for _, tx := range block.Transactions() {
@@ -226,13 +222,15 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 	}()
 
-	// delete the temporarily saved block from disk
-	if err = sm.tempStore.Del(ctx,
-		blockHash.CloneBytes(),
-		options.WithFileExtension("msgBlock"),
-		options.WithSubDirectory("blocks"),
-	); err != nil {
-		sm.logger.Errorf("failed to delete block from disk: %v", err)
+	if msgBlock == nil {
+		// delete the temporarily saved block from disk
+		if err = sm.tempStore.Del(ctx,
+			blockHash.CloneBytes(),
+			options.WithFileExtension("msgBlock"),
+			options.WithSubDirectory("blocks"),
+		); err != nil {
+			sm.logger.Errorf("failed to delete block from disk: %v", err)
+		}
 	}
 
 	return nil
@@ -343,7 +341,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if quickValidationMode {
 			// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
-			if err = sm.validateTransactionsLegacyMode(ctx, txMap, block); err != nil {
+			if err = sm.ValidateTransactionsLegacyMode(ctx, txMap, block); err != nil {
 				return nil, err
 			}
 		}
@@ -462,7 +460,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	return g.Wait()
 }
 
-func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
 		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
@@ -478,7 +476,12 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 
 	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", len(txMap))
 
-	if err = sm.preValidateTransactions(ctx, txMap, block); err != nil {
+	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
+	if err != nil {
+		return err
+	}
+
+	if err = sm.PreValidateTransactions(ctx, txMap, *block.Hash(), blockHeightUint32); err != nil {
 		return errors.NewProcessingError("[validateTransactionsLegacyMode] failed to pre-validate transactions", err)
 	}
 
@@ -538,17 +541,18 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	return nil
 }
 
-// preValidateTransactions pre-validates all the transactions in the block before
+// PreValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
-func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions",
-		tracing.WithLogMessage(sm.logger, "[preValidateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper,
+	blockHash chainhash.Hash, blockHeight uint32) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "PreValidateTransactions",
+		tracing.WithLogMessage(sm.logger, "[PreValidateTransactions] called for block %s / height %d", blockHash, blockHeight),
 		tracing.WithHistogram(prometheusLegacyNetsyncPreValidateTransactions),
 	)
 
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.NewProcessingError("recovered in preValidateTransactions: %v", r, err)
+			err = errors.NewProcessingError("recovered in PreValidateTransactions: %v", r, err)
 		}
 
 		deferFn(err)
@@ -571,15 +575,10 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}()
 
-			blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
-			if err != nil {
-				return err
-			}
-
 			// call the validator to validate the transaction, but skip the utxo creation
 			_, err = sm.validationClient.Validate(gCtx,
 				txMap[txHash].Tx,
-				blockHeightUint32,
+				blockHeight,
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),
 				validator.WithSkipPolicyChecks(true),
