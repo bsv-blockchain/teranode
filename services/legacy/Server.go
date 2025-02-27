@@ -280,16 +280,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	s.logger.Infof("[Legacy Server] Starting...")
-
-	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
-	err = s.blockchainClient.LegacySync(ctx)
-	if err != nil {
-		s.logger.Errorf("[Legacy Server] Failed to wait for FSM transition from IDLE state: %s", err)
-
-		return err
-	}
-
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	go s.server.Start()
 	s.logger.Infof("[Legacy Server] Internal server started")
