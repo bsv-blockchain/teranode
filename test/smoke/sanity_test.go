@@ -1,4 +1,4 @@
-//go:build test_all || test_smoke || test_functional
+//go:build test_all || test_smoke || test_functional || debug
 
 // How to run each test:
 // Clean up docker containers before running the test manually
@@ -8,18 +8,12 @@
 package smoke
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
 	// "github.com/bitcoin-sv/teranode/services/coinbase"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -41,113 +35,13 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	url := "http://" + testEnv.Nodes[0].AssetURL
 
 	txDistributor := testEnv.Nodes[0].DistributorClient
+	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
 
-	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
-	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
-	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
-
-	coinbasePrivKey := testEnv.Nodes[0].Settings.Coinbase.WalletPrivateKey
-	if coinbasePrivKey == "" {
-		t.Errorf("Coinbase private key is not set")
-	}
-
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
-	if err != nil {
-		t.Errorf("Failed to decode Coinbase private key: %v", err)
-	}
-
-	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
-
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		t.Errorf("Failed to generate private key: %v", err)
-	}
-
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	if err != nil {
-		t.Errorf("Failed to create address: %v", err)
-	}
-
-	var tx *bt.Tx
-
-	timeout := time.After(10 * time.Second)
-
-loop:
-	for tx == nil || err != nil {
-		select {
-		case <-timeout:
-			break loop
-		default:
-			tx, err = coinbaseClient.RequestFunds(ctx, address.AddressString, true)
-			if err != nil {
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-	}
-	require.NoError(t, err, "Failed to request funds: %v", err)
-
-	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
-
-	// print tx outputs
-	for _, output := range tx.Outputs {
-		t.Logf("Output: %s %d", output.LockingScript, output.Satoshis)
-	}
-
-	// check tx is malformed
-	require.Equal(t, tx.Outputs[0].Satoshis, uint64(0), "Transaction output satoshis should be 0")
-
+	tx, err := testEnv.Nodes[0].CreateAndSendTx(ctx, block1.CoinbaseTx)
+	require.NoError(t, err)
 	_, err = txDistributor.SendTransaction(ctx, tx)
-	if err != nil {
-		t.Errorf("Failed to send transaction: %v", err)
-	}
-
-	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
-	output := tx.Outputs[0]
-	utxo := &bt.UTXO{
-		TxIDHash:      tx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: output.LockingScript,
-		Satoshis:      output.Satoshis,
-	}
-
-	newTx := bt.NewTx()
-
-	err = newTx.FromUTXOs(utxo)
-	if err != nil {
-		t.Errorf("Error adding UTXO to transaction: %s\n", err)
-	}
-
-	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
-	if err != nil {
-		t.Errorf("Error adding output to transaction: %v", err)
-	}
-
-	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-	if err != nil {
-		t.Errorf("Error filling transaction inputs: %v", err)
-	}
-
-	// send the transaction. We expect this to fail if the tx is malformed
-	_, err = txDistributor.SendTransaction(ctx, newTx)
-	if err != nil {
-		t.Errorf("Failed to send new transaction: %v", err)
-	}
-
-	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
-
-	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-
-	delay := testEnv.Nodes[0].Settings.BlockAssembly.DoubleSpendWindow
-	if delay != 0 {
-		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
-	}
-
-	height, _ := helper.GetBlockHeight(url)
-	t.Logf("Block height before mining: %d\n", height)
-
-	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+	require.NoError(t, err)
 
 	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL
 	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
@@ -161,7 +55,7 @@ loop:
 	subtreeStore := testEnv.Nodes[0].ClientSubtreestore
 	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
-	targetHeight := height + 1
+	targetHeight := uint32(102)
 
 	for i := 0; i < 5; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
@@ -178,7 +72,7 @@ loop:
 
 		t.Logf("Testing on Best block meta: %v", meta[0].Height)
 
-		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *newTx.TxIDChainHash())
+		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
 		}

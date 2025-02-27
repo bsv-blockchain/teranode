@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -50,6 +51,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 	blockchainClientNode0 := testEnv.Nodes[0].BlockchainClient
 
+	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+
 	var hashes []*chainhash.Hash
 
 	var found int
@@ -83,7 +87,10 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		}
 	}()
 
-	hashesTx, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 30)
+	time.Sleep(10 * time.Second)
+
+	parenTx := block1.CoinbaseTx
+	_, hashesTx, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 30)
 
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
@@ -130,7 +137,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 							continue // Skip if we already found this tx
 						}
 
-						exists, err := helper.TestTxInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), txHash)
+						exists, err := helper.TestTxInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), *txHash)
 						require.NoError(t, err)
 
 						if exists {

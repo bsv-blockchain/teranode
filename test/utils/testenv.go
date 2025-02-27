@@ -23,6 +23,10 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	distributor "github.com/bitcoin-sv/teranode/util/distributor"
 	"github.com/docker/go-connections/nat"
+	"github.com/libsv/go-bk/wif"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -108,7 +112,6 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 		}
 
 		t.Compose = compose
-		// time.Sleep(30 * time.Second)
 
 		// Setup shared volume client for local docker-compose
 		if err := t.setupSharedStorageClient(); err != nil {
@@ -129,7 +132,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 				Name: svNodeName,
 			})
 
-			os.Setenv("SETTINGS_CONTEXT", "")
+			// os.Setenv("SETTINGS_CONTEXT", "")
 		}
 	}
 
@@ -159,11 +162,9 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		return err
 	}
 
-	t.Nodes = make([]TeranodeTestClient, 3)
+	// t.Nodes = make([]TeranodeTestClient, 3)
 	for i := 0; i < 3; i++ {
 		node := &t.Nodes[i]
-		node.Name = fmt.Sprintf("teranode%d", i+1)
-		node.SettingsContext = fmt.Sprintf("teranode%d", i+1)
 		node.CoinbaseClient = stubs.NewCoinbaseClient()
 
 		t.Logger.Infof("Initializing node %s", node.Name)
@@ -282,6 +283,7 @@ func getPortFromAddress(address string) (string, error) {
 
 func (t *TeranodeTestEnv) setupRPCURL(node *TeranodeTestClient) error {
 	port := node.Settings.RPC.RPCListenerURL.Port()
+	t.Logger.Infof("rpc port: %s", port)
 
 	rpcPort := fmt.Sprintf("%s/tcp", port)
 
@@ -703,4 +705,111 @@ func (t *TeranodeTestEnv) StopNode(nodeName string) error {
 // Helper function to make host addresses from ports.
 func makeHostAddressFromPort(port string) string {
 	return fmt.Sprintf("localhost:%s", port)
+}
+
+func (t *TeranodeTestClient) CreateAndSendTx(ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
+
+	w, err := wif.DecodeWIF(t.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	if err != nil {
+		return nil, errors.NewProcessingError("error decoding private key", err)
+	}
+
+	privateKey := w.PrivKey
+	publicKey := privateKey.PubKey().SerialiseCompressed()
+
+	utxo := &bt.UTXO{
+		TxIDHash:      parentTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: parentTx.Outputs[0].LockingScript,
+		Satoshis:      parentTx.Outputs[0].Satoshis,
+	}
+
+	newTx := bt.NewTx()
+
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		return nil, errors.NewProcessingError("error creating new transaction", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromPubKeyBytes(publicKey, 10000)
+	if err != nil {
+		return nil, errors.NewProcessingError("Error adding output to transaction", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nil, errors.NewProcessingError("Error filling transaction inputs", err)
+	}
+
+	_, err = t.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		return nil, errors.NewProcessingError("Failed to send new transaction", err)
+	}
+
+	logger.Infof("Transaction sent: %s", newTx.TxID())
+
+	return newTx, nil
+}
+
+// CreateAndSendTxs creates and sends a chain of transactions, where each transaction spends from the previous one
+func (t *TeranodeTestClient) CreateAndSendTxs(ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
+
+	w, err := wif.DecodeWIF(t.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error decoding private key", err)
+	}
+
+	privateKey := w.PrivKey
+	publicKey := privateKey.PubKey().SerialiseCompressed()
+
+	transactions := make([]*bt.Tx, count)
+	currentParent := parentTx
+	txHashes := make([]*chainhash.Hash, 0)
+
+	for i := 0; i < count; i++ {
+		utxo := &bt.UTXO{
+			TxIDHash:      currentParent.TxIDChainHash(),
+			Vout:          uint32(0),
+			LockingScript: currentParent.Outputs[0].LockingScript,
+			Satoshis:      currentParent.Outputs[0].Satoshis,
+		}
+
+		newTx := bt.NewTx()
+
+		err = newTx.FromUTXOs(utxo)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("error creating new transaction", err)
+		}
+
+		// Use the parent's output amount minus a small fee for the next transaction
+		outputAmount := currentParent.Outputs[0].Satoshis - 1000 // Subtract a small fee
+		if outputAmount <= 0 {
+			return transactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
+		}
+
+		err = newTx.AddP2PKHOutputFromPubKeyBytes(publicKey, outputAmount)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Error adding output to transaction", err)
+		}
+
+		err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Error filling transaction inputs", err)
+		}
+
+		_, err = t.DistributorClient.SendTransaction(ctx, newTx)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Failed to send new transaction", err)
+		}
+
+		logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
+
+		transactions[i] = newTx
+		txHashes = append(txHashes, newTx.TxIDChainHash())
+		currentParent = newTx
+	}
+
+	return transactions, txHashes, nil
 }
