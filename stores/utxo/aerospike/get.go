@@ -811,13 +811,15 @@ func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainha
 
 	// remove all non-spendable (OP_RETURN) outputs
 	for i, output := range tx.Outputs {
-		script := *output.LockingScript
+		if output != nil && output.LockingScript != nil {
+			script := *output.LockingScript
 
-		// check whether this output is an OP_RETURN with 0 sat value
-		if len(script) > 0 && (script[0] == 0x00 || script[0] == 0x6a) && output.Satoshis == 0 {
-			tx.Outputs[i] = nil
-		} else {
-			numberOfActiveOutputs++
+			// check whether this output is an OP_RETURN with 0 sat value
+			if len(script) > 0 && (script[0] == 0x00 || script[0] == 0x6a) && output.Satoshis == 0 {
+				tx.Outputs[i] = nil
+			} else {
+				numberOfActiveOutputs++
+			}
 		}
 	}
 

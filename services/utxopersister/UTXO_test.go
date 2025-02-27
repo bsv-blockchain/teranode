@@ -1,10 +1,12 @@
 package utxopersister
 
 import (
+	"os"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBits(t *testing.T) {
@@ -87,4 +89,29 @@ func TestBytesCoinbaseTX(t *testing.T) {
 	assert.Equal(t, uw.UTXOs[0].Index, u2.UTXOs[0].Index)
 	assert.Equal(t, uw.UTXOs[0].Value, u2.UTXOs[0].Value)
 	assert.Equal(t, uw.UTXOs[0].Script, u2.UTXOs[0].Script)
+}
+
+func TestTxWithOnlyOutputs(t *testing.T) {
+	txBytes, err := os.ReadFile("testdata/4827ad32852fd9ca3979a8e507e38c6e557e58bc453184ef19cc7a5f86e7d59b.outputs")
+	require.NoError(t, err)
+
+	uw, err := NewUTXOWrapperFromBytes(txBytes)
+	require.NoError(t, err)
+
+	assert.Equal(t, 476, len(uw.UTXOs))
+
+	utxos := PadUTXOsWithNil(uw.UTXOs)
+	assert.NotNil(t, utxos)
+	assert.Equal(t, 1000, len(utxos))
+
+	// check the length of utxos that are not nil
+	count := 0
+
+	for _, u := range utxos {
+		if u != nil {
+			count++
+		}
+	}
+
+	assert.Equal(t, 476, count)
 }
