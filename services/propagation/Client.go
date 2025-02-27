@@ -7,16 +7,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	_ "github.com/bitcoin-sv/teranode/k8sresolver"
 	"github.com/bitcoin-sv/teranode/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
-	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/resolver"
 )
 
 // batchItem represents a single transaction in a batch along with its completion channel.
@@ -50,8 +47,6 @@ type Client struct {
 //   - *Client: New client instance
 //   - error: Error if client creation fails
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, conn ...*grpc.ClientConn) (*Client, error) {
-	initResolver(logger, tSettings.Propagation.GRPCResolver)
-
 	var useConn *grpc.ClientConn
 	if len(conn) > 0 {
 		useConn = conn[0]
@@ -172,27 +167,6 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	}
 
 	return nil
-}
-
-// initResolver configures the gRPC resolver based on the environment.
-// It supports different resolver configurations:
-//   - k8s: Kubernetes resolver using default scheme
-//   - kubernetes: In-cluster Kubernetes resolver
-//   - default: Standard gRPC resolver
-//
-// Parameters:
-//   - logger: Logger for resolver configuration messages
-func initResolver(logger ulogger.Logger, grpcResolver string) {
-	switch grpcResolver {
-	case "k8s":
-		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
-		resolver.SetDefaultScheme("k8s")
-	case "kubernetes":
-		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
-		kuberesolver.RegisterInClusterWithSchema("k8s")
-	default:
-		logger.Infof("[VALIDATOR] Using default resolver for clients")
-	}
 }
 
 // getClientConn establishes a gRPC connection to the propagation service.

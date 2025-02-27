@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb"
@@ -48,10 +49,8 @@ type BlockHeader struct {
 	PreviousBlockHash string `json:"previousblockhash"`
 }
 
-func Bitcoin2Utxoset(blockchainDir string, outputDir string, skipHeaders bool, skipUTXOs bool,
-	blockHashStr string, previousBlockHashStr string, blockHeightUint uint, dumpRecords int) {
-	logger := ulogger.NewGoCoreLogger("b2utxo")
-
+func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir string, outputDir string,
+	skipHeaders bool, skipUTXOs bool, blockHashStr string, previousBlockHashStr string, blockHeightUint uint, dumpRecords int) {
 	chainstate := filepath.Join(blockchainDir, "chainstate")
 
 	// Check chainstate LevelDB folder exists

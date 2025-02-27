@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	_ "github.com/bitcoin-sv/teranode/k8sresolver"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
+	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -363,4 +366,25 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 	}
 
 	return nil, errors.NewConfigurationError("securityLevel must be 0, 1, 2 or 3")
+}
+
+// InitGRPCResolver configures the gRPC resolver based on the environment.
+// It supports different resolver configurations:
+//   - k8s: Kubernetes resolver using default scheme
+//   - kubernetes: In-cluster Kubernetes resolver
+//   - default: Standard gRPC resolver
+//
+// Parameters:
+//   - logger: Logger for resolver configuration messages
+func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
+	switch grpcResolver {
+	case "k8s":
+		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		resolver.SetDefaultScheme("k8s")
+	case "kubernetes":
+		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
+		kuberesolver.RegisterInClusterWithSchema("k8s")
+	default:
+		logger.Infof("[VALIDATOR] Using default resolver for clients")
+	}
 }

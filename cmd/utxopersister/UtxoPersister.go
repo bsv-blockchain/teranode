@@ -16,16 +16,12 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func UtxoPersister() {
+func UtxoPersister(logger ulogger.Logger, tSettings *settings.Settings) {
 	ctx, _, deferFn := tracing.StartTracing(
 		context.Background(),
 		"utxopersister",
 	)
 	defer deferFn()
-
-	tSettings := settings.NewSettings()
-
-	logger := ulogger.New("utxopd", ulogger.WithLevel(tSettings.LogLevel))
 
 	profilerAddr := tSettings.ProfilerAddr
 	if profilerAddr == "" {

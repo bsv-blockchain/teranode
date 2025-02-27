@@ -27,6 +27,7 @@ ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
 RUN make build -j 32
+RUN make build-teranode-cli
 
 # This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
 ENV GOPATH=/go
@@ -36,11 +37,13 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
+COPY --from=0 /app/teranode-cli ./teranode-cli
 
 # Don't do anything different for ARM64 (for now)
 FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
+COPY --from=0 /app/teranode-cli ./teranode-cli
 
 ENV TARGETARCH=${TARGETARCH}
 ENV TARGETOS=${TARGETOS}
@@ -53,10 +56,6 @@ COPY --from=0 /go/bin/dlv .
 COPY --from=0 /app/settings_local.conf .
 # COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
-
-RUN ln -s teranode.run blaster.run
-RUN ln -s teranode.run miner.run
-RUN ln -s teranode.run teranode-cli
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV PATH=/app:$PATH

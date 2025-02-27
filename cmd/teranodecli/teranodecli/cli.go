@@ -15,6 +15,9 @@ import (
 	cmdSettings "github.com/bitcoin-sv/teranode/cmd/settings"
 	"github.com/bitcoin-sv/teranode/cmd/utxopersister"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 )
 
 // commandHelp stores the command descriptions
@@ -24,6 +27,7 @@ var commandHelp = map[string]string{
 	"seeder":          "Seeder",
 	"getfsmstate":     "Get the current FSM State",
 	"setfsmstate":     "Set the FSM State",
+	"settings":        "Settings",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -109,7 +113,11 @@ func Start(args []string, version, commit string) {
 	}
 
 	cmd := setupCommand(command)
-	// tSettings := settings.NewSettings()
+	tSettings := settings.NewSettings()
+
+	logger := ulogger.InitLogger("teranode-cli", tSettings)
+
+	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 
 	switch command {
 	case "filereader":
@@ -123,7 +131,7 @@ func Start(args []string, version, commit string) {
 		}
 
 		cmd.Execute = func(args []string) error {
-			filereader.FileReader(*verbose, *checkHeights, *useStore, path)
+			filereader.FileReader(logger, tSettings, *verbose, *checkHeights, *useStore, path)
 			return nil
 		}
 	case "aerospikereader":
@@ -136,13 +144,13 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Invalid txid: %s", args[0])
 			}
 
-			aerospike_reader.AerospikeReader(args[0])
+			aerospike_reader.AerospikeReader(logger, tSettings, args[0])
 
 			return nil
 		}
 	case "utxopersister":
 		cmd.Execute = func(args []string) error {
-			utxopersister.UtxoPersister()
+			utxopersister.UtxoPersister(logger, tSettings)
 			return nil
 		}
 	case "seeder":
@@ -159,7 +167,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			seeder.Seeder(*inputDir, *hash, *skipHeaders, *skipUTXOs)
+			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs)
 
 			return nil
 		}
@@ -186,14 +194,14 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("The 'outputDir' flag is mandatory.")
 			}
 
-			bitcoin2utxoset.Bitcoin2Utxoset(*blockchainDir, *outputDir, *skipHeaders, *skipUTXOs,
-				*blockHashStr, *previousBlockHashStr, *blockHeightUint, *dumpRecords)
+			bitcoin2utxoset.Bitcoin2Utxoset(logger, tSettings, *blockchainDir, *outputDir, *skipHeaders,
+				*skipUTXOs, *blockHashStr, *previousBlockHashStr, *blockHeightUint, *dumpRecords)
 
 			return nil
 		}
 	case "getfsmstate":
 		cmd.Execute = func(args []string) error {
-			getfsmstate.GetFSMState()
+			getfsmstate.GetFSMState(logger, tSettings)
 			return nil
 		}
 	case "setfsmstate":
@@ -204,17 +212,15 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("target fsm state is required")
 			}
 
-			setfsmstate.SetFSMState(*targetFsmState)
+			setfsmstate.SetFSMState(logger, tSettings, *targetFsmState)
 
 			return nil
 		}
 	case "settings":
 		cmd.Execute = func(args []string) error {
-			cmdSettings.CmdSettings(version, commit)
+			cmdSettings.CmdSettings(logger, tSettings, version, commit)
 			return nil
 		}
-
-		return
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()

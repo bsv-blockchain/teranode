@@ -26,6 +26,7 @@ type Settings struct {
 	LocalTestStartFromState  string
 	PostgresCheckAddress     string
 	UseCgoVerifier           bool
+	GRPCResolver             string
 	SecurityLevelGRPC        int
 	UsePrometheusGRPCMetrics bool
 	TracingCollectorURL      *url.URL
@@ -382,7 +383,6 @@ type PropagationSettings struct {
 	HTTPListenAddress    string
 	SendBatchSize        int
 	SendBatchTimeout     int
-	GRPCResolver         string
 	GRPCAddresses        []string
 	QuicAddresses        []string
 	GRPCListenAddress    string

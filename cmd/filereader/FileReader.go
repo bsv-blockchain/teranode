@@ -54,15 +54,14 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func FileReader(verbose bool, checkHeights bool, useStore bool, path string) {
-	logger := ulogger.TestLogger{}
+func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verbose bool, checkHeights bool, useStore bool, path string) {
 	ctx := context.Background()
 
 	fmt.Println()
 
 	// Wrap the reader with a buffered reader
 	// read the transaction count
-	if err := ProcessFile(ctx, path, logger); err != nil {
+	if err := ProcessFile(ctx, path, logger, tSettings); err != nil {
 		fmt.Printf("error processing file: %v\n", err)
 		os.Exit(1)
 	}
@@ -70,22 +69,23 @@ func FileReader(verbose bool, checkHeights bool, useStore bool, path string) {
 	os.Exit(0)
 }
 
-func ProcessFile(ctx context.Context, path string, logger ulogger.Logger) error {
-	dir, filename, ext, r, err := getReader(path, logger)
+func ProcessFile(ctx context.Context, path string, logger ulogger.Logger, tSettings *settings.Settings) error {
+	dir, filename, ext, r, err := getReader(path, logger, tSettings)
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
 	}
 
 	logger.Infof("Reading file %s\n", path)
 
-	if err := readFile(ctx, filename, ext, logger, r, dir); err != nil {
+	if err := readFile(ctx, filename, ext, logger, tSettings, r, dir); err != nil {
 		return errors.NewProcessingError("error reading file", err)
 	}
 
 	return nil
 }
 
-func readFile(ctx context.Context, filename string, ext string, logger ulogger.Logger, r io.Reader, dir string) error {
+func readFile(ctx context.Context, filename string, ext string, logger ulogger.Logger,
+	tSettings *settings.Settings, r io.Reader, dir string) error {
 	br := bufio.NewReaderSize(r, 1024*1024)
 
 	if filename == stdin {
@@ -376,7 +376,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		// The subtreeData deserialization needs the subtree first
 		stPath := filepath.Join(dir, fmt.Sprintf("%s.subtree", filename))
 
-		_, _, _, stReader, err := getReader(stPath, logger)
+		_, _, _, stReader, err := getReader(stPath, logger, tSettings)
 		if err != nil {
 			return errors.NewProcessingError("Reading subtreeData files depends on subtree file", err)
 		}
@@ -443,7 +443,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 			if verbose {
 				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
 
-				_, _, _, stReader, err := getReader(filename, logger)
+				_, _, _, stReader, err := getReader(filename, logger, tSettings)
 				if err != nil {
 					return err
 				}
@@ -459,7 +459,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 	return nil
 }
 
-func getReader(path string, logger ulogger.Logger) (string, string, string, io.Reader, error) {
+func getReader(path string, logger ulogger.Logger, tSettings *settings.Settings) (string, string, string, io.Reader, error) {
 	if path == "" {
 		// Handle stdin
 		return "", stdin, "", os.Stdin, nil
@@ -484,7 +484,7 @@ func getReader(path string, logger ulogger.Logger) (string, string, string, io.R
 			return "", "", "", nil, errors.NewProcessingError("error parsing hash", err)
 		}
 
-		store := getBlockStore(logger)
+		store := getBlockStore(logger, tSettings)
 
 		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
 		if err != nil {
@@ -531,9 +531,7 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 	return num
 }
 
-func getBlockStore(logger ulogger.Logger) blob.Store {
-	tSettings := settings.NewSettings()
-
+func getBlockStore(logger ulogger.Logger, tSettings *settings.Settings) blob.Store {
 	blockStoreURL := tSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		panic("blockstore config not found")

@@ -7,9 +7,8 @@ import (
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/ordishs/gocore"
-	"github.com/rs/zerolog"
-	"golang.org/x/term"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -33,35 +32,12 @@ func init() {
 func main() {
 	tSettings := settings.NewSettings()
 
-	logger := initLogger(progname, tSettings)
+	logger := ulogger.InitLogger(progname, tSettings)
+
+	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	daemon.New().Start(logger, os.Args[1:], tSettings)
-}
-
-func initLogger(progname string, tSettings *settings.Settings) ulogger.Logger {
-	logLevel := tSettings.LogLevel
-	logOptions := []ulogger.Option{
-		ulogger.WithLevel(logLevel),
-	}
-
-	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-
-	output := zerolog.ConsoleWriter{
-		Out:     os.Stdout,
-		NoColor: !isTerminal, // Disable color if output is not a terminal
-	}
-
-	logOptions = append(logOptions, ulogger.WithWriter(output))
-
-	useLogger := tSettings.Logger
-	if useLogger != "" {
-		logOptions = append(logOptions, ulogger.WithLoggerType(useLogger))
-	}
-
-	logger := ulogger.New(progname, logOptions...)
-
-	return logger
 }

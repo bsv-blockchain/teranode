@@ -50,7 +50,7 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func Seeder(inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
+func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
 	var (
 		headerFile string
 		utxoFile   string
@@ -71,9 +71,6 @@ func Seeder(inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
 			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
 		}
 	}
-
-	logger := ulogger.NewGoCoreLogger("seed")
-	tSettings := settings.NewSettings()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

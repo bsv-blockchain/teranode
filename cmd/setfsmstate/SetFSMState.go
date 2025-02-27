@@ -12,10 +12,8 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
-func SetFSMState(targetFsmState string) {
+func SetFSMState(logger ulogger.Logger, tSettings *settings.Settings, targetFsmState string) {
 	ctx := context.Background()
-	logger := ulogger.NewGoCoreLogger("Command Line Tool", ulogger.WithLevel("WARN"))
-	tSettings := settings.NewSettings()
 
 	var targetEvent blockchain.FSMEventType
 

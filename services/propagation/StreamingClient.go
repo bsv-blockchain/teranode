@@ -62,8 +62,6 @@ func NewStreamingClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 		sc.testMode = testMode[0]
 	}
 
-	initResolver(logger, tSettings.Propagation.GRPCResolver)
-
 	go sc.handler(ctx)
 
 	return sc, nil

@@ -14,10 +14,7 @@ import (
 )
 
 // AerospikeReader handles the aerospike reader command logic
-func AerospikeReader(txidStr string) {
-	logger := ulogger.NewGoCoreLogger("aerospike_reader", ulogger.WithLevel("WARN"))
-	tSettings := settings.NewSettings()
-
+func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidStr string) {
 	fmt.Println()
 
 	hash, err := chainhash.NewHashFromStr(txidStr)

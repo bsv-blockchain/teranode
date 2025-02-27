@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	_ "github.com/bitcoin-sv/teranode/k8sresolver"
 	"github.com/bitcoin-sv/teranode/services/validator/validator_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -36,9 +35,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
-	"github.com/sercand/kuberesolver/v5"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/resolver"
 )
 
 // batchItem represents a single item in a validation batch request
@@ -87,15 +84,6 @@ type Client struct {
 //   - *Client: Initialized client instance
 //   - error: Any error encountered during initialization
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*Client, error) {
-	grpcResolver := tSettings.Propagation.GRPCResolver
-	if grpcResolver == "k8s" {
-		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
-		resolver.SetDefaultScheme("k8s")
-	} else if grpcResolver == "kubernetes" {
-		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
-		kuberesolver.RegisterInClusterWithSchema("k8s")
-	}
-
 	validatorGrpcAddress := tSettings.Validator.GRPCAddress
 	if validatorGrpcAddress == "" {
 		return nil, errors.NewConfigurationError("missing validator_grpcAddress")
