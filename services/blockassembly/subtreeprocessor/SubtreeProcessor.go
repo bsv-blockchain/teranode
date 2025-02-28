@@ -502,9 +502,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			// get the conflicting transactions from the block subtrees
 			for _, subtreeHash := range block.Subtrees {
 				// get the conflicting transactions from the subtree
-				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:])
+				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("subtree"))
 				if err != nil {
-					return errors.NewProcessingError("[moveForwardBlock][%s] error getting subtree from store", block.String(), err)
+					return errors.NewProcessingError("[moveForwardBlock][%s] error getting subtree %s from store", block.String(), subtreeHash.String(), err)
 				}
 
 				subtreeConflictingNodes, err := util.DeserializeSubtreeConflictingFromReader(subtreeReader)
