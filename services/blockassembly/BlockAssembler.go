@@ -257,7 +257,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				currentHeight := meta.Height
 
 				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveBackBlocks, moveForwardBlocks, isLegacySync); response.Err != nil {
-					b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", err)
+					b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
 					// something went wrong, we need to set the best block header in the block assembly to be the
 					// same as the subtree processor's best block header
 					bestBlockchainBlockHeader = b.subtreeProcessor.GetCurrentBlockHeader()
