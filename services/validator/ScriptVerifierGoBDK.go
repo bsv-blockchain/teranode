@@ -125,9 +125,12 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 
 	eTxBytes := tx.ExtendedBytes()
 
-	// TODO add the utxo heights to the tx verifier
 	_ = utxoHeights
 
+	// TODO : use of VerifyExtendFull. The function is implemented, but for now it fails the tests
+	//        as our tests doesn't have utxo heights slice in it yet.
+	//        once we can have all the data for extended tx with utxo heights, we can pass to use this function
+	// err := bdkscript.VerifyExtendFull(eTxBytes, utxoHeights, blockHeight-1, consensus)
 	err := bdkscript.VerifyExtend(eTxBytes, blockHeight-1, consensus)
 	if err != nil {
 		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\nBlock Height : %v\n\nExtendTxHex:\n%v\n\nerror:\n%v\n\n", blockHeight, hex.EncodeToString(eTxBytes), err)

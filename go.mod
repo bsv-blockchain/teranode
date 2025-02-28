@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoin-sv/alert-system v0.1.10
-	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta3
+	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta4
 	github.com/bitcoin-sv/go-sdk v1.1.17
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
