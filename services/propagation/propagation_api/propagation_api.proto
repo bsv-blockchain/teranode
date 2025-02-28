@@ -9,6 +9,7 @@ option go_package = "./;propagation_api";
 package propagation_api;
 
 import "google/protobuf/timestamp.proto";
+import "errors/error.proto";
 
 // PropagationAPI provides services for processing and propagating Bitcoin SV transactions
 // across the network. It supports various transaction processing methods including
@@ -95,7 +96,7 @@ message ProcessTransactionBatchRequest {
 message ProcessTransactionBatchResponse {
   // error contains error messages for each transaction in the batch
   // empty string indicates success for that transaction
-  repeated string error = 1;
+  repeated errors.TError errors = 1;
 }
 
 // ProcessTransactionHexRequest represents a request to process a transaction in hex format.

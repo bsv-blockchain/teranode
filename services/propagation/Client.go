@@ -158,9 +158,9 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		return err
 	}
 
-	for i, errStr := range response.Error {
-		if errStr != "" {
-			batch[i].done <- errors.NewError(errStr)
+	for i, err := range response.Errors {
+		if !err.IsNil() { // don't do err != nil, proto can't return nil TError
+			batch[i].done <- err
 		} else {
 			batch[i].done <- nil
 		}

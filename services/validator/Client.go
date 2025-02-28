@@ -260,10 +260,10 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	}
 
 	for i, item := range batch {
-		if resp.Errors[i] != "" {
+		if !resp.Errors[i].IsNil() {
 			item.done <- validateBatchResponse{
 				metaData: nil,
-				err:      errors.NewError(resp.Errors[i]),
+				err:      resp.Errors[i],
 			}
 		} else {
 			item.done <- validateBatchResponse{

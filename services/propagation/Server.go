@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -531,7 +530,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	defer deferFn()
 
 	response := &propagation_api.ProcessTransactionBatchResponse{
-		Error: make([]string, len(req.Tx)),
+		Errors: make([]*errors.TError, len(req.Tx)),
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -546,9 +545,9 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 				Tx: tx,
 			}); err != nil {
 				// TODO how can we send the real error back and not just a string?
-				response.Error[idx] = RemoveInvalidUTF8(err.Error())
+				response.Errors[idx] = errors.Wrap(err)
 			} else {
-				response.Error[idx] = ""
+				response.Errors[idx] = nil
 			}
 
 			return nil
@@ -767,26 +766,4 @@ func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
 		NextProtos:   []string{"txblaster2"},
 		MinVersion:   tls.VersionTLS12,
 	}, nil
-}
-
-// RemoveInvalidUTF8 sanitizes a string by removing invalid UTF-8 characters.
-// This is used to clean error messages before sending them to clients.
-//
-// Parameters:
-//   - s: string to sanitize
-//
-// Returns:
-//   - string: sanitized string with valid UTF-8 characters only
-func RemoveInvalidUTF8(s string) string {
-	var buf []rune
-
-	for _, r := range s {
-		if r == utf8.RuneError {
-			continue
-		}
-
-		buf = append(buf, r)
-	}
-
-	return string(buf)
 }

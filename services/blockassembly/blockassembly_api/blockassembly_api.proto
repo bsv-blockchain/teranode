@@ -108,7 +108,6 @@ message AddTxResponse {
 // Response indicating whether the addition of a batch of transactions was successful.
 message AddTxBatchResponse {
   bool ok = 1; // true if the transactions were successfully added
-  repeated bytes txIdErrors = 2; // list of transaction IDs that encountered errors
 }
 
 // Request for submitting a mining solution to the blockchain.

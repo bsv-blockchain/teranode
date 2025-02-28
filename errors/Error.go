@@ -6,6 +6,7 @@ import (
 	reflect "reflect"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -267,6 +268,44 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	return returnErr
+}
+
+func (x *TError) Error() string {
+	if x.IsNil() {
+		return "<nil>"
+	}
+
+	return fmt.Sprintf("%s: %s", x.Code.String(), x.Message)
+}
+
+func (x *TError) IsNil() bool {
+	if x == nil || (x.Code == ERR_UNKNOWN && x.Message == "") {
+		return true
+	}
+
+	return false
+}
+
+func Wrap(err error) *TError {
+	if err == nil {
+		return nil
+	}
+
+	if castError, ok := err.(*Error); ok {
+		return &TError{
+			Code:         castError.code,
+			Message:      RemoveInvalidUTF8(castError.message),
+			WrappedError: Wrap(castError.wrappedErr),
+			File:         castError.file,
+			Line:         int32(castError.line), // nolint:gosec
+			Function:     castError.function,
+		}
+	}
+
+	return &TError{
+		Code:    ERR_UNKNOWN,
+		Message: RemoveInvalidUTF8(err.Error()),
+	}
 }
 
 // WrapGRPC wraps an error with gRPC status details.
@@ -593,26 +632,49 @@ func isGRPCWrappedError(err error) bool {
 	return ok
 }
 
-// Format implements fmt.Formatter for custom formatting
-func (e *Error) Format(f fmt.State, c rune) {
-	if c == 'v' && (f.Flag('+') || f.Flag('#')) {
-		fmt.Fprintf(f, "%v\n", e)
-		e.writeVerbose(f)
-
-		return
-	}
-
-	fmt.Fprint(f, e.Error())
-}
-
-func (e *Error) writeVerbose(f fmt.State) {
-	fmt.Fprintf(f, "- %s%s() %s:%d [%d] %s\n", "", e.function, e.file, e.line, e.code, e.message)
+// buildStackTrace returns just the stack trace portion of the error message
+func (e *Error) buildStackTrace() string {
+	trace := fmt.Sprintf("\n- %s%s() %s:%d [%d] %s", "", e.function, e.file, e.line, e.code, e.message)
 
 	if e.wrappedErr != nil {
 		if werr, ok := e.wrappedErr.(*Error); ok && werr.Code() != ERR_UNKNOWN {
-			werr.writeVerbose(f)
+			trace += werr.buildStackTrace()
 		} else {
-			fmt.Fprintf(f, "- %v\n", e.wrappedErr)
+			trace += fmt.Sprintf("\n- %v", e.wrappedErr)
 		}
 	}
+
+	return trace
+}
+
+// Format implements fmt.Formatter for custom formatting
+func (e *Error) Format(f fmt.State, c rune) {
+	msg := e.Error()
+	if c == 'v' && (f.Flag('+') || f.Flag('#')) {
+		msg += e.buildStackTrace()
+	}
+
+	fmt.Fprint(f, msg)
+}
+
+// RemoveInvalidUTF8 sanitizes a string by removing invalid UTF-8 characters.
+// This is used to clean error messages before sending them to clients.
+//
+// Parameters:
+//   - s: string to sanitize
+//
+// Returns:
+//   - string: sanitized string with valid UTF-8 characters only
+func RemoveInvalidUTF8(s string) string {
+	var buf = make([]rune, 0, len(s))
+
+	for _, r := range s {
+		if r == utf8.RuneError {
+			continue
+		}
+
+		buf = append(buf, r)
+	}
+
+	return string(buf)
 }

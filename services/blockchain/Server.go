@@ -528,7 +528,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 	block, err := b.store.GetBlockByHeight(ctx, request.Height)
 	if err != nil {
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] block not found at height", err))
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))

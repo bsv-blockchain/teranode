@@ -317,7 +317,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 			case blockSubmission := <-ba.blockSubmissionChan:
 				_, err := ba.submitMiningSolution(ctx, blockSubmission)
 				if err != nil {
-					ba.logger.Warnf("Failed to submit block [%s]", err)
+					ba.logger.Warnf("Failed to submit block for job id %s %+v", chainhash.Hash(blockSubmission.Id), err)
 				}
 
 				if blockSubmission.responseChan != nil {
@@ -410,13 +410,14 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
+	// TODO Stu discuss with Gokhan - we need to be able to change state while running not at startup ??? Each endpoint should check the state?
 	// Blocks until the FSM transitions from the IDLE state
-	err = ba.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		ba.logger.Errorf("[Block Assembly Service] Failed to wait for FSM transition from IDLE state: %s", err)
+	// err = ba.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	// if err != nil {
+	// 	ba.logger.Errorf("[Block Assembly Service] Failed to wait for FSM transition from IDLE state: %s", err)
 
-		return err
-	}
+	// 	return err
+	// }
 
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
@@ -689,6 +690,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		err = <-request.responseChan
 	}
 
+	if err != nil {
+		err = errors.WrapGRPC(err)
+	}
+
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: err == nil, // The response only has Ok boolean in it.  If waitForResponse is false, err will always be nil.
 	}, err
@@ -707,7 +712,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	storeID, err := chainhash.NewHash(req.Id)
 	if err != nil {
-		return nil, errors.WrapGRPC(err)
+		return nil, err
 	}
 
 	jobItem := ba.jobStore.Get(*storeID)
@@ -719,12 +724,11 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err))
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err)
 	}
 
 	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
-		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID))
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
 	}
 
 	var coinbaseTx *bt.Tx
@@ -732,17 +736,17 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	if req.CoinbaseTx != nil {
 		coinbaseTx, err = bt.NewTxFromBytes(req.CoinbaseTx)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err)
 		}
 
 		if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID)
 		}
 	} else {
 		// recreate coinbase tx here, nothing was passed in
 		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err)
 		}
 
 		// set the new mining parameters on the coinbase (nonce)
@@ -797,13 +801,13 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// Create a new subtree with the subtreeHashes of the subtrees
 	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err))
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err)
 	}
 
 	for _, hash := range subtreeHashes {
 		err = topTree.AddNode(hash, 1, 0)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to add node to topTree", jobID, err))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to add node to topTree", jobID, err)
 		}
 	}
 
@@ -818,8 +822,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
 		if err != nil {
-			return nil, errors.WrapGRPC(
-				errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err)
 		}
 
 		cmp := make([]string, len(coinbaseMerkleProof))
@@ -835,7 +838,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 		hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashMerkleRoot", jobID, err))
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashMerkleRoot", jobID, err)
 		}
 	}
 
@@ -846,7 +849,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	bits, err := model.NewNBitFromSlice(job.MiningCandidate.NBits)
 	if err != nil {
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert bits", jobID, err)
 	}
 
 	version := job.MiningCandidate.Version
@@ -881,8 +884,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// check fully valid, including whether difficulty in header is low enough
 	if ok, err := block.Valid(ctx, ba.logger, nil, nil, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
-		return nil, errors.WrapGRPC(
-			errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err))
+		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
 	}
 
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block DONE in %s", jobID, block.Header.Hash(), time.Since(startTime).String())
@@ -904,8 +906,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(ba.blockAssembler.bestBlockHeader.Load().Timestamp), 0)).String())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
-		return nil, errors.WrapGRPC(
-			errors.NewServiceError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err))
+		return nil, errors.NewServiceError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
 	// don't wait for blockchain to notify us of new block.
@@ -1091,7 +1092,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	for i := 0; i < int(req.Count); i++ {
 		err := ba.generateBlock(ctx, req.Address)
 		if err != nil {
-			return nil, errors.NewProcessingError("error generating block", err)
+			return nil, errors.WrapGRPC(errors.NewProcessingError("error generating block", err))
 		}
 	}
 

@@ -12,6 +12,8 @@ package validator_api;
 
 import "google/protobuf/timestamp.proto";
 
+import "errors/error.proto";
+
 // ValidatorAPI service provides methods for transaction validation and related operations
 service ValidatorAPI {
   // HealthGRPC checks the health status of the validation service
@@ -84,7 +86,7 @@ message ValidateTransactionBatchRequest {
 // swagger:model ValidateTransactionBatchResponse
 message ValidateTransactionBatchResponse {
   bool valid = 1;                    // Overall batch validation status
-  repeated string errors = 2;        // Array of error messages, one per transaction
+  repeated errors.TError errors = 2;        // Array of error messages, one per transaction
   repeated bytes metadata = 3;       // Array of metadata for each transaction
 }
 

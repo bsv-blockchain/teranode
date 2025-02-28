@@ -308,7 +308,7 @@ func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _
 	panic("not implemented")
 }
 func (s *MockBlockchain) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
-	panic("not implemented")
+	return nil
 }
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")

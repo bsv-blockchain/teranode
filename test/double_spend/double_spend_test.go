@@ -600,19 +600,19 @@ func createFork(t *testing.T, td *testdaemon.TestDaemon, originalBlock *model.Bl
 //
 // Block Structure:
 //
-//	              txOriginal1
-//	  / 102a ---> txOriginal2 ---> 103a
-//	 /            txOriginal3
-//	/
+//	              				 txOriginal1
+//					 / 102a ---> txOriginal2 ---> 103a
+//					/            txOriginal3
+//				   /
 //
 // 0 -> 1 ... 101 -----> 102b -> txDoubleSpend  -> 103b -> 104b
 //
-//	\             txDoubleSpend2
-//	 \            txDoubleSpend3
-//	  \
-//	   \ 102c -> txTripleSpend  -> 103c -> 104c -> 105c (winning)
-//	             txTripleSpend2
-//	             txTripleSpend3
+//				   \             txDoubleSpend2
+//	 				\            txDoubleSpend3
+//					 \
+//					  \ 102c -> txTripleSpend  -> 103c -> 104c -> 105c (winning)
+//								txTripleSpend2
+//								txTripleSpend3
 //
 // Test Flow:
 // 1. Initially chain A (102a->103a) is winning

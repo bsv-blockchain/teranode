@@ -288,13 +288,13 @@ var rpcLimited = map[string]struct{}{
 // RPC server subsystem since internal errors really should not occur.  The
 // context parameter is only used in the log message and may be empty if it's
 // not needed.
-func internalRPCError(errStr, context string) *bsvjson.RPCError {
+func (s *RPCServer) internalRPCError(errStr, context string) *bsvjson.RPCError {
 	logStr := errStr
 	if context != "" {
 		logStr = context + ": " + errStr
 	}
 
-	fmt.Print(logStr)
+	s.logger.Errorf("RPC server internal RPC error: %s", logStr)
 
 	return bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, errStr)
 }
@@ -761,14 +761,14 @@ handled:
 // err field of the returned parsedRPCCmd struct will contain an RPC error that
 // is suitable for use in replies if the command is invalid in some way such as
 // an unregistered command or invalid parameters.
-func parseCmd(request *bsvjson.Request) *parsedRPCCmd {
+func (s *RPCServer) parseCmd(request *bsvjson.Request) *parsedRPCCmd {
 	var parsedCmd parsedRPCCmd
 	parsedCmd.id = request.ID
 	parsedCmd.method = request.Method
 
 	cmd, err := bsvjson.UnmarshalCmd(request)
 	if err != nil {
-		fmt.Printf("Error unmarshalling command: %v", err)
+		s.logger.Errorf("Error unmarshalling command: %v", err)
 		// When the error is because the method is not registered,
 		// produce a method not found RPC error.
 		if jerr, ok := err.(bsvjson.Error); ok &&
@@ -793,14 +793,14 @@ func parseCmd(request *bsvjson.Request) *parsedRPCCmd {
 // createMarshalledReply returns a new marshalled JSON-RPC response given the
 // passed parameters.  It will automatically convert errors that are not of
 // the type *bsvjson.RPCError to the appropriate type as needed.
-func createMarshalledReply(id, result interface{}, replyErr error) ([]byte, error) {
+func (s *RPCServer) createMarshalledReply(id, result interface{}, replyErr error) ([]byte, error) {
 	var jsonErr *bsvjson.RPCError
 
 	if replyErr != nil {
 		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
-			jsonErr = internalRPCError(replyErr.Error(), "")
+			jsonErr = s.internalRPCError(replyErr.Error(), "")
 		}
 	}
 
@@ -929,7 +929,7 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 		if jsonErr == nil {
 			// Attempt to parse the JSON-RPC request into a known concrete
 			// command.
-			parsedCmd := parseCmd(&request)
+			parsedCmd := s.parseCmd(&request)
 			if parsedCmd.err != nil {
 				jsonErr = parsedCmd.err
 			} else {
@@ -939,7 +939,7 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	}
 
 	// Marshal the response.
-	msg, err := createMarshalledReply(responseID, result, jsonErr)
+	msg, err := s.createMarshalledReply(responseID, result, jsonErr)
 	if err != nil {
 		s.logger.Errorf("Failed to marshal reply: %v", err)
 		return
@@ -1149,7 +1149,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", rpcListenerURL.Port()))
 	if err != nil {
-		fmt.Println("Error listening:", err)
+		logger.Errorf("Error listening: %v", err)
 		os.Exit(1)
 	}
 

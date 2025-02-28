@@ -52,7 +52,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	return blockToJSON(ctx, b, *c.Verbosity, s)
+	return s.blockToJSON(ctx, b, *c.Verbosity)
 }
 
 // handleGetBlockByHeight implements the getblockbyheight command.
@@ -73,7 +73,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 		return nil, err
 	}
 
-	return blockToJSON(ctx, b, *c.Verbosity, s)
+	return s.blockToJSON(ctx, b, *c.Verbosity)
 }
 
 // handleGetBlockHash implements the getblockhash command.
@@ -167,7 +167,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	return fmt.Sprintf("%x", b.Bytes()), nil
 }
 
-func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCServer) (interface{}, error) {
+func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity uint32) (interface{}, error) {
 	if b == nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCBlockNotFound,
@@ -421,14 +421,14 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		pkScript, err := txscript.PayToAddrScript(addr)
 		if err != nil {
 			context := "Failed to generate pay-to-address script"
-			return nil, internalRPCError(err.Error(), context)
+			return nil, s.internalRPCError(err.Error(), context)
 		}
 
 		// Convert the amount to satoshi.
 		satoshi, err := bsvutil.NewAmount(amount)
 		if err != nil {
 			context := "Failed to convert amount"
-			return nil, internalRPCError(err.Error(), context)
+			return nil, s.internalRPCError(err.Error(), context)
 		}
 
 		txOut := wire.NewTxOut(int64(satoshi), pkScript)
@@ -449,7 +449,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	// is intentionally not directly returning because the first return
 	// value is a string and it would result in returning an empty string to
 	// the client instead of nothing (nil) in the case of an error.
-	mtxHex, err := messageToHex(mtx)
+	mtxHex, err := s.messageToHex(mtx)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +941,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 		usage, err := s.helpCacher.rpcUsage()
 		if err != nil {
 			context := "Failed to generate RPC usage"
-			return nil, internalRPCError(err.Error(), context)
+			return nil, s.internalRPCError(err.Error(), context)
 		}
 
 		return usage, nil
@@ -962,7 +962,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 	help, err := s.helpCacher.rpcMethodHelp(command)
 	if err != nil {
 		context := "Failed to generate help"
-		return nil, internalRPCError(err.Error(), context)
+		return nil, s.internalRPCError(err.Error(), context)
 	}
 
 	return help, nil
@@ -1141,11 +1141,11 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 
 // messageToHex serializes a message to the wire protocol encoding using the
 // latest protocol version and returns a hex-encoded string of the result.
-func messageToHex(msg wire.Message) (string, error) {
+func (s *RPCServer) messageToHex(msg wire.Message) (string, error) {
 	var buf bytes.Buffer
 	if err := msg.BsvEncode(&buf, wire.ProtocolVersion, wire.BaseEncoding); err != nil {
 		context := fmt.Sprintf("Failed to encode msg of type %T", msg)
-		return "", internalRPCError(err.Error(), context)
+		return "", s.internalRPCError(err.Error(), context)
 	}
 
 	return hex.EncodeToString(buf.Bytes()), nil

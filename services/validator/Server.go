@@ -374,7 +374,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
-	errReasons := make([]string, len(req.GetTransactions()))
+	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 	metaData := make([][]byte, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
@@ -383,9 +383,9 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 		g.Go(func() error {
 			validatorResponse, err := v.ValidateTransaction(gCtx, reqItem)
 			if err != nil {
-				errReasons[idx] = err.Error()
+				errReasons[idx] = errors.Wrap(err)
 			} else {
-				errReasons[idx] = ""
+				errReasons[idx] = nil
 			}
 
 			if validatorResponse.Metadata != nil {
