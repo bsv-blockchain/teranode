@@ -428,6 +428,8 @@ func (sm *SyncManager) startSync() {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
 			}
 
+			sm.resetFeeFilterToDefault()
+
 			return
 		}
 
@@ -499,6 +501,22 @@ func (sm *SyncManager) startSync() {
 	}
 }
 
+func (sm *SyncManager) resetFeeFilterToDefault() {
+	feeFilter := wire.NewMsgFeeFilter(int64(sm.settings.Policy.MinMiningTxFee)) // nolint:gosec
+
+	for p := range sm.peerStates.Range() {
+		if p == nil {
+			continue
+		}
+
+		if !p.Connected() {
+			continue
+		}
+
+		p.QueueMessage(feeFilter, nil)
+	}
+}
+
 // SyncHeight returns latest known block being synced to.
 func (sm *SyncManager) SyncHeight() uint64 {
 	if sm.syncPeer == nil {
@@ -554,6 +572,17 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
+
+	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		sm.logger.Debugf("Error getting FSM current state: %v", err)
+	}
+
+	if *state == teranodeblockchain.FSMStateLEGACYSYNCING {
+		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
+		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
+		peer.QueueMessage(feeFilter, nil)
+	}
 
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
@@ -1091,6 +1120,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/handleBlockMsg"); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
+
+			sm.resetFeeFilterToDefault()
 		}
 	}
 
@@ -1626,6 +1657,8 @@ out:
 					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
+
+					sm.resetFeeFilterToDefault()
 				}
 			}
 

@@ -1217,6 +1217,14 @@ func (s *server) TransactionConfirmed(tx *bsvutil.Tx) {
 // connected peer.  An error is returned if the transaction hash is not known.
 func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
+	defer func() {
+		// Temporary code to hunt down why a transaction is being requested that we do not have in our store fully
+		r := recover()
+		if r != nil {
+			sp.server.logger.Errorf("Recovered in pushTxMsg for %s: %v", hash.String(), r)
+		}
+	}()
+
 	// Attempt to fetch the requested transaction from the pool.  A
 	// call could be made to check for existence first, but simply trying
 	// to fetch a missing transaction results in the same behavior.
@@ -1250,6 +1258,25 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	sp.QueueMessageWithEncoding(tx.MsgTx(), doneChan, encoding)
 
 	return nil
+}
+
+func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error) {
+	txMeta, err := s.utxoStore.Get(s.ctx, hash, []utxostore.FieldName{utxostore.FieldTx})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	fee, err := util.GetFees(txMeta.Tx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return tx, int64(fee), nil // nolint:gosec
 }
 
 // pushBlockMsg sends a block message for the provided block hash to the
@@ -1692,31 +1719,32 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			if sp.relayTxDisabled() {
 				return
 			}
-			// txD, ok := msg.data.(*mempool.TxDesc)
-			//
-			//	if !ok {
-			//		sp.server.logger.Warnf("Underlying data for tx inv "+
-			//			"relay is not a *mempool.TxDesc: %T",
-			//			msg.data)
-			//		return
-			//	}
-			//
-			// Don't relay the transaction if the transaction fee-per-kb
-			// is less than the peer's feefilter.
+
+			// // Don't relay the transaction if the transaction fee-per-kb
+			// // is less than the peer's feeFilter.
 			// feeFilter := atomic.LoadInt64(&sp.feeFilter)
-			//
-			//	if feeFilter > 0 && txD.FeePerKB < feeFilter {
-			//		return
-			//	}
-			//
-			// Don't relay the transaction if there is a bloom
-			// filter loaded and the transaction doesn't match it.
-			//
-			//	if sp.filter.IsLoaded() {
-			//		if !sp.filter.MatchTxAndUpdate(txD.Tx) {
-			//			return
-			//		}
-			//	}
+
+			// if feeFilter > 0 {
+			// 	// tx, err := s.utxoStore.Get(s.ctx, &msg.invVect.Hash)
+			// 	tx, fee, err := s.getTxFromStore(&msg.invVect.Hash)
+			// 	if err != nil {
+			// 		sp.server.logger.Warnf("Failed to fetch tx %v from utxo store: %v", &msg.invVect.Hash, err)
+			// 		return
+			// 	}
+
+			// 	if feeFilter > 0 && fee < feeFilter {
+			// 		return
+			// 	}
+
+			// 	// Don't relay the transaction if there is a bloom
+			// 	// filter loaded and the transaction doesn't match it.
+
+			// 	if sp.filter.IsLoaded() {
+			// 		if !sp.filter.MatchTxAndUpdate(tx) {
+			// 			return
+			// 		}
+			// 	}
+			// }
 		}
 
 		// Queue the inventory to be relayed with the next batch.
