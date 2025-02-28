@@ -422,6 +422,31 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, amount ui
 	return tx
 }
 
+func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTxs []*bt.Tx, amount uint64) *bt.Tx {
+	tx := bt.NewTx()
+
+	err := tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      parentTxs[0].TxIDChainHash(),
+		Vout:          0,
+		LockingScript: parentTxs[0].Outputs[0].LockingScript,
+		Satoshis:      parentTxs[0].Outputs[0].Satoshis,
+	}, &bt.UTXO{
+		TxIDHash:      parentTxs[1].TxIDChainHash(),
+		Vout:          0,
+		LockingScript: parentTxs[1].Outputs[0].LockingScript,
+		Satoshis:      parentTxs[1].Outputs[0].Satoshis,
+	})
+	require.NoError(t, err)
+
+	err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), amount)
+	require.NoError(t, err)
+
+	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: td.privKey})
+	require.NoError(t, err)
+
+	return tx
+}
+
 func (td *TestDaemon) CreateTestBlock(t *testing.T, txs []*bt.Tx, previousBlock *model.Block, nonce uint32) (*util.Subtree, *model.Block) {
 	// Create and save the subtree with the double spend tx
 	subtree, err := createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)

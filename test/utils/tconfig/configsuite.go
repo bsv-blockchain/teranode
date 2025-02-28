@@ -40,7 +40,7 @@ func LoadConfigSuite() TConfigLoader {
 		s.viper.SetDefault(KeySuiteName, "DefaultName")
 		s.Suite.Name = s.viper.GetString(KeySuiteName)
 
-		s.viper.SetDefault(KeySuiteLogLevel, "ERROR")
+		s.viper.SetDefault(KeySuiteLogLevel, "INFO")
 		s.Suite.LogLevel = s.viper.GetString(KeySuiteLogLevel)
 
 		s.viper.SetDefault(KeyInitBlockHeight, uint32(101))
