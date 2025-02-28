@@ -260,7 +260,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	for parentTx := range parentTxs {
 		parentTxHash := &parentTx
 
-		parentTxMeta, err := s.Get(ctx, parentTxHash, []FieldName{FieldTx})
+		parentTxMeta, err := s.Get(ctx, parentTxHash, []FieldName{FieldUtxos})
 		if err != nil {
 			return nil, err
 		}
@@ -271,6 +271,12 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	for idx, input := range txMeta.Tx.Inputs {
 		parenTxIDS, ok := parentTxs[*input.PreviousTxIDChainHash()]
 		if ok {
+			// check the length of the spending txs, if it's less than the index, then the input is not spent
+			if len(parenTxIDS) <= idx {
+				// throw an error
+				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range", txHash.String(), idx, input.PreviousTxIDChainHash().String())
+			}
+
 			spendingTxID := parenTxIDS[idx]
 			if spendingTxID != nil {
 				counterConflictingMap[*spendingTxID] = struct{}{}
