@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/test/testdaemon"
 	"github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -64,6 +66,9 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("test conflicting tx and no conflicting tx as input", func(t *testing.T) {
 		testConflictingTxAndNoConflictingTxAsInput(t, utxoStore)
 	})
+	t.Run("test double spend with frozen tx", func(t *testing.T) {
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
+	})
 }
 
 func TestDoubleSpendPostgres(t *testing.T) {
@@ -109,6 +114,9 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("test conflicting tx and no conflicting tx as input", func(t *testing.T) {
 		testConflictingTxAndNoConflictingTxAsInput(t, utxoStore)
 	})
+		t.Run("test double spend with frozen tx", func(t *testing.T) {
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
+	})
 }
 
 func TestDoubleSpendAerospike(t *testing.T) {
@@ -151,6 +159,9 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	})
 	t.Run("test conflicting tx and no conflicting tx as input", func(t *testing.T) {
 		testConflictingTxAndNoConflictingTxAsInput(t, utxoStore)
+	})
+	t.Run("test double spend with frozen tx", func(t *testing.T) {
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
 	})
 }
 
@@ -1351,4 +1362,118 @@ func testConflictingTxAndNoConflictingTxAsInput(t *testing.T, utxoStore string) 
 	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
 	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 	td.VerifyConflictingInSubtrees(t, block104b.Subtrees[0], []chainhash.Hash{*tx3.TxIDChainHash()})
+}
+func testSingleDoubleSpendFrozenTx(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txOriginal, txDoubleSpend, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	defer func() {
+		td.Stop()
+	}()
+
+	// freeze utxos of txOriginal
+	outputs := txOriginal.Outputs
+	spends := make([]*utxo.Spend, 0)
+	for idx, output := range outputs {
+		// nolint: gosec
+		utxoHash, _ := util.UTXOHashFromOutput(txOriginal.TxIDChainHash(), output, uint32(idx))
+		// nolint: gosec
+		spend := &utxo.Spend{
+			TxID:     txDoubleSpend.TxIDChainHash(),
+			Vout:     uint32(idx),
+			UTXOHash: utxoHash,
+		}
+		spends = append(spends, spend)
+	}
+	td.UtxoStore.FreezeUTXOs(td.Ctx, spends, td.Settings)
+
+	// At this point we have:
+	// 0 -> 1 ... 101 -> 102a (winning)
+
+	// Create block 102b with a double spend transaction
+	block102b := createConflictingBlock(t, td, block102a, []*bt.Tx{txDoubleSpend}, []*bt.Tx{txOriginal}, 10202)
+
+	// freeze utxos of txDoubleSpend
+	outputs = txDoubleSpend.Outputs
+	spends = make([]*utxo.Spend, 0)
+	for idx, output := range outputs {
+		// nolint: gosec
+		utxoHash, _ := util.UTXOHashFromOutput(txDoubleSpend.TxIDChainHash(), output, uint32(idx))
+		// nolint: gosec
+		spend := &utxo.Spend{
+			TxID:     txDoubleSpend.TxIDChainHash(),
+			Vout:     uint32(idx),
+			UTXOHash: utxoHash,
+		}
+		spends = append(spends, spend)
+	}
+	td.UtxoStore.FreezeUTXOs(td.Ctx, spends, td.Settings)
+
+	// Create block 103b to make the longest chain...
+	_, block103b := td.CreateTestBlock(t, []*bt.Tx{}, block102b, 10302)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state := td.WaitForBlockHeight(t, 103, blockWait)
+
+	assert.Equal(t, uint32(103), state.CurrentHeight, "Expected block assembly to reach height 103")
+
+	// At this point we have:
+	//                   / 102a (losing)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> 103b (winning)
+
+	// Verify block 102b is now the block at height 102
+	td.VerifyBlockByHeight(t, block102b, 102)
+
+	// Verify block 103b is the block at height 103
+	td.VerifyBlockByHeight(t, block103b, 103)
+
+	// Check the txOriginal is marked as conflicting
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, true)
+
+	// check the txOriginal has been removed from block assembly
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txOriginal.TxIDChainHash()})
+
+	// Check the txDoubleSpend is no longer marked as conflicting
+	// it should still be marked as conflicting in the subtree
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, false)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been mined and removed
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// fork back to the original chain and check that everything is processed properly
+	_, block103a := td.CreateTestBlock(t, []*bt.Tx{}, block102a, 10301)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height),
+		"Failed to process block")
+
+	_, block104a := td.CreateTestBlock(t, []*bt.Tx{}, block103a, 10401)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height),
+		"Failed to process block")
+
+	// Verify final state in Block Assembly
+	state = td.WaitForBlockHeight(t, 104, blockWait)
+	assert.Equal(t, uint32(104), state.CurrentHeight, "Expected block assembly to reach height 104")
+
+	// Verify block 104a is the block at height 104
+	td.VerifyBlockByHeight(t, block104a, 104)
+
+	// At this point we have:
+	//                   / 102a -> 103a -> 104a (winning)
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b -> 103b (losing)
+
+	// check that the txDoubleSpend is not in block assembly, it should have been removed, since it was conflicting with chain a
+	td.VerifyNotInBlockAssembly(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
+
+	// check that txDoubleSpend has been marked again as conflicting
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txOriginal.TxIDChainHash()}, false)
+	td.VerifyConflictingInUtxoStore(t, []chainhash.Hash{*txDoubleSpend.TxIDChainHash()}, true)
+
+	// check that both transactions are still marked as conflicting in the subtrees
+	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], []chainhash.Hash{*txOriginal.TxIDChainHash()})
+	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], []chainhash.Hash{*txDoubleSpend.TxIDChainHash()})
 }

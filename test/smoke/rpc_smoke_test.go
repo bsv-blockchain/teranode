@@ -242,3 +242,74 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	require.Equal(t, block101.Hash().String(), getBlockByHeightResp.Result.Previousblockhash)
 	require.Equal(t, block103.Hash().String(), getBlockByHeightResp.Result.Nextblockhash)
 }
+
+func TestShouldNotProcessNonFinalTx(t *testing.T) {
+	t.Skip("Test is disabled")
+	td := testdaemon.New(t, testdaemon.TestOptions{
+		EnableRPC:        true,
+		KillTeranode:     true,
+		SettingsOverride: "dev.system.test",
+	})
+
+	t.Cleanup(func() {
+		td.Stop()
+	})
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks
+	_, err = td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	tSettings := td.Settings
+
+	state := td.WaitForBlockHeight(t, 101, 5*time.Second)
+	assert.Equal(t, uint32(101), state.CurrentHeight, "Expected block assembly to reach height 101")
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+
+	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
+	require.NoError(t, err)
+
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	newTx.LockTime = 350
+
+	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	require.Error(t, err, "Failed to send new tx with rpc")
+	t.Logf("Transaction sent with RPC: %s\n", resp)
+}
