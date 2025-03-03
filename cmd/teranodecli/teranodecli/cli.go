@@ -125,13 +125,14 @@ func Start(args []string, version, commit string) {
 		checkHeights := cmd.FlagSet.Bool("checkHeights", false, "check heights in utxo headers")
 		useStore := cmd.FlagSet.Bool("useStore", false, "use store")
 
-		var path string
-		if len(args) == 1 {
-			path = args[0]
-		}
-
 		cmd.Execute = func(args []string) error {
+			var path string
+			if len(args) == 1 {
+				path = args[0]
+			}
+
 			filereader.FileReader(logger, tSettings, *verbose, *checkHeights, *useStore, path)
+
 			return nil
 		}
 	case "aerospikereader":
