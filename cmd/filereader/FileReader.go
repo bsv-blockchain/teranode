@@ -54,7 +54,11 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verbose bool, checkHeights bool, useStore bool, path string) {
+func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verboseInput bool, checkHeightsInput bool, useStoreInput bool, path string) {
+	verbose = verboseInput
+	checkHeights = checkHeightsInput
+	useStore = useStoreInput
+
 	ctx := context.Background()
 
 	fmt.Println()
