@@ -3,9 +3,11 @@ package testdaemon
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -402,18 +404,51 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txHash []chainhash.Has
 	}
 }
 
-func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, amount uint64) *bt.Tx {
+func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx) *bt.Tx {
 	tx := bt.NewTx()
 
-	err := tx.FromUTXOs(&bt.UTXO{
+	useParentOutput, _ := rand.Int(rand.Reader, big.NewInt(int64(len(parentTx.Outputs))))
+
+	if useParentOutput.Int64() == int64(len(parentTx.Outputs)-1) {
+		// if the last input was selected (the OP_RETURN output), use the first output instead
+		useParentOutput = big.NewInt(0)
+	}
+
+	// convert to uint32
+	useParentOutputUint32, err := util.SafeUint64ToUint32(useParentOutput.Uint64())
+	require.NoError(t, err)
+
+	err = tx.FromUTXOs(&bt.UTXO{
 		TxIDHash:      parentTx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
+		Vout:          useParentOutputUint32,
+		LockingScript: parentTx.Outputs[useParentOutputUint32].LockingScript,
+		Satoshis:      parentTx.Outputs[useParentOutputUint32].Satoshis,
 	})
 	require.NoError(t, err)
 
-	err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), amount)
+	amount := parentTx.Outputs[useParentOutputUint32].Satoshis
+
+	// create a random number of outputs
+	numOutputs, _ := rand.Int(rand.Reader, big.NewInt(10))
+	if numOutputs.Uint64() == 0 {
+		numOutputs = big.NewInt(1)
+	}
+
+	fee := uint64(1)
+
+	amountPerOutput := (amount - fee) / numOutputs.Uint64()
+
+	for i := uint64(0); i < numOutputs.Uint64(); i++ {
+		err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), amountPerOutput)
+		require.NoError(t, err)
+	}
+
+	// add some random data as OP_RETURN to make sure the transaction is unique
+	randomBytes := make([]byte, 64)
+	_, err = rand.Read(randomBytes)
+	require.NoError(t, err)
+
+	err = tx.AddOpReturnOutput(randomBytes)
 	require.NoError(t, err)
 
 	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: td.privKey})

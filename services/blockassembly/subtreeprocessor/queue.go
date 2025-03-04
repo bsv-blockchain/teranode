@@ -48,6 +48,7 @@ func (q *LockFreeQueue) enqueue(v *TxIDAndFee) {
 	prev := q.tail.Swap(v)
 	if prev == nil {
 		q.head.next.Store(v)
+		q.queueLength.Add(1)
 		return
 	}
 

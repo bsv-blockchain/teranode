@@ -39,8 +39,8 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 	coinbaseTx1 = block1.CoinbaseTx
 	// t.Logf("Coinbase has %d outputs", len(coinbaseTx.Outputs))
 
-	txOriginal = td.CreateTransaction(t, coinbaseTx1, 49e8)
-	txDoubleSpend = td.CreateTransaction(t, coinbaseTx1, 48e8)
+	txOriginal = td.CreateTransaction(t, coinbaseTx1)
+	txDoubleSpend = td.CreateTransaction(t, coinbaseTx1)
 
 	err1 := td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal)
 	require.NoError(t, err1)
@@ -67,7 +67,7 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 2)
 	require.NoError(t, err)
 
-	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 49e8)
+	tx2 := td.CreateTransaction(t, block2.CoinbaseTx)
 
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx2)
 	require.NoError(t, err)

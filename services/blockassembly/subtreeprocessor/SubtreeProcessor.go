@@ -520,7 +520,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			if len(conflictingNodes) > 0 {
 				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes)
 				if err != nil {
-					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 				}
 
 				if losingTxHashesMap.Length() > 0 {

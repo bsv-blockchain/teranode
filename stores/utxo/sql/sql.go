@@ -1108,24 +1108,35 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	// Update the block_ids
 	q := `
 		INSERT INTO block_ids (
-		 transaction_id
-		,block_id
-		,block_height
-		,subtree_idx
+			transaction_id,
+			block_id,
+			block_height,
+			subtree_idx
 		) VALUES (
-		 (SELECT id FROM transactions WHERE hash = $1)
-		,$2
-		,$3
-		,$4
+			(SELECT id FROM transactions WHERE hash = $1),
+			$2,
+			$3,
+			$4
 		)
-		ON CONFLICT DO NOTHING
+		ON CONFLICT DO NOTHING;
+    `
+
+	q2 := `		
+		UPDATE transactions
+		SET unspendable = false
+		WHERE hash = $1;
 	`
 
 	for _, hash := range hashes {
 		// TODO set all the values from minedBlockInfo
-		_, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx)
-		if err != nil {
+		if _, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx); err != nil {
 			return errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
+		}
+	}
+
+	for _, hash := range hashes {
+		if _, err = txn.ExecContext(ctx, q2, hash[:]); err != nil {
+			return errors.NewStorageError("SQL error calling update unspendable on tx %s:%v", hash.String(), err)
 		}
 	}
 
@@ -1345,20 +1356,15 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, err
 		}
 
-		for i, input := range txMeta.Tx.Inputs {
+		for _, input := range txMeta.Tx.Inputs {
 			utxoHash, err = util.UTXOHashFromInput(input)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			iUint32, err := util.SafeIntToUint32(i)
 			if err != nil {
 				return nil, nil, err
 			}
 
 			spend := &utxo.Spend{
 				TxID:         input.PreviousTxIDChainHash(),
-				Vout:         iUint32,
+				Vout:         input.PreviousTxOutIndex,
 				UTXOHash:     utxoHash,
 				SpendingTxID: &conflictingTxHash,
 			}
@@ -1367,12 +1373,12 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		for vOut, output := range txMeta.Tx.Outputs {
-			utxoHash, err = util.UTXOHashFromOutput(&conflictingTxHash, output, 0)
+			vOutUint32, err := util.SafeIntToUint32(vOut)
 			if err != nil {
 				return nil, nil, err
 			}
 
-			vOutUint32, err := util.SafeIntToUint32(vOut)
+			utxoHash, err = util.UTXOHashFromOutput(&conflictingTxHash, output, vOutUint32)
 			if err != nil {
 				return nil, nil, err
 			}

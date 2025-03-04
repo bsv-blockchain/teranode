@@ -114,7 +114,7 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("test conflicting tx and no conflicting tx as input", func(t *testing.T) {
 		testConflictingTxAndNoConflictingTxAsInput(t, utxoStore)
 	})
-		t.Run("test double spend with frozen tx", func(t *testing.T) {
+	t.Run("test double spend with frozen tx", func(t *testing.T) {
 		testSingleDoubleSpendFrozenTx(t, utxoStore)
 	})
 }
@@ -299,7 +299,7 @@ func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 	// At this point we have:
 	// 0 -> 1 ... 101 -> 102a (winning)
 
-	txDoubleSpend2 := td.CreateTransaction(t, coinbaseTx1, 47e8)
+	txDoubleSpend2 := td.CreateTransaction(t, coinbaseTx1)
 
 	// Create block 102b with a double spend transaction
 	block102b := createConflictingBlock(t, td, block102a, []*bt.Tx{txDoubleSpend}, []*bt.Tx{txOriginal}, 10202)
@@ -349,10 +349,10 @@ func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 	// At this point we have:
 	// 0 -> 1 ... 101 -> 102a (winning)
 
-	txOriginal1 := td.CreateTransaction(t, txOriginal, 14e8)
-	txOriginal2 := td.CreateTransaction(t, txOriginal1, 13e8)
-	txOriginal3 := td.CreateTransaction(t, txOriginal2, 12e8)
-	txOriginal4 := td.CreateTransaction(t, txOriginal3, 11e8)
+	txOriginal1 := td.CreateTransaction(t, txOriginal)
+	txOriginal2 := td.CreateTransaction(t, txOriginal1)
+	txOriginal3 := td.CreateTransaction(t, txOriginal2)
+	txOriginal4 := td.CreateTransaction(t, txOriginal3)
 
 	// Create block 103a with the original transactions
 	subtree103a, block103a := td.CreateTestBlock(t, []*bt.Tx{txOriginal1, txOriginal2, txOriginal3, txOriginal4}, block102a, 10301)
@@ -382,9 +382,9 @@ func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 	// At this point we have:
 	// 0 -> 1 ... 101 -> 102a -> 103a (winning)
 
-	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend, 32e8)
-	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2, 31e8)
-	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3, 30e8)
+	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend)
+	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2)
+	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3)
 
 	// Create a conflicting block 103b with double spend transactions
 	block103b := createConflictingBlock(t, td, block103a,
@@ -445,10 +445,10 @@ func testDoubleSpendFork(t *testing.T, utxoStore string) {
 	defer td.Stop()
 
 	// Create chain A transactions
-	txOriginal1 := td.CreateTransaction(t, txOriginal, 14e8)
-	txOriginal2 := td.CreateTransaction(t, txOriginal1, 13e8)
-	txOriginal3 := td.CreateTransaction(t, txOriginal2, 12e8)
-	txOriginal4 := td.CreateTransaction(t, txOriginal3, 11e8)
+	txOriginal1 := td.CreateTransaction(t, txOriginal)
+	txOriginal2 := td.CreateTransaction(t, txOriginal1)
+	txOriginal3 := td.CreateTransaction(t, txOriginal2)
+	txOriginal4 := td.CreateTransaction(t, txOriginal3)
 
 	td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal1)
 	td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal2)
@@ -483,9 +483,9 @@ func testDoubleSpendFork(t *testing.T, utxoStore string) {
 		"Failed to process block102b")
 
 	// Create chain B transactions
-	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend, 32e8)
-	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2, 31e8)
-	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3, 30e8)
+	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend)
+	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2)
+	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3)
 
 	// Create block103b with chain B transactions
 	_, block103b := td.CreateTestBlock(t, []*bt.Tx{txDoubleSpend, txDoubleSpend2, txDoubleSpend3, txDoubleSpend4}, block102b, 10302)
@@ -654,9 +654,9 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 	defer td.Stop()
 
 	// Create chain A transactions
-	txOriginal1 := td.CreateTransaction(t, txOriginal, 14e8)
-	txOriginal2 := td.CreateTransaction(t, txOriginal1, 13e8)
-	txOriginal3 := td.CreateTransaction(t, txOriginal2, 12e8)
+	txOriginal1 := td.CreateTransaction(t, txOriginal)
+	txOriginal2 := td.CreateTransaction(t, txOriginal1)
+	txOriginal3 := td.CreateTransaction(t, txOriginal2)
 
 	// Create block 103a with chain A transactions
 	subtree103a, block103a := td.CreateTestBlock(t, []*bt.Tx{txOriginal1, txOriginal2, txOriginal3}, block102a, 10301)
@@ -686,8 +686,8 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 		"Failed to process block102b")
 
 	// Create chain B transactions
-	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend, 32e8)
-	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2, 31e8)
+	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend)
+	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2)
 
 	// Create block103b with chain B transactions
 	subtree103b, block103b := td.CreateTestBlock(t, []*bt.Tx{txDoubleSpend, txDoubleSpend2, txDoubleSpend3}, block102b, 10302)
@@ -718,11 +718,11 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
-	txTripleSpend := td.CreateTransaction(t, block1.CoinbaseTx, 14e8)
+	txTripleSpend := td.CreateTransaction(t, block1.CoinbaseTx)
 	require.NoError(t, err)
 
-	txTripleSpend2 := td.CreateTransaction(t, txTripleSpend, 14e8)
-	txTripleSpend3 := td.CreateTransaction(t, txTripleSpend2, 14e8)
+	txTripleSpend2 := td.CreateTransaction(t, txTripleSpend)
+	txTripleSpend3 := td.CreateTransaction(t, txTripleSpend2)
 
 	// err = td.PropagationClient.ProcessTransaction(td.Ctx, txTripleSpend2)
 	// require.NoError(t, err)
@@ -1023,15 +1023,18 @@ func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
 // 3. Chain A wins again (106a), causing all Chain B transactions to be conflicting
 //
 // Final block structure:
-//                               txOriginal1
-//                   / 102a ---> txOriginal2 ---> 103a -> 104a -> 105a -> 106a (winning)
-//                  /            txOriginal3
+//
+//	             txOriginal1
+//	 / 102a ---> txOriginal2 ---> 103a -> 104a -> 105a -> 106a (winning)
+//	/            txOriginal3
+//
 // 0 -> 1 ... 101 /            txOriginal4
-//                \
-//                 \ 102b ---> txDoubleSpend  ---> 103b -> 104b -> 105b
-//                             txDoubleSpend2         txDoubleSpend5
-//                             txDoubleSpend3         txDoubleSpend6
-//                             txDoubleSpend4
+//
+//	\
+//	 \ 102b ---> txDoubleSpend  ---> 103b -> 104b -> 105b
+//	             txDoubleSpend2         txDoubleSpend5
+//	             txDoubleSpend3         txDoubleSpend6
+//	             txDoubleSpend4
 //
 // This test verifies that:
 // - All transactions in the losing chain (including late additions 5,6) are marked conflicting
@@ -1042,10 +1045,10 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 	defer td.Stop()
 
 	// Create chain A transactions
-	txOriginal1 := td.CreateTransaction(t, txOriginal, 14e8)
-	txOriginal2 := td.CreateTransaction(t, txOriginal1, 13e8)
-	txOriginal3 := td.CreateTransaction(t, txOriginal2, 12e8)
-	txOriginal4 := td.CreateTransaction(t, txOriginal3, 11e8)
+	txOriginal1 := td.CreateTransaction(t, txOriginal)
+	txOriginal2 := td.CreateTransaction(t, txOriginal1)
+	txOriginal3 := td.CreateTransaction(t, txOriginal2)
+	txOriginal4 := td.CreateTransaction(t, txOriginal3)
 
 	td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal1)
 	td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal2)
@@ -1080,9 +1083,9 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 		"Failed to process block102b")
 
 	// Create chain B transactions
-	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend, 32e8)
-	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2, 31e8)
-	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3, 30e8)
+	txDoubleSpend2 := td.CreateTransaction(t, txDoubleSpend)
+	txDoubleSpend3 := td.CreateTransaction(t, txDoubleSpend2)
+	txDoubleSpend4 := td.CreateTransaction(t, txDoubleSpend3)
 
 	// Create block103b with chain B transactions
 	_, block103b := td.CreateTestBlock(t, []*bt.Tx{txDoubleSpend, txDoubleSpend2, txDoubleSpend3, txDoubleSpend4}, block102b, 10302)
@@ -1142,8 +1145,8 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], block103bTxHashes)
 
 	// Create TXs from the doubleSpends
-	txDoubleSpend5 := td.CreateTransaction(t, txDoubleSpend4, 29e8)
-	txDoubleSpend6 := td.CreateTransaction(t, txDoubleSpend5, 28e8)
+	txDoubleSpend5 := td.CreateTransaction(t, txDoubleSpend4)
+	txDoubleSpend6 := td.CreateTransaction(t, txDoubleSpend5)
 
 	// Process the doubleSpends
 	err1 := td.PropagationClient.ProcessTransaction(td.Ctx, txDoubleSpend5)
@@ -1218,19 +1221,28 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 //
 // Test Evolution:
 // Stage 1 (Initial):
-//                   / 102a (with txOriginal)
+//
+//	/ 102a (with txOriginal)
+//
 // 0 -> 1 ... 101 ->
-//                   \ 102b (with txDoubleSpend) -> tx2 -> 103b (winning)
+//
+//	\ 102b (with txDoubleSpend) -> tx2 -> 103b (winning)
 //
 // Stage 2 (After tx3):
-//                   / 102a (losing)
+//
+//	/ 102a (losing)
+//
 // 0 -> 1 ... 101 ->
-//                   \ 102b -> tx2 -> 103b -> tx3 -> 104b (winning)
+//
+//	\ 102b -> tx2 -> 103b -> tx3 -> 104b (winning)
 //
 // Stage 3 (Final reorganization):
-//                   / 102a -> 103a -> 104a -> 105a (winning)
+//
+//	/ 102a -> 103a -> 104a -> 105a (winning)
+//
 // 0 -> 1 ... 101 ->
-//                   \ 102b -> tx2 -> 103b -> tx3 -> 104b (losing)
+//
+//	\ 102b -> tx2 -> 103b -> tx3 -> 104b (losing)
 //
 // Key Test Points:
 // 1. Chain B initially wins with txDoubleSpend (conflicting) and tx2 (non-conflicting)
@@ -1239,19 +1251,19 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 //
 // Verification Steps:
 // 1. Initially verify:
-//    - txOriginal is marked conflicting (losing chain)
-//    - txDoubleSpend is not conflicting (winning chain)
-//    - Both remain marked as conflicting in their respective subtrees
+//   - txOriginal is marked conflicting (losing chain)
+//   - txDoubleSpend is not conflicting (winning chain)
+//   - Both remain marked as conflicting in their respective subtrees
 //
 // 2. After tx3 is mined:
-//    - Verify tx3 is accepted in block 104b
-//    - Verify proper handling of mixed ancestry transaction
+//   - Verify tx3 is accepted in block 104b
+//   - Verify proper handling of mixed ancestry transaction
 //
 // 3. After final reorganization:
-//    - txOriginal becomes non-conflicting (winning chain)
-//    - txDoubleSpend becomes conflicting (losing chain)
-//    - tx3 is marked conflicting (depends on conflicting input)
-//    - All conflict markings are preserved in subtrees
+//   - txOriginal becomes non-conflicting (winning chain)
+//   - txDoubleSpend becomes conflicting (losing chain)
+//   - tx3 is marked conflicting (depends on conflicting input)
+//   - All conflict markings are preserved in subtrees
 //
 // This test ensures that:
 // - Mixed ancestry transactions are properly handled

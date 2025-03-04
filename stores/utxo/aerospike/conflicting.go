@@ -86,20 +86,15 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		))
 
-		for i, input := range tx.Inputs {
+		for _, input := range tx.Inputs {
 			utxoHash, err := util.UTXOHashFromInput(input)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			iUint32, err := util.SafeIntToUint32(i)
 			if err != nil {
 				return nil, nil, err
 			}
 
 			spend := &utxo.Spend{
 				TxID:         input.PreviousTxIDChainHash(),
-				Vout:         iUint32,
+				Vout:         input.PreviousTxOutIndex,
 				UTXOHash:     utxoHash,
 				SpendingTxID: tx.TxIDChainHash(),
 			}
