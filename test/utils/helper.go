@@ -217,6 +217,67 @@ func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Has
 	return false, nil
 }
 
+func GetBlockSubtreeHashes(ctx context.Context, l ulogger.Logger, blockHash []byte, storeBlock blob.Store) ([]*chainhash.Hash, error) {
+	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, options.WithFileExtension("block"))
+	if err != nil {
+		return nil, errors.NewProcessingError("error getting block reader", err)
+	}
+
+	block, err := block_model.NewBlockFromReader(blockReader, nil)
+	if err != nil {
+		return nil, errors.NewProcessingError("error reading block", err)
+	}
+
+	return block.Subtrees, nil
+}
+
+func GetSubtreeTxHashes(ctx context.Context, logger ulogger.Logger, subtreeHash *chainhash.Hash, baseURL string, tSettings *settings.Settings) ([]chainhash.Hash, error) {
+	if baseURL == "" {
+		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
+	}
+
+	// do http request to baseUrl + subtreeHash.String()
+	logger.Infof("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), baseURL)
+	url := fmt.Sprintf("%s/api/v1/subtree/%s", baseURL, subtreeHash.String())
+
+	body, err := util.DoHTTPRequestBodyReader(ctx, url)
+	if err != nil {
+		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String(), err)
+	}
+	defer body.Close()
+
+	logger.Infof("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
+
+	txHashes := make([]chainhash.Hash, 0, tSettings.BlockAssembly.InitialMerkleItemsPerSubtree)
+	buffer := make([]byte, chainhash.HashSize)
+	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
+
+	logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
+
+	for {
+		n, err := io.ReadFull(bufferedReader, buffer)
+		if n > 0 {
+			txHashes = append(txHashes, chainhash.Hash(buffer))
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			// Not recoverable, returning processing error
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] unexpected EOF: partial hash read", subtreeHash.String())
+			}
+
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] error reading stream", subtreeHash.String(), err)
+		}
+	}
+
+	logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
+
+	return txHashes, nil
+}
+
 func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
