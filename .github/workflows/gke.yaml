@@ -67,9 +67,9 @@ jobs:
     uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
     with:
-      region: eu-north-1
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
 
   # Operations team notifications
   notify_on_failure:

@@ -7,7 +7,7 @@ on:
 env:
   REPO: teranode
   ECR_REGION: eu-north-1
-  SETTINGS_CONTEXT_DEFAULT: "default_context"
+  SETTINGS_CONTEXT_DEFAULT: default_context
   USE_ECR_IMAGE: true
 
 jobs:
@@ -213,7 +213,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
-          cache: "false"
+          cache: false
 
       - name: Run Test
         run: |

@@ -54,13 +54,13 @@ jobs:
       # Get current cluster ID for base image
       - name: Get Cluster Base ID
         id: base
-        run: echo "id=$(cat ./deploy/docker/CLUSTER_BASE_ID)" >> $GITHUB_OUTPUT
+        run: echo "id=$(cat './deploy/docker/CLUSTER_BASE_ID')" >> $GITHUB_OUTPUT
 
       # Get current cluster ID for run image
       - name: Get Cluster Run ID
         id: run
-        run: echo "id=$(cat ./deploy/docker/CLUSTER_RUN_ID)" >> $GITHUB_OUTPUT
-      
+        run: echo "id=$(cat './deploy/docker/CLUSTER_RUN_ID')" >> $GITHUB_OUTPUT
+
       # Set latest tag if not a pull request
       - name: Set latest tag
         id: latest

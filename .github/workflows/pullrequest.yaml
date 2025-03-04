@@ -7,9 +7,7 @@ permissions:
   pull-requests: read
 
 env:
-  REPO: teranode
-  ECR_REGION: eu-north-1
-  SETTINGS_CONTEXT_DEFAULT: "test"
+  SETTINGS_CONTEXT_DEFAULT: test
 
 jobs:
   golangci:
@@ -20,9 +18,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
-          cache: "false"
+          cache: false
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v5
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           only-new-issues: true
@@ -36,7 +34,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
-          cache: "false"
+          cache: false
       - name: Build Go tests in test directory
         run: make buildtest
 
@@ -55,7 +53,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
-          cache: "false"
+          cache: false
       - name: Run Go tests
         # run: USE_JSON_REPORTER=true make longtests
         run: make longtests
@@ -88,7 +86,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
-          cache: "false"
+          cache: false
 
       - name: Run Smoke tests
         run: |
@@ -190,7 +188,7 @@ jobs:
     uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
     with:
-      region: eu-north-1
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
       pull_request: true

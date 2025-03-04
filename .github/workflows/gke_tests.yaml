@@ -7,8 +7,6 @@ env:
   ECR_REGION: eu-north-1
 
 jobs:
-
-
   go-buildtest:
     name: build non-unit tests
     runs-on: teranode-runner
