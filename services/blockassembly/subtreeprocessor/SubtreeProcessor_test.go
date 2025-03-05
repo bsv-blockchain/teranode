@@ -435,7 +435,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings()
-	// tSettings.BlockAssembly.DoubleSpendWindow = 10 * time.Millisecond
+	tSettings.BlockAssembly.DoubleSpendWindow = 2 * time.Second
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
 
 	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, nil, utxosStore, nil)
@@ -444,7 +444,8 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
 	subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 1, SizeInBytes: 294})
 
-	assert.Equal(t, 1, len(subtreeProcessor.currentSubtree.Nodes))
+	// we should not have the transaction in the subtrees yet, it should be stuck in the queue
+	assert.Equal(t, 1, subtreeProcessor.GetCurrentLength())
 	// assert.Equal(t, subtreeHash.String(), subtreeProcessor.currentSubtree.RootHash().String())
 
 	// Move up the block
@@ -454,7 +455,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	block, err := model.NewBlockFromBytes(blockBytes, tSettings)
 	require.NoError(t, err)
 
-	err = subtreeProcessor.moveForwardBlock(ctx, block, true)
+	err = subtreeProcessor.MoveForwardBlock(block)
 	require.NoError(t, err)
 
 	assert.Len(t, subtreeProcessor.chainedSubtrees, 0)

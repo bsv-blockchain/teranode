@@ -113,6 +113,9 @@ type SubtreeProcessor struct {
 	// removeTxCh receives transactions to be removed
 	removeTxCh chan chainhash.Hash
 
+	// lengthCh receives requests for the current length of the processor
+	lengthCh chan chan int
+
 	// newSubtreeChan receives notifications about new subtrees
 	newSubtreeChan chan NewSubtreeRequest
 
@@ -211,6 +214,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		deDuplicateTransactionsCh: make(chan struct{}),
 		resetCh:                   make(chan *resetBlocks),
 		removeTxCh:                make(chan chainhash.Hash),
+		lengthCh:                  make(chan chan int),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
@@ -226,6 +230,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		currentRunningState:       atomic.Value{},
 	}
 	stp.currentRunningState.Store("starting")
+
+	// need to make sure first coinbase tx is counted when we start
+	stp.setTxCountFromSubtrees()
 
 	for _, opts := range options {
 		opts(stp)
@@ -334,6 +341,10 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				stp.currentRunningState.Store("running")
 
+			case lengthCh := <-stp.lengthCh:
+				// return the length of the current subtree
+				lengthCh <- stp.currentSubtree.Length()
+
 			default:
 				stp.currentRunningState.Store("dequeue")
 
@@ -391,6 +402,18 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 //   - string: Current state description
 func (stp *SubtreeProcessor) GetCurrentRunningState() string {
 	return stp.currentRunningState.Load().(string)
+}
+
+// GetCurrentLength returns the length of the current subtree
+//
+// Returns:
+//   - int: Length of the current subtree
+func (stp *SubtreeProcessor) GetCurrentLength() int {
+	lengthCh := make(chan int)
+
+	stp.lengthCh <- lengthCh
+
+	return <-lengthCh
 }
 
 // Reset resets the processor to a clean state,  removing all subtrees and transactions
@@ -1392,6 +1415,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 	stp.logger.Debugf("[moveForwardBlock][%s] processing remainder tx hashes into subtrees DONE in %s", block.String(), time.Since(remainderStartTime).String())
 
+	// set the correct count of the current subtrees
 	stp.setTxCountFromSubtrees()
 
 	// set the current block header

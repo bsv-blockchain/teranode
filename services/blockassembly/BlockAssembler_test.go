@@ -175,7 +175,9 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		// Check the state of the SubtreeProcessor
 		assert.Equal(t, 3, testItems.blockAssembler.subtreeProcessor.SubtreeCount())
-		assert.Equal(t, uint64(7), testItems.blockAssembler.subtreeProcessor.TxCount())
+
+		// should include the 7 transactions added + the coinbase placeholder of the first subtree
+		assert.Equal(t, uint64(8), testItems.blockAssembler.subtreeProcessor.TxCount())
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
