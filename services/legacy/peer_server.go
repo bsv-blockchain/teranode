@@ -1230,7 +1230,19 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	// to fetch a missing transaction results in the same behavior.
 	txMeta, err := s.utxoStore.Get(s.ctx, hash, []utxostore.FieldName{utxostore.FieldTx})
 	if err != nil {
-		sp.server.logger.Infof("Unable to fetch tx %v from transaction pool: %v", hash, err)
+		sp.server.logger.Warnf("[pushTxMsg] Unable to fetch tx %v from transaction pool: %v", hash, err)
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+
+		return err
+	}
+
+	if txMeta == nil || txMeta.Tx == nil {
+		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
+
+		sp.server.logger.Warnf(err.Error())
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1241,7 +1253,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 
 	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
 	if err != nil {
-		sp.server.logger.Infof("Unable to fetch tx %v from transaction pool: %v", hash, err)
+		sp.server.logger.Warnf("[pushTxMsg] Unable to deserialize tx %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
