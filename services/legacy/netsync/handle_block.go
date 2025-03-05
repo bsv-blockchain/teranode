@@ -290,10 +290,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	subtrees = make([]*chainhash.Hash, 0)
 
 	var (
-		subtree        *util.Subtree
-		txMap          map[chainhash.Hash]*TxMapWrapper
-		legacyMode     bool
-		catchingBlocks bool
+		subtree    *util.Subtree
+		txMap      map[chainhash.Hash]*TxMapWrapper
+		legacyMode bool
 	)
 
 	// create 1 subtree + subtree.subtreeData
@@ -330,13 +329,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			sm.logger.Errorf("[prepareSubtrees] Failed to get current state: %s", err)
 		}
 
-		if catchingBlocks, err = sm.blockchainClient.IsFSMCurrentState(sm.ctx, blockchain_api.FSMStateType_CATCHINGBLOCKS); err != nil {
-			sm.logger.Errorf("[prepareSubtrees] Failed to get current state: %s", err)
-		}
-
-		// quick validation mode is used when we are in legacy mode or catching blocks mode
+		// quick validation mode is used when we are in legacy mode
 		// we can skip some of the processing since we assume the block is valid
-		quickValidationMode := legacyMode || catchingBlocks
+		quickValidationMode := legacyMode
 
 		if quickValidationMode {
 			// in quickValidationMode, we can process transactions in a block in parallel, but in reverse order

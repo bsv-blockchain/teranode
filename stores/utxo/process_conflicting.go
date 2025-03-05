@@ -63,18 +63,18 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 		g.Go(func() error {
 			txMeta, err := s.Get(gCtx, &txHash, []FieldName{FieldTx, FieldBlockIDs, FieldConflicting})
 			if err != nil {
-				return err
+				return errors.NewProcessingError("[ProcessConflicting][%s] error getting tx", txHash.String(), err)
 			}
 
 			// the transaction should be marked as conflicting, otherwise it shouldn't be in this process
 			if !txMeta.Conflicting {
-				return errors.NewError("tx is not conflicting")
+				return errors.NewProcessingError("[ProcessConflicting][%s] tx is not conflicting", txHash.String())
 			}
 
 			// get the counter conflicting transactions for the current transaction
 			// this includes all the children of the conflicting transaction
 			if losingTxHashesPerConflictingTx[idx], err = s.GetCounterConflicting(gCtx, txHash); err != nil {
-				return err
+				return errors.NewProcessingError("[ProcessConflicting][%s] error getting counter conflicting txs", txHash.String(), err)
 			}
 
 			winningTxs[idx] = txMeta.Tx
