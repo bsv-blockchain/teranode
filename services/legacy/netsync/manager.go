@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -376,6 +377,8 @@ func (sm *SyncManager) startSync() {
 		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+
+			continue
 		}
 
 		if peer.LastBlock() == bestBlockHeightInt32 {
@@ -418,6 +421,8 @@ func (sm *SyncManager) startSync() {
 		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+
+			return
 		}
 
 		// check whether we are in sync with this peer and send RUNNING FSM state
@@ -497,7 +502,17 @@ func (sm *SyncManager) startSync() {
 			recvBytesLastTick: uint64(0),
 		}
 	} else {
-		sm.logger.Warnf("No sync peer candidates available")
+		// If we have no peers available, log a warning and schedule a retry
+		sm.logger.Warnf("No sync peer candidates available, will retry in 5 seconds")
+
+		go func() {
+			select {
+			case <-sm.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				sm.startSync()
+			}
+		}()
 	}
 }
 
@@ -677,6 +692,8 @@ func (sm *SyncManager) topBlock() int32 {
 // the current sync peer, attempts to select a new best peer to sync from.  It
 // is invoked from the syncHandler goroutine.
 func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
+	sm.logger.Debugf("Received done peer message from peer %s", peer)
+
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
 		sm.logger.Debugf("Received done peer message for unknown peer %s", peer)
@@ -686,7 +703,7 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 	// Remove the peer from the list of candidate peers.
 	sm.peerStates.Delete(peer)
 
-	sm.logger.Infof("Lost peer %s", peer)
+	sm.logger.Infof("Lost peer %s (removed from peerStates)", peer)
 
 	// Cleanup state of requested items.
 	sm.clearRequestedState(state)
@@ -715,12 +732,13 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 		sm.syncPeerState.getLastBlockTime(),
 		sm.syncPeerState.getViolations())
 
-	// Disconnect from the misbehaving peer.
-	sm.syncPeer.Disconnect()
+	// Only disconnect if we have a valid sync peer
+	if sm.syncPeer != nil {
+		sm.syncPeer.SetSyncPeer(false)
+		sm.syncPeer.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
+	}
 
-	// Attempt to find a new peer to sync from
-	// Also, reset the headers-first state.
-	sm.syncPeer.SetSyncPeer(false)
+	// Reset sync peer state
 	sm.syncPeer = nil
 	sm.syncPeerState = nil
 
@@ -994,10 +1012,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		// mode, in this case, so the chain code is actually fed the
 		// duplicate blocks.
 		if sm.chainParams != &chaincfg.RegressionNetParams {
-			peer.Disconnect()
-			sm.logger.Errorf("[handleBlockMsg][%s] Got unrequested block from %s -- disconnected", bmsg.blockHash, peer)
+			reason := fmt.Sprintf("Got unrequested block %v", bmsg.blockHash)
+			peer.DisconnectWithWarning(reason)
 
-			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", bmsg.blockHash, peer)
+			return errors.NewServiceError("Got unrequested block %v", bmsg.blockHash)
 		}
 	}
 
@@ -1267,8 +1285,8 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	numHeaders := len(msg.Headers)
 
 	if !sm.headersFirstMode {
-		sm.logger.Warnf("Got %d unrequested headers from %s -- disconnecting", numHeaders, peer.String())
-		peer.Disconnect()
+		reason := fmt.Sprintf("Got %d unrequested headers from %s", numHeaders, peer.String())
+		peer.DisconnectWithWarning(reason)
 
 		return
 	}
@@ -1291,8 +1309,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Ensure there is a previous header to compare against.
 		prevNodeEl := sm.headerList.Back()
 		if prevNodeEl == nil {
-			sm.logger.Warnf("Header list does not contain a previous element as expected -- disconnecting peer")
-			peer.Disconnect()
+			peer.DisconnectWithWarning("Header list does not contain a previous element as expected")
 
 			return
 		}
@@ -1310,10 +1327,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 				sm.startHeader = e
 			}
 		} else {
-			sm.logger.Warnf("Received block header that does not "+
-				"properly connect to the chain from peer %s "+
-				"-- disconnecting", peer.String())
-			peer.Disconnect()
+			peer.DisconnectWithWarning("Received block header that does not properly connect to the chain")
 
 			return
 		}
@@ -1327,14 +1341,11 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 					"header against checkpoint at height "+
 					"%d/hash %s", node.height, node.hash)
 			} else {
-				sm.logger.Warnf("Block header at height %d/hash "+
-					"%s from peer %s does NOT match "+
-					"expected checkpoint hash of %s -- "+
-					"disconnecting", node.height,
-					node.hash, peer.String(),
+				reason := fmt.Sprintf("Block header at height %d/hash "+
+					"%s does NOT match expected checkpoint hash of %s",
+					node.height, node.hash,
 					sm.nextCheckpoint.Hash)
-
-				peer.Disconnect()
+				peer.DisconnectWithWarning(reason)
 
 				return
 			}
@@ -1894,6 +1905,7 @@ func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 		return
 	}
 
+	sm.logger.Infof("Done peer %s", peer)
 	sm.msgChan <- &donePeerMsg{peer: peer, reply: done}
 }
 

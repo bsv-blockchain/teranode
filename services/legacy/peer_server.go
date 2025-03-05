@@ -407,8 +407,8 @@ func (sp *serverPeer) pushAddrMsg(addresses []*wire.NetAddress) {
 
 	known, err := sp.PushAddrMsg(addrs)
 	if err != nil {
-		sp.server.logger.Errorf("Can't push address message to %s: %v", sp.Peer, err)
-		sp.Disconnect()
+		reason := fmt.Sprintf("Can't push address message to peer: %v", err)
+		sp.DisconnectWithWarning(reason)
 
 		return
 	}
@@ -451,10 +451,8 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 			sp, reason, score)
 
 		if score > cfg.BanThreshold {
-			sp.server.logger.Warnf("Misbehaving peer %s -- banning and disconnecting",
-				sp)
 			sp.server.BanPeer(sp)
-			sp.Disconnect()
+			sp.DisconnectWithWarning("Misbehaving peer -- banning and disconnecting")
 		}
 	}
 }
@@ -594,8 +592,7 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 
 	// we do not support onMempool requests
 	// normally this would only be sent with bloom filtering on, which we do not support
-	sp.server.logger.Warnf("Ignoring mempool request from %v -- bloom filtering is not supported", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring mempool request from peer -- bloom filtering is not supported")
 }
 
 // OnTx is invoked when a peer receives a tx bitcoin message.  It blocks
@@ -694,8 +691,7 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 			sp.server.logger.Infof("[OnInv] Ignoring tx %v in inv from %v -- blocksonly enabled", invVect.Hash, sp)
 
 			if sp.ProtocolVersion() >= wire.BIP0037Version {
-				sp.server.logger.Infof("[OnInv] Peer %v is announcing transactions -- disconnecting", sp)
-				sp.Disconnect()
+				sp.DisconnectWithWarning("Ignoring tx in inv from peer")
 
 				return
 			}
@@ -915,20 +911,17 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 
 // OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.
 func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
-	sp.server.logger.Warnf("Ignoring getcfilters request from %v", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring getcfilters request from peer")
 }
 
 // OnGetCFHeaders is invoked when a peer receives a getcfheader bitcoin message.
 func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
-	sp.server.logger.Warnf("Ignoring getcfheaders request from %v", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring getcfheaders request from peer")
 }
 
 // OnGetCFCheckpt is invoked when a peer receives a getcfcheckpt bitcoin message.
 func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-	sp.server.logger.Warnf("Ignoring getcfcheckpt request from %v", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring getcfcheckpt request from peer")
 }
 
 // enforceNodeBloomFlag disconnects the peer if the server is not configured to
@@ -950,16 +943,14 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 			// Disconnect the peer regardless of whether it was
 			// banned.
 			sp.addBanScore(100, 0, cmd)
-			sp.Disconnect()
+			sp.DisconnectWithWarning("Ignoring unsupported request protocol version")
 
 			return false
 		}
 
 		// Disconnect the peer regardless of protocol version or banning
 		// state.
-		sp.server.logger.Debugf("%s sent an unsupported %s request -- "+
-			"disconnecting", sp, cmd)
-		sp.Disconnect()
+		sp.DisconnectWithWarning("Ignoring unsupported " + cmd + " request from peer")
 
 		return false
 	}
@@ -978,9 +969,8 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
 
 	// Check that the passed minimum fee is a valid amount.
 	if msg.MinFee < 0 || msg.MinFee > bsvutil.MaxSatoshi {
-		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
-			"disconnecting", sp, bsvutil.Amount(msg.MinFee))
-		sp.Disconnect()
+		reason := fmt.Sprintf("Peer sent an invalid feefilter '%v'", bsvutil.Amount(msg.MinFee))
+		sp.DisconnectWithWarning(reason)
 
 		return
 	}
@@ -993,8 +983,7 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
 // filter.  The peer will be disconnected if a filter is not loaded when this
 // message is received or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
-	sp.server.logger.Warnf("Ignoring filteradd request from %s", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring filteradd request from peer")
 }
 
 // OnFilterClear is invoked when a peer receives a filterclear bitcoin
@@ -1002,8 +991,7 @@ func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
 // The peer will be disconnected if a filter is not loaded when this message is
 // received  or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
-	sp.server.logger.Warnf("Ignoring filterclear request from %s", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring filterclear request from peer")
 }
 
 // OnFilterLoad is invoked when a peer receives a filterload bitcoin
@@ -1012,8 +1000,7 @@ func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
 // The peer will be disconnected if the server is not configured to allow bloom
 // filters.
 func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
-	sp.server.logger.Warnf("Ignoring filterload request from %s", sp)
-	sp.Disconnect()
+	sp.DisconnectWithWarning("Ignoring filterload request from peer")
 }
 
 // OnGetAddr is invoked when a peer receives a getaddr bitcoin message
@@ -1075,8 +1062,8 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 
 	// A message that has no addresses is invalid.
 	if len(msg.AddrList) == 0 {
-		sp.server.logger.Errorf("Command [%s] from %s does not contain any addresses", msg.Command(), sp.Peer)
-		sp.Disconnect()
+		reason := fmt.Sprintf("Command [%s] from peer does not contain any addresses", msg.Command())
+		sp.DisconnectWithWarning(reason)
 
 		return
 	}
@@ -1472,16 +1459,14 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	// ignore new peers if in banlist
 	if s.banList.IsBanned(sp.Addr()) {
-		s.logger.Infof("Rejecting banned peer %s", sp.Addr())
-		sp.Disconnect()
+		sp.DisconnectWithWarning("Ignoring banned peer")
 
 		return false
 	}
 
 	// Ignore new peers if we're shutting down.
 	if atomic.LoadInt32(&s.shutdown) != 0 {
-		s.logger.Infof("New peer %s ignored - server is shutting down", sp)
-		sp.Disconnect()
+		sp.DisconnectWithInfo("Ignoring new peer - server is shutting down")
 
 		return false
 	}
@@ -1489,17 +1474,16 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	// Disconnect banned peers.
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err != nil {
-		sp.server.logger.Debugf("can't split hostport %v", err)
-		sp.Disconnect()
+		reason := fmt.Sprintf("can't split host port %v", err)
+		sp.DisconnectWithInfo(reason)
 
 		return false
 	}
 
 	if banEnd, ok := state.banned.Get(host); ok {
 		if time.Now().Before(banEnd) {
-			sp.server.logger.Debugf("Peer %s is banned for another %v - disconnecting",
-				host, time.Until(banEnd))
-			sp.Disconnect()
+			reason := fmt.Sprintf("Peer %s is banned for another %v", host, time.Until(banEnd))
+			sp.DisconnectWithWarning(reason)
 
 			return false
 		}
@@ -1511,8 +1495,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	// check whether we are already connected to this peer
 	for _, outboundPeer := range state.outboundPeers.Range() {
 		if outboundPeer.Addr() == sp.Addr() {
-			s.logger.Infof("[handleAddPeerMsg] Already connected to outbound peer %s, disconnecting in favor of new connection", sp)
-			outboundPeer.Disconnect()
+			outboundPeer.DisconnectWithInfo("Already connected to outbound peer, disconnecting in favor of new connection")
 			// remove from state.outboundPeers
 			state.outboundPeers.Delete(outboundPeer.ID())
 		}
@@ -1520,8 +1503,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	for _, inboundPeer := range state.inboundPeers.Range() {
 		if inboundPeer.Addr() == sp.Addr() {
-			s.logger.Infof("[handleAddPeerMsg] Already connected to inbound peer %s, disconnecting in favor of new connection", sp)
-			inboundPeer.Disconnect()
+			inboundPeer.DisconnectWithInfo("Already connected to inbound peer, disconnecting in favor of new connection")
 			// remove from state.inboundPeers
 			state.inboundPeers.Delete(inboundPeer.ID())
 		}
@@ -1529,18 +1511,16 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	// Limit max number of total peers per ip.
 	if state.CountIP(host) >= cfg.MaxPeersPerIP {
-		s.logger.Infof("Max peers per IP reached [%d] - disconnecting peer %s",
-			cfg.MaxPeersPerIP, sp)
-		sp.Disconnect()
+		reason := fmt.Sprintf("Max peers per IP reached [%d] - disconnecting peer", cfg.MaxPeersPerIP)
+		sp.DisconnectWithInfo(reason)
 
 		return false
 	}
 
 	// Limit max number of total peers.
 	if state.Count() >= cfg.MaxPeers {
-		s.logger.Infof("Max peers reached [%d] - disconnecting peer %s",
-			cfg.MaxPeers, sp)
-		sp.Disconnect()
+		reason := fmt.Sprintf("Max peers reached [%d] - disconnecting peer", cfg.MaxPeers)
+		sp.DisconnectWithInfo(reason)
 		// TODO: how to handle permanent peers here?
 		// they should be rescheduled.
 		return false
@@ -1577,17 +1557,18 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 // handleDonePeerMsg deals with peers that have signalled they are done.  It is
 // invoked from the peerHandler goroutine.
 func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
-	var list map[int32]*serverPeer
+	var list *util.SyncedMap[int32, *serverPeer]
 
-	if sp.persistent {
-		list = state.persistentPeers.Range()
-	} else if sp.Inbound() {
-		list = state.inboundPeers.Range()
-	} else {
-		list = state.outboundPeers.Range()
+	switch {
+	case sp.persistent:
+		list = state.persistentPeers
+	case sp.Inbound():
+		list = state.inboundPeers
+	default:
+		list = state.outboundPeers
 	}
 
-	if _, ok := list[sp.ID()]; ok {
+	if _, ok := list.Get(sp.ID()); ok {
 		if !sp.Inbound() && sp.VersionKnown() {
 			count, _ := state.outboundGroups.Get(addrmgr.GroupKey(sp.NA()))
 			state.outboundGroups.Set(addrmgr.GroupKey(sp.NA()), count-1)
@@ -1597,7 +1578,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			s.connManager.Disconnect(sp.connReq.ID())
 		}
 
-		delete(list, sp.ID())
+		list.Delete(sp.ID())
 
 		host, _, err := net.SplitHostPort(sp.Addr())
 		if err == nil && !sp.persistent {
@@ -1965,7 +1946,7 @@ func disconnectPeer(peerList *util.SyncedMap[int32, *serverPeer], compareFunc fu
 			// This is ok because we are not continuing
 			// to iterate so won't corrupt the loop.
 			peerList.Delete(addr)
-			peer.Disconnect()
+			peer.DisconnectWithInfo("disconnectPeer")
 
 			return true
 		}
@@ -2184,8 +2165,7 @@ out:
 		case <-s.quit:
 			// Disconnect all peers on server shutdown.
 			state.forAllPeers(func(sp *serverPeer) {
-				s.logger.Infof("Shutdown peer %s", sp)
-				sp.Disconnect()
+				sp.DisconnectWithInfo("Shutdown peer")
 			})
 			break out
 		}

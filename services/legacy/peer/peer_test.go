@@ -368,8 +368,8 @@ func TestPeerConnection(t *testing.T) {
 		testPeer(t, inPeer, wantStats2)
 		testPeer(t, outPeer, wantStats1)
 
-		inPeer.Disconnect()
-		outPeer.Disconnect()
+		inPeer.DisconnectWithInfo("disconnect")
+		outPeer.DisconnectWithInfo("disconnect")
 		inPeer.WaitForDisconnect()
 		outPeer.WaitForDisconnect()
 	}
@@ -626,8 +626,8 @@ func TestPeerListeners(t *testing.T) {
 		}
 	}
 
-	inPeer.Disconnect()
-	outPeer.Disconnect()
+	inPeer.DisconnectWithInfo("")
+	outPeer.DisconnectWithInfo("")
 }
 
 // TestOutboundPeer tests that the outbound peer works as expected.
@@ -691,7 +691,7 @@ func TestOutboundPeer(t *testing.T) {
 	done := make(chan struct{})
 	p.QueueMessage(fakeMsg, done)
 	<-done
-	p.Disconnect()
+	p.DisconnectWithInfo("")
 
 	// Test NewestBlock
 	var newestBlock = func() (*chainhash.Hash, int32, error) {
@@ -733,7 +733,7 @@ func TestOutboundPeer(t *testing.T) {
 
 	// Test Queue Inv after connection
 	p1.QueueInventory(fakeInv)
-	p1.Disconnect()
+	p1.DisconnectWithInfo("")
 
 	// Test regression
 	peerCfg.ChainParams = &chaincfg.RegressionNetParams
@@ -783,7 +783,7 @@ func TestOutboundPeer(t *testing.T) {
 	p2.QueueMessage(wire.NewMsgGetHeaders(), nil)
 	p2.QueueMessage(wire.NewMsgFeeFilter(20000), nil)
 
-	p2.Disconnect()
+	p2.DisconnectWithInfo("")
 }
 
 // Tests that the node disconnects from peers with an unsupported protocol
@@ -1134,8 +1134,8 @@ func TestBanPeer(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, r.Ok)
 
-		inPeer.Disconnect()
-		outPeer.Disconnect()
+		inPeer.DisconnectWithInfo("")
+		outPeer.DisconnectWithInfo("")
 		inPeer.WaitForDisconnect()
 		outPeer.WaitForDisconnect()
 	}

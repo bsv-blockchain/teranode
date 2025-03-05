@@ -119,8 +119,7 @@ func connect(c *cli.Context) error {
 	case <-verack:
 		fmt.Println("Verack received. Connection established.")
 	case <-time.After(time.Second * 5):
-		fmt.Println("connection: verack timeout")
-		p.Disconnect()
+		p.DisconnectWithInfo("verack timeout")
 
 		return errors.NewError("verack timeout")
 	}
@@ -238,7 +237,7 @@ func interactiveLoop() {
 			fmt.Println("Exiting...")
 
 			if p != nil && p.Connected() {
-				p.Disconnect()
+				p.DisconnectWithInfo("interactiveLoop")
 			}
 
 			break

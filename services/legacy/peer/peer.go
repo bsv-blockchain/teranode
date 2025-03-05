@@ -1211,10 +1211,17 @@ func (p *Peer) shouldHandleReadError(err error) bool {
 	// No logging or reject message when the remote peer has been
 	// disconnected.
 	if err == io.EOF {
+		p.logger.Debugf("Remote peer has disconnected (EOF): %s", p)
+		return false
+	}
+
+	if err == io.ErrUnexpectedEOF {
+		p.logger.Debugf("Remote peer has disconnected (Unexpected EOF): %s", p)
 		return false
 	}
 
 	if opErr, ok := err.(*net.OpError); ok && !opErr.Temporary() {
+		p.logger.Debugf("Remote peer network error (non-temporary): %s - %v", p, opErr)
 		return false
 	}
 
@@ -1370,8 +1377,8 @@ out:
 					continue
 				}
 
-				p.logger.Debugf("Peer %s appears to be stalled or misbehaving, %s timeout -- disconnecting", p, command)
-				p.Disconnect()
+				reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
+				p.DisconnectWithInfo(reason)
 				break
 			}
 
@@ -1413,8 +1420,8 @@ cleanup:
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
 	idleTimer := time.AfterFunc(idleTimeout, func() {
-		p.logger.Warnf("Peer %s no answer for %s -- disconnecting", p, idleTimeout)
-		p.Disconnect()
+		reason := fmt.Sprintf("No answer from peer for %s", idleTimeout)
+		p.DisconnectWithInfo(reason)
 	})
 
 out:
@@ -1452,7 +1459,17 @@ out:
 				// command.
 				p.PushRejectMsg("malformed", wire.RejectMalformed, errMsg, nil, true)
 
-				p.Disconnect()
+				p.DisconnectWithWarning("malformed message")
+			} else {
+				// We're not handling the error with a reject message, but we still need to disconnect
+				// the peer when network errors occur
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					reason := fmt.Sprintf("Peer disconnected due to: %v", err)
+					p.DisconnectWithWarning(reason)
+				} else if opErr, ok := err.(*net.OpError); ok && !opErr.Temporary() {
+					reason := fmt.Sprintf("Peer disconnected due to network error: %v", opErr)
+					p.DisconnectWithWarning(reason)
+				}
 			}
 			break out
 		}
@@ -1591,7 +1608,7 @@ out:
 	idleTimer.Stop()
 
 	// Ensure connection is closed.
-	p.Disconnect()
+	p.DisconnectWithInfo("Peer appears to be stalled or misbehaving, inHandler break out")
 
 	close(p.inQuit)
 	p.logger.Debugf("Peer input handler done for %s", p)
@@ -1773,7 +1790,7 @@ func (p *Peer) shouldLogWriteError(err error) bool {
 	}
 
 	// No logging when the remote peer has been disconnected.
-	if err == io.EOF {
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		return false
 	}
 
@@ -1808,7 +1825,7 @@ out:
 
 			err := p.writeMessage(msg.msg, msg.encoding)
 			if err != nil {
-				p.Disconnect()
+				// p.Disconnect("write error")
 				if p.shouldLogWriteError(err) {
 					p.logger.Errorf("Failed to send message to "+
 						"%s: %v", p, err)
@@ -1946,12 +1963,25 @@ func (p *Peer) Connected() bool {
 // Disconnect disconnects the peer by closing the connection.  Calling this
 // function when the peer is already disconnected or in the process of
 // disconnecting will have no effect.
-func (p *Peer) Disconnect() {
+func (p *Peer) DisconnectWithInfo(reason string) {
+	p.DisconnectWithLogFunc(reason, p.logger.Infof)
+}
+
+func (p *Peer) DisconnectWithWarning(reason string) {
+	p.DisconnectWithLogFunc(reason, p.logger.Warnf)
+}
+
+func (p *Peer) DisconnectWithLogFunc(reason string, logFunc func(format string, args ...interface{})) {
+	// // Get stack trace
+	// buf := make([]byte, 4096)
+	// n := runtime.Stack(buf, false)
+	// stackTrace := string(buf[:n])
+	// p.logger.Debugf("Disconnecting (%s) reason: %s\nStack trace:\n%s", p, reason, stackTrace)
+	logFunc("Disconnecting (%s) reason: %s", p, reason)
+
 	if atomic.AddInt32(&p.disconnect, 1) != 1 {
 		return
 	}
-
-	p.logger.Debugf("Disconnecting %s", p)
 
 	if atomic.LoadInt32(&p.connected) != 0 {
 		p.conn.Close()
@@ -2179,14 +2209,16 @@ func (p *Peer) start() error {
 	select {
 	case err := <-negotiateErr:
 		if err != nil {
-			p.logger.Debugf("Unable to negotiate protocol with %s: %v", p, err)
-			p.Disconnect()
+			reason := fmt.Sprintf("Unable to negotiate protocol: %v", err)
+			p.DisconnectWithWarning(reason)
+
 			return err
 		}
 	case <-time.After(negotiateTimeout):
-		p.logger.Debugf("Protocol negotiation timeout with %s", p)
-		p.Disconnect()
-		return errors.New("protocol negotiation timeout")
+		reason := "protocol negotiation timeout"
+		p.DisconnectWithWarning(reason)
+
+		return errors.New(reason)
 	}
 	p.logger.Debugf("Connected to %s", p.Addr())
 
@@ -2228,8 +2260,8 @@ func (p *Peer) AssociateConnection(conn net.Conn) {
 		// and no point recomputing.
 		na, err := newNetAddress(p.conn.RemoteAddr(), p.services)
 		if err != nil {
-			p.logger.Errorf("Cannot create remote net address: %v", err)
-			p.Disconnect()
+			reason := fmt.Sprintf("Cannot create remote net address: %v", err)
+			p.DisconnectWithWarning(reason)
 
 			return
 		}
@@ -2239,8 +2271,8 @@ func (p *Peer) AssociateConnection(conn net.Conn) {
 
 	go func() {
 		if err := p.start(); err != nil {
-			p.logger.Debugf("Cannot start peer %v: %v", p, err)
-			p.Disconnect()
+			reason := fmt.Sprintf("Cannot start peer: %v", err)
+			p.DisconnectWithWarning(reason)
 		}
 	}()
 }
