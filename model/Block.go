@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -799,7 +800,7 @@ func (b *Block) GetCounterConflictingTxs(ctx context.Context, txMetaStore utxo.S
 
 	for _, subtree := range b.SubtreeSlices {
 		for _, conflictingNode := range subtree.ConflictingNodes {
-			tx, err := txMetaStore.Get(ctx, &conflictingNode, []utxo.FieldName{utxo.FieldTx})
+			tx, err := txMetaStore.Get(ctx, &conflictingNode, fields.Tx)
 			if err != nil {
 				return nil, errors.NewStorageError("error getting transaction %s from txMetaStore", conflictingNode.String(), err)
 			}

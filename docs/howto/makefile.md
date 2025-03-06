@@ -94,7 +94,6 @@ Other specific build tasks for different components:
 ### Code Generation:
 
 - `gen`: Generates Go code from Protocol Buffers for various services.
-- `gen-frpc`: Generates Go code for fRPC from Protocol Buffers for specific services.
 
 ### Cleanup:
 

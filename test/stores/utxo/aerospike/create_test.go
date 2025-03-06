@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -59,15 +60,15 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		var subtreeIdxs []int
 
 		expectedBinValues := map[string]aerospike.Value{
-			"version":      aerospike.NewIntegerValue(int(tx.Version)),
-			"locktime":     aerospike.NewIntegerValue(int(tx.LockTime)),
-			"fee":          aerospike.NewIntegerValue(187),
-			"sizeInBytes":  aerospike.NewIntegerValue(tx.Size()),
-			"extendedSize": aerospike.NewIntegerValue(len(tx.ExtendedBytes())),
-			"spentUtxos":   aerospike.NewIntegerValue(0),
-			"nrUtxos":      aerospike.NewIntegerValue(2),
-			"nrRecords":    aerospike.NewIntegerValue(1),
-			"isCoinbase":   aerospike.BoolValue(false),
+			"version":        aerospike.NewIntegerValue(int(tx.Version)),
+			"locktime":       aerospike.NewIntegerValue(int(tx.LockTime)),
+			"fee":            aerospike.NewIntegerValue(187),
+			"sizeInBytes":    aerospike.NewIntegerValue(tx.Size()),
+			"extendedSize":   aerospike.NewIntegerValue(len(tx.ExtendedBytes())),
+			"spentUtxos":     aerospike.NewIntegerValue(0),
+			"totalUtxos":     aerospike.NewIntegerValue(2),
+			"totalExtraRecs": aerospike.NewIntegerValue(0),
+			"isCoinbase":     aerospike.BoolValue(false),
 			"utxos": aerospike.NewListValue([]interface{}{
 				aerospike.BytesValue(utxos[0].CloneBytes()),
 				aerospike.BytesValue(utxos[1].CloneBytes()),
@@ -88,7 +89,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// check the bin values
 		for _, v := range bins[0] {
 			if _, ok := expectedBinValues[v.Name]; ok {
-				assert.Equal(t, expectedBinValues[v.Name], v.Value)
+				assert.Equal(t, expectedBinValues[v.Name], v.Value, "expected %v, got %v, for bin name: %s", expectedBinValues[v.Name], v.Value, v.Name)
 			} else {
 				t.Errorf("unexpected bin name: %s", v.Name)
 			}
@@ -117,10 +118,14 @@ func TestStore_GetBinsToStore(t *testing.T) {
 }
 
 func TestStore_StoreTransactionExternally(t *testing.T) {
-	ctx := context.Background()
-	client, db, _, deferFn := initAerospike(t)
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
 
-	defer deferFn()
+	client, db, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
 
 	t.Run("TestStore_StoreTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
@@ -200,10 +205,14 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 }
 
 func TestStore_StorePartialTransactionExternally(t *testing.T) {
-	ctx := context.Background()
-	client, db, _, deferFn := initAerospike(t)
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
 
-	defer deferFn()
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
 
 	t.Run("TestStore_StorePartialTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
@@ -222,7 +231,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		err := bItem.RecvDone()
 		require.NoError(t, err)
 
-		key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), bItem.GetTxHash().CloneBytes())
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), bItem.GetTxHash().CloneBytes())
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
@@ -257,7 +266,7 @@ func BenchmarkStore_Create(b *testing.B) {
 			item.SendDone(nil)
 		}
 	}
-	s.SetStoreBatcher(batcher.New[teranode_aerospike.BatchStoreItem](100, 1, sendStoreBatch, true))
+	s.SetStoreBatcher(batcher.New(100, 1, sendStoreBatch, true))
 
 	b.ResetTimer()
 

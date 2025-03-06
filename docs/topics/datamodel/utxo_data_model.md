@@ -8,7 +8,7 @@ For every transaction, a UTXO record is stored in the database. The record conta
 |--------------------------|--------------------------------------|--------------------------------------------------------------------------------------------------------------------|
 | **utxos**                | `Array of Byte[32] or Byte[64]`      | A list of UTXOs, where each UTXO is either 32 bytes (unspent) or 64 bytes (spent).                                 |
 | **utxoSpendableIn**      | `Map<Integer, Integer>`              | A map where the key is the UTXO offset and the value is the block height after which the UTXO is spendable.        |
-| **nrUtxos**              | `Integer`                            | Total number of UTXOs in this record.                                                                              |
+| **recordUtxos**          | `Integer`                            | Total number of UTXOs in this record.                                                                              |
 | **spentUtxos**           | `Integer`                            | Number of UTXOs that have been spent in this record.                                                               |
 | **frozen**               | `Boolean`                            | Indicates whether the UTXO or transaction is frozen.                                                               |
 | **conflicting**          | `Boolean`                            | Indicates whether this transaction is a double spend.                                                              |
@@ -16,7 +16,7 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **spendingHeight**       | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
 | **blockIDs**             | `Array<Integer>`                     | List of block IDs that reference this UTXO.                                                                        |
 | **external**             | `Boolean`                            | Flag indicating whether the transaction is stored externally (used for fetching external raw transaction data).    |
-| **nrRecords**            | `Integer (Optional)`                 | The number of UTXO records associated with the transaction, used for pagination.                                   |
+| **totalExtraRecs**       | `Integer (Optional)`                 | The number of UTXO records associated with the transaction, used for pagination.                                   |
 | **reassignments**        | `Array<Map>`                         | Tracks UTXO reassignments. Contains maps with keys such as `offset`, `utxoHash`, `newUtxoHash`, and `blockHeight`. |
 | **tx**                   | `bt.Tx Object`                       | Raw transaction data containing inputs, outputs, version, and locktime.                                            |
 | **fee**                  | `Integer`                            | Transaction fee associated with this UTXO.                                                                         |

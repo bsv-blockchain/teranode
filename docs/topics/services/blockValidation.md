@@ -5,13 +5,28 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
-- [2.2. Validating blocks](#22-validating-blocks)
-  - [2.2.1. Overview](#221-overview)
-  - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
-  - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
-  - [2.2.4. Block Data Validation](#224-block-data-validation)
-- [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
+- [🔍 Block Validation Service](#-block-validation-service)
+  - [Index](#index)
+  - [1. Description](#1-description)
+  - [2. Functionality](#2-functionality)
+    - [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
+    - [2.2. Validating blocks](#22-validating-blocks)
+      - [2.2.1. Overview](#221-overview)
+      - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
+      - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
+      - [2.2.4. Block Data Validation](#224-block-data-validation)
+    - [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
+  - [3. gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+  - [4. Data Model](#4-data-model)
+  - [5. Technology](#5-technology)
+  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+  - [7. How to run](#7-how-to-run)
+  - [8. Configuration options (settings flags)](#8-configuration-options-settings-flags)
+    - [Network and Communication Settings](#network-and-communication-settings)
+    - [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
+    - [Performance and Optimization](#performance-and-optimization)
+    - [Storage and State Management](#storage-and-state-management)
+  - [9. Other Resources](#9-other-resources)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -44,7 +59,7 @@ The Block Validation Service:
 * Validates the blocks, after fetching them from the remote asset server.
 * Updates stores, and notifies the blockchain service of the new block.
 
-The P2P Service communicates with the Block Validation over either gRPC (Recommended) or fRPC (Experimental) protocols.
+The P2P Service communicates with the Block Validation over either gRPC protocols.
 
 ![Block_Validation_Service_Component_Diagram.png](img/Block_Validation_Service_Component_Diagram.png)
 
@@ -189,22 +204,19 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 2. **gRPC (Google Remote Procedure Call)**:
   - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
-3. **fRPC (Custom or Specific RPC Framework)**:
-  - An alternative RPC (Remote Procedure Call) framework, used in experimental mode.
-
-4. **Blockchain Data Stores**:
+3. **Blockchain Data Stores**:
   - Integration with various stores such as UTXO (Unspent Transaction Output) store, blob store, and transaction metadata store.
 
-5. **Caching Mechanisms (ttlcache)**:
+4. **Caching Mechanisms (ttlcache)**:
   - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
-6. **Configuration Management (gocore)**:
+5. **Configuration Management (gocore)**:
   - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
-7. **Networking and Protocol Buffers**:
+6. **Networking and Protocol Buffers**:
   - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
-8. **Synchronization Primitives (sync)**:
+7. **Synchronization Primitives (sync)**:
   - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 
@@ -220,11 +232,9 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 ├── Server.go                      - Contains the server-side implementation for the block validation service, handling incoming requests and providing validation services.
 ├── Server_test.go                 - Unit tests for the `Server.go` functionalities,
 ├── blockvalidation_api
-│   ├── blockvalidation_api.frpc.go       - Specific implementation file for the fRPC framework for the block validation API.
 │   ├── blockvalidation_api.pb.go         - Auto-generated file from protobuf definitions, containing Go bindings for the API.
 │   ├── blockvalidation_api.proto         - Protocol Buffers definition file for the block validation API.
 │   └── blockvalidation_api_grpc.pb.go    - gRPC (Google's RPC framework) specific implementation file for the block validation API.
-├── frpc.go                        - Alternative RPC (Remote Procedure Call) framework implementation for the block validation service.
 ├── metrics.go                     - Metrics collection and monitoring of the block validation service's performance.
 ├── ttl_queue.go                   - Implements a time-to-live (TTL) queue, for managing caching within the service.
 ├── txmetacache.go                 - Transaction metadata cache, used to improve performance and efficiency in transaction data access.

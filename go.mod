@@ -43,7 +43,6 @@ require (
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt v1.0.8
 	github.com/libsv/go-bt/v2 v2.2.5
-	github.com/loopholelabs/polyglot v1.1.4
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v0.7.3
 	github.com/mrz1836/go-logger v0.3.5

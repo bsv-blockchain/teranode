@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -76,7 +77,7 @@ func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 	return newReadCloserFromBytes(b), nil
 }
 
-func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
+func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	for _, missing := range hashes {
 		missing.Data = &meta.Data{
 			Tx: m.txs[missing.Idx],
@@ -98,7 +99,7 @@ func (m *MockStore) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
+func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	return nil, nil
 }
 

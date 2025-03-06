@@ -8,7 +8,7 @@ locktime
 fee
 sizeInBytes
 utxos - this is the list of utxos in the tx
-nrUtxos - this is total number of utxos in the tx
+totalUtxos - this is total number of utxos in the tx
 spentUtxos - this is number of utxos that are spent in the tx
 blockIDs
 isCoinbase
@@ -22,7 +22,7 @@ big = true
 fee
 sizeInBytes
 utxos - this is the list of utxos in the tx
-nrUtxos - this is total number of utxos in the tx
+totalUtxos - this is total number of utxos in the tx
 spentUtxos - this is number of utxos that are spent in the tx
 blockIDs
 isCoinbase
@@ -39,7 +39,7 @@ big = true
 fee
 sizeInBytes
 utxos - utxo[0..19999]
-nrUtxos - this is number of utxos in this record
+totalUtxos - this is number of utxos in this record
 spentUtxos - this is number of utxos that are spent in the tx
 blockIDs
 isCoinbase
@@ -50,7 +50,7 @@ frozen
 Record 2 - Key of TXID_1
 
 utxos - utxo[20000..39999]
-nrUtxos - this is number of utxos in this record
+totalUtxos - this is number of utxos in this record
 spentUtxos - this is number of utxos that are spent in the tx
 isCoinbase
 spendingHeight

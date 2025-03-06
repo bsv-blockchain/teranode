@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/types"
@@ -190,7 +191,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
+func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
@@ -223,7 +224,7 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}

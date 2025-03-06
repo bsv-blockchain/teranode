@@ -6,6 +6,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -46,7 +47,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := s.get(gCtx, &txHash, []utxo.FieldName{utxo.FieldTx, utxo.FieldConflictingChildren, utxo.FieldUtxos})
+			txMeta, err := s.get(gCtx, &txHash, []fields.FieldName{fields.Tx, fields.ConflictingChildren, fields.Utxos})
 			if err != nil {
 				return err
 			}
@@ -150,7 +151,7 @@ func (s *Store) SetUnspendable(_ context.Context, txHashes []chainhash.Hash, set
 			return errors.NewProcessingError("could not create aerospike key", err)
 		}
 
-		op := aerospike.PutOp(aerospike.NewBin(utxo.FieldUnspendable.String(), setValue))
+		op := aerospike.PutOp(aerospike.NewBin(fields.Unspendable.String(), setValue))
 
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
 	}
@@ -182,7 +183,7 @@ func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
 		}
 
 		// update the conflictingChildren bin with the tx ID of this parent making sure it is unique in the list
-		op := aerospike.ListAppendWithPolicyOp(listPolicy, utxo.FieldConflictingChildren.String(), tx.TxIDChainHash().CloneBytes())
+		op := aerospike.ListAppendWithPolicyOp(listPolicy, fields.ConflictingChildren.String(), tx.TxIDChainHash().CloneBytes())
 
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
 	}

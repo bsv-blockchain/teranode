@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -61,7 +62,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := s.Get(gCtx, &txHash, []FieldName{FieldTx, FieldBlockIDs, FieldConflicting})
+			txMeta, err := s.Get(gCtx, &txHash, fields.Tx, fields.BlockIDs, fields.Conflicting)
 			if err != nil {
 				return errors.NewProcessingError("[ProcessConflicting][%s] error getting tx", txHash.String(), err)
 			}
@@ -185,7 +186,7 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 
 	defer deferFn()
 
-	txMeta, err := s.Get(ctx, &hash, []FieldName{FieldUtxos, FieldConflictingChildren})
+	txMeta, err := s.Get(ctx, &hash, fields.Utxos, fields.ConflictingChildren)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +242,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 
 	defer deferFn()
 
-	txMeta, err := s.Get(ctx, &txHash, []FieldName{FieldTx})
+	txMeta, err := s.Get(ctx, &txHash, fields.Tx)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +261,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	for parentTx := range parentTxs {
 		parentTxHash := &parentTx
 
-		parentTxMeta, err := s.Get(ctx, parentTxHash, []FieldName{FieldUtxos})
+		parentTxMeta, err := s.Get(ctx, parentTxHash, fields.Utxos)
 		if err != nil {
 			return nil, err
 		}

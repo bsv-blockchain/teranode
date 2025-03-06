@@ -45,6 +45,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blob_options "github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -1215,7 +1216,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	// Attempt to fetch the requested transaction from the pool.  A
 	// call could be made to check for existence first, but simply trying
 	// to fetch a missing transaction results in the same behavior.
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, []utxostore.FieldName{utxostore.FieldTx})
+	txMeta, err := s.utxoStore.Get(s.ctx, hash, fields.Tx)
 	if err != nil {
 		sp.server.logger.Warnf("[pushTxMsg] Unable to fetch tx %v from transaction pool: %v", hash, err)
 
@@ -1260,7 +1261,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 }
 
 func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error) {
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, []utxostore.FieldName{utxostore.FieldTx})
+	txMeta, err := s.utxoStore.Get(s.ctx, hash, fields.Tx)
 	if err != nil {
 		return nil, 0, err
 	}

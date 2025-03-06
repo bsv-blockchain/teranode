@@ -11,7 +11,9 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -21,27 +23,33 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_SpendMultiRecord(t *testing.T) {
-	client, db, ctx, deferFn := initAerospike(t)
-	defer deferFn()
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
 
 	t.Run("Spent tx id", func(t *testing.T) {
 		// clean up the externalStore, if needed
-		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// create a tx
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		// spend the tx
-		_, err = db.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		// spend again, should not return an error
-		_, err = db.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		// try to spend the tx with a different tx, check the spending tx ID
-		spends, err := db.Spend(ctx, spendTx2)
+		spends, err := store.Spend(ctx, spendTx2)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -52,22 +60,33 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
-		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), tx.TxIDChainHash().CloneBytes())
+		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
 		require.NoError(t, aErr)
 
 		cleanDB(t, client, key, tx)
 
-		db.SetUtxoBatchSize(1)
+		store.SetUtxoBatchSize(1)
 
 		// clean up the externalStore, if needed
-		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// create a tx
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
+		resp, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		// Check the totalExtraRecs and spentExtraRecs
+		totalExtraRecs, ok := resp.Bins["totalExtraRecs"].(int)
+		require.True(t, ok)
+		assert.Equal(t, 4, totalExtraRecs) // parent is one, and there are 4 extra records
+
+		_, ok = resp.Bins["spentExtraRecs"].(int)
+		assert.False(t, ok)
+
 		// mine the tx
-		err = db.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
+		err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
 		require.NoError(t, err)
 
 		utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
@@ -77,19 +96,19 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 			require.NoError(t, err)
 
 			//nolint:gosec
-			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(vOut/db.GetUtxoBatchSize()))
-			key, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
+			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(vOut/store.GetUtxoBatchSize()))
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 			require.NoError(t, err)
 
 			// check we created 5 records in aerospike properly
 			resp, err := client.Get(nil, key)
 			require.NoError(t, err)
 
-			assert.Equal(t, 1, resp.Bins["nrUtxos"])
+			assert.Equal(t, 1, resp.Bins["totalUtxos"])
 
 			if vOut == 0 {
 				assert.Equal(t, true, resp.Bins["external"])
-				assert.Equal(t, 5, resp.Bins["nrRecords"])
+				assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
 			} else {
 				_, ok := resp.Bins["external"]
 				require.False(t, ok)
@@ -97,150 +116,206 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		}
 
 		// check we created the tx in the external store
-		exists, err := db.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		exists, err := store.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// check that the TTL is not set on the external store
-		ttl, err := db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		ttl, err := store.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		require.Equal(t, time.Duration(0), ttl)
 
 		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(0))
-		mainRecordKey, err := aerospike.NewKey(db.GetNamespace(), db.GetName(), keySource)
+		mainRecordKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 		require.NoError(t, err)
 
 		// spend 1,2,3,4
-		_, err = db.Spend(ctx, spendTxRemaining)
+		_, err = store.Spend(ctx, spendTxRemaining)
 		require.NoError(t, err)
 
 		// give the db time to update the main record
 		time.Sleep(100 * time.Millisecond)
 
-		// get nrRecords from main record
-		resp, err := client.Get(nil, mainRecordKey)
+		// get totalExtraRecs from main record
+		resp, err = client.Get(nil, mainRecordKey)
 		require.NoError(t, err)
 
 		// assert that the record is not yet marked for TTL
-		assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has been set
-		assert.Equal(t, 1, resp.Bins["nrRecords"])
+		assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has not been set
+		assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
+		assert.Equal(t, 4, resp.Bins["spentExtraRecs"])
 
 		// spend 0
-		_, err = db.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
 		// main record check
 		assert.Greater(t, resp.Expiration, uint32(0)) // expiration has been set
-		assert.Equal(t, 1, resp.Bins["nrRecords"])
+		assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
+		assert.Equal(t, 4, resp.Bins["spentExtraRecs"])
 
 		// check the external file ttl has been set
-		ttl, err = db.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		ttl, err = store.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		assert.Greater(t, ttl, time.Duration(0))
 	})
 }
 
-func TestStore_IncrementNrRecords(t *testing.T) {
-	client, db, ctx, deferFn := initAerospike(t)
-	defer deferFn()
+func TestStore_IncrementSpentRecords(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, nil)
 
-	t.Run("Increment nrRecords", func(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.UtxoStore.UtxoBatchSize = 2
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	t.Run("Increment spentExtraRecs", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
+		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
 		cleanDB(t, client, key, tx)
 
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		// Increment nrRecords by 1
-		res, err := db.IncrementNrRecords(txID, 1)
+		// Increment spentExtraRecs by 1
+		res, err := store.IncrementSpentRecords(txID, 1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
+
+		r, ok := res.(string)
+		require.True(t, ok)
+
+		ret, err := store.ParseLuaReturnValue(r)
+		require.NoError(t, err)
+		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
+		assert.Nil(t, ret.SpendingTxID)
 
 		// Verify the increment
 		resp, err := client.Get(nil, key)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Equal(t, 2, resp.Bins["nrRecords"])
+		assert.Equal(t, 2, resp.Bins["totalExtraRecs"])
+		assert.Equal(t, 1, resp.Bins["spentExtraRecs"])
 
-		// Decrement nrRecords by 1
-		res, err = db.IncrementNrRecords(txID, -1)
+		// Decrement spentExtraRecs by 1
+		res, err = store.IncrementSpentRecords(txID, -1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
+
+		r, ok = res.(string)
+		require.True(t, ok)
+
+		ret, err = store.ParseLuaReturnValue(r)
+		require.NoError(t, err)
+		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
+		assert.Nil(t, ret.SpendingTxID)
 
 		// Verify the decrement
 		resp, err = client.Get(nil, key)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Equal(t, 1, resp.Bins["nrRecords"])
-
-		r, ok := res.(string)
-		require.True(t, ok)
-
-		ret, err := db.ParseLuaReturnValue(r)
-		require.NoError(t, err)
-		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
-		assert.Nil(t, ret.SpendingTxID)
+		assert.Equal(t, 2, resp.Bins["totalExtraRecs"])
+		assert.Equal(t, 0, resp.Bins["spentExtraRecs"])
 	})
 
-	t.Run("Increment nrRecords - set TTL", func(t *testing.T) {
+	t.Run("Increment spentExtraRecs - set TTL", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
+		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
 		cleanDB(t, client, key, tx)
 
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		// force the values we expect to be set
 		err = client.Put(nil, key, aerospike.BinMap{
-			"spentUtxos": 5,
-			"blockIDs":   []int{101},
-			"nrRecords":  2,
+			"spentUtxos":     2,
+			"blockIDs":       []int{101},
+			"totalExtraRecs": 2,
 		})
 		require.NoError(t, err)
 
 		rec, aErr := client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
+		assert.Equal(t, 2, rec.Bins["totalUtxos"])
+		assert.Equal(t, 2, rec.Bins["spentUtxos"])
+		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
 
-		// Decrement nrRecords by 1
-		res, err := db.IncrementNrRecords(txID, -1)
+		// Increment spentExtraRecs by 1
+		res, err := store.IncrementSpentRecords(txID, 1)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
 		r, ok := res.(string)
 		require.True(t, ok)
 
-		ret, err := db.ParseLuaReturnValue(r)
+		ret, err := store.ParseLuaReturnValue(r)
+		require.NoError(t, err)
+		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
+
+		rec, aErr = client.Get(nil, key)
+		require.NoError(t, aErr)
+		require.NotNil(t, rec)
+		assert.Equal(t, 2, rec.Bins["totalUtxos"])
+		assert.Equal(t, 2, rec.Bins["spentUtxos"])
+		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
+		assert.Equal(t, 1, rec.Bins["spentExtraRecs"])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
+
+		res, err = store.IncrementSpentRecords(txID, 1)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		rec, aErr = client.Get(nil, key)
+		require.NoError(t, aErr)
+		require.NotNil(t, rec)
+		assert.Equal(t, 2, rec.Bins["totalUtxos"])
+		assert.Equal(t, 2, rec.Bins["spentUtxos"])
+		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
+		assert.Equal(t, 2, rec.Bins["spentExtraRecs"])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
+
+		r, ok = res.(string)
+		require.True(t, ok)
+
+		ret, err = store.ParseLuaReturnValue(r)
 		require.NoError(t, err)
 		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
 		assert.Equal(t, teranode_aerospike.LuaReturnValue("TTLSET"), ret.Signal)
 	})
 
-	t.Run("Increment nrRecords - multi", func(t *testing.T) {
+	t.Run("Increment totalExtraRecs - multi", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
+		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
 		cleanDB(t, client, key, tx)
 
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		for i := 0; i < 5; i++ {
-			// Decrement nrRecords by 1
-			res, err := db.IncrementNrRecords(txID, 1)
+		// We have a master record and 2 extra records
+		for i := 0; i < 2; i++ {
+			// Increment spentExtraRecs by 1
+			res, err := store.IncrementSpentRecords(txID, 1)
 			require.NoError(t, err)
 			require.NotNil(t, res)
 		}
@@ -248,33 +323,40 @@ func TestStore_IncrementNrRecords(t *testing.T) {
 		rec, aErr := client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
-		assert.Equal(t, 6, rec.Bins["nrRecords"])
+		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
+		assert.Equal(t, 2, rec.Bins["spentExtraRecs"])
 	})
 }
 
 func TestStore_Unspend(t *testing.T) {
-	client, db, ctx, deferFn := initAerospike(t)
-	defer deferFn()
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
 
 	t.Run("Successfully unspend a spent tx", func(t *testing.T) {
 		// Clean up any existing data
-		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// Create a tx
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		// Spend the tx
-		spends, err := db.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 
 		// Unspend the tx
-		err = db.Unspend(ctx, spends)
+		err = store.Unspend(ctx, spends)
 		require.NoError(t, err)
 
 		// Verify we can now spend it again with a different tx
-		spends, err = db.Spend(ctx, spendTx2)
+		spends, err = store.Spend(ctx, spendTx2)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
@@ -282,17 +364,17 @@ func TestStore_Unspend(t *testing.T) {
 	t.Run("Unspend a non-spent tx", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
-		key, aErr := aerospike.NewKey(db.GetNamespace(), db.GetName(), txID.CloneBytes())
+		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
 		cleanDB(t, client, key, tx)
 
 		// Clean up any existing data
-		_ = db.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 
 		// Create a tx
-		_, err := db.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		utxoHash, err := util.UTXOHashFromOutput(
@@ -303,7 +385,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to unspend a tx that hasn't been spent
-		err = db.Unspend(ctx, []*utxo.Spend{
+		err = store.Unspend(ctx, []*utxo.Spend{
 			{
 				TxID:     tx.TxIDChainHash(),
 				Vout:     0,
@@ -313,7 +395,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can still spend it
-		spends, err := db.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})

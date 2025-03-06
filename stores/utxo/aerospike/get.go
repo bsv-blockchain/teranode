@@ -36,7 +36,7 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
+//   - totalUtxos: Total number of UTXOs
 //   - spentUtxos: Number of spent UTXOs
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
@@ -67,6 +67,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
@@ -92,7 +93,7 @@ type batchGetItemData struct {
 // batchGetItem represents a single item in a batch get operation
 type batchGetItem struct {
 	hash   chainhash.Hash        // Transaction hash
-	fields []utxo.FieldName      // Fields to retrieve
+	fields []fields.FieldName    // Fields to retrieve
 	done   chan batchGetItemData // Channel for result
 }
 
@@ -133,7 +134,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	policy := util.GetAerospikeReadPolicy(s.settings)
 	policy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
-	value, aErr := s.client.Get(policy, key, utxo.FieldNamesToStrings(binNames)...)
+	value, aErr := s.client.Get(policy, key, fields.FieldNamesToStrings(binNames)...)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Get", aErr.Error()).Inc()
 
@@ -156,7 +157,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	)
 
 	if value != nil {
-		utxos, ok := value.Bins[utxo.FieldUtxos.String()].([]interface{})
+		utxos, ok := value.Bins[fields.Utxos.String()].([]interface{})
 		if ok {
 			b, ok := utxos[spend.Vout].([]byte)
 			if ok {
@@ -179,7 +180,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			}
 		}
 
-		utxoSpendableInBin, found := value.Bins[utxo.FieldUtxoSpendableIn.String()]
+		utxoSpendableInBin, found := value.Bins[fields.UtxoSpendableIn.String()]
 		if found {
 			utxoSpendableIn, ok := utxoSpendableInBin.(map[interface{}]interface{})
 			if !ok {
@@ -195,15 +196,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			}
 		}
 
-		frozenBin, found := value.Bins[utxo.FieldFrozen.String()]
-		if found {
-			frozen, ok = frozenBin.(bool)
-			if !ok {
-				return nil, errors.NewProcessingError("invalid frozen", nil)
-			}
-		}
-
-		conflictingBin, found := value.Bins[utxo.FieldConflicting.String()]
+		conflictingBin, found := value.Bins[fields.Conflicting.String()]
 		if found {
 			conflicting, ok = conflictingBin.(bool)
 			if !ok {
@@ -259,18 +252,16 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, 
 // Returns:
 //   - Transaction metadata
 //   - Any error encountered
-func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
+func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
-		bins = fields[0]
+		bins = fields
 	}
 
 	return s.get(ctx, hash, bins)
 }
 
-func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []utxo.FieldName) (*meta.Data, error) {
-	bins = s.addAbstractedBins(bins)
-
+func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
 	done := make(chan batchGetItemData)
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
@@ -294,12 +285,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []utxo.FieldNa
 }
 
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
-	versionUint32, err := util.SafeIntToUint32(bins[utxo.FieldVersion.String()].(int))
+	versionUint32, err := util.SafeIntToUint32(bins[fields.Version.String()].(int))
 	if err != nil {
 		return nil, err
 	}
 
-	locktimeUint32, err := util.SafeIntToUint32(bins[utxo.FieldLockTime.String()].(int))
+	locktimeUint32, err := util.SafeIntToUint32(bins[fields.LockTime.String()].(int))
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +300,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 		LockTime: locktimeUint32,
 	}
 
-	inputInterfaces, ok := bins[utxo.FieldInputs.String()].([]interface{})
+	inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
 	if ok {
 		tx.Inputs = make([]*bt.Input, len(inputInterfaces))
 
@@ -324,7 +315,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 		}
 	}
 
-	outputInterfaces, ok := bins[utxo.FieldOutputs.String()].([]interface{})
+	outputInterfaces, ok := bins[fields.Outputs.String()].([]interface{})
 	if ok {
 		tx.Outputs = make([]*bt.Output, len(outputInterfaces))
 
@@ -345,44 +336,54 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
-func (s *Store) addAbstractedBins(bins []utxo.FieldName) []utxo.FieldName {
+func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 	// add missing bins
-	if slices.Contains(bins, utxo.FieldParentTxHashes) {
-		if !slices.Contains(bins, utxo.FieldInputs) {
-			bins = append(bins, utxo.FieldInputs)
-			bins = append(bins, utxo.FieldExternal)
+	if slices.Contains(bins, fields.ParentTxHashes) {
+		if !slices.Contains(bins, fields.Inputs) {
+			bins = append(bins, fields.Inputs)
+			bins = append(bins, fields.External)
 		}
 	}
 
-	if slices.Contains(bins, utxo.FieldTx) {
-		if !slices.Contains(bins, utxo.FieldInputs) {
-			bins = append(bins, utxo.FieldInputs)
+	if slices.Contains(bins, fields.Tx) {
+		if !slices.Contains(bins, fields.Inputs) {
+			bins = append(bins, fields.Inputs)
 		}
 
-		if !slices.Contains(bins, utxo.FieldOutputs) {
-			bins = append(bins, utxo.FieldOutputs)
+		if !slices.Contains(bins, fields.Outputs) {
+			bins = append(bins, fields.Outputs)
 		}
 
-		if !slices.Contains(bins, utxo.FieldVersion) {
-			bins = append(bins, utxo.FieldVersion)
+		if !slices.Contains(bins, fields.Version) {
+			bins = append(bins, fields.Version)
 		}
 
-		if !slices.Contains(bins, utxo.FieldLockTime) {
-			bins = append(bins, utxo.FieldLockTime)
+		if !slices.Contains(bins, fields.LockTime) {
+			bins = append(bins, fields.LockTime)
 		}
 
-		if !slices.Contains(bins, utxo.FieldExternal) {
-			bins = append(bins, utxo.FieldExternal)
+		if !slices.Contains(bins, fields.External) {
+			bins = append(bins, fields.External)
 		}
 	}
 
-	if slices.Contains(bins, utxo.FieldBlockIDs) {
-		if !slices.Contains(bins, utxo.FieldBlockHeights) {
-			bins = append(bins, utxo.FieldBlockHeights)
+	if slices.Contains(bins, fields.BlockIDs) {
+		if !slices.Contains(bins, fields.BlockHeights) {
+			bins = append(bins, fields.BlockHeights)
 		}
 
-		if !slices.Contains(bins, utxo.FieldSubtreeIdxs) {
-			bins = append(bins, utxo.FieldSubtreeIdxs)
+		if !slices.Contains(bins, fields.SubtreeIdxs) {
+			bins = append(bins, fields.SubtreeIdxs)
+		}
+	}
+
+	if slices.Contains(bins, fields.Utxos) {
+		if !slices.Contains(bins, fields.TotalExtraRecs) {
+			bins = append(bins, fields.TotalExtraRecs)
+		}
+
+		if !slices.Contains(bins, fields.TotalUtxos) {
+			bins = append(bins, fields.TotalUtxos)
 		}
 	}
 
@@ -400,7 +401,7 @@ func (s *Store) addAbstractedBins(bins []utxo.FieldName) []utxo.FieldName {
 //   - ctx: Context for cancellation
 //   - items: Transactions to fetch
 //   - fields: Optional fields to retrieve
-func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
+func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, optionalFields ...fields.FieldName) error {
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
@@ -416,16 +417,16 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
-		bins := []utxo.FieldName{utxo.FieldTx, utxo.FieldFee, utxo.FieldSizeInBytes, utxo.FieldParentTxHashes, utxo.FieldBlockIDs, utxo.FieldIsCoinbase}
+		bins := []fields.FieldName{fields.Tx, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase}
 		if len(item.Fields) > 0 {
 			bins = item.Fields
-		} else if len(fields) > 0 {
-			bins = fields
+		} else if len(optionalFields) > 0 {
+			bins = optionalFields
 		}
 
 		item.Fields = s.addAbstractedBins(bins)
 
-		record := aerospike.NewBatchRead(policy, key, utxo.FieldNamesToStrings(item.Fields))
+		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(item.Fields))
 		// Add to batch
 		batchRecords[idx] = record
 	}
@@ -453,7 +454,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 			var externalTx *bt.Tx
 
-			external, ok := bins[utxo.FieldExternal.String()].(bool)
+			external, ok := bins[fields.External.String()].(bool)
 			if ok && external {
 				if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
 					items[idx].Err = err
@@ -466,7 +467,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 				value := bins[key.String()]
 
 				switch key {
-				case utxo.FieldTx:
+				case fields.Tx:
 					if external {
 						items[idx].Data.Tx = externalTx
 					} else {
@@ -478,26 +479,26 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.Tx = tx
 					}
 
-				case utxo.FieldFee:
+				case fields.Fee:
 					fee, ok := value.(int)
 					if ok {
-						items[idx].Data.Fee = uint64(fee)
+						items[idx].Data.Fee = uint64(fee) //nolint: gosec
 					}
 
-				case utxo.FieldSizeInBytes:
+				case fields.SizeInBytes:
 					sizeInBytes, ok := value.(int)
 					if ok {
-						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes) //nolint: gosec
 					}
 
-				case utxo.FieldParentTxHashes:
+				case fields.ParentTxHashes:
 					if external {
 						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
 						for i, input := range externalTx.Inputs {
 							items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
 						}
 					} else {
-						inputInterfaces, ok := bins[utxo.FieldInputs.String()].([]interface{})
+						inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
 						if ok {
 							items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
 
@@ -508,7 +509,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						}
 					}
 
-				case utxo.FieldBlockIDs:
+				case fields.BlockIDs:
 					temp := value.([]interface{})
 
 					var blockIDs []uint32
@@ -524,7 +525,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 					items[idx].Data.BlockIDs = blockIDs
 
-				case utxo.FieldBlockHeights:
+				case fields.BlockHeights:
 					if value != nil {
 						temp := value.([]interface{})
 
@@ -540,7 +541,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.BlockHeights = []uint32{}
 					}
 
-				case utxo.FieldSubtreeIdxs:
+				case fields.SubtreeIdxs:
 					if value != nil {
 						temp := value.([]interface{})
 
@@ -556,42 +557,49 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 						items[idx].Data.SubtreeIdxs = []int{}
 					}
 
-				case utxo.FieldIsCoinbase:
+				case fields.IsCoinbase:
 					coinbaseBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.IsCoinbase = coinbaseBool
 					}
 
-				case utxo.FieldFrozen:
-					frozenBool, ok := value.(bool)
-					if ok {
-						items[idx].Data.Frozen = frozenBool
+				case fields.Utxos:
+					totalUtxos, ok := bins[fields.TotalUtxos.String()].(int)
+					if !ok {
+						return errors.NewStorageError("failed to get totalUtxos", nil)
 					}
 
-				case utxo.FieldUtxos:
 					utxos, ok := value.([]interface{})
 					if ok {
-						items[idx].Data.SpendingTxIDs = make([]*chainhash.Hash, len(utxos))
+						items[idx].Data.SpendingTxIDs = make([]*chainhash.Hash, totalUtxos)
 
 						for i, ui := range utxos {
 							u, ok := ui.([]uint8)
-							if ok {
-								if len(u) == 64 {
-									items[idx].Data.SpendingTxIDs[i], _ = chainhash.NewHash(u[32:])
-								} else {
-									items[idx].Data.SpendingTxIDs[i] = nil
-								}
+							if ok && len(u) == 64 {
+								items[idx].Data.SpendingTxIDs[i], _ = chainhash.NewHash(u[32:])
+							} else {
+								items[idx].Data.SpendingTxIDs[i] = nil
+							}
+						}
+
+						// Add any extra UTXOs from child records...
+						totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
+						if ok {
+							txID := items[idx].Hash
+
+							if err := s.getAllExtraUTXOs(ctx, &txID, totalExtraRecs, items[idx].Data.SpendingTxIDs); err != nil {
+								return err
 							}
 						}
 					}
 
-				case utxo.FieldConflicting:
+				case fields.Conflicting:
 					conflictingBool, ok := value.(bool)
 					if ok {
 						items[idx].Data.Conflicting = conflictingBool
 					}
 
-				case utxo.FieldConflictingChildren:
+				case fields.ConflictingChildren:
 					conflictingChildren, ok := value.([]interface{})
 					if ok {
 						items[idx].Data.ConflictingChildren = make([]chainhash.Hash, len(conflictingChildren))
@@ -607,6 +615,56 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+
+	return nil
+}
+
+// getAllExtraUTXOs retrieves all UTXOs from child records recursively
+func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, totalExtraRecs int, spendingTxIDs []*chainhash.Hash) error {
+	if totalExtraRecs <= 0 {
+		return nil
+	}
+
+	// Fetch each extra record
+	for recordNum := 1; recordNum <= totalExtraRecs; recordNum++ {
+		// Check context before each iteration
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default: // Empty default to prevent blocking
+		}
+
+		keySource := uaerospike.CalculateKeySource(txID, uint32(recordNum)) //nolint: gosec
+
+		extraKey, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			return errors.NewProcessingError("failed to create key for extra record", err)
+		}
+
+		policy := util.GetAerospikeReadPolicy(s.settings)
+
+		extraRecord, err := s.client.Get(policy, extraKey, fields.Utxos.String())
+		if err != nil {
+			return errors.NewStorageError("failed to get extra record", err)
+		}
+
+		// Calculate the base offset for this pagination record
+		baseOffset := recordNum * s.utxoBatchSize
+
+		// Extract UTXOs from the extra record
+		if extraUtxos, ok := extraRecord.Bins[fields.Utxos.String()].([]interface{}); ok {
+			for i, ui := range extraUtxos {
+				if u, ok := ui.([]uint8); ok && len(u) == 64 {
+					hash, err := chainhash.NewHash(u[32:])
+					if err != nil {
+						return errors.NewStorageError("failed to parse hash from extra record", err)
+					}
+
+					spendingTxIDs[baseOffset+i] = hash
+				}
+			}
+		}
+	}
 
 	return nil
 }
@@ -675,8 +733,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		bins := []utxo.FieldName{utxo.FieldVersion, utxo.FieldLockTime, utxo.FieldInputs, utxo.FieldOutputs, utxo.FieldExternal}
-		record := aerospike.NewBatchRead(policy, key, utxo.FieldNamesToStrings(bins))
+		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External}
+		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
 		batchRecords = append(batchRecords, record)
@@ -715,7 +773,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		var previousTx *bt.Tx
 
-		external, ok := bins[utxo.FieldExternal.String()].(bool)
+		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
 			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err

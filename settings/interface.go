@@ -255,6 +255,8 @@ type UtxoStoreSettings struct {
 	UtxoBatchSize                  int
 	IncrementBatcherSize           int
 	IncrementBatcherDurationMillis int
+	SetTTLBatcherSize              int
+	SetTTLBatcherDurationMillis    int
 	GetBatcherSize                 int
 	GetBatcherDurationMillis       int
 	DBTimeout                      time.Duration

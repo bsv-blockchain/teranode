@@ -96,7 +96,7 @@ The Propagation Service is responsible for receiving and forwarding transactions
 
 **Technology Stack:**
 - Go programming language
-- UDP, HTTP, QUIC, and fRPC for network communication
+- UDP and HTTP for network communication
 - gRPC and Protocol Buffers for service communication
 
 
@@ -133,7 +133,7 @@ The TX Validator Service checks transactions against network rules and updates t
 
 **Technology Stack:**
 - Go programming language
-- gRPC and fRPC for service communication
+- gRPC for service communication
 - Kafka for message queuing (optional)
 - BSV libraries for transaction validation
 

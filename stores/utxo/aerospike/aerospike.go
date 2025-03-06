@@ -36,7 +36,7 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
+//   - totalUtxos: Total number of UTXOs
 //   - spentUtxos: Number of spent UTXOs
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
@@ -71,7 +71,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
@@ -83,17 +83,16 @@ import (
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
 var (
-	binNames = []utxo.FieldName{
-		utxo.FieldUnspendable,
-		utxo.FieldFee,
-		utxo.FieldSizeInBytes,
-		utxo.FieldLockTime,
-		utxo.FieldUtxos,
-		utxo.FieldParentTxHashes,
-		utxo.FieldBlockIDs,
-		utxo.FieldUtxoSpendableIn,
-		utxo.FieldFrozen,
-		utxo.FieldConflicting,
+	binNames = []fields.FieldName{
+		fields.Unspendable,
+		fields.Fee,
+		fields.SizeInBytes,
+		fields.LockTime,
+		fields.Utxos,
+		fields.ParentTxHashes,
+		fields.BlockIDs,
+		fields.UtxoSpendableIn,
+		fields.Conflicting,
 	}
 )
 
@@ -121,6 +120,7 @@ type Store struct {
 	spendBatcher     batcherIfc[batchSpend]
 	outpointBatcher  batcherIfc[batchOutpoint]
 	incrementBatcher batcherIfc[batchIncrement]
+	setTTLBatcher    batcherIfc[batchTTL]
 	externalStore    blob.Store
 	utxoBatchSize    int
 	externalTxCache  *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
@@ -220,7 +220,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
 
 	if storeBatchSize > 1 {
-		s.storeBatcher = batcher.New[BatchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+		s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
 	} else {
 		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
 	}
@@ -228,7 +228,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	getBatchSize := s.settings.UtxoStore.GetBatcherSize
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
-	s.getBatcher = batcher.New[batchGetItem](getBatchSize, getBatchDuration, s.sendGetBatch, true)
+	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, true)
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
@@ -239,17 +239,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
-	s.spendBatcher = batcher.New[batchSpend](spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
+	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
 
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
-	s.outpointBatcher = batcher.New[batchOutpoint](outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, true)
+	s.outpointBatcher = batcher.New(outpointBatchSize, outpointBatchDuration, s.sendOutpointBatch, true)
 
 	incrementBatchSize := tSettings.UtxoStore.IncrementBatcherSize
 	incrementBatchDurationStr := tSettings.UtxoStore.IncrementBatcherDurationMillis
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
-	s.incrementBatcher = batcher.New[batchIncrement](incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, true)
+	s.incrementBatcher = batcher.New(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, true)
+
+	setTTLBatchSize := tSettings.UtxoStore.SetTTLBatcherSize
+	setTTLBatchDurationStr := tSettings.UtxoStore.SetTTLBatcherDurationMillis
+	setTTLBatchDuration := time.Duration(setTTLBatchDurationStr) * time.Millisecond
+	s.setTTLBatcher = batcher.New(setTTLBatchSize, setTTLBatchDuration, s.sendSetTTLBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

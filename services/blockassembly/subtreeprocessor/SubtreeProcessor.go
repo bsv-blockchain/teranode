@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -1798,7 +1799,7 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 		txHash := txHash
 
 		g.Go(func() error {
-			txMeta, err := stp.utxoStore.Get(gCtx, &txHash, []utxostore.FieldName{utxostore.FieldBlockIDs})
+			txMeta, err := stp.utxoStore.Get(gCtx, &txHash, fields.BlockIDs)
 			if err != nil {
 				return errors.NewServiceError("error getting utxos for tx %s", txHash.String())
 			}

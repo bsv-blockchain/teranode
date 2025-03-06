@@ -45,7 +45,7 @@ The Subtree Validation Service:
 * Validates the subtrees, after fetching them from the remote asset server.
 * Decorates the subtrees with additional metadata, and stores them in the Subtree Store.
 
-The P2P Service communicates with the Block Validation over either gRPC (Recommended) or fRPC (Experimental) protocols.
+The P2P Service communicates with the Block Validation over either gRPC protocols.
 
 ![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
 

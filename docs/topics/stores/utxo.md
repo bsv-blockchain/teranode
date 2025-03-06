@@ -12,14 +12,33 @@
    - [3.2. How are UTXOs stored?](#32-how-are-utxos-stored)
    - [3.3. UTXO Meta Data](#33-utxo-meta-data)
 4. [Use Cases](#4-use-cases)
-- [4.1. Asset Server:](#41-asset-server)
-- [4.2. Block Persister](#42-block-persister)
-- [4.3. Block Assembly](#43-block-assembly)
-- [4.4. Block Validation](#44-block-validation)
-- [4.5. Subtree Validation](#45-subtree-validation)
-- [4.6. Transaction Validator](#46-transaction-validator)
-- [4.7. UTXO Batch Processing and External Storage mode](#47-utxo-batch-processing-and-external-storage-mode)
-- [4.8. Alert System and UTXO Management](#48-alert-system-and-utxo-management)
+- [🗃️ UTXO Store](#️-utxo-store)
+  - [Index](#index)
+  - [Index](#index-1)
+  - [1. Description](#1-description)
+  - [2. Architecture](#2-architecture)
+  - [3. UTXO - Data Model](#3-utxo---data-model)
+  - [2.1. What is an UTXO?](#21-what-is-an-utxo)
+    - [3.2. How are UTXOs stored?](#32-how-are-utxos-stored)
+    - [3.3. UTXO Meta Data](#33-utxo-meta-data)
+  - [4. Use Cases](#4-use-cases)
+    - [4.1. Asset Server:](#41-asset-server)
+    - [4.2. Block Persister](#42-block-persister)
+    - [4.3. Block Assembly](#43-block-assembly)
+    - [4.4. Block Validation](#44-block-validation)
+    - [4.5. Subtree Validation](#45-subtree-validation)
+    - [4.6. Transaction Validator](#46-transaction-validator)
+    - [4.7. UTXO Batch Processing and External Storage mode](#47-utxo-batch-processing-and-external-storage-mode)
+    - [4.8. Alert System and UTXO Management](#48-alert-system-and-utxo-management)
+  - [5. Technology](#5-technology)
+    - [5.1. Language and Libraries](#51-language-and-libraries)
+    - [5.2. Data Stores](#52-data-stores)
+    - [5.3. Data Purging](#53-data-purging)
+  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+  - [7. Running the Store Locally](#7-running-the-store-locally)
+    - [How to run](#how-to-run)
+  - [8. Settings](#8-settings)
+  - [9. Other Resources](#9-other-resources)
 5. [Technology](#5-technology)
 - [5.1. Language and Libraries](#51-language-and-libraries)
 - [5.2. Data Stores](#52-data-stores)
@@ -182,7 +201,7 @@ When storing the UTXOs (Unspent Transaction Outputs) associated to a given Tx in
 
 6. **UTXOs**: A map representing the UTXOs associated with this transaction (`utxos` bin). The keys are the UTXO hashes, and the values are empty strings initially. The values will be populated, once the UTXO is spent, with the spending Tx Id.
 
-7. **Number of UTXOs**: The number of UTXOs in the `utxos` map (`nrUtxos` bin).
+7. **Number of UTXOs**: The number of UTXOs in the `utxos` map (`recordUtxos` bin).
 
 8. **Spent UTXOs**: A counter for the number of UTXOs that have been spent (`spentUtxos` bin).
 

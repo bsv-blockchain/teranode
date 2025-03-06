@@ -36,8 +36,9 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
-//   - spentUtxos: Number of spent UTXOs
+//   - totalUtxos: Total number of UTXOs in the transaction
+//   - recordUtxos: Total number of UTXO in this record
+//   - spentUtxos: Number of spent UTXOs in this record
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
 //   - spendingHeight: Coinbase maturity height
@@ -145,7 +146,6 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 //
 // Lua Return Values:
 //   - OK:NOTALLSPENT - Success, some UTXOs still unspent
-//   - OK:NOTALLSPENT:EXTERNAL - Success, external storage needs update
 //   - ERROR:* - Various error conditions
 //
 // Metrics:
@@ -184,23 +184,21 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 		return errors.NewStorageError("error in aerospike unspend record", aErr)
 	}
 
-	resp, err := s.ParseLuaReturnValue(responseMsg)
+	res, err := s.ParseLuaReturnValue(responseMsg)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
 		return errors.NewProcessingError("error parsing response %s", responseMsg, err)
 	}
 
-	switch resp.ReturnValue {
+	switch res.ReturnValue {
 	case LuaOk:
-		if resp.Signal == LuaNotAllSpent {
-			go func() {
-				if _, err := s.IncrementNrRecords(spend.TxID, 1); err != nil {
-					s.logger.Errorf("error incrementing nrRecords for tx %s: %v", spend.TxID.String(), err)
-				}
-			}()
+		if res.Signal == LuaNotAllSpent {
+			if err := s.SetTTLForChildRecords(spend.TxID, res.ChildCount, aerospike.TTLDontExpire); err != nil {
+				return err
+			}
 
-			if resp.External {
-				go s.setTTLExternalTransaction(s.ctx, spend.TxID, 0)
+			if err := s.setTTLExternalTransaction(s.ctx, spend.TxID, 0); err != nil {
+				return err
 			}
 		}
 

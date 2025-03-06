@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -77,7 +78,7 @@ func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	return args.Error(0)
 }
 
-func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...utxo.FieldName) error {
+func (m *mockCache) BatchDecorate(ctx context.Context, txs []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	args := m.Called(ctx, txs, fields)
 	return args.Error(0)
 }
@@ -91,7 +92,7 @@ func (m *mockCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, o
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *mockCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxo.FieldName) (*meta.Data, error) {
+func (m *mockCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	args := m.Called(ctx, hash, fields)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

@@ -34,6 +34,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -1400,7 +1401,7 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 	case wire.InvTypeTx:
 		// check whether this transaction exists in the utxo store
 		// which means it has been processed completely at our end
-		utxo, err := sm.utxoStore.Get(sm.ctx, &invVect.Hash, []utxostore.FieldName{utxostore.FieldFee})
+		utxo, err := sm.utxoStore.Get(sm.ctx, &invVect.Hash, fields.Fee)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				return false, nil

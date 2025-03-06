@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -25,7 +26,7 @@ func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]FieldName) (*meta.Data, error) {
+func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	args := m.Called(ctx, hash, fields)
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
@@ -60,7 +61,7 @@ func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 	return args.Error(0)
 }
 
-func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...FieldName) error {
+func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {
 	args := m.Called(ctx, unresolvedMetaDataSlice, fields)
 	return args.Error(0)
 }

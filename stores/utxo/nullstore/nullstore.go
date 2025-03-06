@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -18,7 +19,7 @@ type NullStore struct {
 }
 
 // BatchDecorate implements utxo.Store.
-func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...utxostore.FieldName) error {
+func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...fields.FieldName) error {
 	panic("unimplemented")
 }
 
@@ -48,7 +49,7 @@ func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return http.StatusOK, "NullStore Store available", nil
 }
 
-func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]utxostore.FieldName) (*meta.Data, error) {
+func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	return &meta.Data{}, nil
 }
 

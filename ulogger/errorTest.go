@@ -20,6 +20,13 @@ func NewErrorTestLogger(t *testing.T, cancelFn func()) *ErrorTestLogger {
 	}
 }
 
+func (l *ErrorTestLogger) SetCancelFn(cancelFn func()) {
+	l.cancelFn = cancelFn
+}
+
+func (l *ErrorTestLogger) EnableVerbose() {
+}
+
 func (l *ErrorTestLogger) SkipCancelOnFail(skip bool) {
 	l.skipCancelOnFail.Store(skip)
 }

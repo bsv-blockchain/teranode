@@ -36,8 +36,9 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
-//   - spentUtxos: Number of spent UTXOs
+//   - totalUtxos: Total number of UTXOs in the transaction
+//   - recordUtxos: Total number of UTXO in this record
+//   - spentUtxos: Number of spent UTXOs in this record
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
 //   - spendingHeight: Coinbase maturity height
@@ -182,13 +183,38 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
+					res, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						nrErrors++
 						errs = errors.NewError("aerospike batchRecord %s ParseLuaReturnValue error: %s", hashes[idx].String(), errors.Join(errs, err))
 					} else {
-						switch responseMsgParts.ReturnValue {
+						switch res.ReturnValue {
 						case LuaOk:
+							switch res.Signal {
+							case LuaAllSpent:
+								if err := s.handleExtraRecords(ctx, hashes[idx], 1); err != nil {
+									errs = errors.Join(errs, err)
+								}
+
+							case LuaTTLSet:
+								if err := s.SetTTLForChildRecords(hashes[idx], res.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+									errs = errors.Join(errs, err)
+								}
+
+								if err := s.setTTLExternalTransaction(ctx, hashes[idx], s.expiration); err != nil {
+									errs = errors.Join(errs, err)
+								}
+
+							case LuaTTLUnset:
+								if err := s.SetTTLForChildRecords(hashes[idx], res.ChildCount, aerospike.TTLDontExpire); err != nil {
+									errs = errors.Join(errs, err)
+								}
+
+								if err := s.setTTLExternalTransaction(ctx, hashes[idx], 0); err != nil {
+									errs = errors.Join(errs, err)
+								}
+							}
+
 							okUpdates++
 						default:
 							nrErrors++

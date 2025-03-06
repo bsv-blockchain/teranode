@@ -36,7 +36,7 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
+//   - totalUtxos: Total number of UTXOs
 //   - spentUtxos: Number of spent UTXOs
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag

@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -457,7 +458,7 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 		idxs := idxs
 
 		g.Go(func() error {
-			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, []utxo.FieldName{utxo.FieldBlockIDs, utxo.FieldBlockHeights})
+			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, fields.BlockIDs, fields.BlockHeights)
 			if err != nil {
 				return errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 			}

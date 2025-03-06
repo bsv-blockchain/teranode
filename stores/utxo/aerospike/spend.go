@@ -36,8 +36,9 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
-//   - spentUtxos: Number of spent UTXOs
+//   - totalUtxos: Total number of UTXOs in the transaction
+//   - recordUtxos: Total number of UTXO in this record
+//   - spentUtxos: Number of spent UTXOs in this record
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
 //   - spendingHeight: Coinbase maturity height
@@ -58,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,9 +98,16 @@ type batchSpend struct {
 
 // batchIncrement handles record count updates for paginated transactions
 type batchIncrement struct {
-	txID      *chainhash.Hash            // Transaction hash
-	increment int                        // Count adjustment
-	res       chan incrementNrRecordsRes // Result channel
+	txID      *chainhash.Hash               // Transaction hash
+	increment int                           // Count adjustment
+	res       chan incrementSpentRecordsRes // Result channel
+}
+
+type batchTTL struct {
+	txID     *chainhash.Hash // Transaction hash
+	childIdx uint32          // Child record index
+	ttl      uint32          // TTL duration
+	errCh    chan error      // Error Result channel
 }
 
 // Spend marks UTXOs as spent in a batch operation.
@@ -221,10 +230,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, errors.NewError("error in aerospike unspend (batched mode)", err)
+		return nil, errors.NewError("error in aerospike spend (batched mode)", err)
 	}
 
 	if len(spends) != len(spentSpends) { // there must have been failures
+		// s.logger.Errorf("len(spends) != len(spentSpends): %d != %d", len(spends), len(spentSpends))
+
+		// for i, spend := range spends {
+		// 	s.logger.Errorf("spend: %d: %v", i, spend.Err)
+		// }
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
 
@@ -356,12 +370,14 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		// s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchID, len(batch), err)
-
 		for idx, bItem := range batch {
 			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
-		} // TODO should we return here?
+		}
+
+		return
 	}
+
+	var errs error
 
 	start = stat.NewStat("BatchOperate").AddTime(start)
 
@@ -393,20 +409,35 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 							batch[idx].errCh <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response", txID.String(), err)
+
+							continue
 						}
 					}
 
 					switch res.ReturnValue {
 					case LuaOk:
-						if res.Signal == LuaAllSpent {
-							// all utxos in this record are spent so we decrement the nrRecords in the master record
-							// we do this in a separate go routine to avoid blocking the batcher
-							go s.handleAllSpent(ctx, txID)
-						} else if res.Signal == LuaTTLSet {
-							// record has been set to expire, we need to set the TTL on the external transaction file
-							if res.External {
-								// add ttl to the externally stored transaction, if applicable
-								go s.setTTLExternalTransaction(ctx, txID, s.expiration)
+						switch res.Signal {
+						case LuaAllSpent:
+							if err := errors.Join(errs, s.handleExtraRecords(ctx, txID, 1)); err != nil {
+								errs = errors.Join(errs, err)
+							}
+
+						case LuaTTLSet:
+							if err := s.SetTTLForChildRecords(txID, res.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+								errs = errors.Join(errs, err)
+							}
+
+							if err := s.setTTLExternalTransaction(ctx, txID, s.expiration); err != nil {
+								errs = errors.Join(errs, err)
+							}
+
+						case LuaTTLUnset:
+							if err := s.SetTTLForChildRecords(txID, res.ChildCount, aerospike.TTLDontExpire); err != nil {
+								errs = errors.Join(errs, err)
+							}
+
+							if err := s.setTTLExternalTransaction(ctx, txID, 0); err != nil {
+								errs = errors.Join(errs, err)
 							}
 						}
 
@@ -454,18 +485,18 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						if res.Signal == LuaTxNotFound {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
-								batch[idx].errCh <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+								batch[idx].errCh <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %v", txID.String(), thisBlockHeight, batchID, res)
 							}
 						} else {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
-								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, res.Signal)
+								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %v", txID.String(), thisBlockHeight, batchID, res)
 							}
 						}
 					default:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+							batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %v", txID.String(), thisBlockHeight, batchID, res)
 						}
 					}
 				}
@@ -481,15 +512,57 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
-// handleAllSpent manages cleanup when all UTXOs in a transaction are spent:
+// SetTTLForChildRecords sets TTL for all child records of a transaction
+func (s *Store) SetTTLForChildRecords(txID *chainhash.Hash, childCount int, expiration uint32) error {
+	errs := make([]error, childCount)
+
+	for i := uint32(0); i < uint32(childCount); i++ { //nolint: gosec
+		errCh := make(chan error)
+
+		go func() {
+			s.setTTLBatcher.Put(&batchTTL{
+				txID:     txID,
+				childIdx: i + 1, // We want to set TTL for child record i+1
+				ttl:      expiration,
+				errCh:    errCh,
+			})
+		}()
+
+		errs[i] = <-errCh
+		if errs[i] != nil {
+			s.logger.Errorf("[setTTLForChildRecords][%s] failed to set TTL for child record %d: %v", txID.String(), i, errs[i])
+		}
+	}
+
+	var errorsFound bool
+
+	for _, err := range errs {
+		if err != nil {
+			errorsFound = true
+			break
+		}
+	}
+
+	if errorsFound {
+		return errors.NewStorageError("[setTTLForChildRecords][%s] failed to set TTL for one or more child records", txID.String())
+	}
+
+	return nil
+}
+
+// handleSpentRecords manages cleanup when all UTXOs in a transaction are spent:
+//  1. Decrements record count for pagination
+//  2. Sets TTL for cleanup
+
+// handleSpentRecords manages cleanup when all UTXOs in a transaction are spent:
 //  1. Decrements record count for pagination
 //  2. Sets TTL for cleanup
 //  3. Updates external storage TTL
-func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
-	res, err := s.IncrementNrRecords(txID, -1)
+
+func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, increment int) error {
+	res, err := s.IncrementSpentRecords(txID, increment) // This is a batch operation
 	if err != nil {
-		// TODO if this goes wrong, we never decrement the nrRecords and the record will never be deleted
-		s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", txID.String(), err)
+		return err
 	}
 
 	if r, ok := res.(string); ok {
@@ -497,28 +570,77 @@ func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
 		if err != nil {
 			s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to parse LUA return value: %v", txID.String(), err)
 		} else if ret.ReturnValue == LuaOk {
-			if ret.Signal == LuaTTLSet {
-				// TODO - we should TTL all the pagination records for this TX
-				_ = ret.Signal
+			switch ret.Signal {
+			case LuaTTLSet:
+				if err := s.SetTTLForChildRecords(txID, ret.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+					return err
+				}
 
-				if ret.External {
-					// add ttl to the externally stored transaction, if applicable
-					s.setTTLExternalTransaction(ctx, txID, s.expiration)
+				if err := s.setTTLExternalTransaction(ctx, txID, s.expiration); err != nil {
+					return err
+				}
+
+			case LuaTTLUnset:
+				if err := s.SetTTLForChildRecords(txID, ret.ChildCount, aerospike.TTLDontExpire); err != nil {
+					return err
+				}
+
+				if err := s.setTTLExternalTransaction(ctx, txID, 0); err != nil {
+					return err
 				}
 			}
 		}
 	}
+
+	return nil
 }
 
-type incrementNrRecordsRes struct {
+func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.Hash, newTTL time.Duration) error {
+	if err := s.externalStore.SetTTL(ctx,
+		txid[:],
+		newTTL,
+		options.WithFileExtension("tx"),
+	); err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			// did not find the tx, try the outputs
+			if err := s.externalStore.SetTTL(ctx,
+				txid[:],
+				newTTL,
+				options.WithFileExtension("outputs"),
+			); err != nil {
+				return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s TTL for external transaction outputs",
+					txid,
+					ttlOperation(newTTL),
+					err)
+			}
+		} else {
+			return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s TTL for external transaction",
+				txid,
+				ttlOperation(newTTL),
+				err)
+		}
+	}
+
+	return nil
+}
+
+func ttlOperation(ttl time.Duration) string {
+	if ttl > 0 {
+		return "set"
+	}
+
+	return "unset"
+}
+
+type incrementSpentRecordsRes struct {
 	res interface{}
 	err error
 }
 
-// IncrementNrRecords updates the record count for paginated transactions.
+// IncrementSpentRecords updates the record count for paginated transactions.
 // Used for cleanup management of large transactions.
-func (s *Store) IncrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
-	res := make(chan incrementNrRecordsRes)
+func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
+	res := make(chan incrementSpentRecordsRes)
 
 	go func() {
 		s.incrementBatcher.Put(&batchIncrement{
@@ -546,7 +668,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	for _, item := range batch {
 		aeroKey, err := aerospike.NewKey(s.namespace, s.setName, item.txID[:])
 		if err != nil {
-			item.res <- incrementNrRecordsRes{
+			item.res <- incrementSpentRecordsRes{
 				res: nil,
 				err: errors.NewProcessingError("failed to init new aerospike key for txMeta", err),
 			}
@@ -554,7 +676,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 			continue
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementNrRecords",
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(item.increment),
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
 		))
@@ -564,7 +686,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			item.res <- incrementNrRecordsRes{
+			item.res <- incrementSpentRecordsRes{
 				res: nil,
 				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
 			}
@@ -577,7 +699,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	for idx, batchRecordIfc := range batchRecords {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			batch[idx].res <- incrementNrRecordsRes{
+			batch[idx].res <- incrementSpentRecordsRes{
 				res: nil,
 				err: errors.NewStorageError("error in aerospike send outpoint batch records", err),
 			}
@@ -587,7 +709,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 
 		res, ok := batchRecord.Record.Bins["SUCCESS"].(string)
 		if !ok {
-			batch[idx].res <- incrementNrRecordsRes{
+			batch[idx].res <- incrementSpentRecordsRes{
 				res: nil,
 				err: errors.NewProcessingError("failed to parse response"),
 			}
@@ -595,30 +717,68 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 			continue
 		}
 
-		batch[idx].res <- incrementNrRecordsRes{
+		if strings.HasPrefix(res, "ERROR:") {
+			batch[idx].res <- incrementSpentRecordsRes{
+				res: nil,
+				err: errors.NewProcessingError(res),
+			}
+
+			continue
+		}
+
+		batch[idx].res <- incrementSpentRecordsRes{
 			res: res,
 			err: nil,
 		}
 	}
 }
 
-func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.Hash, newTTL time.Duration) {
-	if err := s.externalStore.SetTTL(ctx,
-		txid[:],
-		newTTL,
-		options.WithFileExtension("tx"),
-	); err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			// did not find the tx, try the outputs
-			if err = s.externalStore.SetTTL(ctx,
-				txid[:],
-				newTTL,
-				options.WithFileExtension("outputs"),
-			); err != nil {
-				s.logger.Errorf("[ttlExternalTransaction][%s] failed to set TTL for external transaction outputs: %v", txid, err)
-			}
-		} else {
-			s.logger.Errorf("[ttlExternalTransaction][%s] failed to set TTL for external transaction: %v", txid, err)
+func (s *Store) sendSetTTLBatch(batch []*batchTTL) {
+	var err error
+
+	// Create batch records with individual TTLs
+	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+
+	for i, b := range batch {
+		keySource := uaerospike.CalculateKeySource(b.txID, b.childIdx)
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			s.logger.Errorf("[SetTTLBatch][%s] failed to create key for pagination record %d: %v", b.txID.String(), b.childIdx, err)
+			continue
 		}
+
+		var batchWritePolicy *aerospike.BatchWritePolicy
+
+		if b.ttl > 0 {
+			batchWritePolicy = util.GetAerospikeBatchWritePolicy(s.settings, 0, b.ttl)
+		} else {
+			batchWritePolicy = util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+		}
+
+		// Create a BatchWrite with TouchOperation
+		batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.TouchOp())
+	}
+
+	// Execute batch operation
+	err = s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords)
+	if err != nil {
+		for _, bItem := range batch {
+			bItem.errCh <- errors.NewStorageError("[SetTTLBatch][%s] failed to set TTL", err)
+		}
+
+		return
+	}
+
+	// batchOperate may have no errors, but some of the records may have failed
+	for batchIdx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+
+		if err != nil {
+			batch[batchIdx].errCh <- err
+			continue
+		}
+
+		batch[batchIdx].errCh <- nil
 	}
 }

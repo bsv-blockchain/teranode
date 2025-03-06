@@ -56,11 +56,11 @@ func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidSt
 		os.Exit(1)
 	}
 
-	nrRecordsIfc, ok := record.Bins["nrRecords"]
+	nrRecordsIfc, ok := record.Bins["totalExtraRecs"]
 	if ok {
-		nrRecords, ok := nrRecordsIfc.(int)
+		totalExtraRecs, ok := nrRecordsIfc.(int)
 		if ok {
-			nrRecordsUint32, err := util.SafeIntToUint32(nrRecords)
+			nrRecordsUint32, err := util.SafeIntToUint32(totalExtraRecs)
 			if err != nil {
 				fmt.Printf("Failed to convert nrRecords to uint32: %s\n", err)
 				os.Exit(1)

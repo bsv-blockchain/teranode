@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
@@ -96,13 +97,30 @@ var (
 	spendTxRemaining = utxo2.GetSpendingTx(tx, 1, 2, 3, 4)
 )
 
-func initAerospike(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
+func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Logger) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
 	teranode_aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-7.2.0.3_1"))
 	require.NoError(t, err)
+
+	// go func() {
+	// 	reader, err := container.Logs(ctx)
+	// 	if err != nil {
+	// 		log.Fatalf("Failed to fetch logs: %v", err)
+	// 	}
+	// 	defer reader.Close()
+
+	// 	scanner := bufio.NewScanner(reader)
+	// 	for scanner.Scan() {
+	// 		fmt.Println(scanner.Text()) // Print each log line as it appears
+	// 	}
+
+	// 	if err := scanner.Err(); err != nil {
+	// 		log.Printf("Error reading container logs: %v", err)
+	// 	}
+	// }()
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
@@ -123,11 +141,9 @@ func initAerospike(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store,
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
-
 	// teranode db client
 	var db *teranode_aerospike.Store
-	db, err = teranode_aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aeroURL)
+	db, err = teranode_aerospike.New(ctx, logger, settings, aeroURL)
 	require.NoError(t, err)
 
 	db.SetExternalStore(memory.New())
@@ -157,96 +173,6 @@ func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ..
 			key, _ = aerospike.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
 			_, err := client.Delete(policy, key)
 			require.NoError(t, err)
-		}
-	}
-}
-
-func printResponse(response *aerospike.Record) {
-	fmt.Printf("Digest      : %x\n", response.Key.Digest())
-	fmt.Printf("Namespace   : %s\n", response.Key.Namespace())
-	fmt.Printf("SetName     : %s\n", response.Key.SetName())
-	fmt.Printf("Node        : %s\n", response.Node.GetName())
-	fmt.Printf("Bins        :")
-
-	var indent = false
-
-	for binName := range response.Bins {
-		if indent {
-			fmt.Printf("            : %s\n", binName)
-		} else {
-			fmt.Printf(" %s\n", binName)
-		}
-
-		indent = true
-	}
-
-	fmt.Printf("Generation  : %d\n", response.Generation)
-	fmt.Printf("Expiration  : %d\n", response.Expiration)
-
-	fmt.Println()
-
-	for k, v := range response.Bins {
-		switch k {
-		case "Generation":
-			fallthrough
-		case "Expiration":
-			fallthrough
-		case "inputs":
-			fallthrough
-		case "outputs":
-			fallthrough
-		case "utxos":
-
-		default:
-			if arr, ok := v.([]interface{}); ok {
-				printArray(k, arr)
-			} else if b, ok := v.([]byte); ok {
-				fmt.Printf("%-12s: %x\n", k, b)
-			} else {
-				fmt.Printf("%-12s: %v\n", k, v)
-			}
-		}
-	}
-
-	printArray("inputs", response.Bins["inputs"])
-	printArray("outputs", response.Bins["outputs"])
-	printArray("utxos", response.Bins["utxos"])
-
-	fmt.Println()
-}
-
-func printArray(name string, ifc interface{}) {
-	fmt.Printf("%-12s:", name)
-
-	if ifc == nil {
-		fmt.Printf(" <nil>\n")
-		return
-	}
-
-	arr, ok := ifc.([]interface{})
-	if !ok {
-		fmt.Printf(" <not array>\n")
-		return
-	}
-
-	if len(arr) == 0 {
-		fmt.Printf(" <empty>\n")
-		return
-	}
-
-	for i, item := range arr {
-		if b, ok := item.([]byte); ok {
-			if i == 0 {
-				fmt.Printf(" %-5d : %x\n", i, b)
-			} else {
-				fmt.Printf("            : %-5d : %x\n", i, b)
-			}
-		} else {
-			if i == 0 {
-				fmt.Printf(" %-5d : %v\n", i, item)
-			} else {
-				fmt.Printf("            : %-5d : %v\n", i, item)
-			}
 		}
 	}
 }

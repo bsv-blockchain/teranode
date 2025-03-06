@@ -26,6 +26,7 @@ import (
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -38,10 +39,14 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_GetTxFromExternalStore(t *testing.T) {
-	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
 
-	client, _, _, deferFn := initAerospike(t)
-	defer deferFn()
+	client, _, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
 
 	t.Run("TestStore_GetTxFromExternalStore", func(t *testing.T) {
 		s := &teranode_aerospike.Store{}
@@ -158,14 +163,20 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight uint32) {
 	ctx := context.Background()
 
-	_, s, _, deferFn := initAerospike(t)
-	defer deferFn()
+	logger := ulogger.NewErrorTestLogger(t, nil)
 
-	tSettings := s.GetSettings()
+	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.UtxoStore.GetBatcherSize = 8192
 	tSettings.UtxoStore.SpendBatcherSize = 8192
-	s.SetSettings(tSettings)
+
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	store.SetSettings(tSettings)
 
 	txStoreURL, _ := url.Parse("file://./data/txstore")
 	txStore, err := file.New(ulogger.TestLogger{}, txStoreURL)
@@ -179,10 +190,11 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		t.Fatal(err)
 	}
 
-	s.SetExternalStore(externalStore)
-	s.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
-	_ = s.SetBlockHeight(blockHeight)
-	_ = s.SetMedianBlockTime(121233)
+	store.SetExternalStore(externalStore)
+	store.SetExternalTxCache(util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute))
+
+	_ = store.SetBlockHeight(blockHeight)
+	_ = store.SetMedianBlockTime(121233)
 
 	b, err := bitcoin.New(rpcHost, rpcPort, username, password, false)
 	if err != nil {
@@ -216,7 +228,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 			Tx: tx,
 		}
 
-		if err = ProcessTx(ctx, txStore, b, s, tx, blockHeight, &parentTxs); err != nil {
+		if err = ProcessTx(ctx, txStore, b, store, tx, blockHeight, &parentTxs); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -224,7 +236,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
 	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
 
-	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, s.GetSettings(), s, nil, nil)
+	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil)
 	require.NoError(t, err)
 
 	mockBlockchain := &blockchain.MockStore{}
@@ -240,15 +252,15 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		},
 	}
 
-	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, mockBlockchain, nil, s)
+	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, mockBlockchain, nil, store)
 	require.NoError(t, err)
 
 	sm, err := netsync.New(ctx,
 		ulogger.TestLogger{},
-		s.GetSettings(),
+		store.GetSettings(),
 		blockchainClient,
 		validationClient,
-		s,
+		store,
 		nil,
 		nil,
 		nil,
@@ -256,7 +268,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		nil,
 		&netsync.Config{
 			PeerNotifier:            nil,
-			ChainParams:             s.GetSettings().ChainCfgParams,
+			ChainParams:             store.GetSettings().ChainCfgParams,
 			DisableCheckpoints:      false,
 			MaxPeers:                1,
 			MinSyncPeerNetworkSpeed: 1000,

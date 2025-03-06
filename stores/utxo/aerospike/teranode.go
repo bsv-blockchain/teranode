@@ -34,8 +34,9 @@
 //   - inputs: Transaction input data
 //   - outputs: Transaction output data
 //   - utxos: List of UTXO hashes
-//   - nrUtxos: Total number of UTXOs
-//   - spentUtxos: Number of spent UTXOs
+//   - totalUtxos: Total number of UTXOs in the transaction
+//   - recordUtxos: Total number of UTXO in this record
+//   - spentUtxos: Number of spent UTXOs in this record
 //   - blockIDs: Block references
 //   - isCoinbase: Coinbase flag
 //   - spendingHeight: Coinbase maturity height
@@ -56,6 +57,7 @@ package aerospike
 
 import (
 	_ "embed"
+	"strconv"
 	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
@@ -69,7 +71,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v25" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v26" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]
@@ -102,8 +104,34 @@ type LuaReturnMessage struct {
 	// SpendingTxID contains the spending transaction hash if relevant
 	SpendingTxID *chainhash.Hash
 
-	// External indicates if the transaction uses external storage
-	External bool
+	ChildCount int
+}
+
+func (l *LuaReturnMessage) String() string {
+	if l == nil {
+		return "<nil>"
+	}
+
+	sb := strings.Builder{}
+
+	sb.WriteString(string(l.ReturnValue))
+
+	if len(l.Signal) > 0 {
+		sb.WriteString(":")
+		sb.WriteString(string(l.Signal))
+	}
+
+	if l.SpendingTxID != nil {
+		sb.WriteString(":")
+		sb.WriteString(l.SpendingTxID.String())
+	}
+
+	if l.ChildCount > 0 {
+		sb.WriteString(":")
+		sb.WriteString(strconv.Itoa(l.ChildCount))
+	}
+
+	return sb.String()
 }
 
 // Lua Return Values
@@ -114,11 +142,11 @@ const (
 	// LuaTTLSet indicates TTL was set on the record
 	LuaTTLSet LuaReturnValue = "TTLSET"
 
+	// LuaTTLUnset indicates TTL was unset on the record
+	LuaTTLUnset LuaReturnValue = "TTLUNSET"
+
 	// LuaSpent indicates UTXO is already spent
 	LuaSpent LuaReturnValue = "SPENT"
-
-	// LuaExternal indicates transaction uses external storage
-	LuaExternal LuaReturnValue = "EXTERNAL"
 
 	// LuaAllSpent indicates all UTXOs in transaction are spent
 	LuaAllSpent LuaReturnValue = "ALLSPENT"
@@ -197,7 +225,8 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 // Example responses:
 //
 //	"OK:ALLSPENT"
-//	"OK:TTLSET:EXTERNAL"
+//	"OK:TTLSET:n"
+//	"OK:TTLUNSET:n"
 //	"SPENT:1234...5678" (where 1234...5678 is a 64-char tx hash)
 //	"ERROR:TX not found"
 //
@@ -208,6 +237,8 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 //   - Parsed LuaReturnMessage
 //   - Error if parsing fails
 func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error) {
+	var err error
+
 	rets := LuaReturnMessage{}
 
 	r := strings.Split(returnValue, ":")
@@ -230,7 +261,10 @@ func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error
 	}
 
 	if len(r) > 2 {
-		rets.External = r[2] == string(LuaExternal)
+		rets.ChildCount, err = strconv.Atoi(r[2])
+		if err != nil {
+			return rets, errors.NewProcessingError("error parsing child count %s", r[2], err)
+		}
 	}
 
 	return rets, nil
