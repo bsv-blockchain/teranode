@@ -29,6 +29,9 @@ jobs:
     name: Build Docker image
     runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "teranode-runner-arm" ]') || fromJSON('[ "teranode-runner" ]') }}
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +54,14 @@ jobs:
         with:
           mask-password: true
 
+      # Authenticate Docker to GitHub Container Registry
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # Get current cluster ID for base image
       - name: Get Cluster Base ID
         id: base
@@ -61,6 +72,13 @@ jobs:
         id: run
         run: echo "id=$(cat './deploy/docker/CLUSTER_RUN_ID')" >> $GITHUB_OUTPUT
 
+      # Get GH repo name
+      - name: Extract repository name
+        id: repo-name
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "repo=$REPO_NAME" >> $GITHUB_OUTPUT
+
       # Set latest tag if not a pull request
       - name: Set latest tag
         id: latest
@@ -68,6 +86,7 @@ jobs:
           case ${{ inputs.pull_request }} in
             "false")
             echo "tag=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-${{ inputs.arch }}" >> $GITHUB_OUTPUT
+            echo "ghtag=ghcr.io/${{ steps.repo-name.outputs.repo }}:latest-${{ inputs.arch }}" >> $GITHUB_OUTPUT
             ;;
           esac
 
@@ -81,12 +100,23 @@ jobs:
           file: ./Dockerfile
           push: true
           build-args: |
-            GITHUB_SHA=${{github.sha}}
+            GITHUB_SHA=${{ github.sha }}
             DEBUG=true
             RACE=true
-            GITHUB_REF=${{github.ref_name}}
+            GITHUB_REF=${{ github.ref_name }}
+            ARCH=${{ inputs.arch }}
+            VERSION=${{ inputs.tag }}
             BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-build-${{ steps.base.outputs.id }}
             RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
+            ghcr.io/${{ steps.repo-name.outputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
             ${{ steps.latest.outputs.tag }}
+            ${{ steps.latest.outputs.ghtag }}
+          platforms: linux/${{ inputs.arch }}
+          labels: |
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=${{ github.event.repository.license.spdx_id }}

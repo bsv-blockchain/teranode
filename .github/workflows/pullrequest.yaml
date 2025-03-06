@@ -163,6 +163,9 @@ jobs:
     needs: get_tag
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
+    permissions:
+      contents: read
+      packages: write
     with:
       arch: amd64
       repo: teranode
@@ -175,6 +178,9 @@ jobs:
     needs: get_tag
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
+    permissions:
+      contents: read
+      packages: write
     with:
       arch: arm64
       repo: teranode
@@ -187,6 +193,9 @@ jobs:
     needs: [ build_amd64, build_arm64, get_tag ]
     uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
+    permissions:
+      contents: read
+      packages: write
     with:
       repo: teranode
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
