@@ -287,6 +287,7 @@ type SyncManager struct {
 
 	// An optional fee estimator.
 	// feeEstimator *mempool.FeeEstimator
+	currentFeeFilter atomic.Uint64
 
 	// minSyncPeerNetworkSpeed is the minimum speed allowed for
 	// a sync peer.
@@ -517,18 +518,22 @@ func (sm *SyncManager) startSync() {
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
-	feeFilter := wire.NewMsgFeeFilter(int64(sm.settings.Policy.MinMiningTxFee)) // nolint:gosec
+	if sm.currentFeeFilter.Load() != uint64(bsvutil.SatoshiPerBitcoin*sm.settings.Policy.MinMiningTxFee) {
+		feeFilter := wire.NewMsgFeeFilter(int64(sm.settings.Policy.MinMiningTxFee)) // nolint:gosec
 
-	for p := range sm.peerStates.Range() {
-		if p == nil {
-			continue
+		for p := range sm.peerStates.Range() {
+			if p == nil {
+				continue
+			}
+
+			if !p.Connected() {
+				continue
+			}
+
+			p.QueueMessage(feeFilter, nil)
 		}
 
-		if !p.Connected() {
-			continue
-		}
-
-		p.QueueMessage(feeFilter, nil)
+		sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin * sm.settings.Policy.MinMiningTxFee))
 	}
 }
 
@@ -593,10 +598,13 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 		sm.logger.Debugf("Error getting FSM current state: %v", err)
 	}
 
-	if *state == teranodeblockchain.FSMStateLEGACYSYNCING {
+	if *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
 		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
+
 		peer.QueueMessage(feeFilter, nil)
+
+		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
 	}
 
 	sm.peerStates.Set(peer, &peerSyncState{
