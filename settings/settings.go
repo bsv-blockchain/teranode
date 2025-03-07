@@ -268,6 +268,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UtxoBatchSize:                  getInt("utxostore_utxoBatchSize", 128, alternativeContext...),
 			IncrementBatcherSize:           getInt("utxostore_incrementBatcherSize", 256, alternativeContext...),
 			IncrementBatcherDurationMillis: getInt("utxostore_incrementBatcherDurationMillis", 10, alternativeContext...),
+			SetTTLBatcherSize:              getInt("utxostore_setTTLBatcherSize", 256, alternativeContext...),
+			SetTTLBatcherDurationMillis:    getInt("utxostore_setTTLBatcherDurationMillis", 10, alternativeContext...),
 			GetBatcherSize:                 getInt("utxostore_getBatcherSize", 1, alternativeContext...),
 			GetBatcherDurationMillis:       getInt("utxostore_getBatcherDurationMillis", 10, alternativeContext...),
 			DBTimeout:                      getDuration("utxostore_dbTimeoutDuration", 5*time.Second),
