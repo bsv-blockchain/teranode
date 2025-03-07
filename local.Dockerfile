@@ -26,20 +26,22 @@ ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
 RUN RACE=true TXMETA_SMALL_TAG=true make build -j 32
-RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
+# RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
-COPY --from=0 /app/blaster.run ./blaster.run
+COPY --from=0 /app/teranode-cli ./teranode-cli
+# COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
 FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
-COPY --from=0 /app/blaster.run ./blaster.run
+COPY --from=0 /app/teranode-cli ./teranode-cli
+# COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 ENV TARGETARCH=${TARGETARCH}
@@ -65,6 +67,8 @@ WORKDIR /app
 COPY --from=0 /app/settings_local.conf .
 # COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
+COPY --from=0 /app/wait.sh ./wait.sh
+RUN chmod +x ./wait.sh
 
 # RUN ln -s teranode.run chainintegrity.run
 # RUN ln -s teranode.run blaster.run
@@ -73,7 +77,7 @@ COPY --from=0 /app/settings.conf .
 # RUN ln -s teranode.run utxostoreblaster.run
 # RUN ln -s teranode.run aerospiketest.run
 # RUN ln -s teranode.run s3blaster.run
-RUN ln -s teranode.run miner.run
+# RUN ln -s teranode.run miner.run
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 

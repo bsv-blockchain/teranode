@@ -53,7 +53,7 @@ dev-dashboard:
 
 .PHONY: build
 # build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
-build: update_config build-teranode-with-dashboard clean_backup
+build: update_config build-teranode-with-dashboard build-teranode-cli clean_backup
 
 .PHONY: update_config
 update_config:
