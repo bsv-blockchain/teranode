@@ -5,11 +5,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,4 +101,38 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 
 	err = <-errCh
 	require.NoError(t, err)
+}
+
+func TestKafkaURLOverride(t *testing.T) {
+	t.Run("with replay set", func(t *testing.T) {
+		kafkaURLStr := "kafka://localhost:9092/meta?partitions=2&replication=3&retention=60000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&consumer_ratio=4&replay=1"
+
+		kafkaURL, err := url.Parse(kafkaURLStr)
+		require.NoError(t, err)
+
+		assert.Equal(t, "1", kafkaURL.Query().Get("replay"))
+
+		values := kafkaURL.Query()
+		values.Set("replay", "0")
+
+		kafkaURL.RawQuery = values.Encode()
+
+		assert.Equal(t, "0", kafkaURL.Query().Get("replay"))
+	})
+
+	t.Run("with replay not set", func(t *testing.T) {
+		kafkaURLStr := "kafka://localhost:9092/meta?partitions=2&replication=3&retention=60000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&consumer_ratio=4"
+
+		kafkaURL, err := url.Parse(kafkaURLStr)
+		require.NoError(t, err)
+
+		assert.Equal(t, "", kafkaURL.Query().Get("replay"))
+
+		values := kafkaURL.Query()
+		values.Set("replay", "0")
+
+		kafkaURL.RawQuery = values.Encode()
+
+		assert.Equal(t, "0", kafkaURL.Query().Get("replay"))
+	})
 }

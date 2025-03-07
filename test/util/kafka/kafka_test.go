@@ -650,7 +650,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	producer.Start(ctx, make(chan *ukafka.Message, 100))
 	defer producer.Stop() // nolint:errcheck
 
-	t.Log("Publishing first batch of test messages...")
+	t.Log("Publishing test messages...")
 
 	messages := []string{"msg1", "msg2"}
 	for _, msg := range messages {
@@ -659,56 +659,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		})
 	}
 
-	var (
-		receivedMessages []string
-		messagesMutex    sync.RWMutex
-	)
+	receivedMessages := consumeMessages(t, ctx, logger, kafkaURL, groupID, 2)
 
-	consume := func() {
-		consumer, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
-		require.NoError(t, err)
-
-		defer func() {
-			_ = consumer.ConsumerGroup.Close()
-		}()
-
-		consumer.Start(ctx, func(msg *ukafka.KafkaMessage) error {
-			messagesMutex.Lock()
-			receivedMessages = append(receivedMessages, string(msg.Value))
-			messagesMutex.Unlock()
-
-			return nil
-		})
-
-		deadline := time.After(5 * time.Second)
-
-		// wait for 2 messages to be received
-		for {
-			select {
-			case <-deadline:
-				return
-			default:
-				time.Sleep(1 * time.Millisecond)
-
-				messagesMutex.RLock()
-				l := len(receivedMessages)
-				messagesMutex.RUnlock()
-
-				if l >= 2 {
-					return
-				}
-			}
-		}
-	}
-
-	// this relies on replay=1 to replay messages from the beginning
-	// because 2 messages have already been published and we want to pick them up
-	consume()
-
-	messagesMutex.RLock()
 	t.Logf("First batch complete. Received messages: %v", receivedMessages)
 	require.Equal(t, []string{"msg1", "msg2"}, receivedMessages)
-	messagesMutex.RUnlock()
 
 	t.Log("Publishing second batch of test messages...")
 
@@ -719,18 +673,124 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		})
 	}
 
-	messagesMutex.Lock()
-	receivedMessages = nil
-	messagesMutex.Unlock()
+	// this should be ignoring replay=1 because the kafka server knows the previous offset for this consumer group
+	// We expect this to find msg3 and msg4
+	// If it were to replay, it would find msg1 and msg2 again
+	receivedMessages = consumeMessages(t, ctx, logger, kafkaURL, groupID, 2)
+
+	require.Equal(t, []string{"msg3", "msg4"}, receivedMessages)
+}
+
+/*
+This test is to ensure that when a consumer is restarted, it will not reprocess the same messages again if replay=0
+This test mimics TestKafkaConsumerOffsetContinuation, but with replay=0
+*/
+func TestKafkaConsumerNoReplay(t *testing.T) {
+	logger := ulogger.NewZeroLogger("test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	testContainer, err := RunContainer(ctx)
+	require.NoError(t, err)
+
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
+
+	topic := fmt.Sprintf("test-topic-%s", uuid.New().String())
+	groupID := fmt.Sprintf("test-group-%s", uuid.New().String())
+
+	kafkaURL := &url.URL{
+		Scheme:   "kafka",
+		Host:     testContainer.GetBrokerAddresses()[0],
+		Path:     topic,
+		RawQuery: "partitions=1&replicationFactor=1&flush_frequency=1ms&replay=0",
+	}
+
+	producer, err := ukafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	require.NoError(t, err)
+
+	producer.Start(ctx, make(chan *ukafka.Message, 100))
+	defer producer.Stop() // nolint:errcheck
+
+	t.Log("Publishing test messages...")
+
+	messages := []string{"msg1", "msg2"}
+	for _, msg := range messages {
+		producer.Publish(&ukafka.Message{
+			Value: []byte(msg),
+		})
+	}
+
+	receivedMessages := consumeMessages(t, ctx, logger, kafkaURL, groupID, 2)
+
+	t.Logf("First batch complete. Received messages: %v", receivedMessages)
+
+	// we should not be getting any messages, since we set replay=0 which means we just read new messages
+	require.Equal(t, []string{}, receivedMessages)
+
+	t.Log("Publishing second batch of test messages...")
+
+	messages = []string{"msg3", "msg4"}
+	for _, msg := range messages {
+		producer.Publish(&ukafka.Message{
+			Value: []byte(msg),
+		})
+	}
 
 	// this should be ignoring replay=1 because the kafka server knows the previous offset for this consumer group
 	// We expect this to find msg3 and msg4
 	// If it were to replay, it would find msg1 and msg2 again
-	consume()
+	receivedMessages = consumeMessages(t, ctx, logger, kafkaURL, groupID, 2)
 
-	messagesMutex.RLock()
-	require.Equal(t, []string{"msg3", "msg4"}, receivedMessages)
-	messagesMutex.RUnlock()
+	// we should not be getting any messages, since we set replay=0 which means we just read new messages
+	require.Equal(t, []string{}, receivedMessages)
+}
+
+func consumeMessages(t *testing.T, ctx context.Context, logger *ulogger.ZLoggerWrapper, kafkaURL *url.URL, groupID string, nMessages int) []string {
+	var (
+		receivedMessages = make([]string, 0)
+		messagesMutex    sync.RWMutex
+	)
+
+	consumer, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
+	require.NoError(t, err)
+
+	defer func() {
+		_ = consumer.ConsumerGroup.Close()
+	}()
+
+	consumer.Start(ctx, func(msg *ukafka.KafkaMessage) error {
+		messagesMutex.Lock()
+		receivedMessages = append(receivedMessages, string(msg.Value))
+		messagesMutex.Unlock()
+
+		return nil
+	})
+
+	deadline := time.After(5 * time.Second)
+
+	// wait for 2 messages to be received
+	for {
+		select {
+		case <-deadline:
+			return receivedMessages
+		default:
+			time.Sleep(1 * time.Millisecond)
+
+			messagesMutex.RLock()
+			l := len(receivedMessages)
+			messagesMutex.RUnlock()
+
+			if l >= nMessages {
+				return receivedMessages
+			}
+		}
+	}
 }
 
 func byteArrayToIntFromString(message []byte) (int, error) {
@@ -767,7 +827,7 @@ func Test3Containers(t *testing.T) {
 	kafkaContainer3, err := RunTestContainer(ctx)
 	require.NoError(t, err)
 
-	//assert ports
+	// assert ports
 	require.NotEqual(t, kafkaContainer1.KafkaPort, kafkaContainer2.KafkaPort)
 	require.NotEqual(t, kafkaContainer1.KafkaPort, kafkaContainer3.KafkaPort)
 	require.NotEqual(t, kafkaContainer2.KafkaPort, kafkaContainer3.KafkaPort)

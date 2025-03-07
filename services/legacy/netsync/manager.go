@@ -2133,9 +2133,16 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	}
 
 	txmetaKafkaURL := sm.settings.Kafka.TxMetaConfig
+
 	if txmetaKafkaURL != nil {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
+
+		// disable replay for txmeta in the legacy service, we do not have to replay anything, ever
+		values := txmetaKafkaURL.Query()
+		values.Set("replay", "0")
+
+		txmetaKafkaURL.RawQuery = values.Encode()
 
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
