@@ -74,7 +74,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"

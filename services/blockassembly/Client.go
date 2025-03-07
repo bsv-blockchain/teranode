@@ -12,7 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

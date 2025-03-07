@@ -38,7 +38,7 @@ import (
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	batcher "github.com/bitcoin-sv/teranode/util/batcher_temp"
+	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2"
@@ -270,7 +270,7 @@ type SyncManager struct {
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
-	txAnnounceBatcher *batcher.Batcher2[chainhash.Hash]
+	txAnnounceBatcher *batcher.BatcherWithDedup[chainhash.Hash]
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    *util.SyncedMap[chainhash.Hash, struct{}]
@@ -2011,7 +2011,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.New[chainhash.Hash](maxRequestedTxns, 1*time.Second, func(batch []*chainhash.Hash) {
+	sm.txAnnounceBatcher = batcher.NewWithDeduplication[chainhash.Hash](maxRequestedTxns, 1*time.Second, func(batch []*chainhash.Hash) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
 
 		// process the batch
@@ -2139,6 +2139,46 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
+
+	go func() {
+		// will never return an error
+		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, "legacy/manager")
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case notification := <-blockchainSubscription:
+				if notification == nil {
+					continue
+				}
+
+				// check if the notification is a new subtree
+				if notification.Type == model.NotificationType_Subtree {
+					// we just got notified of a new subtree internally, announce all the transactions to our peers
+					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
+
+					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash)
+					if err != nil {
+						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
+						continue
+					}
+
+					subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+					if err != nil {
+						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
+						continue
+					}
+
+					// announce all the transactions in the subtree
+					// the batcher should de-duplicate the transactions that have already been sent in the last minute
+					for _, txHash := range subtree.Nodes {
+						sm.txAnnounceBatcher.Put(&txHash.Hash)
+					}
+				}
+			}
+		}
+	}()
 
 	go func() {
 		// listen to the control channel and send the control signal to all listeners

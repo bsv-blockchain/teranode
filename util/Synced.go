@@ -57,7 +57,7 @@ func (m *SyncedMap[K, V]) Range() map[K]V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	items := map[K]V{}
+	items := make(map[K]V, len(m.m))
 
 	for k, v := range m.m {
 		items[k] = v
