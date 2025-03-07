@@ -1,3 +1,5 @@
+// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
 import (
@@ -25,27 +27,56 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// Server represents the main legacy protocol server structure that implements the peer service interface.
 type Server struct {
+	// UnimplementedPeerServiceServer is embedded to satisfy the gRPC interface
 	peer_api.UnimplementedPeerServiceServer
-	logger   ulogger.Logger
-	settings *settings.Settings
-	stats    *gocore.Stat
-	server   *server
-	lastHash *chainhash.Hash
-	height   uint32
 
-	// teranode stores
-	blockchainClient    blockchain.ClientI
-	validationClient    validator.Interface
-	subtreeStore        blob.Store
-	tempStore           blob.Store
-	utxoStore           utxo.Store
-	subtreeValidation   subtreevalidation.Interface
-	blockValidation     blockvalidation.Interface
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains the configuration settings for the server
+	settings *settings.Settings
+
+	// stats tracks server statistics
+	stats *gocore.Stat
+
+	// server is the internal server implementation
+	server *server
+
+	// lastHash stores the most recent block hash
+	lastHash *chainhash.Hash
+
+	// height represents the current blockchain height
+	height uint32
+
+	// blockchainClient handles blockchain operations
+	blockchainClient blockchain.ClientI
+
+	// validationClient handles transaction validation
+	validationClient validator.Interface
+
+	// subtreeStore provides storage for merkle subtrees
+	subtreeStore blob.Store
+
+	// tempStore provides temporary storage
+	tempStore blob.Store
+
+	// utxoStore manages the UTXO set
+	utxoStore utxo.Store
+
+	// subtreeValidation handles merkle subtree validation
+	subtreeValidation subtreevalidation.Interface
+
+	// blockValidation handles block validation
+	blockValidation blockvalidation.Interface
+
+	// blockAssemblyClient handles block assembly operations
 	blockAssemblyClient *blockassembly.Client
 }
 
-// New will return a server instance with the logger stored within it
+// New creates and returns a new Server instance with the provided dependencies.
+// It initializes Prometheus metrics and returns a configured server ready for use.
 func New(logger ulogger.Logger,
 	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
@@ -74,6 +105,9 @@ func New(logger ulogger.Logger,
 	}
 }
 
+// Health performs health checks on the server and its dependencies.
+// It returns an HTTP status code, a message, and an error if any.
+// The checkLiveness parameter determines whether to perform liveness or readiness checks.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -120,6 +154,8 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// Init initializes the server by setting up wire limits, network listeners,
+// and other required components. It returns an error if initialization fails.
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
@@ -175,6 +211,8 @@ func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.
 	return &peer_api.GetPeerCountResponse{Count: pc}, nil
 }
 
+// GetPeers returns information about all connected peers.
+// It returns a GetPeersResponse containing details about each peer's connection and state.
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
@@ -267,7 +305,8 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 	return nil
 }
 
-// Start function
+// Start begins the server operation, including starting the internal server
+// and gRPC service. It returns an error if the server fails to start.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -295,6 +334,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// Stop gracefully shuts down the server and its components.
+// It returns an error if the shutdown process fails.
 func (s *Server) Stop(_ context.Context) error {
 	return s.server.Stop()
 }

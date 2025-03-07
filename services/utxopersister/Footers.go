@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -11,6 +12,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 )
 
+// GetFooter retrieves the transaction and UTXO counts from the footer of a file.
+// It returns the transaction count, UTXO count, and any error encountered.
 func GetFooter(r io.Reader) (uint64, uint64, error) {
 	f, ok := r.(*os.File)
 	if !ok {
@@ -39,6 +42,8 @@ func GetFooter(r io.Reader) (uint64, uint64, error) {
 	return txCount, utxoCount, nil
 }
 
+// PrintFooter prints the footer information with formatted numbers.
+// It displays the transaction count and UTXO count with the provided label.
 func PrintFooter(r io.Reader, label string) error {
 	txCount, utxoCount, err := GetFooter(r)
 	if err != nil {
@@ -53,6 +58,8 @@ func PrintFooter(r io.Reader, label string) error {
 	return nil
 }
 
+// formatNumber formats a number with comma separators for better readability.
+// For example: 1000000 becomes "1,000,000"
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)

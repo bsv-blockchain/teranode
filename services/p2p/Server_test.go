@@ -1,3 +1,4 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
 package p2p
 
 import (

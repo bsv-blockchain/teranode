@@ -1,3 +1,4 @@
+// Package filestorer provides functionality for storing and managing files in a blockchain context.
 package filestorer
 
 import (
@@ -20,18 +21,38 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// FileStorer handles the storage and management of blockchain-related files.
 type FileStorer struct {
-	logger         ulogger.Logger
-	store          blob.Store
-	key            []byte
-	extension      string
-	writer         *io.PipeWriter
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// store represents the underlying blob storage
+	store blob.Store
+
+	// key represents the unique identifier for the file
+	key []byte
+
+	// extension represents the file extension
+	extension string
+
+	// writer is the underlying pipe writer
+	writer *io.PipeWriter
+
+	// bufferedWriter provides buffered writing capabilities
 	bufferedWriter *bufio.Writer
-	hasher         hash.Hash
-	wg             sync.WaitGroup // Add a WaitGroup to manage the goroutine
-	mu             sync.Mutex
+
+	// hasher provides hashing functionality
+	hasher hash.Hash
+
+	// wg manages goroutine synchronization
+	wg sync.WaitGroup
+
+	// mu provides mutex locking for thread safety
+	mu sync.Mutex
 }
 
+// NewFileStorer creates a new FileStorer instance with the provided parameters.
+// It initializes the file storage system with buffering and hashing capabilities.
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
 
@@ -83,6 +104,8 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	return fs
 }
 
+// Write writes the provided bytes to the file storage.
+// It returns the number of bytes written and any error encountered.
 func (f *FileStorer) Write(b []byte) (n int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -90,6 +113,8 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 	return f.bufferedWriter.Write(b)
 }
 
+// Close finalizes the file storage operation and ensures all data is written.
+// It returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -140,6 +165,8 @@ func (f *FileStorer) Close(ctx context.Context) error {
 	return nil
 }
 
+// waitUntilFileIsAvailable waits for the file to become available in storage.
+// It returns an error if the file doesn't become available within the timeout period.
 func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context, extension string) error {
 	maxRetries := 10
 	retryInterval := 100 * time.Millisecond

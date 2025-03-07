@@ -1,3 +1,4 @@
+// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -18,35 +19,45 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// KafkaMessage wraps sarama.ConsumerMessage to provide additional functionality.
 type KafkaMessage struct {
 	sarama.ConsumerMessage
 }
 
+// KafkaConsumerGroupI defines the interface for Kafka consumer group operations.
 type KafkaConsumerGroupI interface {
+	// Start begins consuming messages using the provided consumer function and options.
 	Start(ctx context.Context, consumerFn func(message *KafkaMessage) error, opts ...ConsumerOption)
+
+	// BrokersURL returns the list of Kafka broker URLs.
 	BrokersURL() []string
+
+	// Close gracefully shuts down the consumer group.
 	Close() error
 }
 
+// KafkaConsumerConfig holds configuration parameters for Kafka consumer.
 type KafkaConsumerConfig struct {
-	Logger            ulogger.Logger
-	URL               *url.URL
-	BrokersURL        []string
-	Topic             string
-	Partitions        int
-	ConsumerRatio     int
-	ConsumerGroupID   string
-	ConsumerCount     int
-	AutoCommitEnabled bool
-	Replay            bool
+	Logger            ulogger.Logger // Logger instance for logging
+	URL               *url.URL       // Kafka broker URL
+	BrokersURL        []string       // List of Kafka broker URLs
+	Topic             string         // Kafka topic to consume from
+	Partitions        int            // Number of partitions
+	ConsumerRatio     int            // Ratio of consumers to partitions
+	ConsumerGroupID   string         // Consumer group identifier
+	ConsumerCount     int            // Number of consumers
+	AutoCommitEnabled bool           // Whether to auto-commit offsets
+	Replay            bool           // Whether to replay messages from the beginning
 }
 
+// KafkaConsumerGroup implements KafkaConsumerGroupI interface.
 type KafkaConsumerGroup struct {
 	Config        KafkaConsumerConfig
 	ConsumerGroup sarama.ConsumerGroup
 	cancel        context.CancelFunc
 }
 
+// NewKafkaConsumerGroupFromURL creates a new KafkaConsumerGroup from a URL.
 func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
 	if url == nil {
 		return nil, errors.NewConfigurationError("missing kafka url")

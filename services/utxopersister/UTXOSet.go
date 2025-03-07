@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -58,23 +59,53 @@ const (
 	utxosetExtension   = "utxo-set"
 )
 
+// UTXOSet manages a set of Unspent Transaction Outputs.
 type UTXOSet struct {
-	ctx             context.Context
-	logger          ulogger.Logger
-	settings        *settings.Settings
-	blockHash       chainhash.Hash
-	blockHeight     uint32
+	// ctx provides context for operations
+	ctx context.Context
+
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains configuration settings
+	settings *settings.Settings
+
+	// blockHash contains the hash of the current block
+	blockHash chainhash.Hash
+
+	// blockHeight represents the height of the current block
+	blockHeight uint32
+
+	// additionsStorer manages storage of UTXO additions
 	additionsStorer *filestorer.FileStorer
+
+	// deletionsStorer manages storage of UTXO deletions
 	deletionsStorer *filestorer.FileStorer
-	store           blob.Store
-	deletionsMap    map[[32]byte][]uint32
-	txCount         uint64
-	utxoCount       uint64
-	deletionCount   uint64
-	stats           *gocore.Stat
-	mu              sync.Mutex // Add this line
+
+	// store provides blob storage functionality
+	store blob.Store
+
+	// deletionsMap tracks deletions by transaction ID
+	deletionsMap map[[32]byte][]uint32
+
+	// txCount tracks the number of transactions
+	txCount uint64
+
+	// utxoCount tracks the number of UTXOs
+	utxoCount uint64
+
+	// deletionCount tracks the number of deletions
+	deletionCount uint64
+
+	// stats tracks operational statistics
+	stats *gocore.Stat
+
+	// mu provides mutex locking for thread safety
+	mu sync.Mutex
 }
 
+// NewUTXOSet creates a new UTXOSet instance for managing UTXOs.
+// It initializes the additions and deletions storers and writes their headers.
 func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
 	// Now, write the block file
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
@@ -114,6 +145,8 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	}, nil
 }
 
+// GetUTXOSet creates a new UTXOSet instance for an existing block.
+// It's used for reading existing UTXO data rather than creating new data.
 func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
 	return &UTXOSet{
 		ctx:       ctx,
@@ -124,6 +157,8 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	}, nil
 }
 
+// GetUTXOSetWithExistCheck creates a new UTXOSet instance and checks if it exists.
+// Returns the UTXOSet, a boolean indicating existence, and any error encountered.
 func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
 		ctx:       ctx,
@@ -174,6 +209,8 @@ func BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint3
 	return b, nil
 }
 
+// GetHeaderFromReader reads and parses a header from a reader.
+// Returns the magic string, block hash, block height, and any error encountered.
 func GetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, error) {
 	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 	// - a 32-byte hash (little endian) of the block that the data is for
@@ -196,6 +233,8 @@ func GetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, err
 	return magic, blockHash, blockHeight, nil
 }
 
+// GetUTXOSetHeaderFromReader reads and parses a UTXO set header from a reader.
+// Returns the magic string, block hash, block height, previous block hash, and any error encountered.
 func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, *chainhash.Hash, error) {
 	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 	// - a 32-byte hash (little endian) of the block that the data is for
@@ -224,6 +263,8 @@ func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint
 	return magic, blockHash, blockHeight, previousBlockHash, nil
 }
 
+// ProcessTx processes a transaction, updating the UTXO set accordingly.
+// It handles both spending (deletions) and creation (additions) of UTXOs.
 // ProcessTx makes the method thread-safe
 func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	us.mu.Lock()
@@ -273,6 +314,7 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	return nil
 }
 
+// delete records a UTXO deletion.
 func (us *UTXOSet) delete(deletion *UTXODeletion) error {
 	if _, err := us.deletionsStorer.Write(deletion.DeletionBytes()); err != nil {
 		return err
@@ -283,6 +325,7 @@ func (us *UTXOSet) delete(deletion *UTXODeletion) error {
 	return nil
 }
 
+// Close finalizes the UTXO set by writing footers and closing storers.
 func (us *UTXOSet) Close() error {
 	g, ctx := errgroup.WithContext(us.ctx)
 
@@ -353,6 +396,7 @@ type readCloserWrapper struct {
 	io.Closer
 }
 
+// GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
 func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetUTXOAdditionsReader",
 		tracing.WithDebugLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
@@ -383,6 +427,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 	return r, nil
 }
 
+// GetUTXODeletionsReader returns a reader for accessing UTXO deletions.
 func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
 	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
 	if err != nil {
@@ -558,6 +603,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	return nil
 }
 
+// GetUTXOSetReader returns a reader for accessing the UTXO set.
+// Optionally accepts a specific block hash to read from.
 func (us *UTXOSet) GetUTXOSetReader(optionalBlockHash ...*chainhash.Hash) (io.ReadCloser, error) {
 	blockHash := us.blockHash
 	if len(optionalBlockHash) > 0 {
@@ -585,6 +632,7 @@ func filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chain
 	return filteredUTXOs
 }
 
+// PadUTXOsWithNil pads a slice of UTXOs with nil values to match their indices.
 func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
 	// Determine the size of the new slice
 	var maxIndex uint32
@@ -606,6 +654,7 @@ func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
 	return padded
 }
 
+// UnpadSlice removes nil values from a padded slice.
 func UnpadSlice[T any](padded []*T) []*T {
 	utxos := make([]*T, 0, len(padded))
 
@@ -618,6 +667,7 @@ func UnpadSlice[T any](padded []*T) []*T {
 	return utxos
 }
 
+// checkMagic verifies the magic number in a file header.
 func checkMagic(r io.Reader, magic string) error {
 	// Read the header
 	m, _, _, err := GetHeaderFromReader(r)

@@ -1,4 +1,26 @@
 @startuml ChainIntegrity Test Logic
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
 
 participant "ChainIntegrity Service" as CI
 participant "Logger" as Log
@@ -68,6 +90,6 @@ loop for each blockHeader in reverse order
     CI -> CI: Calculate and validate block fees
 end
 
-left footer " Last Modified On: 15-April-2024. © 2024 Bitcoin SV. All rights reserved."
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

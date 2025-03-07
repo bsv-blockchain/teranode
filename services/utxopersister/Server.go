@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -23,20 +24,40 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// Server type carries the logger within it
+// Server manages the UTXO persistence operations.
 type Server struct {
-	logger           ulogger.Logger
-	settings         *settings.Settings
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains configuration settings
+	settings *settings.Settings
+
+	// blockchainClient provides access to blockchain operations
 	blockchainClient blockchain.ClientI
-	blockchainStore  blockchain_store.Store
-	blockStore       blob.Store
-	stats            *gocore.Stat
-	lastHeight       uint32
-	mu               sync.Mutex
-	running          bool
-	triggerCh        chan string
+
+	// blockchainStore provides access to blockchain storage
+	blockchainStore blockchain_store.Store
+
+	// blockStore provides access to block storage
+	blockStore blob.Store
+
+	// stats tracks operational statistics
+	stats *gocore.Stat
+
+	// lastHeight stores the last processed block height
+	lastHeight uint32
+
+	// mu provides mutex locking for thread safety
+	mu sync.Mutex
+
+	// running indicates if the server is currently processing
+	running bool
+
+	// triggerCh is used to trigger processing operations
+	triggerCh chan string
 }
 
+// New creates a new Server instance with the provided parameters.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -55,6 +76,7 @@ func New(
 	}
 }
 
+// NewDirect creates a new Server instance with direct blockchain store access.
 func NewDirect(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -72,6 +94,7 @@ func NewDirect(
 	}, nil
 }
 
+// Health checks the health status of the server and its dependencies.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -101,6 +124,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// Init initializes the server by reading the last processed height.
 func (s *Server) Init(ctx context.Context) (err error) {
 	height, err := s.readLastHeight(ctx)
 	if err != nil {
@@ -112,7 +136,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// Start function
+// Start begins the server's processing operations.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
@@ -172,10 +196,14 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 }
 
+// Stop stops the server's processing operations.
 func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 
+// trigger initiates the processing of the next block.
+// It ensures only one processing operation runs at a time and handles various trigger sources.
+// The source parameter indicates what triggered the processing (blockchain, timer, etc.).
 func (s *Server) trigger(ctx context.Context, source string) error {
 	s.mu.Lock()
 
@@ -223,6 +251,9 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 	return nil
 }
 
+// processNextBlock processes the next block in the chain.
+// It returns a duration to wait before processing the next block and any error encountered.
+// The duration is used to implement confirmation waiting periods.
 func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	var (
 		headers       []*model.BlockHeader
@@ -317,6 +348,9 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	return 0, s.writeLastHeight(ctx, s.lastHeight)
 }
 
+// readLastHeight reads the last processed block height from storage.
+// Returns the height as uint32 and any error encountered.
+// If the height file doesn't exist, it returns 0 and no error.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
 	b, err := s.blockStore.Get(ctx, nil, options.WithFilename("lastProcessed"), options.WithFileExtension("dat"))
@@ -346,6 +380,8 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	return heightUint32, nil
 }
 
+// writeLastHeight writes the current block height to storage.
+// It persists the last processed height for recovery purposes.
 func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	// Convert the height to a string
 	heightStr := fmt.Sprintf("%d", height)
@@ -362,6 +398,8 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	)
 }
 
+// verifyLastSet verifies the integrity of the last UTXO set.
+// It checks if the UTXO set for the given hash exists and has valid header and footer.
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,

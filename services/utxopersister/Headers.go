@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -11,13 +12,23 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// BlockIndex represents the index information for a block.
 type BlockIndex struct {
-	Hash        *chainhash.Hash    `json:"hash"`
-	Height      uint32             `json:"height"`
-	TxCount     uint64             `json:"txCount"`
-	BlockHeader *model.BlockHeader `json:"blockHeader"`
+	// Hash contains the block hash
+	Hash *chainhash.Hash
+
+	// Height represents the block height
+	Height uint32
+
+	// TxCount represents the number of transactions
+	TxCount uint64
+
+	// BlockHeader contains the block header information
+	BlockHeader *model.BlockHeader
 }
 
+// Serialise writes the BlockIndex data to the provided writer.
+// It returns an error if the write operation fails.
 func (bi *BlockIndex) Serialise(writer io.Writer) error {
 	if _, err := writer.Write(bi.Hash[:]); err != nil {
 		return err
@@ -42,6 +53,8 @@ func (bi *BlockIndex) Serialise(writer io.Writer) error {
 	return bi.BlockHeader.ToWireBlockHeader().Serialize(writer)
 }
 
+// NewUTXOHeaderFromReader creates a new BlockIndex from the provided reader.
+// It returns the BlockIndex and any error encountered during reading.
 func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	hash := &chainhash.Hash{}
 	if n, err := io.ReadFull(reader, hash[:]); err != nil || n != 32 {
@@ -86,6 +99,7 @@ func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	}, nil
 }
 
+// String returns a string representation of the BlockIndex.
 func (bi *BlockIndex) String() string {
 	return fmt.Sprintf("Hash: %s, Height: %d, TxCount: %d, PreviousHash: %s, ComputedHash: %s", bi.Hash.String(), bi.Height, bi.TxCount, bi.BlockHeader.HashPrevBlock.String(), bi.BlockHeader.String())
 }

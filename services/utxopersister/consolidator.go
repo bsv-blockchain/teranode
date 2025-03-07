@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -12,35 +13,73 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// headerIfc defines the interface for retrieving block headers.
 type headerIfc interface {
 	GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 }
 
+// consolidator manages the consolidation of UTXO additions and deletions.
 type consolidator struct {
-	logger           ulogger.Logger
-	settings         *settings.Settings
-	blockchainStore  headerIfc
+	// logger provides logging functionality
+	logger ulogger.Logger
+
+	// settings contains configuration settings
+	settings *settings.Settings
+
+	// blockchainStore provides access to blockchain storage
+	blockchainStore headerIfc
+
+	// blockchainClient provides access to blockchain client
 	blockchainClient headerIfc
-	blockStore       blob.Store
-	insertCounter    uint64 // Used to order the additions
-	additions        map[UTXODeletion]*Addition
-	deletions        map[UTXODeletion]struct{}
-	firstBlockHeight uint32 // The first block height in the range (startHeight)
-	// firstBlockHash    *chainhash.Hash
-	firstPreviousBlockHash *chainhash.Hash // This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
-	lastBlockHeight        uint32
-	lastBlockHash          *chainhash.Hash // Used to name the new UTXOSet
-	previousBlockHash      *chainhash.Hash // Used to put in the header of the new UTXOSet
+
+	// blockStore provides access to block storage
+	blockStore blob.Store
+
+	// insertCounter tracks the order of additions
+	insertCounter uint64
+
+	// additions maps deletions to their corresponding additions
+	additions map[UTXODeletion]*Addition
+
+	// deletions stores the set of deletions
+	deletions map[UTXODeletion]struct{}
+
+	// firstBlockHeight stores the height of the first block in range - The first block height in the range (startHeight)
+	firstBlockHeight uint32
+
+	// firstPreviousBlockHash stores the hash of the block before the first block
+	// This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
+	firstPreviousBlockHash *chainhash.Hash
+
+	// lastBlockHeight stores the height of the last block
+	lastBlockHeight uint32
+
+	// lastBlockHash stores the hash of the last block
+	lastBlockHash *chainhash.Hash
+
+	// previousBlockHash stores the hash of the previous block
+	previousBlockHash *chainhash.Hash
 }
 
+// Addition represents a UTXO addition.
 type Addition struct {
-	Order    uint64
-	Value    uint64
-	Height   uint32
-	Script   []byte
+	// Order represents the insertion order
+	Order uint64
+
+	// Value represents the UTXO value
+	Value uint64
+
+	// Height represents the block height
+	Height uint32
+
+	// Script contains the locking script
+	Script []byte
+
+	// Coinbase indicates if this is a coinbase transaction
 	Coinbase bool
 }
 
+// NewConsolidator creates a new consolidator instance.
 func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
 	return &consolidator{
 		logger:                 logger,
@@ -54,6 +93,7 @@ func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockc
 	}
 }
 
+// ConsolidateBlockRange consolidates UTXOs for the specified block range.
 func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, endBlock uint32) error {
 	var (
 		headers []*model.BlockHeader
@@ -121,6 +161,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	return nil
 }
 
+// processDeletionsFromReader processes UTXO deletions from a reader.
 func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Reader) error {
 	if err := checkMagic(r, "U-D-1.0"); err != nil {
 		return err
@@ -149,6 +190,7 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 	}
 }
 
+// processAdditionsFromReader processes UTXO additions from a reader.
 func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.ReadCloser) error {
 	if err := checkMagic(r, "U-A-1.0"); err != nil {
 		return err
@@ -201,7 +243,7 @@ type keyAndVal struct {
 	Value *Addition
 }
 
-// Helper function to get sorted additions
+// getSortedUTXOWrappers returns a sorted slice of UTXO wrappers.
 func (c *consolidator) getSortedUTXOWrappers() []*UTXOWrapper {
 	sortedAdditions := make([]*keyAndVal, 0, len(c.additions))
 

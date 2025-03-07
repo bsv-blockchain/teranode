@@ -1,3 +1,4 @@
+// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -7,6 +8,15 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
+// StartKafkaControlledListener starts a Kafka listener that can be controlled via a channel.
+// It manages the lifecycle of a Kafka listener based on control signals received through kafkaControlChan.
+//
+// Parameters:
+//   - ctx: Context for controlling the listener's lifecycle
+//   - logger: Logger instance for logging operations
+//   - kafkaControlChan: Channel for receiving control signals (true to start, false to stop)
+//   - kafkaConfigURL: Kafka configuration URL
+//   - listener: Function that implements the actual listening logic
 func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, kafkaControlChan chan bool, kafkaConfigURL *url.URL,
 	listener func(ctx context.Context, kafkaURL *url.URL, groupID string)) {
 	var (
@@ -45,6 +55,14 @@ func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, ka
 // this function is a utility function to cleanly stop the listener when the context is done
 // the consumerFn is called for each message received
 // NOTE: this functionality could be moved into the client.Start() function
+//
+// Parameters:
+//   - ctx: Context for controlling the listener's lifecycle
+//   - logger: Logger instance for logging operations
+//   - kafkaURL: Kafka configuration URL
+//   - groupID: Consumer group identifier
+//   - autoCommit: Whether to enable auto-commit of offsets
+//   - consumerFn: Function to process received messages
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, autoCommit bool, consumerFn func(msg *KafkaMessage) error) {
 	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, autoCommit)
 	if err != nil {

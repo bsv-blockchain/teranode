@@ -1,3 +1,4 @@
+// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -8,10 +9,24 @@ import (
 	"github.com/IBM/sarama"
 )
 
-/*
-HealthChecker is a function that checks the health of a Kafka cluster.
-It returns a function that can be used to check the health of a Kafka cluster.
-*/
+// HealthChecker creates a function that checks the health of a Kafka cluster.
+// It returns a health check function that can be used to verify the Kafka cluster's status.
+//
+// Parameters:
+//   - ctx: Context for the health check operation
+//   - brokersURL: List of Kafka broker URLs to check
+//
+// Returns:
+//   - A function that performs the actual health check with the following signature:
+//     func(ctx context.Context, checkLiveness bool) (int, string, error)
+//     where:
+//   - int: HTTP status code (200 for healthy, 503 for unhealthy)
+//   - string: Health check message
+//   - error: Any error encountered during the health check
+//
+// The returned health check function attempts to establish a connection to the Kafka cluster.
+// If successful, it indicates the cluster is healthy. This check doesn't verify individual
+// consumer or producer functionality but rather tests basic connectivity to the cluster.
 func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/*
 		There isn't a built-in way to check the health of a Kafka cluster.

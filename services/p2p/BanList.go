@@ -1,3 +1,4 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
 package p2p
 
 import (
@@ -21,27 +22,39 @@ var (
 	banListOnce     sync.Once
 )
 
+// BanInfo contains information about a banned peer.
 type BanInfo struct {
-	ExpirationTime time.Time
-	Subnet         *net.IPNet
+	ExpirationTime time.Time  // Time when the ban expires
+	Subnet         *net.IPNet // Subnet information for the ban
 }
 
+// BanEvent represents a ban-related event in the system.
 type BanEvent struct {
-	Action string // "add" or "remove"
-	IP     string
-	Subnet *net.IPNet
+	Action string     // Action type ("add" or "remove")
+	IP     string     // IP address involved in the ban
+	Subnet *net.IPNet // Subnet information if applicable
 }
 
+// BanList manages the list of banned peers and related operations.
 type BanList struct {
-	db          *usql.DB
-	engine      util.SQLEngine
-	logger      ulogger.Logger
-	bannedPeers map[string]BanInfo
-	subscribers map[chan BanEvent]struct{}
-
-	mu sync.RWMutex
+	db          *usql.DB                   // Database connection
+	engine      util.SQLEngine             // SQL engine type
+	logger      ulogger.Logger             // Logger instance
+	bannedPeers map[string]BanInfo         // Map of banned peers
+	subscribers map[chan BanEvent]struct{} // Map of ban event subscribers
+	mu          sync.RWMutex               // Mutex for thread-safe operations
 }
 
+// GetBanList retrieves or creates a singleton instance of BanList.
+// Parameters:
+//   - ctx: Context for the operation
+//   - logger: Logger instance
+//   - tSettings: Configuration settings
+//
+// Returns:
+//   - *BanList: The ban list instance
+//   - chan BanEvent: Channel for ban events
+//   - error: Any error encountered
 func GetBanList(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*BanList, chan BanEvent, error) {
 	var eventChan chan BanEvent
 
@@ -115,10 +128,18 @@ func (b *BanList) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// Add adds an IP or subnet to the ban list.
 // map of banned ips with their expiration time
 // if the ip or subnet is already banned, the expiration time will be updated
 // if the ip or subnet is not banned, it will be added to the map
 // ipOrSubnet can be an IP address or a subnet in CIDR notation
+// Parameters:
+//   - ctx: Context for the operation
+//   - ipOrSubnet: IP address or subnet to ban
+//   - expirationTime: When the ban should expire
+//
+// Returns:
+//   - error: Any error encountered during the operation
 func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -171,6 +192,14 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 
 	return b.savePeerToDatabase(ctx, key, banInfo)
 }
+
+// Remove removes an IP or subnet from the ban list.
+// Parameters:
+//   - ctx: Context for the operation
+//   - ipOrSubnet: IP address or subnet to unban
+//
+// Returns:
+//   - error: Any error encountered during the operation
 func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -214,7 +243,12 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 	return err
 }
 
-// IsBanned checks if a given IP address is banned
+// IsBanned checks if a given IP address is currently banned.
+// Parameters:
+//   - ipStr: IP address to check
+//
+// Returns:
+//   - bool: true if the IP is banned, false otherwise
 func (b *BanList) IsBanned(ipStr string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -324,6 +358,9 @@ func (b *BanList) loadFromDatabase(ctx context.Context) error {
 	return rows.Err()
 }
 
+// Subscribe creates and returns a new channel for ban events.
+// Returns:
+//   - chan BanEvent: Channel that will receive ban events
 func (b *BanList) Subscribe() chan BanEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -334,6 +371,9 @@ func (b *BanList) Subscribe() chan BanEvent {
 	return ch
 }
 
+// Unsubscribe removes a subscriber from receiving ban events.
+// Parameters:
+//   - ch: Channel to unsubscribe
 func (b *BanList) Unsubscribe(ch chan BanEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -357,6 +397,7 @@ func (b *BanList) notifySubscribers(event BanEvent) {
 	b.logger.Debugf("Finished notifying subscribers for %s\n", event.IP)
 }
 
+// Clear removes all entries from the ban list and cleans up resources.
 func (b *BanList) Clear() {
 	b.mu.Lock()
 	defer b.mu.Unlock()

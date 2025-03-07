@@ -1,3 +1,4 @@
+// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -18,19 +19,27 @@ kafka-topics.sh --describe --bootstrap-server localhost:9092
 kafka-console-consumer.sh --topic blocks --bootstrap-server localhost:9092 --from-beginning
 */
 
+// KafkaProducerI defines the interface for Kafka producer operations.
 type KafkaProducerI interface {
+	// GetClient returns the underlying consumer group client
 	GetClient() sarama.ConsumerGroup
+
+	// Send publishes a message with the given key and data
 	Send(key []byte, data []byte) error
+
+	// Close gracefully shuts down the producer
 	Close() error
 }
 
+// SyncKafkaProducer implements a synchronous Kafka producer.
 type SyncKafkaProducer struct {
-	Producer   sarama.SyncProducer
-	Topic      string
-	Partitions int32
-	client     sarama.ConsumerGroup
+	Producer   sarama.SyncProducer  // Underlying Sarama sync producer
+	Topic      string               // Kafka topic to produce to
+	Partitions int32                // Number of partitions
+	client     sarama.ConsumerGroup // Associated consumer group client
 }
 
+// Close gracefully shuts down the sync producer.
 func (k *SyncKafkaProducer) Close() error {
 	if err := k.Producer.Close(); err != nil {
 		return errors.NewServiceError("failed to close Kafka producer", err)
@@ -39,10 +48,13 @@ func (k *SyncKafkaProducer) Close() error {
 	return nil
 }
 
+// GetClient returns the associated consumer group client.
 func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
 	return k.client
 }
 
+// Send publishes a message to Kafka with the specified key and data.
+// The partition is determined by hashing the key.
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 	kPartitionsUint32, err := util.SafeInt32ToUint32(k.Partitions)
 	if err != nil {
@@ -66,6 +78,16 @@ func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 	return err
 }
 
+// NewKafkaProducer creates a new Kafka producer from the given URL.
+// It also creates the topic if it doesn't exist with the specified configuration.
+//
+// Parameters:
+//   - kafkaURL: URL containing Kafka configuration including topic and partition settings
+//
+// Returns:
+//   - ClusterAdmin: Kafka cluster administrator interface
+//   - KafkaProducerI: Configured Kafka producer
+//   - error: Any error encountered during setup
 func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, error) {
 	brokersURL := strings.Split(kafkaURL.Host, ",")
 
@@ -119,6 +141,17 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 	return clusterAdmin, producer, nil
 }
 
+// ConnectProducer establishes a connection to Kafka and creates a new sync producer.
+//
+// Parameters:
+//   - brokersURL: List of Kafka broker URLs
+//   - topic: Topic to produce messages to
+//   - partitions: Number of partitions for the topic
+//   - flushBytes: Optional parameter to specify flush size in bytes
+//
+// Returns:
+//   - KafkaProducerI: Configured Kafka producer
+//   - error: Any error encountered during connection
 func ConnectProducer(brokersURL []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true

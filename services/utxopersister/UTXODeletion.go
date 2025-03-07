@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -8,16 +9,20 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// UTXODeletion represents a deletion of an Unspent Transaction Output.
 type UTXODeletion struct {
-	TxID  chainhash.Hash
+	// TxID contains the transaction ID
+	TxID chainhash.Hash
+
+	// Index represents the output index in the transaction
 	Index uint32
 }
 
-/* Binary format is:
-32 bytes - txID
-4 bytes - index
-*/
-
+// NewUTXODeletionFromReader creates a new UTXODeletion from the provided reader.
+// It returns the UTXODeletion and any error encountered during reading.
+// Binary format is:
+// 32 bytes - txID
+// 4 bytes - index
 func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
 	// Read all the fixed size fields
 	b := make([]byte, 32+4)
@@ -43,6 +48,7 @@ func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
 	return u, nil
 }
 
+// DeletionBytes returns the byte representation of the UTXODeletion.
 func (u *UTXODeletion) DeletionBytes() []byte {
 	b := make([]byte, 0, 32+4)
 
@@ -53,6 +59,7 @@ func (u *UTXODeletion) DeletionBytes() []byte {
 	return b
 }
 
+// String returns a string representation of the UTXODeletion.
 func (u *UTXODeletion) String() string {
 	return fmt.Sprintf("%s:%d", u.TxID.String(), u.Index)
 }

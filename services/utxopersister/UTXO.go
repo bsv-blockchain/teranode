@@ -1,3 +1,4 @@
+// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
 package utxopersister
 
 import (
@@ -12,21 +13,37 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// EOFMarker represents the end-of-file marker (32 zero bytes).
 var EOFMarker = make([]byte, 32) // 32 zero bytes
 
+// UTXOWrapper wraps transaction outputs with additional metadata.
 type UTXOWrapper struct {
-	TxID     chainhash.Hash
-	Height   uint32
+	// TxID contains the transaction ID
+	TxID chainhash.Hash
+
+	// Height represents the block height
+	Height uint32
+
+	// Coinbase indicates if this is a coinbase transaction
 	Coinbase bool
-	UTXOs    []*UTXO
+
+	// UTXOs contains the unspent transaction outputs
+	UTXOs []*UTXO
 }
 
+// UTXO represents an Unspent Transaction Output.
 type UTXO struct {
-	Index  uint32
-	Value  uint64
+	// Index represents the output index in the transaction
+	Index uint32
+
+	// Value represents the amount in satoshis
+	Value uint64
+
+	// Script contains the locking script
 	Script []byte
 }
 
+// Bytes returns the byte representation of the UTXOWrapper.
 func (uw *UTXOWrapper) Bytes() []byte {
 	size := 32 + 4 + 4 // TXID + encoded height / coinbase + len(UTXOs)
 	for _, u := range uw.UTXOs {
@@ -61,6 +78,7 @@ func (uw *UTXOWrapper) Bytes() []byte {
 	return b
 }
 
+// DeletionBytes returns the byte representation for deletion of a specific output.
 func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 	var b [36]byte
 
@@ -73,6 +91,7 @@ func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 	return b
 }
 
+// NewUTXOWrapperFromReader creates a new UTXOWrapper from the provided reader.
 func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error) {
 	uw := &UTXOWrapper{}
 
@@ -116,10 +135,12 @@ func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, e
 	return uw, nil
 }
 
+// NewUTXOWrapperFromBytes creates a new UTXOWrapper from the provided bytes.
 func NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error) {
 	return NewUTXOWrapperFromReader(context.Background(), bytes.NewReader(b))
 }
 
+// String returns a string representation of the UTXOWrapper.
 func (uw *UTXOWrapper) String() string {
 	s := strings.Builder{}
 
@@ -136,6 +157,7 @@ func (uw *UTXOWrapper) String() string {
 	return s.String()
 }
 
+// NewUTXOFromReader creates a new UTXO from the provided reader.
 func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	// Read all the fixed size fields
 	var b [16]byte // index + value + length of script
@@ -166,6 +188,7 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 // 	return NewUTXOFromReader(bytes.NewReader(b))
 // }
 
+// Bytes returns the byte representation of the UTXO.
 func (u *UTXO) Bytes() []byte {
 	b := make([]byte, 0, 4+8+4+len(u.Script)) // index + value + length of script + script
 
@@ -190,6 +213,7 @@ func (u *UTXO) Bytes() []byte {
 	return b
 }
 
+// String returns a string representation of the UTXO.
 func (u *UTXO) String() string {
 	return fmt.Sprintf("%d: %d - %x", u.Index, u.Value, u.Script)
 }

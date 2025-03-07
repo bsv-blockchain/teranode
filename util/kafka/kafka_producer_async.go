@@ -1,3 +1,4 @@
+// Package kafka provides Kafka consumer and producer implementations for message handling.
 package kafka
 
 import (
@@ -19,45 +20,67 @@ import (
 	"github.com/bitcoin-sv/teranode/util/retry"
 )
 
+// KafkaAsyncProducerI defines the interface for asynchronous Kafka producer operations.
 type KafkaAsyncProducerI interface {
+	// Start begins the async producer operation with the given message channel
 	Start(ctx context.Context, ch chan *Message)
+
+	// Stop gracefully shuts down the async producer
 	Stop() error
+
+	// BrokersURL returns the list of Kafka broker URLs
 	BrokersURL() []string
+
+	// Publish sends a message to the producer's channel
 	Publish(msg *Message)
 }
 
+// KafkaProducerConfig holds configuration for the async Kafka producer.
 type KafkaProducerConfig struct {
-	Logger                ulogger.Logger
-	URL                   *url.URL
-	BrokersURL            []string
-	Topic                 string
-	Partitions            int32
-	ReplicationFactor     int16
-	RetentionPeriodMillis string
-	SegmentBytes          string
-	FlushBytes            int
-	FlushMessages         int
-	FlushFrequency        time.Duration
+	Logger                ulogger.Logger // Logger instance
+	URL                   *url.URL       // Kafka URL
+	BrokersURL            []string       // List of broker URLs
+	Topic                 string         // Topic to produce to
+	Partitions            int32          // Number of partitions
+	ReplicationFactor     int16          // Replication factor for topic
+	RetentionPeriodMillis string         // Message retention period
+	SegmentBytes          string         // Segment size in bytes
+	FlushBytes            int            // Flush threshold in bytes
+	FlushMessages         int            // Number of messages before flush
+	FlushFrequency        time.Duration  // Time between flushes
 }
 
+// MessageStatus represents the status of a produced message.
 type MessageStatus struct {
 	Success bool
 	Error   error
 	Time    time.Time
 }
 
+// Message represents a Kafka message with key and value.
 type Message struct {
 	Key   []byte
 	Value []byte
 }
 
+// KafkaAsyncProducer implements asynchronous Kafka producer functionality.
 type KafkaAsyncProducer struct {
-	Config         KafkaProducerConfig
-	Producer       sarama.AsyncProducer
-	publishChannel chan *Message
-	closed         atomic.Bool
+	Config         KafkaProducerConfig  // Producer configuration
+	Producer       sarama.AsyncProducer // Underlying Sarama async producer
+	publishChannel chan *Message        // Channel for publishing messages
+	closed         atomic.Bool          // Flag indicating if producer is closed
 }
 
+// NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
+//
+// Parameters:
+//   - ctx: Context for producer operations
+//   - logger: Logger instance
+//   - url: URL containing Kafka configuration
+//
+// Returns:
+//   - *KafkaAsyncProducer: Configured async producer
+//   - error: Any error encountered during setup
 func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := util.SafeIntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
@@ -94,6 +117,15 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 	return producer, nil
 }
 
+// NewKafkaAsyncProducer creates a new async producer with the given configuration.
+//
+// Parameters:
+//   - logger: Logger instance
+//   - cfg: Producer configuration
+//
+// Returns:
+//   - *KafkaAsyncProducer: Configured async producer
+//   - error: Any error encountered during setup
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
@@ -148,6 +180,8 @@ func (c *KafkaAsyncProducer) decodeKeyOrValue(encoder sarama.Encoder) string {
 	return fmt.Sprintf("%x", bytes)
 }
 
+// Start begins the async producer operation.
+// It sets up message handling and error handling goroutines.
 func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
@@ -224,6 +258,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
 }
 
+// Stop gracefully shuts down the async producer.
 func (c *KafkaAsyncProducer) Stop() error {
 	if c == nil {
 		return nil
@@ -243,6 +278,7 @@ func (c *KafkaAsyncProducer) Stop() error {
 	return nil
 }
 
+// BrokersURL returns the list of configured Kafka broker URLs.
 func (c *KafkaAsyncProducer) BrokersURL() []string {
 	if c == nil {
 		return nil
@@ -251,10 +287,19 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 	return c.Config.BrokersURL
 }
 
+// Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.publishChannel <- msg
 }
 
+// createTopic creates a new Kafka topic with the specified configuration.
+//
+// Parameters:
+//   - admin: Kafka cluster administrator
+//   - cfg: Producer configuration containing topic settings
+//
+// Returns:
+//   - error: Any error encountered during topic creation
 func createTopic(admin sarama.ClusterAdmin, cfg KafkaProducerConfig) error {
 	err := admin.CreateTopic(cfg.Topic, &sarama.TopicDetail{
 		NumPartitions:     cfg.Partitions,

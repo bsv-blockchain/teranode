@@ -1,3 +1,4 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
 package p2p
 
 import (
@@ -34,36 +35,39 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// Various topic name variables used for P2P communication
 var (
-	blockTopicName      string
-	bestBlockTopicName  string
-	subtreeTopicName    string
-	miningOnTopicName   string
-	rejectedTxTopicName string
+	blockTopicName      string // Topic name for block-related messages
+	bestBlockTopicName  string // Topic name for best block messages
+	subtreeTopicName    string // Topic name for subtree messages
+	miningOnTopicName   string // Topic name for mining-on messages
+	rejectedTxTopicName string // Topic name for rejected transaction messages
 )
 
 const (
-	banActionAdd = "add"
+	banActionAdd = "add" // Action constant for adding a ban
 )
 
+// Server represents the P2P server instance and implements the P2P service functionality.
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                       *p2p.P2PNode
-	logger                        ulogger.Logger
-	settings                      *settings.Settings
-	bitcoinProtocolID             string
-	blockchainClient              blockchain.ClientI
-	blockValidationClient         *blockvalidation.Client
-	AssetHTTPAddressURL           string
-	e                             *echo.Echo
-	notificationCh                chan *notificationMsg
-	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI
-	subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI
-	blocksKafkaProducerClient     kafka.KafkaAsyncProducerI
-	banList                       *BanList
-	banChan                       chan BanEvent
+	P2PNode                       *p2p.P2PNode              // The P2P network node instance
+	logger                        ulogger.Logger            // Logger instance for the server
+	settings                      *settings.Settings        // Configuration settings
+	bitcoinProtocolID             string                    // Bitcoin protocol identifier
+	blockchainClient              blockchain.ClientI        // Client for blockchain interactions
+	blockValidationClient         *blockvalidation.Client   // Client for block validation
+	AssetHTTPAddressURL           string                    // HTTP address URL for assets
+	e                             *echo.Echo                // Echo server instance
+	notificationCh                chan *notificationMsg     // Channel for notifications
+	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
+	subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
+	blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
+	banList                       *BanList                  // List of banned peers
+	banChan                       chan BanEvent             // Channel for ban events
 }
 
+// NewServer creates a new P2P server instance with the provided configuration and dependencies.
 func NewServer(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -171,6 +175,7 @@ func NewServer(
 	return p2pServer, nil
 }
 
+// Health performs health checks on the P2P server and its dependencies.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -203,6 +208,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// Init initializes the P2P server and its components.
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
@@ -228,6 +234,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// Start begins the P2P server operations and starts listening for connections.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -483,6 +490,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	}
 }
 
+// StartHTTP starts the HTTP server component of the P2P server.
 func (s *Server) StartHTTP(ctx context.Context) error {
 	addr := s.settings.P2P.HTTPListenAddress
 	if addr == "" {
@@ -533,6 +541,7 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the P2P server and its components.
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Infof("[Stop] Stopping P2P service")
 
@@ -778,6 +787,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 	}
 }
 
+// GetPeers returns a list of connected peers.
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
