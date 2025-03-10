@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/go-utils"
@@ -154,9 +155,16 @@ func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte, opts ...options.
 func (l *LocalTTL) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
 	value, err := l.ttlStore.Get(ctx, key, opts...)
 	if err != nil {
-		// couldn't find it in the ttl store, try the blob store
-		l.logger.Errorf("LocalTTL.Get miss for %s", utils.ReverseAndHexEncodeSlice(key))
-		return l.blobStore.Get(ctx, key, opts...)
+		if errors.Is(err, errors.ErrNotFound) {
+			opts = append(opts, options.WithFileExtension("subtreeToCheck"))
+			value, err = l.ttlStore.Get(ctx, key, opts...)
+		}
+
+		if err != nil {
+			// couldn't find it in the ttl store, try the blob store
+			l.logger.Errorf("LocalTTL.Get miss for %s", utils.ReverseAndHexEncodeSlice(key))
+			return l.blobStore.Get(ctx, key, opts...)
+		}
 	}
 
 	return value, nil
