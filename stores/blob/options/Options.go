@@ -123,6 +123,31 @@ func WithFooter(footer *Footer) StoreOption {
 	}
 }
 
+// ReplaceExtention replaces the file extension in the given FileOptions.
+// Parameters:
+//   - fileOpts: The FileOptions to replace the extension in.
+//   - oldExt: The old file extension to replace.
+//   - newExt: The new file extension to replace with.
+//
+// Returns:
+//   - A new slice of FileOptions with the old extension replaced with the new extension.
+func ReplaceExtention(fileOpts []FileOption, oldExt string, newExt string) []FileOption {
+	newOpts := make([]FileOption, 0, len(fileOpts))
+
+	for _, opt := range fileOpts {
+		tempOpt := &Options{}
+		opt(tempOpt)
+
+		if tempOpt.Extension == oldExt {
+			newOpts = append(newOpts, WithFileExtension(newExt))
+		} else {
+			newOpts = append(newOpts, opt)
+		}
+	}
+
+	return newOpts
+}
+
 // MergeOptions combines StoreOptions and FileOptions into a single MergedOptions struct
 func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	options := &Options{}

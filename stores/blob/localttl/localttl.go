@@ -156,8 +156,7 @@ func (l *LocalTTL) Get(ctx context.Context, key []byte, opts ...options.FileOpti
 	value, err := l.ttlStore.Get(ctx, key, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			opts = append(opts, options.WithFileExtension("subtreeToCheck"))
-			value, err = l.ttlStore.Get(ctx, key, opts...)
+			value, err = l.ttlStore.Get(ctx, key, options.ReplaceExtention(opts, "subtree", "subtreeToCheck")...)
 		}
 
 		if err != nil {
