@@ -283,14 +283,14 @@ cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
 
 Force the node to transition to Run mode:
 ```
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext localhost:BLOCKCHAIN_PORT blockchain_api.BlockchainAPI.Run
 ```
 
 or LegacySync mode:
 ```
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.LegacySync
+grpcurl -plaintext localhost:BLOCKCHAIN_PORT blockchain_api.BlockchainAPI.LegacySync
 ```
-
+where the BLOCKCHAIN_PORT is the port where Docker is mapping the internal port 8087. Use `docker container ls` to locate this one.
 
 
 **Step 7: Verify Services**
@@ -356,6 +356,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
     - **P2P service**: Ports 9905, 9906
     - **RPC service**: 9292
 
+Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
 
 
 **Step 10: Logging and Troubleshooting**
