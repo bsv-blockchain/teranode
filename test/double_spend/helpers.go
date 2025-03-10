@@ -1,4 +1,4 @@
-//go:build test_sequentially
+//go:build test_sequentially || debug
 
 package doublespendtest
 
