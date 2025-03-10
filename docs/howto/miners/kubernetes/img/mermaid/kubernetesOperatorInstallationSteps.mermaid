@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant User
+    participant Minikube
+    participant K8s
+    participant Docker
+    participant Helm
+
+    User->>Minikube: Start cluster
+    User->>Docker: Create NFS volume
+    User->>Docker: Run NFS server
+    User->>K8s: Deploy dependencies
+    Note over K8s: Aerospike, PostgreSQL, Kafka
+    User->>Docker: Pull Teranode images
+    User->>Minikube: Load images
+    User->>Helm: Install Teranode operator
+    User->>K8s: Apply Teranode configs
+    User->>K8s: Deploy Teranode

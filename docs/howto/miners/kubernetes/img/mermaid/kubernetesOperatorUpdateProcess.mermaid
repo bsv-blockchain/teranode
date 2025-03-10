@@ -1,0 +1,13 @@
+flowchart TD
+    A[Start Update Process] --> B[Set Version Variables]
+    B --> C[Login to ECR]
+    C --> D[Pull New Images]
+    D --> E[Load Images to Minikube]
+    E --> F[Login to Helm Registry]
+    F --> G[Update Operator]
+    G --> H[Verify Deployment]
+    H --> I{All Pods Ready?}
+    I -->|Yes| J[Update Complete]
+    I -->|No| K[Check Logs]
+    K --> L[Troubleshoot]
+    L --> H

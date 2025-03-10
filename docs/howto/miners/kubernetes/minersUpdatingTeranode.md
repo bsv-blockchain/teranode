@@ -1,101 +1,83 @@
-# Updating Teranode to a New Version - Kubernetes Operator
+# How to Update Teranode with Kubernetes Helm
 
-Last modified: 29-January-2025
+Last modified: 6-March-2025
 
------
+## Introduction
 
+This guide provides instructions for updating Teranode in a Kubernetes environment using Helm.
 
-With the BSVA Catalog installation method, updates are typically handled automatically for minor releases. However, for major version updates or to change the update policy, follow these steps:
+## Prerequisites
 
-1. **Check Current Version**
+Ensure you have:
+- Access to the ECR registry
+- AWS CLI configured
+- Helm installed
+- Existing Teranode deployment
 
-```
-kubectl get csv -n teranode-operator
-```
+## Update Process
 
-2. **Update the Subscription**
+![kubernetesOperatorUpdateProcess.svg](img/mermaid/kubernetesOperatorUpdateProcess.svg)
 
-If you need to change the channel or update behavior, edit the subscription:
+### 1. Set Version Variables
 
-```
-kubectl edit subscription teranode-operator -n teranode-operator
-```
-
-You can modify the
-
-```
-channel
-```
-
-or
-
-```
-installPlanApproval
+```bash
+# Set new versions
+export OPERATOR_VERSION=<new-version>
+export TERANODE_VERSION=<new-version>
+export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
 ```
 
-fields as needed.
+### 2. Update Images
 
-3. **Monitor the Update Process**
+```bash
+# Login to ECR
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-Watch the ClusterServiceVersion (CSV) and pods as they update:
+# Pull new images
+docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 
-```
-kubectl get csv -n teranode-operator -w
-kubectl get pods -n teranode-operator -w
-```
-
-4. **Verify the Update**
-
-Check that all pods are running and ready:
-
-```
-kubectl get pods -n teranode-operator
+# Load into Minikube
+minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 ```
 
-5. **Check Logs for Any Issues**
+### 3. Update Operator
 
-```
-kubectl logs deployment/teranode-operator-controller-manager -n teranode-operator
-```
+```bash
+# Login to Helm registry
+aws ecr get-login-password --region eu-west-1 | helm registry login --username AWS --password-stdin 434394763103.dkr.ecr.eu-west-1.amazonaws.com
 
-
-
-**Important Considerations:**
-* **Data Persistence**: The update process should not affect data stored in PersistentVolumes. However, it's always good practice to backup important data before updating.
-* **Configuration Changes**: Check the release notes or documentation for any required changes to ConfigMaps or Secrets.
-* **Custom Resource Changes**: Be aware of any new fields or changes in the Cluster custom resource structure.
-* **Database Migrations**: Some updates may require database schema changes. The operator handles this automatically.
-* Some updates may require manual intervention, especially for major version changes. Always refer to the official documentation for specific update instructions
-
-
-
-**After the update:**
-
-* Monitor the system closely for any unexpected behavior.
-
-* If you've set up Prometheus and Grafana, check the dashboards to verify that performance metrics are normal.
-
-* Verify that all services are communicating correctly and that the node is in sync with the network.
-
-
-
-**If you encounter any issues during or after the update:**
-* Check the specific pod logs for error messages:
-```
-kubectl logs <pod-name>
+# Update operator
+helm upgrade teranode-operator oci://434394763103.dkr.ecr.eu-west-1.amazonaws.com/teranode-operator \
+    -n teranode-operator \
+    -f kubernetes/teranode/teranode-operator.yaml
 ```
 
-* Check the operator logs for any issues during the update process:
+### 4. Verify Update
+
+```bash
+# Check all pods are running
+kubectl get pods -n teranode-operator | grep -E 'aerospike|postgres|kafka|teranode-operator'
+
+# Check Teranode services are ready
+kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --timeout=300s
+
+# View Teranode logs
+kubectl logs -n teranode-operator -l app=blockchain -f
 ```
-kubectl logs -l control-plane=controller-manager -n <operator-namespace>
-```
 
-* Consult the release notes for known issues and solutions.
+## Production Considerations
 
-* If needed, you can rollback to the previous version by applying the old Cluster resource and downgrading the operator.
+For production deployments:
+- Create backups before updating
+- Review release notes for breaking changes
+- Test updates in a staging environment first
+- Monitor system during and after update
+- Have a rollback plan prepared
 
-* Reach out to the Teranode support team for assistance if problems persist.
+## Other Resources
 
-
-
-Remember, the exact update process may vary depending on the specific changes in each new version. Always refer to the official update instructions provided with each new release for the most accurate and up-to-date information.
+- [How to Install Teranode](minersHowToInstallation.md)
+- [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
+- [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)

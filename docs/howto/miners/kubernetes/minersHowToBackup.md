@@ -1,6 +1,6 @@
 # How to Backup Teranode Data
 
-Last modified: 29-January-2025
+Last modified: 6-March-2025
 
 
 Regular and secure backups are essential for protecting a Teranode installation, ensuring data integrity, and safeguarding your wallet. The next steps outline how to back up your Teranode wallet and data:

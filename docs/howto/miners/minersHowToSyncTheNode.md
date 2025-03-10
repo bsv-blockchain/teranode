@@ -1,9 +1,8 @@
 # Syncing the Blockchain
 
-Last Modified: 17-December-2024
+Last modified: 6-March-2025
 
 ## Index
-
 
 - [Introduction](#introduction)
 - [Default Synchronization Process](#default-synchronization-process)
@@ -12,25 +11,27 @@ Last Modified: 17-December-2024
     - [Seeding Teranode with pre-existing Teranode data](#seeding-teranode-with-pre-existing-teranode-data)
     - [Recovery After Downtime](#recovery-after-downtime)
         - [Handling Extended Downtime:](#handling-extended-downtime)
-
+- [Other Resources](#other-resources)
 
 ## Introduction
 
 When a new Teranode instance is started, it begins the synchronization process automatically. This initial block synchronization process involves downloading and validating the entire blockchain history from other nodes in the network.
 
+![syncStateFlow.svg](img/mermaid/syncStateFlow.svg)
 
 ## Default Synchronization Process
 
 1. **Peer Discovery**:
-- Upon startup, the Teranode peer service (typically running in the `peer` pod / container) begins to discover and connect to other nodes in the BSV network.
+- Upon startup, the Teranode peer service (typically running in the `peer` pod / container) begins in IDLE state. To begin syncing, you need to explicitly set the state to `legacysyncing`.
 
-
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+```
 
 2. **Block Download**:
 - Once connected, Teranode requests blocks from its peers, typically starting with the first node it successfully connects to.
 
-- This peer could be either a traditional BSV node or another BSV Teranode.
-
+- When in `legacysyncing` status, this peer represents a traditional BSV node (if in `run` state, Teranode can sync from another BSV Teranode).
 
 
 3. **Validation and Storage**:
@@ -46,10 +47,16 @@ When a new Teranode instance is started, it begins the synchronization process a
 
 - You can monitor the synchronization progress by checking the logs of relevant pods:
 ```
-kubectl logs <blockchain-pod-name>
-kubectl logs <peer-pod-name>
-kubectl logs <legacy-pod-name>
+# View Teranode logs
+kubectl logs -n teranode-operator -l app=blockchain -f
+
+# Check all pods are running
+kubectl get pods -n teranode-operator | grep -E 'aerospike|postgres|kafka|teranode-operator'
+
+# Check Teranode services are ready
+kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --timeout=300s
 ```
+
 - The `getblockchaininfo` command can provide detailed sync status:
 ```
 kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockchaininfo
@@ -61,6 +68,16 @@ kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockch
 ## Optimizing Initial Sync
 
 While the default synchronization process is automatic and typically requires no intervention, there are ways to optimize the initial sync to speed up the process.
+
+
+| Sync Method           | Use Case               | Pros                | Cons                             |
+|-----------------------|------------------------|---------------------|----------------------------------|
+| Default Network Sync  | Fresh install          | No additional setup | Slowest method                   |
+| Bitcoind Seeding      | Have existing BSV node | Faster initial sync | Requires SV Node setup           |
+| Teranode Data Seeding | Have existing Teranode | Fastest method      | Requires access to existing data |
+
+
+![seedingOptions.svg](img/mermaid/seedingOptions.svg)
 
 ### Seeding Teranode from a bitcoind instance
 
@@ -149,9 +166,14 @@ Teranode is designed to be resilient and can recover from various types of downt
 
 - Monitor the recovery process using the same methods as the initial sync:
 ```
-kubectl logs <peer-pod-name>
-kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockchaininfo
-kubectl logs <legacy-pod-name>
+# Check pod status
+kubectl get pods -n teranode-operator
+
+# View logs during recovery
+kubectl logs -n teranode-operator -l app=blockchain -f
+
+# Check pod events
+kubectl describe pod -n teranode-operator -l app=blockchain
 ```
 
 
@@ -177,3 +199,10 @@ If Teranode has been offline for an extended period, consider the following:
 3. **Monitoring Catch-up Time**:
 - The time required for catch-up synchronization depends on the duration of the downtime and the number of missed blocks.
 - Use monitoring tools (e.g., Prometheus and Grafana) to track the sync progress and estimate completion time.
+
+
+## Other Resources
+
+- [How to Install Teranode](minersHowToInstallation.md)
+- [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
+- [How to Configure Teranode](minersHowToConfigureTheNode.md)

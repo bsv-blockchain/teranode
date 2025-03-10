@@ -1,0 +1,10 @@
+graph TD
+    A[Start Verification] --> B[Check Pod Status]
+    B --> C{All Pods Running?}
+    C -->|No| D[Check Logs]
+    C -->|Yes| E[Wait for Ready State]
+    E --> F{Ready?}
+    F -->|No| D
+    F -->|Yes| G[View Logs]
+    D --> H[Troubleshoot]
+    H --> B

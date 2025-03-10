@@ -1,0 +1,14 @@
+graph TB
+    Start[New Teranode Instance] --> Choice{Choose Sync Method}
+    Choice -->|Option 1| Default[Default Sync<br/>from Network]
+    Choice -->|Option 2| BSV[Seed from<br/>bitcoind]
+    Choice -->|Option 3| TN[Seed from<br/>existing Teranode]
+
+    BSV --> Export[Export UTXO Set]
+    Export --> Seed[Run Seeder]
+
+    TN --> UseData[Use Block and<br/>UTXO Persister Data]
+    UseData --> Seed
+
+    Default --> Connect[Connect to Peers]
+    Connect --> Sync[Sync Blocks]

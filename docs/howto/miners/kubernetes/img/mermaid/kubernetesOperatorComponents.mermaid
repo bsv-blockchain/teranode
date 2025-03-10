@@ -1,0 +1,53 @@
+graph TB
+    subgraph "Kubernetes Cluster - teranode-operator namespace"
+        subgraph "Core Components"
+            TO[Teranode Operator]
+
+            subgraph "Teranode Services"
+                BC[Blockchain]
+                AS[Asset Service]
+                BA[Block Assembly]
+                BV[Block Validator]
+                LEG[Legacy]
+                PS[Propagation Service]
+                RPC[RPC Service]
+                SV[Subtree Validator]
+                ALS[Alert System]
+            end
+        end
+
+        subgraph "Dependencies"
+            KF[Kafka/Redpanda<br/>Single Replica]
+            AER[Aerospike<br/>Single Replica]
+            PG[PostgreSQL]
+        end
+
+        subgraph "Storage"
+            NFS[NFS Storage<br/>ReadWriteMany]
+            AERPV[Aerospike PV<br/>ReadWriteOnce]
+        end
+
+        TO -->|manages| BC
+        TO -->|manages| PS
+        TO -->|manages| AS
+        TO -->|manages| BA
+        TO -->|manages| BV
+        TO -->|manages| LEG
+        TO -->|manages| RPC
+        TO -->|manages| SV
+        TO -->|manages| ALS
+
+        BC -->|uses| KF
+        BC -->|uses| AER
+        BC -->|uses| PG
+
+        SV -->|uses| NFS
+        AER -->|uses| AERPV
+
+    %% Configuration relationships
+        CM[ConfigMap<br/>teranode-operator-config]
+        TO -->|reads| CM
+    end
+
+    classDef storage fill:#f9f,stroke:#333,stroke-width:2px;
+    class NFS,AERPV storage;

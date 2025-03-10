@@ -1,6 +1,6 @@
 # Configuring Kubernetes Operator Teranode
 
-Last modified: 13-December-2024
+Last modified: 6-March-2025
 
 ## Index
 
@@ -10,7 +10,7 @@ Last modified: 13-December-2024
 
 ## Configuring Setting Files
 
-The following settings can be configured in the custom operator ConfigMap. You can refer to the notes on the installation and ConfigMap setup [here](minersHowToInstallation.md).
+The Teranode settings can be configured in the operator ConfigMap. You can refer to the notes on the installation and ConfigMap setup [here](minersHowToInstallation.md).
 
 For a list of settings, and their default values, please refer to the reference at the end of this document.
 

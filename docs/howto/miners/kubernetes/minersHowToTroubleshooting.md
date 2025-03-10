@@ -1,6 +1,6 @@
 # How to Troubleshoot Teranode (Kubernetes Operator)
 
-Last modified: 29-January-2025
+Last modified: 6-March-2025
 
 ## Index
 
@@ -26,7 +26,7 @@ Last modified: 29-January-2025
 ### Service Status
 
 ```bash
-kubectl get pods
+kubectl get pods -n teranode-operator
 ```
 This command lists all pods in the current namespace, showing their status and readiness.
 
@@ -35,14 +35,13 @@ This command lists all pods in the current namespace, showing their status and r
 
 
 ```bash
-kubectl describe pod <pod-name>
+kubectl describe pod <pod-name> -n teranode-operator
 ```
 This provides detailed information about the pod, including its current state, recent events, and readiness probe results.
 
 
 
 ### Configuring Health Checks
-
 
 
 In your Deployment or StatefulSet specification:
@@ -107,49 +106,35 @@ For both environments:
 
 
 ```bash
-kubectl logs -l app.kubernetes.io/part-of=teranode-operator
-kubectl logs -f -l app.kubernetes.io/part-of=teranode-operator  # Follow logs in real-time
-kubectl logs --tail=100 -l app.kubernetes.io/part-of=teranode-operator  # View only the most recent logs
+kubectl logs -n teranode-operator -l app.kubernetes.io/part-of=teranode-operator
+kubectl logs -n teranode-operator -f -l app.kubernetes.io/part-of=teranode-operator  # Follow logs in real-time
+kubectl logs -n teranode-operator --tail=100 -l app.kubernetes.io/part-of=teranode-operator  # View only the most recent logs
 ```
 
 
 
 ### Viewing Logs for Specific Microservices
 
-
-
-
-
 ```bash
-kubectl logs <pod-name>
+kubectl logs -n teranode-operator <pod-name>
 ```
-
-
 
 ### Useful Options for Log Viewing
 
-
-
-
-
 * Show timestamps:
 ```bash
-kubectl logs <pod-name> --timestamps=true
+kubectl logs -n teranode-operator <pod-name> --timestamps=true
 ```
 * Limit output:
 ```bash
-kubectl logs <pod-name> --tail=50
+kubectl logs -n teranode-operator <pod-name> --tail=50
 ```
 * Since time:
 ```bash
-kubectl logs <pod-name> --since-time="2023-07-01T00:00:00Z"
+kubectl logs -n teranode-operator <pod-name> --since-time="2023-07-01T00:00:00Z"
 ```
 
-
-
 ### Checking Logs for Specific Teranode Microservices
-
-
 
 Replace `[service_name]` or `<pod-name>` with the appropriate service or pod name:
 
@@ -168,23 +153,17 @@ Replace `[service_name]` or `<pod-name>` with the appropriate service or pod nam
 
 ### Redirecting Logs to a File
 
-
-
 ```bash
-kubectl logs -l app.kubernetes.io/part-of=teranode-operator > teranode_logs.txt
-kubectl logs <pod-name> > pod_logs.txt
+kubectl logs -n teranode-operator -l app.kubernetes.io/part-of=teranode-operator > teranode_logs.txt
+kubectl logs -n teranode-operator <pod-name> > pod_logs.txt
 ```
 
 Remember to replace placeholders like `[service_name]`, `<pod-name>`, and label selectors with the appropriate values for your Teranode setup.
 
 
-
 ### Check Services Dashboard**
 
-
-
 Check your Grafana `TERANODE Service Overview` dashboard:
-
 
 
 - Check that there's no blocks in the queue (`Queued Blocks in Block Validation`). We expect little or no queueing, and not creeping up. 3 blocks queued up are already a concern.

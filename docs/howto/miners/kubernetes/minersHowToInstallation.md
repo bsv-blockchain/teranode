@@ -1,438 +1,197 @@
-# How to Install Teranode with Kubernetes Operator
+# How to Install Teranode with Kubernetes Helm
 
-Last modified: 29-January-2025
+Last modified: 6-March-2025
 
 # Index
-
-- [Introduction](#introduction)
+- [Introduction ](#introduction-)
 - [Prerequisites](#prerequisites)
-- [Hardware Requirements](#hardware-requirements)
-- [Software Requirements](#software-requirements)
-- [Network Considerations](#network-considerations)
-- [Installation Process](#installation-process)
-    - [Teranode Initial Synchronization](#teranode-initial-synchronization)
-        - [Full P2P Download](#full-p2p-download)
-        - [Initial Data Set Installation](#initial-data-set-installation)
-    - [Teranode Installation Introduction to the Kubernetes Operator](#teranode-installation---introduction-to-the-kubernetes-operator)
-    - [Installing Teranode with the Custom Kubernetes Operator](#installing-teranode-with-the-custom-kubernetes-operator)
-- [Optimizations](#optimizations)
-- [Reference Settings](#reference---settings)
+- [Deployment with Minikube](#deployment-with-minikube)
+    1. [Start Minikube](#1-start-minikube)
+    2. [Deploy Dependencies](#2-deploy-dependencies)
+    3. [Create persistent volume provider](#3-create-persistent-volume-provider)
+    4. [Load Teranode Images](#4-load-teranode-images)
+    5. [Deploy Teranode](#5-deploy-teranode)
+- [Verifying the Deployment](#verifying-the-deployment)
+- [Production Considerations](#production-considerations)
+- [Other Resources](#other-resources)
 
 ## Introduction
 
-This guide provides step-by-step instructions for installing Teranode with the Kubernetes Operator.
+This guide provides instructions for deploying Teranode in a Kubernetes environment. While this guide shows the steps to deploy on a single server cluster using Minikube, these configurations can be adapted for production use with appropriate modifications.
 
-
-This guide is applicable to:
-
-1. Miners and node operators using `kubernetes operator`.
-
-2. Configurations designed to connect to and process the BSV mainnet with current production load.
-
-
-This guide does not cover:
-
-1. Advanced network configurations.
-
-2. Any sort of source code build or manipulation of any kind.
+![kubernetesOperatorComponents.svg](img/mermaid/kubernetesOperatorComponents.svg)
 
 ## Prerequisites
 
+Before you begin, ensure you have the following tools installed and configured:
+- [Docker](https://docs.docker.com/get-docker/)
+- [Minikube](https://minikube.sigs.k8s.io/docs/start/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [Helm](https://helm.sh/docs/intro/install/)
+- [AWS CLI](https://aws.amazon.com/cli/)
 
-- Go version 1.20.0+
-- Docker version 17.03+
-- kubectl version 1.11.3+
-- Access to a Kubernetes v1.11.3+ cluster
-- Operator Lifecycle Manager (OLM) installed
-- Operator SDK
-- Sufficient cluster resources as defined in the Cluster spec
-- A stable internet connection
+Additionally, ensure you have a storage provider capable of providing ReadWriteMany (RWX) storage. As an example, this guide includes setting up an NFS server via Docker for this purpose.
 
-
-
-## Hardware Requirements
+![miniKubeOperatorPrerequisites.svg](img/mermaid/miniKubeOperatorPrerequisites.svg)
 
 
-The Teranode team will provide you with current hardware recommendations. These recommendations will be:
+## Deployment with Minikube
 
-1. Tailored to your specific configuration settings
-2. Designed to handle the expected production transaction volume
-3. Updated regularly to reflect the latest performance requirements
+Minikube creates a local Kubernetes cluster on your machine. For running Teranode, we recommend the following process:
 
-This ensures your system is appropriately equipped to manage the projected workload efficiently.
+![KubernetesOperatorInstallationSteps.svg](img/mermaid/KubernetesOperatorInstallationSteps.svg)
 
+### 1. Start Minikube
+```bash
+# Start minikube with recommended resources
+minikube start --cpus=4 --memory=8192 --disk-size=20gb
 
-## Software Requirements
+# Verify minikube status
+minikube status
+```
 
-Teranode relies on a number of third-party software dependencies, some of which can be sourced from different vendors.
+### 2. Deploy Dependencies
 
-BSV provides both a `Kubernetes operator` that provides a production-live multi-node setup. However, it is the operator responsibility to support and monitor the various third parties.
+Teranode requires several backing services. While these services should be deployed separately in production, for local development we'll deploy them within the same cluster.
 
-This section will outline the various vendors in use in Teranode.
+```bash
+# Create namespace for deployment
+kubectl create namespace teranode-operator
+
+# Deploy all dependencies in the teranode namespace
+kubectl apply -f kubernetes/aerospike/ -n teranode-operator
+kubectl apply -f kubernetes/postgres/ -n teranode-operator
+kubectl apply -f kubernetes/kafka/ -n teranode-operator
+```
 
 To know more, please refer to the [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
 
-
-
-## Network Considerations
-
-
-Running a Teranode BSV listener node has relatively low bandwidth requirements compared to many other server applications. The primary network traffic consists of receiving blockchain data, including new transactions and blocks.
-
-While exact bandwidth usage can vary depending on network activity and node configuration, Bitcoin nodes typically require:
-
-- Inbound: 5-50 GB per day
-- Outbound: 50-150 GB per day
-
-These figures are approximate. In general, any stable internet connection should be sufficient for running a Teranode instance.
-
-Key network considerations:
-
-1. Ensure your internet connection is reliable and has sufficient bandwidth to handle continuous data transfer.
-2. Be aware that initial blockchain synchronization, depending on your installation method, may require higher bandwidth usage. If you synchronise automatically starting from the genesis block, you will have to download every block. However, the BSV recommended approach is to install a seed UTXO Set and blockchain.
-3. Monitor your network usage to ensure it stays within your ISP's limits and adjust your node's configuration if needed.
-
-
-## Installation Process
-
-
-
-### Teranode Initial Synchronization
-
-
-
-Teranode requires an initial block synchronization to function properly. There are two approaches for completing the synchronization process.
-
-
-
-#### Full P2P Download
-
-
-
-- Start the node and download all blocks from genesis using peer-to-peer (P2P) network.
-- This method downloads the entire blockchain history.
-
-
-
-**Pros:**
-
-- Simple to implement
-- Ensures the node has the complete blockchain history
-
-
-
-**Cons:**
-
-- Time-consuming process
-- Can take 5-8 days, depending on available bandwidth
-
-
-
-#### Initial Data Set Installation
-
-
-To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](../minersHowToSyncTheNode.md) guide.
-
-Pros:
-
-- Significantly faster than full P2P download
-- Allows for quicker node setup
-
-
-Cons:
-
-- Requires additional steps
-- The data set must be validated, to ensure it has not been tampered with
-
-
-Where possible, BSV recommends using the Initial Data Set Installation approach.
-
-
-
-### Teranode Installation - Introduction to the Kubernetes Operator
-
-
-Teranode is a complex system that can be deployed on Kubernetes using a custom operator (https://kubernetes.io/docs/concepts/extend-kubernetes/operator/). The deployment is managed through Kubernetes manifests, specifically using a Custom Resource Definition (CRD) of kind "Cluster" in the teranode.bsvblockchain.org/v1alpha1 API group. This Cluster resource defines various components of the Teranode system, including Asset, Block Validator, Block Persister, UTXO Persister, Blockchain, Block Assembly, Miner, Peer-to-Peer, Propagation, and Subtree Validator services.
-
-
-The deployment uses kustomization for managing Kubernetes resources, allowing for easier customization and overlay configurations.
-
-
-
-The Cluster resource allows fine-grained control over resource allocation, enabling users to adjust CPU and memory requests and limits for each component.
-
-
-
-It must be noted that the `Kubernetes operator` production-like setup does not install or manage the third party dependencies, explicitly:
-
-- **Kafka**
-- **PostgreSQL**
-- **Aerospike**
-- **Grafana**
-- **Prometheus**
-
-
-
-##### Configuration Management
-Environment variables and settings are managed using ConfigMaps. The Cluster custom resource specifies a `configMapName` (e.g., "shared-config") which is referenced by the various Teranode components. Users will need to create this ConfigMap before deploying the Cluster resource.
-
-Sample config:
-
-```
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: teranode-operator-config
-data:
-  SETTINGS_CONTEXT: operator.testnet
-  KAFKA_HOSTS: ...
-  blockchain_store: 'postgres://...'
-  utxostore: 'aerospike://...'
-```
-
-To review the list of settings you could configure in the ConfigMap, please refer to the list [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf).
-
-##### Storage Requirements
-Teranode uses PersistentVolumeClaims (PVCs) for storage in some components. For example, the SubtreeValidator specifies storage resources and a storage class. Users should ensure their Kubernetes cluster has the necessary storage classes and capacity available.
-
-
-
-##### Service Deployment
-The Teranode services are deployed as separate components within the Cluster custom resource. Each service (e.g., Asset, BlockValidator, Blockchain, Peer-to-Peer, etc.) is defined with its own specification, including resource requests and limits. The Kubernetes operator manages the creation and lifecycle of these components based on the Cluster resource definition.
-
-
-
-##### Namespace Usage
-Users can deploy Teranode to a specific namespace by specifying it during the operator installation or when applying the Cluster resource.
-
-
-
-##### Networking and Ingress
-Networking is handled through Kubernetes Services and Ingress resources. The Cluster resource allows specification of ingress for Asset, Peer, and Propagation services. It supports customization of ingress class, annotations, and hostnames. The setup appears to use Traefik as the ingress controller, but it's designed to be flexible for different ingress providers.
-
-
-
-##### Third Party Dependencies
-Tools like Grafana, Prometheus, Aerospike Postgres and Kafka are not included in the Teranode operator deployment. Users are expected to set up these tools separately in their Kubernetes environment (or outside of it).
-
-
-
-##### Logging and Troubleshooting
-Standard Kubernetes logging and troubleshooting approaches apply. Users can use `kubectl logs` and `kubectl describe` commands to investigate issues with the deployed pods and resources.
-
-
-
-In the following sections, we will focus on the `Kubernetes operator` installation method, as it is the most suitable for production purposes.
-
-
-
-
-### Installing Teranode with the Custom Kubernetes Operator
-
-
-
-**Step 1: Prepare the Environment**
-
-1. Ensure you have kubectl installed and configured to access your Kubernetes cluster.
-
-2. Verify access to your Kubernetes cluster:
-
-```
-kubectl cluster-info
-```
-
-
-
-**Step 2: Install Operator Lifecycle Manager (OLM)**
-
-1. If OLM is not already installed, install it using the following command:
-
-```
-operator-sdk olm install
-```
-
-
-
-**Step 3: Create BSVA CatalogSource**
-
-1. Clone the Teranode repository:
+### 3. Create persistent volume provider
+For this example, we will create a local folder and expose it to Minikube via a docker based NFS server.
 
 ```bash
-cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode-operator.git
-cd teranode-operator
+docker volume create nfs-volume
+
+docker run -d \
+  --name nfs-server \
+  -e NFS_EXPORT_0='/minikube-storage *(rw,no_subtree_check,fsid=0,no_root_squash)' \
+  -v nfs-volume:/minikube-storage \
+  --cap-add SYS_ADMIN \
+  -p 2049:2049 \
+  erichough/nfs-server
+
+# connect the nfs-server to the minikube network
+docker network connect minikube nfs-server
+
+# create the PersistentVolume
+kubectl apply -f kubernetes/nfs/
 ```
 
-
-2. Authenticate with AWS ECR (**only required during the private beta phase**)
+Note, for arm based systems, you can use this variant:
 
 ```bash
-# authenticate with AWS ECR
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-```
+docker volume create nfs-volume
 
-Make sure the credentials are stored in your Kubernetes cluster (specific steps will depend on your Kubernetes implementation of choice).
+docker run -d --name nfs-server --privileged \
+    -v nfs-volume:/minikube-storage \
+    alpine:latest \
+    sh -c "apk add --no-cache nfs-utils && \
+        mkdir -p /minikube-storage && \
+        chmod 777 /minikube-storage && \
+        echo '/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)' > /etc/exports && \
+        exportfs -r && \
+        rpcbind && \
+        rpc.statd && \
+        rpc.nfsd 8 && \
+        rpc.mountd && \
+        tail -f /dev/null"
 
-3. Create the BSVA CatalogSource in the OLM namespace:
+# connect the nfs-server to the minikube network
+docker network connect minikube nfs-server
 
-```
-kubectl create -f olm/catalog-source.yaml
-```
-
-
-
-**Step 4: Create Target Namespace**
-
-1. Create the namespace where you want to install the Teranode operator (this example uses 'teranode-operator'):
-
-```
-kubectl create namespace teranode-operator
-```
-
-
-
-**Step 5: Create OperatorGroup and Subscription**
-
-
-1. (Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:
-
-   ```
-   echo "  - <your-namespace>" >> olm/og.yaml
-   ```
-
-2. Create the OperatorGroup and Subscription resources:
-
-   ```
-   kubectl create -f olm/og.yaml -n teranode-operator
-   kubectl create -f olm/subscription.yaml -n teranode-operator
-   ```
-
-
-
-**Step 6: Verify Deployment**
-
-1. Check if all pods are running (your output should be similar to the below):
-
-```
-# Check catalog source pod
-kubectl get pods -n olm
-
-NAME                                READY   STATUS    RESTARTS   AGE
-bsva-catalog-8922m                  1/1     Running   0          22s
-catalog-operator-577f8b4bf5-sczlj   1/1     Running   0          86m
-olm-operator-8685b95f84-8wkf4       1/1     Running   0          86m
-operatorhubio-catalog-thvck         1/1     Running   0          85m
-packageserver-b54f9549f-kzqn9       1/1     Running   0          85m
-packageserver-b54f9549f-tr24v       1/1     Running   0          85m
-```
-
-```
-# Check operator deployment
-kubectl get pods -n teranode-operator
-
-NAME                                                              READY   STATUS      RESTARTS   AGE
-asset-5cc5745c75-6m5gf                                            1/1     Running     0          3d11h
-asset-5cc5745c75-84p58                                            1/1     Running     0          3d11h
-block-assembly-649dfd8596-k8q29                                   1/1     Running     0          3d11h
-block-assembly-649dfd8596-njdgn                                   1/1     Running     0          3d11h
-block-persister-57784567d6-tdln7                                  1/1     Running     0          3d11h
-block-persister-57784567d6-wdx84                                  1/1     Running     0          3d11h
-block-validator-6c4bf46f8b-bvxmm                                  1/1     Running     0          3d11h
-blockchain-ccbbd894c-k95z9                                        1/1     Running     0          3d11h
-dkr-ecr-eu-north-1-amazonaws-com-teranode-operator-bundle-v0-1    1/1     Running     0          3d11h
-ede69fe8f248328195a7b76b2fc4c65a4ae7b7185126cdfd54f61c7eadffnzv   0/1     Completed   0          3d11h
-miner-6b454ff67c-jsrgv                                            1/1     Running     0          3d11h
-peer-6845bc4749-24ms4                                             1/1     Running     0          3d11h
-propagation-648cd4cc56-cw5bp                                      1/1     Running     0          3d11h
-propagation-648cd4cc56-sllxb                                      1/1     Running     0          3d11h
-subtree-validator-7879f559d5-9gg9c                                1/1     Running     0          3d11h
-subtree-validator-7879f559d5-x2dd4                                1/1     Running     0          3d11h
-teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Running     0          3d11h
-```
-
-2. Ensure all services show a status of "Running" or "Completed".
-
-**Step 7: Configure Ingress (if applicable)**
-
-1. Verify that ingress resources are created for Asset, Peer, and Propagation services:
-   ```
-   kubectl get ingress
-   ```
-
-2. Configure your ingress controller or external load balancer as needed.
-
-
-
-**Step 8: Access Teranode Services**
-
-- The various Teranode services will be accessible through the configured ingress or service endpoints.
-- Refer to your specific ingress or network configuration for exact URLs and ports.
-
-**Step 9: Change the node status to Run or LegacySync**
-
-Force the node to transition to Run mode:
-```
-grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
-```
-
-or LegacySync mode:
-```
-grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
+# create the PersistentVolume
+kubectl apply -f kubernetes/nfs/
 ```
 
 
-**Step 10: Access Monitoring Tools**
+### 4. Load Teranode Images
 
-_Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
-- **Port**: Exposed on port **8090** of the asset container.
-- **Access URL**: http://localhost:8090/viewer
+Pull and load the required Teranode images into Minikube:
 
-Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
+```bash
+# Set image versions
+export OPERATOR_VERSION=v0.4.3
+export TERANODE_VERSION=v0.6.42
+export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
-**Step 11: Monitoring and Logging**
+# Login to ECR
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-- Set up your preferred monitoring stack (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
-- Use standard Kubernetes logging practices to access logs:
-  ```
-  kubectl logs <pod-name>
-  ```
+# Load Teranode Operator
+docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 
-**Step 12: Troubleshooting**
+# Load Teranode Public
+docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
+minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
+```
 
-1. Check pod status:
-   ```
-   kubectl describe pod <pod-name>
-   ```
+### 5. Deploy Teranode
 
-2. View pod logs:
-   ```
-   kubectl logs <pod-name>
-   ```
+The Teranode Operator manages the lifecycle of Teranode instances:
 
-3. Verify ConfigMaps and Secrets:
-   ```
-   kubectl get configmaps
-   kubectl get secrets
-   ```
+```bash
+# Login to Helm registry and install operator
+aws ecr get-login-password --region eu-west-1 | helm registry login --username AWS --password-stdin 434394763103.dkr.ecr.eu-west-1.amazonaws.com
 
-Additional Notes:
+helm upgrade --install teranode-operator oci://434394763103.dkr.ecr.eu-west-1.amazonaws.com/teranode-operator \
+    -n teranode-operator \
+    -f kubernetes/teranode/teranode-operator.yaml
+```
 
-- You can also refer to the https://github.com/bitcoin-sv/teranode-operator repository for up to date instructions.
-- This installation uses the 'stable' channel of the BSVA Catalog, which includes automatic upgrades for minor releases.
-- To change the channel or upgrade policy, modify the `olm/subscription.yaml` file before creating the Subscription.
-- **SharedPVCName** represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server, Block Persister, UTXO Persister). The Persistent Volume must be in access mode *ReadWriteMany* ( https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
-- Ensure proper network policies and security contexts are in place for your Kubernetes environment.
-- Regularly back up any persistent data stored in PersistentVolumeClaims.
-- The Teranode operator manages the lifecycle of the Teranode services. Direct manipulation of the underlying resources is not recommended.
+Apply the Teranode configuration and custom resources:
+```bash
+kubectl apply -f kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
+kubectl apply -f kubernetes/teranode/teranode-cr.yaml -n teranode-operator
+```
 
+A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+```
 
-## Optimizations
+To know more about the syncing process, please refer to the [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
 
-When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings), so you don't get banned by the SV Nodes.
+## Verifying the Deployment
 
-If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
+![kubernetesOperatorVerification.svg](img/mermaid/kubernetesOperatorVerification.svg)
 
+To verify your deployment:
 
-## Reference - Settings
+```bash
+# Check all pods are running
+kubectl get pods -n teranode-operator | grep -E 'aerospike|postgres|kafka|teranode-operator'
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+# Check Teranode services are ready
+kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --timeout=300s
+
+# View Teranode logs
+kubectl logs -n teranode-operator -l app=blockchain -f
+```
+
+## Production Considerations
+
+For production deployments, consider:
+- Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services
+- Implementing proper security measures (network policies, RBAC, etc.)
+- Setting up monitoring and alerting
+- Configuring appropriate resource requests and limits
+- Setting up proper backup and disaster recovery procedures
+
+An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bitcoin-sv/teranode-public/blob/feature/kube-docs/kubernetes/teranode/teranode-cr-mainnet.yaml).
+
+## Other Resources
+
+- [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
+- [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
+- [How-To Configure the Node.md](minersHowToConfigureTheNode.md)

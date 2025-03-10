@@ -1,0 +1,19 @@
+graph LR
+    subgraph "Required Tools"
+        D[Docker]
+        M[Minikube]
+        K[kubectl]
+        H[Helm]
+        A[AWS CLI]
+    end
+
+    subgraph "Resources"
+        CPU[4+ CPUs]
+        MEM[8GB+ RAM]
+        DISK[20GB+ Disk]
+    end
+
+    D --> M
+    K --> M
+    H --> M
+    A --> ECR[ECR Access]
