@@ -680,3 +680,33 @@ func BenchmarkSubtree_SerializeNodes(b *testing.B) {
 	require.NoError(b, err)
 	assert.GreaterOrEqual(b, len(ser), 32*b.N)
 }
+
+func TestSubtree_ConflictingNodes(t *testing.T) {
+	st, err := NewTree(4)
+	require.NoError(t, err)
+
+	err = st.AddNode(hash1, 111, 1)
+	require.NoError(t, err)
+
+	err = st.AddNode(hash2, 112, 2)
+	require.NoError(t, err)
+
+	assert.Len(t, st.Nodes, 2)
+	assert.Equal(t, 2, st.Length())
+
+	err = st.AddConflictingNode(hash1)
+	require.NoError(t, err)
+	assert.Len(t, st.Nodes, 2)
+	assert.Equal(t, 2, st.Length())
+	assert.Len(t, st.ConflictingNodes, 1)
+
+	bytes, err := st.Serialize()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(bytes), 48)
+
+	newSt, err := NewSubtreeFromBytes(bytes)
+	require.NoError(t, err)
+	assert.Len(t, newSt.Nodes, 2)
+	assert.Equal(t, 2, newSt.Length())
+	assert.Len(t, newSt.ConflictingNodes, 1)
+}
