@@ -4,7 +4,7 @@
 rm -rf "$(dirname "$0")/../data"
 
 # Drop all postgres tables
-psql postgres://teranode:teranode@localhost:5432/teranode -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions;"
+psql postgres://teranode:teranode@localhost:5432/teranode -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions; drop table if exists bans;"
 psql postgres://teranode:teranode@localhost:5432/coinbase -c "SET client_min_messages TO WARNING; drop table if exists coinbase_utxos; drop table if exists spendable_utxos_balance; drop table if exists spendable_utxos_log; drop table if exists spendable_utxos; drop table if exists blocks; drop table if exists state;"
 
 # Flush aerospike
@@ -13,7 +13,7 @@ psql postgres://teranode:teranode@localhost:5432/coinbase -c "SET client_min_mes
 asinfo -h localhost -v "truncate-namespace:namespace=teranode-store"
 asinfo -h localhost -v "truncate-namespace:namespace=test"
 
-docker exec scripts-kafka-1 /bin/bash -c '
+docker exec kafka-server /bin/bash -c '
 TOPICS=$(/opt/bitnami/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092)
 for topic in $TOPICS; do
   echo "Deleting topic $topic"

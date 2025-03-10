@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/alert"
 	"github.com/bitcoin-sv/teranode/services/asset"
@@ -743,6 +744,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if startLegacy {
+		if tSettings.ChainCfgParams.Net == chaincfg.RegressionNetParams.Net {
+			logger.Warnf("legacy service not supported in regtest mode. Skipping legacy service...")
+			return nil
+		}
+
 		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err
