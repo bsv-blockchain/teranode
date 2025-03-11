@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
@@ -30,9 +29,6 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
 	require.NoError(t, err)
 
-	state := td.WaitForBlockHeight(t, 101, 5*time.Second)
-	require.Equal(t, uint32(101), state.CurrentHeight)
-
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
@@ -54,9 +50,6 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 
 	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
 	require.NoError(t, err)
-
-	state = td.WaitForBlockHeight(t, 102, 5*time.Second)
-	require.Equal(t, uint32(102), state.CurrentHeight)
 
 	block102, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)

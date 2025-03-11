@@ -525,26 +525,48 @@ func (td *TestDaemon) CreateTestBlock(t *testing.T, txs []*bt.Tx, previousBlock 
 	return subtree, block
 }
 
-func (td *TestDaemon) WaitForBlockHeight(t *testing.T, height uint32, timeout time.Duration) (state *blockassembly_api.StateMessage) {
+func (td *TestDaemon) WaitForBlockHeight(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
 	deadline := time.Now().Add(timeout)
 
 	var (
-		err error
+		err   error
+		state *blockassembly_api.StateMessage
 	)
 
-	for state == nil || state.CurrentHeight < height {
+	tmpBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, expectedBlock.Height)
+
+	require.NoError(t, err, "Failed to get block at height %d", expectedBlock.Height)
+	assert.Equal(t, expectedBlock.Header.Hash().String(), tmpBlock.Header.Hash().String(),
+		"Block hash mismatch at height %d", expectedBlock.Height)
+
+	for state == nil || state.CurrentHeight < expectedBlock.Height {
 		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
 		require.NoError(t, err)
 
 		if time.Now().After(deadline) {
-			t.Logf("Timeout waiting for block height %d", height)
+			t.Logf("Timeout waiting for block height %d", expectedBlock.Height)
 			t.FailNow()
 		}
 
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	return state
+	require.Equal(t, expectedBlock.Height, state.CurrentHeight, "Expected block assembly to reach height %d", expectedBlock.Height)
+
+	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
+		return
+	}
+
+	previousBlockHash := expectedBlock.Header.HashPrevBlock
+
+	for height := expectedBlock.Height - 1; height > 0; height-- {
+		getBlockByHeight, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		require.NoError(t, err)
+
+		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), "Block hash mismatch at height %d", height)
+
+		previousBlockHash = getBlockByHeight.Header.HashPrevBlock
+	}
 }
 
 func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*util.Subtree, error) {

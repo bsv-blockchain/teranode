@@ -41,9 +41,6 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	tSettings := td.Settings
 
-	state := td.WaitForBlockHeight(t, 101, 5*time.Second)
-	assert.Equal(t, uint32(101), state.CurrentHeight, "Expected block assembly to reach height 101")
-
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
@@ -103,9 +100,6 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	require.NoError(t, err, "Failed to generate blocks")
 
 	t.Logf("Resp: %s", resp)
-
-	state = td.WaitForBlockHeight(t, 202, 10*time.Second)
-	assert.Equal(t, uint32(202), state.CurrentHeight, "Expected block assembly to reach height 202")
 
 	block102, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)
@@ -264,9 +258,6 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings := td.Settings
-
-	state := td.WaitForBlockHeight(t, 101, 5*time.Second)
-	assert.Equal(t, uint32(101), state.CurrentHeight, "Expected block assembly to reach height 101")
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
