@@ -349,7 +349,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, "p2p")
+		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, "p2p"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
@@ -581,12 +581,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation")
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
-		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, "subtreevalidation")
+		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
@@ -639,7 +639,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 				return err
 			}
 
-			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, "blockvalidation")
+			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, "blockvalidation"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}
@@ -672,7 +672,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 				return err
 			}
 
-			consumerClient, err := getKafkaTxConsumerGroup(logger, "validator")
+			consumerClient, err := getKafkaTxConsumerGroup(logger, "validator"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}

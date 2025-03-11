@@ -111,16 +111,22 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 
 // Close gracefully shuts down the Kafka consumer group
 func (k *KafkaConsumerGroup) Close() error {
-	if k.ConsumerGroup != nil {
-		if err := k.ConsumerGroup.Close(); err != nil {
-			k.Config.Logger.Errorf("[Kafka] %s: error closing consumer group: %v", k.Config.ConsumerGroupID, err)
-			return err
-		}
+	k.Config.Logger.Infof("[Kafka] %s: initiating shutdown of consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
+
+	// cancel the context first to signal all consumers to stop
+	if k.cancel != nil {
+		k.Config.Logger.Debugf("[Kafka] %s: canceling context for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
+		k.cancel()
 	}
 
-	// cancel the context
-	if k.cancel != nil {
-		k.cancel()
+	// Then close the consumer group
+	if k.ConsumerGroup != nil {
+		if err := k.ConsumerGroup.Close(); err != nil {
+			k.Config.Logger.Errorf("[Kafka] %s: error closing consumer group for topic %s: %v", k.Config.ConsumerGroupID, k.Config.Topic, err)
+			return err
+		}
+
+		k.Config.Logger.Infof("[Kafka] %s: successfully closed consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 	}
 
 	return nil
@@ -428,6 +434,11 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			for {
 				select {
 				case <-session.Context().Done():
+					err := session.Context().Err()
+					if err != nil {
+						kc.cfg.Logger.Debugf("[kafka_consumer] Context canceled in commit ticker (topic: %s): %v",
+							kc.cfg.Topic, err)
+					}
 					return
 				case <-commitTicker.C:
 					mu.Lock()
@@ -451,6 +462,12 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			select {
 			case messages <- message:
 			case <-session.Context().Done():
+				// Log when context is canceled in the message forwarding goroutine
+				err := session.Context().Err()
+				if err != nil {
+					kc.cfg.Logger.Debugf("[kafka_consumer] Context canceled in message forwarder (topic: %s, partition: %d): %v",
+						claim.Topic(), claim.Partition(), err)
+				}
 				return
 			}
 		}
@@ -459,7 +476,19 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	for {
 		select {
 		case <-session.Context().Done():
-			return session.Context().Err()
+			err := session.Context().Err()
+			// Only log detailed information if it's not a normal shutdown
+			if err != nil {
+				// Get additional context about the consumer state
+				partition := claim.Partition()
+				topic := claim.Topic()
+				highWatermark := claim.HighWaterMarkOffset()
+
+				kc.cfg.Logger.Infof("[kafka_consumer] Context done for consumer (topic: %s, partition: %d, highWatermark: %d): %v. This is normal during shutdown or rebalancing.",
+					topic, partition, highWatermark, err)
+			}
+
+			return err
 
 		case message := <-messages:
 			if message == nil {

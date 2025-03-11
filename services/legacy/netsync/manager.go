@@ -2121,7 +2121,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, "inv.legacy"+"."+sm.settings.ClientName, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
 	}
 
 	blocksFinalConfigURL := sm.settings.Kafka.BlocksFinalConfig
@@ -2129,7 +2129,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		controlCh := make(chan bool)
 		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
 
-		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, blocksFinalConfigURL, sm.kafkaBlocksFinalListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, "blocksfinal.legacy"+"."+sm.settings.ClientName, controlCh, blocksFinalConfigURL, sm.kafkaBlocksFinalListener)
 	}
 
 	txmetaKafkaURL := sm.settings.Kafka.TxMetaConfig
@@ -2144,7 +2144,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 
 		txmetaKafkaURL.RawQuery = values.Encode()
 
-		go kafka.StartKafkaControlledListener(ctx, sm.logger, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
+		go kafka.StartKafkaControlledListener(ctx, sm.logger, "txmeta.legacy"+"."+sm.settings.ClientName, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
 	go func() {

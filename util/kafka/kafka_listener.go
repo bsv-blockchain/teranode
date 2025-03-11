@@ -17,7 +17,7 @@ import (
 //   - kafkaControlChan: Channel for receiving control signals (true to start, false to stop)
 //   - kafkaConfigURL: Kafka configuration URL
 //   - listener: Function that implements the actual listening logic
-func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, kafkaControlChan chan bool, kafkaConfigURL *url.URL,
+func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, groupID string, kafkaControlChan chan bool, kafkaConfigURL *url.URL,
 	listener func(ctx context.Context, kafkaURL *url.URL, groupID string)) {
 	var (
 		kafkaCtx    context.Context
@@ -41,7 +41,7 @@ func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, ka
 
 				logger.Infof("[Legacy Manager] starting Kafka listener for %s", kafkaConfigURL.String())
 
-				go listener(kafkaCtx, kafkaConfigURL, "legacy")
+				go listener(kafkaCtx, kafkaConfigURL, groupID)
 			} else if kafkaCancel != nil {
 				logger.Infof("[Legacy Manager] stopping Kafka listener for %s", kafkaConfigURL.String())
 				kafkaCancel() // Stop the listener
