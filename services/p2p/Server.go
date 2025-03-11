@@ -550,7 +550,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 	}
 
-	return s.e.Shutdown(ctx)
+	if s.e != nil {
+		return s.e.Shutdown(ctx)
+	}
+
+	return nil
 }
 
 func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string) {
@@ -742,7 +746,6 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
-
 	}
 }
 

@@ -1302,8 +1302,14 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 }
 
 // WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
+func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
 	for b.finiteStateMachine.Current() != targetState.String() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
@@ -1316,6 +1322,12 @@ func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ 
 	// If the FSM is not initialized, we need to wait
 	// or if the FSM is in the IDLE state, we need to wait
 	for b.finiteStateMachine.Current() == "" || b.finiteStateMachine.Current() == blockchain_api.FSMStateType_IDLE.String() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		b.logger.Debugf("Waiting 1 second for FSM to transition from IDLE state, currently at: %v", b.finiteStateMachine.Current())
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
