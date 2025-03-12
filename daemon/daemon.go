@@ -311,7 +311,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, logger)
+		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
@@ -349,17 +349,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, "p2p"+"."+tSettings.ClientName)
+		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, tSettings, "p2p"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
-		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, logger)
+		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, logger)
+		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, logger, tSettings)
 		if err != nil {
 			return err
 		}
@@ -581,12 +581,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
-		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation"+"."+tSettings.ClientName)
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, tSettings, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
-		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, "subtreevalidation"+"."+tSettings.ClientName)
+		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, tSettings, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
@@ -639,7 +639,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 				return err
 			}
 
-			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, "blockvalidation"+"."+tSettings.ClientName)
+			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, tSettings, "blockvalidation"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}
@@ -677,12 +677,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 				return err
 			}
 
-			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
+			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}
 
-			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
+			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger, tSettings)
 			if err != nil {
 				return err
 			}

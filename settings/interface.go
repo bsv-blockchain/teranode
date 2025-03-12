@@ -78,6 +78,9 @@ type KafkaSettings struct {
 	TxMetaConfig      *url.URL
 	LegacyInvConfig   *url.URL
 	BlocksFinalConfig *url.URL
+	RejectedTxConfig  *url.URL
+	SubtreesConfig    *url.URL
+	BlocksConfig      *url.URL
 }
 
 type AerospikeSettings struct {

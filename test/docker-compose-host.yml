@@ -1,0 +1,211 @@
+x-teranode-base: &teranode-base
+  image: teranode:latest
+  network_mode: "host"
+  depends_on:
+    - postgres
+    - kafka-shared
+  volumes:
+    - ./data:/app/data
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-7.2.0.3_1
+  # mem_limit: 1024m
+  network_mode: "host"
+  command: --config-file /etc/aerospike.conf
+
+services:
+
+  teranode-builder:
+    image: teranode:latest
+    network_mode: "host"
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
+    entrypoint: [ "pwd" ]
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:1.59
+    network_mode: "host"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    ports:
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14268:14268"
+      - "14269:14269"
+      - "9411:9411"
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    network_mode: "host"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    volumes:
+      - ../deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: on-failure
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: redpandadata/redpanda:latest
+    network_mode: "host"
+    mem_limit: 256m
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:19092
+      - --advertise-kafka-addr PLAINTEXT://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:19093
+
+  teranode-1:
+    <<: *teranode-base
+    profiles:
+      - skip-teranode
+    container_name: teranode-1
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-shared:
+        condition: service_started
+      aerospike-1:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode1"
+      JAEGER_SERVICE_NAME: teranode-1
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+      logLevel: "DEBUG"
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./data/teranode1/txstore:/app/data/teranode1/txstore
+      - ./data/teranode1/subtreestore:/app/data/teranode1/subtreestore
+      - ./data/teranode1/blockstore:/app/data/teranode1/blockstore
+      - ./data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
+      - ./data/teranode1/external:/app/data/teranode1/external
+      - ./wait.sh:/app/wait.sh
+
+  teranode-2:
+    <<: *teranode-base
+    container_name: teranode-2
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-shared:
+        condition: service_started
+      aerospike-2:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode2"
+      JAEGER_SERVICE_NAME: teranode-2
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./data/teranode2/txstore:/app/data/teranode2/txstore
+      - ./data/teranode2/subtreestore:/app/data/teranode2/subtreestore
+      - ./data/teranode2/blockstore:/app/data/teranode2/blockstore
+      - ./data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
+      - ./data/teranode2/external:/app/data/teranode2/external
+      - ./wait.sh:/app/wait.sh
+  teranode-3:
+    <<: *teranode-base
+    container_name: teranode-3
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-shared:
+        condition: service_started
+      aerospike-3:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode3"
+      JAEGER_SERVICE_NAME: teranode-3
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./data/teranode3/txstore:/app/data/teranode3/txstore
+      - ./data/teranode3/subtreestore:/app/data/teranode3/subtreestore
+      - ./data/teranode3/blockstore:/app/data/teranode3/blockstore
+      - ./data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
+      - ./data/teranode3/external:/app/data/teranode3/external
+      - ./wait.sh:/app/wait.sh
+  aerospike-1:
+    container_name: aerospike-1
+    <<: *aerospike-base
+    volumes:
+      - ../deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ./data/aerospike1/logs:/var/log/aerospike
+      - ./data/aerospike1/data:/opt/aerospike/data
+
+  aerospike-2:
+    container_name: aerospike-2
+    <<: *aerospike-base
+    volumes:
+      - ../deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ./data/aerospike2/logs:/var/log/aerospike
+      - ./data/aerospike2/data:/opt/aerospike/data
+
+  aerospike-3:
+    container_name: aerospike-3
+    <<: *aerospike-base
+    volumes:
+      - ../deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ./data/aerospike3/logs:/var/log/aerospike
+      - ./data/aerospike3/data:/opt/aerospike/data
+  set-fsm-state-1:
+    <<: *teranode-base
+    container_name: set-fsm-state-1
+    profiles:
+      - skip-teranode
+    depends_on:
+      - teranode-1
+    network_mode: "host"
+    entrypoint: [ "/app/wait.sh", "localhost", "18087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode1"
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./wait.sh:/app/wait.sh
+  set-fsm-state-2:
+    <<: *teranode-base
+    container_name: set-fsm-state-2
+    depends_on:
+      - teranode-2
+    network_mode: "host"
+    entrypoint: [ "/app/wait.sh", "localhost", "28087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode2"
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./wait.sh:/app/wait.sh
+  set-fsm-state-3:
+    <<: *teranode-base
+    container_name: set-fsm-state-3
+    depends_on:
+      - teranode-3
+    network_mode: "host"
+    entrypoint: [ "/app/wait.sh", "localhost", "38087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.teranode3"
+    volumes:
+      - ../settings_local.conf:/app/settings_local.conf
+      - ./wait.sh:/app/wait.sh

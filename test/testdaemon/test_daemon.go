@@ -45,6 +45,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
 type TestDaemon struct {
@@ -65,12 +66,16 @@ type TestDaemon struct {
 }
 
 type TestOptions struct {
-	SkipRemoveDataDir bool
-	KillTeranode      bool
-	UtxoStoreOverride string
-	UseTracing        bool
-	EnableRPC         bool
-	SettingsOverride  string
+	SkipRemoveDataDir       bool
+	KillTeranode            bool
+	UtxoStoreOverride       string
+	UseTracing              bool
+	EnableRPC               bool
+	EnableP2P               bool
+	EnableValidator         bool
+	StartDockerNetwork      bool
+	SettingsContextOverride string
+	SettingsOverride        *settings.Settings
 }
 
 type JSONError struct {
@@ -97,6 +102,26 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 		_ = cmd.Run()
 	}
 
+	if opts.StartDockerNetwork {
+		var err error
+
+		identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
+
+		var compose tc.ComposeStack
+
+		compose, err = tc.NewDockerComposeWith(tc.WithStackFiles("../docker-compose-host.yml"), identifier)
+		if err != nil {
+			t.Fatalf("Failed to create docker network: %v", err)
+		}
+
+		if err := compose.Up(ctx); err != nil {
+			t.Fatalf("Failed to start docker network: %v", err)
+		}
+
+		// Add small delay to allow services to start
+		time.Sleep(20 * time.Second)
+	}
+
 	persistentStore, err := url.Parse("sqlite:///test")
 	require.NoError(t, err)
 
@@ -109,7 +134,7 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 	memoryStore, err := url.Parse("memory:///")
 	require.NoError(t, err)
 
-	if !isKafkaRunning() {
+	if !isKafkaRunning() && !opts.StartDockerNetwork {
 		kafkaContainer, err := testkafka.RunTestContainer(ctx)
 		require.NoError(t, err)
 
@@ -121,9 +146,13 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	var tSettings *settings.Settings
-	if opts.SettingsOverride != "" {
-		tSettings = settings.NewSettings("dev.system.test") // This reads gocore.Config and applies sensible defaults
-	} else {
+
+	switch {
+	case opts.SettingsContextOverride != "":
+		tSettings = settings.NewSettings(opts.SettingsContextOverride)
+	case opts.SettingsOverride != nil:
+		tSettings = opts.SettingsOverride
+	default:
 		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 		tSettings.SubtreeValidation.SubtreeStore = memoryStore
 		tSettings.BlockChain.StoreURL = persistentStore
@@ -159,6 +188,14 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 
 	if opts.EnableRPC {
 		services = append(services, "-rpc=1")
+	}
+
+	if opts.EnableP2P {
+		services = append(services, "-p2p=1")
+	}
+
+	if opts.EnableValidator {
+		services = append(services, "-validator=1")
 	}
 
 	go d.Start(logger, services, tSettings, readyCh)

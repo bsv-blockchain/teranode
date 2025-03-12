@@ -101,6 +101,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxMetaConfig:      getURL("kafka_txmetaConfig", "", alternativeContext...),
 			LegacyInvConfig:   getURL("kafka_legacyInvConfig", "", alternativeContext...),
 			BlocksFinalConfig: getURL("kafka_blocksFinalConfig", "", alternativeContext...),
+			RejectedTxConfig:  getURL("kafka_rejectedTxConfig", "", alternativeContext...),
+			SubtreesConfig:    getURL("kafka_subtreesConfig", "", alternativeContext...),
+			BlocksConfig:      getURL("kafka_blocksConfig", "", alternativeContext...),
 		},
 		Aerospike: AerospikeSettings{
 			Debug:                  getBool("aerospike_debug", false, alternativeContext...),

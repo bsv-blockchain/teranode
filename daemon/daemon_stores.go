@@ -101,12 +101,12 @@ func GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
-		txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
+		txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
 		}
 
-		rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
+		rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 		}
