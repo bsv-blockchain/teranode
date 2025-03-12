@@ -321,7 +321,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
-		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
+		}, errors.WrapGRPC(errors.NewTxError("error reading transaction data", err))
 	}
 
 	// set the tx hash, so it doesn't have to be recalculated

@@ -228,7 +228,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		if r.err != nil {
-			return nil, errors.UnwrapGRPC(r.err)
+			return nil, r.err
 		}
 	}
 
@@ -252,7 +252,7 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 		for _, item := range batch {
 			item.done <- validateBatchResponse{
 				metaData: nil,
-				err:      err,
+				err:      errors.UnwrapGRPC(err),
 			}
 		}
 

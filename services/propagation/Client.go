@@ -151,6 +151,8 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		Tx: txs,
 	})
 	if err != nil {
+		err = errors.UnwrapGRPC(err)
+
 		for _, tx := range batch {
 			tx.done <- err
 		}
