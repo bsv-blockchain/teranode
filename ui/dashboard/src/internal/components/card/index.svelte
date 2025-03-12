@@ -45,7 +45,6 @@
 <style>
   .tui-card {
     box-sizing: var(--box-sizing);
-
     background: var(--comp-bg-color);
     border-radius: 12px;
   }

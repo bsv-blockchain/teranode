@@ -482,13 +482,13 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 				case fields.Fee:
 					fee, ok := value.(int)
 					if ok {
-						items[idx].Data.Fee = uint64(fee) //nolint: gosec
+						items[idx].Data.Fee = uint64(fee) // nolint: gosec
 					}
 
 				case fields.SizeInBytes:
 					sizeInBytes, ok := value.(int)
 					if ok {
-						items[idx].Data.SizeInBytes = uint64(sizeInBytes) //nolint: gosec
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes) // nolint:gosec
 					}
 
 				case fields.ParentTxHashes:

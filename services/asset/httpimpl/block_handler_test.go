@@ -1,0 +1,1140 @@
+package httpimpl
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/labstack/echo/v4"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// MockBlockchainClient is a mock implementation of the blockchain.ClientI interface
+type MockBlockchainClient struct {
+	mock.Mock
+}
+
+// GetBlockExists mocks the GetBlockExists method
+func (m *MockBlockchainClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
+// InvalidateBlock mocks the InvalidateBlock method
+func (m *MockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// RevalidateBlock mocks the RevalidateBlock method
+func (m *MockBlockchainClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// GetLastNInvalidBlocks mocks the GetLastNInvalidBlocks method
+func (m *MockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	args := m.Called(ctx, n)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockInfo), args.Error(1)
+}
+
+// The following methods implement the rest of the blockchain.ClientI interface
+// but are not used in the block handler tests
+
+func (m *MockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	args := m.Called(ctx, checkLiveness)
+	return args.Int(0), args.String(1), args.Error(2)
+}
+
+func (m *MockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	args := m.Called(ctx, block, peerID)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	args := m.Called(ctx, notification)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
+	args := m.Called(ctx, blockHash, numberOfBlocks)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	args := m.Called(ctx, height)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.BlockStats), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	args := m.Called(ctx, periodMillis)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.BlockDataPoints), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
+	args := m.Called(ctx, n, includeOrphans, fromHeight)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockInfo), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.SuitableBlock), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	args := m.Called(ctx, hash, depth)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*chainhash.Hash), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
+	args := m.Called(ctx, hash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.NBit), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx)
+
+	var (
+		header *model.BlockHeader
+		meta   *model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		header = args.Get(0).(*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		meta = args.Get(1).(*model.BlockHeaderMeta)
+	}
+
+	return header, meta, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash)
+
+	var (
+		header *model.BlockHeader
+		meta   *model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		header = args.Get(0).(*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		meta = args.Get(1).(*model.BlockHeaderMeta)
+	}
+
+	return header, meta, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, hashTarget, blockLocatorHashes)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHashFrom, blockHashTill)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, height, limit)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, startHeight, endHeight)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]uint32), args.Error(1)
+}
+
+func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
+	args := m.Called(ctx, source)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(chan *blockchain_api.Notification), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	args := m.Called(ctx, key)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]byte), args.Error(1)
+}
+
+func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
+	args := m.Called(ctx, key, data)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(uint32), args.Get(1).(uint32), args.Error(2)
+}
+
+func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	state := args.Get(0).(blockchain_api.FSMStateType)
+
+	return &state, args.Error(1)
+}
+
+func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
+	args := m.Called(ctx, state)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) WaitForFSMtoTransitionToGivenState(ctx context.Context, state blockchain.FSMStateType) error {
+	args := m.Called(ctx, state)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
+	args := m.Called()
+	return args.Get(0).(blockchain.FSMStateType)
+}
+
+func (m *MockBlockchainClient) Run(ctx context.Context, source string) error {
+	args := m.Called(ctx, source)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) LegacySync(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) Idle(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
+	args := m.Called(ctx, event)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	args := m.Called(ctx, blockHeaderHash, blockHeaderHeight)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*chainhash.Hash), args.Error(1)
+}
+
+func (m *MockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
+	args := m.Called(ctx, locator, hashStop, maxHashes)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Error(1)
+}
+
+// TestNewBlockHandler tests the NewBlockHandler function
+func TestNewBlockHandler(t *testing.T) {
+	// Create mock blockchain client
+	mockClient := new(MockBlockchainClient)
+	logger := ulogger.TestLogger{}
+
+	// Call the function to be tested
+	handler := NewBlockHandler(mockClient, logger)
+
+	// Assert that the handler is not nil and has the correct properties
+	assert.NotNil(t, handler)
+	assert.Equal(t, mockClient, handler.blockchainClient)
+	assert.Equal(t, logger, handler.logger)
+}
+
+// setupBlockHandlerTest creates a test environment for block handler tests
+func setupBlockHandlerTest(t *testing.T, requestBody string) (*BlockHandler, *MockBlockchainClient, echo.Context, *httptest.ResponseRecorder) {
+	mockClient := new(MockBlockchainClient)
+	logger := ulogger.TestLogger{}
+	handler := NewBlockHandler(mockClient, logger)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(requestBody))
+
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	return handler, mockClient, c, rec
+}
+
+// TestHandleBlockOperationWithInvalidJSON tests the handleBlockOperation function with invalid JSON
+func TestHandleBlockOperationWithInvalidJSON(t *testing.T) {
+	// Setup test with invalid JSON
+	const requestBody = `{invalid-json}`
+	handler, _, c, _ := setupBlockHandlerTest(t, requestBody)
+
+	// Create a test operation that should not be called
+	operation := func(ctx echo.Context, blockHash *chainhash.Hash) error {
+		t.Fatal("Operation should not be called")
+		return nil
+	}
+
+	// Call the function to be tested
+	err := handler.handleBlockOperation(c, "test", operation)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Invalid request body")
+}
+
+// TestHandleBlockOperation tests the handleBlockOperation function
+func TestHandleBlockOperation(t *testing.T) {
+	// This hash is used throughout the tests
+	const validBlockHash = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" // Bitcoin genesis block hash
+
+	t.Run("Success case", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+
+		// Create a test operation
+		operationCalled := false
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			operationCalled = true
+
+			assert.Equal(t, blockHash, hash)
+
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.True(t, operationCalled)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Verify response
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, "Block test successfully", response["message"])
+	})
+
+	t.Run("Invalid request body", func(t *testing.T) {
+		// Setup test with invalid JSON
+		handler, _, c, _ := setupBlockHandlerTest(t, "{invalid json")
+
+		// Create a test operation
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			t.Fatal("Operation should not be called")
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Invalid request body")
+	})
+
+	t.Run("Missing block hash", func(t *testing.T) {
+		// Setup test with empty block hash
+		handler, _, c, _ := setupBlockHandlerTest(t, `{"blockHash": ""}`)
+
+		// Create a test operation
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			t.Fatal("Operation should not be called")
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+		assert.Equal(t, "BlockHash is required", httpErr.Message)
+	})
+
+	t.Run("Invalid block hash format", func(t *testing.T) {
+		// Setup test with invalid block hash format
+		handler, _, c, _ := setupBlockHandlerTest(t, `{"blockHash": "invalid-hash"}`)
+
+		// Create a test operation
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			t.Fatal("Operation should not be called")
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Invalid block hash format")
+	})
+
+	t.Run("Block does not exist", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(false, nil)
+
+		// Create a test operation
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			t.Fatal("Operation should not be called")
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusNotFound, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Block with hash")
+	})
+
+	t.Run("Error checking if block exists", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(false, errors.ErrServiceError)
+
+		// Create a test operation
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			t.Fatal("Operation should not be called")
+			return nil
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Error checking if block exists")
+	})
+
+	t.Run("Operation error", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+
+		// Create a test operation that returns an error
+		testOperation := func(ctx echo.Context, hash *chainhash.Hash) error {
+			return errors.ErrServiceError
+		}
+
+		// Call the function to be tested
+		err := handler.handleBlockOperation(c, "test", testOperation)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Failed to test block")
+	})
+}
+
+// TestInvalidateBlockWithEmptyRequest tests the InvalidateBlock method with an empty request
+func TestInvalidateBlockWithEmptyRequest(t *testing.T) {
+	// Setup test with an empty request body
+	handler, _, c, _ := setupBlockHandlerTest(t, "{}")
+
+	// Call the function to be tested
+	err := handler.InvalidateBlock(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "BlockHash is required")
+}
+
+// TestInvalidateBlockWithInvalidHash tests the InvalidateBlock method with an invalid block hash
+func TestInvalidateBlockWithInvalidHash(t *testing.T) {
+	// Setup test with an invalid block hash
+	const requestBody = `{"blockHash": "invalid-hash"}`
+	handler, _, c, _ := setupBlockHandlerTest(t, requestBody)
+
+	// Call the function to be tested
+	err := handler.InvalidateBlock(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Invalid block hash format")
+}
+
+// TestInvalidateBlock tests the InvalidateBlock method
+func TestInvalidateBlock(t *testing.T) {
+	const validBlockHash = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" // Bitcoin genesis block hash
+
+	t.Run("Success case", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return(nil)
+
+		// Call the function to be tested
+		err := handler.InvalidateBlock(c)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Verify response
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, "Block invalidate successfully", response["message"])
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "InvalidateBlock", mock.Anything, blockHash)
+	})
+
+	t.Run("Error from InvalidateBlock", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return(errors.ErrServiceError)
+
+		// Call the function to be tested
+		err := handler.InvalidateBlock(c)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Failed to invalidate block")
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "InvalidateBlock", mock.Anything, blockHash)
+	})
+}
+
+// TestRevalidateBlockWithEmptyRequest tests the RevalidateBlock method with an empty request
+func TestRevalidateBlockWithEmptyRequest(t *testing.T) {
+	// Setup test with an empty request body
+	handler, _, c, _ := setupBlockHandlerTest(t, "{}")
+
+	// Call the function to be tested
+	err := handler.RevalidateBlock(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "BlockHash is required")
+}
+
+// TestRevalidateBlockWithInvalidHash tests the RevalidateBlock method with an invalid block hash
+func TestRevalidateBlockWithInvalidHash(t *testing.T) {
+	// Setup test with an invalid block hash
+	const requestBody = `{"blockHash": "invalid-hash"}`
+	handler, _, c, _ := setupBlockHandlerTest(t, requestBody)
+
+	// Call the function to be tested
+	err := handler.RevalidateBlock(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Invalid block hash format")
+}
+
+// TestRevalidateBlock tests the RevalidateBlock method
+func TestRevalidateBlock(t *testing.T) {
+	const validBlockHash = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" // Bitcoin genesis block hash
+
+	t.Run("Success case", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+		mockClient.On("RevalidateBlock", mock.Anything, blockHash).Return(nil)
+
+		// Call the function to be tested
+		err := handler.RevalidateBlock(c)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Verify response
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, "Block revalidate successfully", response["message"])
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "RevalidateBlock", mock.Anything, blockHash)
+	})
+
+	t.Run("Error from RevalidateBlock", func(t *testing.T) {
+		// Setup test
+		requestBody := `{"blockHash": "` + validBlockHash + `"}`
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
+
+		// Mock the blockchain client responses
+		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
+		mockClient.On("RevalidateBlock", mock.Anything, blockHash).Return(errors.ErrServiceError)
+
+		// Call the function to be tested
+		err := handler.RevalidateBlock(c)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Failed to revalidate block")
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "RevalidateBlock", mock.Anything, blockHash)
+	})
+}
+
+// TestGetLastNInvalidBlocksWithInvalidCount tests the GetLastNInvalidBlocks method with an invalid count parameter
+func TestGetLastNInvalidBlocksWithInvalidCount(t *testing.T) {
+	// Setup test
+	handler, _, c, _ := setupBlockHandlerTest(t, "")
+
+	// Create a request with an invalid count query parameter
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=invalid", nil)
+	c.SetRequest(req)
+
+	// Call the function to be tested
+	err := handler.GetLastNInvalidBlocks(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Invalid count parameter")
+}
+
+// TestGetLastNInvalidBlocksWithNegativeCount tests the GetLastNInvalidBlocks method with a negative count parameter
+func TestGetLastNInvalidBlocksWithNegativeCount(t *testing.T) {
+	// Setup test
+	handler, _, c, _ := setupBlockHandlerTest(t, "")
+
+	// Create a request with a negative count query parameter
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=-5", nil)
+	c.SetRequest(req)
+
+	// Call the function to be tested
+	err := handler.GetLastNInvalidBlocks(c)
+
+	// Assert results
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Count must be a positive number")
+}
+
+// TestGetLastNInvalidBlocks tests the GetLastNInvalidBlocks method
+func TestGetLastNInvalidBlocks(t *testing.T) {
+	// Define test data
+	const (
+		validBlockHash1 = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+		validBlockHash2 = "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+	)
+
+	t.Run("Success case with default count", func(t *testing.T) {
+		// Setup test
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, "")
+
+		// Create a request with no query parameters (should use default count=10)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid", nil)
+		c.SetRequest(req)
+
+		// Create test data for the mock response
+		blockHash1, _ := chainhash.NewHashFromStr(validBlockHash1)
+		blockHash2, _ := chainhash.NewHashFromStr(validBlockHash2)
+
+		// Create proper 80-byte block headers
+		// A block header consists of: Version(4) + PrevBlock(32) + MerkleRoot(32) + Timestamp(4) + Bits(4) + Nonce(4) = 80 bytes
+		blockHeader1 := make([]byte, 80)
+		blockHeader2 := make([]byte, 80)
+
+		// Set version (first 4 bytes)
+		version := uint32(1)
+		blockHeader1[0] = byte(version)
+		blockHeader1[1] = byte(version >> 8)
+		blockHeader1[2] = byte(version >> 16)
+		blockHeader1[3] = byte(version >> 24)
+		copy(blockHeader2[0:4], blockHeader1[0:4])
+
+		// Set previous block hash (next 32 bytes)
+		// For genesis block, prev hash is all zeros
+		// For block 1, prev hash is the hash of genesis block
+		copy(blockHeader2[4:36], blockHash1.CloneBytes())
+
+		// Set merkle root (next 32 bytes) - using the block hashes for simplicity
+		copy(blockHeader1[36:68], blockHash1.CloneBytes())
+		copy(blockHeader2[36:68], blockHash2.CloneBytes())
+
+		// Set timestamp (next 4 bytes)
+		timestamp1Unix := uint32(1231006505) // Genesis block timestamp
+		timestamp2Unix := uint32(1231469665) // Block 1 timestamp
+		blockHeader1[68] = byte(timestamp1Unix)
+		blockHeader1[69] = byte(timestamp1Unix >> 8)
+		blockHeader1[70] = byte(timestamp1Unix >> 16)
+		blockHeader1[71] = byte(timestamp1Unix >> 24)
+		blockHeader2[68] = byte(timestamp2Unix)
+		blockHeader2[69] = byte(timestamp2Unix >> 8)
+		blockHeader2[70] = byte(timestamp2Unix >> 16)
+		blockHeader2[71] = byte(timestamp2Unix >> 24)
+
+		// Set bits/difficulty (next 4 bytes)
+		bits := uint32(0x1d00ffff) // Initial difficulty
+		blockHeader1[72] = byte(bits)
+		blockHeader1[73] = byte(bits >> 8)
+		blockHeader1[74] = byte(bits >> 16)
+		blockHeader1[75] = byte(bits >> 24)
+		copy(blockHeader2[72:76], blockHeader1[72:76])
+
+		// Set nonce (last 4 bytes)
+		nonce1 := uint32(2083236893) // Genesis block nonce
+		nonce2 := uint32(2573394689) // Block 1 nonce
+		blockHeader1[76] = byte(nonce1)
+		blockHeader1[77] = byte(nonce1 >> 8)
+		blockHeader1[78] = byte(nonce1 >> 16)
+		blockHeader1[79] = byte(nonce1 >> 24)
+		blockHeader2[76] = byte(nonce2)
+		blockHeader2[77] = byte(nonce2 >> 8)
+		blockHeader2[78] = byte(nonce2 >> 16)
+		blockHeader2[79] = byte(nonce2 >> 24)
+
+		// Create timestamp for SeenAt
+		timestamp1 := timestamppb.New(time.Unix(1231006505, 0))
+		timestamp2 := timestamppb.New(time.Unix(1231469665, 0))
+
+		mockBlocks := []*model.BlockInfo{
+			{BlockHeader: blockHeader1, Height: 0, SeenAt: timestamp1, TransactionCount: 1},
+			{BlockHeader: blockHeader2, Height: 1, SeenAt: timestamp2, TransactionCount: 2},
+		}
+
+		// Mock the blockchain client response
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(10)).Return(mockBlocks, nil)
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Verify response
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, float64(2), response["count"])
+		assert.Len(t, response["blocks"], 2)
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(10))
+	})
+
+	t.Run("Success case with custom count", func(t *testing.T) {
+		// Setup test
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, "")
+
+		// Create a request with count=5 query parameter
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=5", nil)
+		c.SetRequest(req)
+		// Set query parameter
+		q := req.URL.Query()
+		q.Add("count", "5")
+		req.URL.RawQuery = q.Encode()
+
+		// Create test data for the mock response
+		blockHash1, _ := chainhash.NewHashFromStr(validBlockHash1)
+
+		// Create proper 80-byte block header
+		// A block header consists of: Version(4) + PrevBlock(32) + MerkleRoot(32) + Timestamp(4) + Bits(4) + Nonce(4) = 80 bytes
+		blockHeader1 := make([]byte, 80)
+
+		// Set version (first 4 bytes)
+		version := uint32(1)
+		blockHeader1[0] = byte(version)
+		blockHeader1[1] = byte(version >> 8)
+		blockHeader1[2] = byte(version >> 16)
+		blockHeader1[3] = byte(version >> 24)
+
+		// Set merkle root (next 32 bytes) - using the block hash for simplicity
+		copy(blockHeader1[36:68], blockHash1.CloneBytes())
+
+		// Set timestamp (next 4 bytes)
+		timestamp1Unix := uint32(1231006505) // Genesis block timestamp
+		blockHeader1[68] = byte(timestamp1Unix)
+		blockHeader1[69] = byte(timestamp1Unix >> 8)
+		blockHeader1[70] = byte(timestamp1Unix >> 16)
+		blockHeader1[71] = byte(timestamp1Unix >> 24)
+
+		// Set bits/difficulty (next 4 bytes)
+		bits := uint32(0x1d00ffff) // Initial difficulty
+		blockHeader1[72] = byte(bits)
+		blockHeader1[73] = byte(bits >> 8)
+		blockHeader1[74] = byte(bits >> 16)
+		blockHeader1[75] = byte(bits >> 24)
+
+		// Set nonce (last 4 bytes)
+		nonce1 := uint32(2083236893) // Genesis block nonce
+		blockHeader1[76] = byte(nonce1)
+		blockHeader1[77] = byte(nonce1 >> 8)
+		blockHeader1[78] = byte(nonce1 >> 16)
+		blockHeader1[79] = byte(nonce1 >> 24)
+
+		// Create timestamp for SeenAt
+		timestamp1 := timestamppb.New(time.Unix(1231006505, 0))
+
+		mockBlocks := []*model.BlockInfo{
+			{BlockHeader: blockHeader1, Height: 0, SeenAt: timestamp1, TransactionCount: 1},
+		}
+
+		// Mock the blockchain client response
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(5)).Return(mockBlocks, nil)
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Verify response
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, float64(1), response["count"])
+		assert.Len(t, response["blocks"], 1)
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(5))
+	})
+
+	t.Run("Invalid count parameter", func(t *testing.T) {
+		// Setup test
+		handler, _, c, _ := setupBlockHandlerTest(t, "")
+
+		// Create a request with invalid count parameter
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=invalid", nil)
+		c.SetRequest(req)
+		// Set query parameter
+		q := req.URL.Query()
+		q.Add("count", "invalid")
+		req.URL.RawQuery = q.Encode()
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Invalid count parameter")
+	})
+
+	t.Run("Negative count parameter", func(t *testing.T) {
+		// Setup test
+		handler, _, c, _ := setupBlockHandlerTest(t, "")
+
+		// Create a request with negative count parameter
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=-5", nil)
+		c.SetRequest(req)
+		// Set query parameter
+		q := req.URL.Query()
+		q.Add("count", "-5")
+		req.URL.RawQuery = q.Encode()
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Count must be a positive number")
+	})
+
+	t.Run("Error from GetLastNInvalidBlocks", func(t *testing.T) {
+		// Setup test
+		handler, mockClient, c, _ := setupBlockHandlerTest(t, "")
+
+		// Create a request with default count
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid", nil)
+		c.SetRequest(req)
+
+		// Mock the blockchain client response with error
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(10)).Return(nil, errors.ErrServiceError)
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		httpErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+		assert.Contains(t, httpErr.Message, "Failed to retrieve invalid blocks")
+
+		// Verify that the mock was called with the correct arguments
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(10))
+	})
+}

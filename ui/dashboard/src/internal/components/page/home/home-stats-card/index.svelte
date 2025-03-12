@@ -126,7 +126,7 @@
   }
 
   .content {
-    background: #0a1018;
+    background: var(--comp-bg-color);
 
     display: grid;
     grid-template-columns: var(--grid-template-columns);

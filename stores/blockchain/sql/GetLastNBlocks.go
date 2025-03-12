@@ -9,10 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/tracing"
-	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -58,7 +55,6 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		WHERE invalid = false
 		ORDER BY height DESC
 	  LIMIT $1
-		)
 	`
 	} else {
 		q = `
@@ -109,75 +105,12 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	if err != nil {
 		return nil, errors.NewStorageError("failed to get blocks", err)
 	}
-
 	defer rows.Close()
 
-	blockInfos := make([]*model.BlockInfo, 0)
-
-	for rows.Next() {
-		var (
-			hashPrevBlock  []byte
-			hashMerkleRoot []byte
-			coinbaseBytes  []byte
-			nBits          []byte
-			seenAt         CustomTime
-		)
-
-		header := &model.BlockHeader{}
-		info := &model.BlockInfo{}
-
-		if err = rows.Scan(
-			&header.Version,
-			&header.Timestamp,
-			&nBits,
-			&header.Nonce,
-			&hashPrevBlock,
-			&hashMerkleRoot,
-			&info.TransactionCount,
-			&info.Size,
-			&coinbaseBytes,
-			&info.Height,
-			&seenAt,
-		); err != nil {
-			return nil, errors.NewStorageError("failed to scan row", err)
-		}
-
-		bits, _ := model.NewNBitFromSlice(nBits)
-		header.Bits = *bits
-
-		header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
-		}
-
-		header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
-		}
-
-		info.BlockHeader = header.Bytes()
-
-		if len(coinbaseBytes) > 0 {
-			coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
-			if err != nil {
-				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
-			}
-
-			// Add up the sum of the coinbase tx outputs.
-			info.CoinbaseValue = 0
-			for _, output := range coinbaseTx.Outputs {
-				info.CoinbaseValue += output.Satoshis
-			}
-
-			info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
-			if err != nil {
-				return nil, errors.NewProcessingError("failed to extract miner", err)
-			}
-		}
-
-		info.SeenAt = timestamppb.New(seenAt.Time)
-
-		blockInfos = append(blockInfos, info)
+	// Process the query results using the common helper function
+	blockInfos, err := s.processBlockRows(rows)
+	if err != nil {
+		return nil, err
 	}
 
 	s.responseCache.Set(cacheID, blockInfos, s.cacheTTL)

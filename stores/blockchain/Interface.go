@@ -89,6 +89,13 @@ type Store interface {
 	// Returns: Slice of BlockInfo and any error encountered
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)
 
+	// GetLastNInvalidBlocks retrieves the last N blocks that were marked as invalid.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - n: Number of invalid blocks to retrieve
+	// Returns: Slice of BlockInfo and any error encountered
+	GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error)
+
 	// GetSuitableBlock retrieves a suitable block starting from the given hash.
 	// Parameters:
 	//   - ctx: Context for the operation

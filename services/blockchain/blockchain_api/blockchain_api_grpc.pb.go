@@ -32,6 +32,7 @@ const (
 	BlockchainAPI_GetBlockStats_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockStats"
 	BlockchainAPI_GetBlockGraphData_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
 	BlockchainAPI_GetLastNBlocks_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
+	BlockchainAPI_GetLastNInvalidBlocks_FullMethodName               = "/blockchain_api.BlockchainAPI/GetLastNInvalidBlocks"
 	BlockchainAPI_GetSuitableBlock_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
 	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName              = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
 	BlockchainAPI_GetNextWorkRequired_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
@@ -95,6 +96,8 @@ type BlockchainAPIClient interface {
 	GetBlockGraphData(ctx context.Context, in *GetBlockGraphDataRequest, opts ...grpc.CallOption) (*model.BlockDataPoints, error)
 	// GetLastNBlocks retrieves the most recent N blocks from the blockchain.
 	GetLastNBlocks(ctx context.Context, in *GetLastNBlocksRequest, opts ...grpc.CallOption) (*GetLastNBlocksResponse, error)
+	// GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
+	GetLastNInvalidBlocks(ctx context.Context, in *GetLastNInvalidBlocksRequest, opts ...grpc.CallOption) (*GetLastNInvalidBlocksResponse, error)
 	// GetSuitableBlock finds a suitable block for mining purposes.
 	GetSuitableBlock(ctx context.Context, in *GetSuitableBlockRequest, opts ...grpc.CallOption) (*GetSuitableBlockResponse, error)
 	// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
@@ -260,6 +263,16 @@ func (c *blockchainAPIClient) GetLastNBlocks(ctx context.Context, in *GetLastNBl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetLastNBlocksResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetLastNBlocks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetLastNInvalidBlocks(ctx context.Context, in *GetLastNInvalidBlocksRequest, opts ...grpc.CallOption) (*GetLastNInvalidBlocksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLastNInvalidBlocksResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetLastNInvalidBlocks_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +673,8 @@ type BlockchainAPIServer interface {
 	GetBlockGraphData(context.Context, *GetBlockGraphDataRequest) (*model.BlockDataPoints, error)
 	// GetLastNBlocks retrieves the most recent N blocks from the blockchain.
 	GetLastNBlocks(context.Context, *GetLastNBlocksRequest) (*GetLastNBlocksResponse, error)
+	// GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
+	GetLastNInvalidBlocks(context.Context, *GetLastNInvalidBlocksRequest) (*GetLastNInvalidBlocksResponse, error)
 	// GetSuitableBlock finds a suitable block for mining purposes.
 	GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error)
 	// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
@@ -767,6 +782,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockGraphData(context.Context, *GetB
 }
 func (UnimplementedBlockchainAPIServer) GetLastNBlocks(context.Context, *GetLastNBlocksRequest) (*GetLastNBlocksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLastNBlocks not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetLastNInvalidBlocks(context.Context, *GetLastNInvalidBlocksRequest) (*GetLastNInvalidBlocksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLastNInvalidBlocks not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSuitableBlock not implemented")
@@ -1055,6 +1073,24 @@ func _BlockchainAPI_GetLastNBlocks_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetLastNBlocks(ctx, req.(*GetLastNBlocksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetLastNInvalidBlocks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLastNInvalidBlocksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetLastNInvalidBlocks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetLastNInvalidBlocks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetLastNInvalidBlocks(ctx, req.(*GetLastNInvalidBlocksRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1742,6 +1778,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLastNBlocks",
 			Handler:    _BlockchainAPI_GetLastNBlocks_Handler,
+		},
+		{
+			MethodName: "GetLastNInvalidBlocks",
+			Handler:    _BlockchainAPI_GetLastNInvalidBlocks_Handler,
 		},
 		{
 			MethodName: "GetSuitableBlock",

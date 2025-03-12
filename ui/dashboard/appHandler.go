@@ -7,9 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/ordishs/gocore"
+)
+
+const (
+	authPathLogin  = "/api/auth/login"
+	authPathLogout = "/api/auth/logout"
+	authPathCheck  = "/api/auth/check"
 )
 
 var (
@@ -17,7 +24,8 @@ var (
 
 	res embed.FS
 
-	logger ulogger.Logger
+	logger      ulogger.Logger
+	authHandler *AuthHandler
 )
 
 func init() {
@@ -25,10 +33,31 @@ func init() {
 	logger = ulogger.New("appHandler", ulogger.WithLevel(logLevelStr))
 }
 
+// InitDashboard initializes the dashboard with settings
+func InitDashboard(settings *settings.Settings) {
+	authHandler = NewAuthHandler(settings)
+}
+
 func AppHandler(c echo.Context) error {
 	var resource string
 
 	path := c.Request().URL.Path
+
+	// Check if this is an auth API request
+	switch {
+	case path == authPathLogin:
+		return authHandler.LoginHandler(c)
+	case path == authPathLogout:
+		return authHandler.LogoutHandler(c)
+	case path == authPathCheck:
+		return authHandler.CheckAuthHandler(c)
+	}
+
+	// Check authentication for admin paths
+	if strings.HasPrefix(path, "/admin") && !authHandler.CheckAuth(c.Request()) {
+		// Redirect to login page
+		return c.Redirect(http.StatusFound, "/login?redirect="+path)
+	}
 
 	if path == "/" {
 		resource = "build/index.html"

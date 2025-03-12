@@ -39,6 +39,9 @@ service BlockchainAPI {
   // GetLastNBlocks retrieves the most recent N blocks from the blockchain.
   rpc GetLastNBlocks (GetLastNBlocksRequest) returns (GetLastNBlocksResponse) {}
 
+  // GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
+  rpc GetLastNInvalidBlocks (GetLastNInvalidBlocksRequest) returns (GetLastNInvalidBlocksResponse) {}
+
   // GetSuitableBlock finds a suitable block for mining purposes.
   rpc GetSuitableBlock (GetSuitableBlockRequest) returns (GetSuitableBlockResponse) {}
 
@@ -381,6 +384,16 @@ message GetLastNBlocksRequest {
 
 // GetLastNBlocksResponse contains recent block information.
 message GetLastNBlocksResponse {
+  repeated model.BlockInfo blocks = 1;  // List of block information
+}
+
+// GetLastNInvalidBlocksRequest requests the most recent invalid blocks.
+message GetLastNInvalidBlocksRequest {
+  int64 n = 1;  // Number of blocks to retrieve
+}
+
+// GetLastNInvalidBlocksResponse contains recent invalid block information.
+message GetLastNInvalidBlocksResponse {
   repeated model.BlockInfo blocks = 1;  // List of block information
 }
 

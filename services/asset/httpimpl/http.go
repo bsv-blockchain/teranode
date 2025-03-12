@@ -113,9 +113,18 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	e.Use(middleware.Recover())
 
+	// Default CORS config for non-dashboard endpoints
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{echo.GET},
+		// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
+		AllowOriginFunc: func(origin string) (bool, error) {
+			// Allow any origin to access the dashboard
+			return true, nil
+		},
+		AllowMethods:     []string{echo.GET, echo.HEAD, echo.PUT, echo.PATCH, echo.POST, echo.DELETE, echo.OPTIONS},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, echo.HeaderXRequestedWith},
+		ExposeHeaders:    []string{echo.HeaderContentLength, echo.HeaderContentType},
+		AllowCredentials: true,
+		MaxAge:           86400,
 	}))
 
 	e.Use(middleware.Gzip())
@@ -239,12 +248,83 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	if h.settings.Dashboard.Enabled {
+		// Initialize dashboard with settings
+		dashboard.InitDashboard(h.settings)
+
+		// Apply authentication middleware for all POST endpoints
+		authHandler := dashboard.NewAuthHandler(h.settings)
+		apiGroup.Use(authHandler.PostAuthMiddleware)
+
+		dashboardConfig := middleware.CORSConfig{
+			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
+			AllowOriginFunc: func(origin string) (bool, error) {
+				// Allow any origin to access the dashboard
+				return true, nil
+			},
+			AllowMethods:     []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodPost, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, echo.HeaderXRequestedWith, "X-CSRF-Token"},
+			ExposeHeaders:    []string{echo.HeaderContentLength, echo.HeaderContentType},
+			AllowCredentials: true,
+			MaxAge:           86400,
+		}
+		// Apply CORS middleware to the entire Echo instance
+		e.Use(middleware.CORSWithConfig(dashboardConfig))
+
+		// Register handlers for all HTTP methods to support API endpoints
 		e.GET("*", dashboard.AppHandler)
+		e.POST("*", dashboard.AppHandler)
+		e.PUT("*", dashboard.AppHandler)
+		e.DELETE("*", dashboard.AppHandler)
+		e.OPTIONS("*", dashboard.AppHandler) // Important for CORS preflight requests
 	} else {
 		e.GET("*", func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "Not Found")
 		})
 	}
+
+	fsmHandler := NewFSMHandler(repo.BlockchainClient, logger)
+
+	const (
+		pathFsmState  = "/fsm/state"
+		pathFsmEvents = "/fsm/events"
+		pathFsmStates = "/fsm/states"
+	)
+
+	// Register FSM API endpoints
+	apiGroup.GET(pathFsmState, fsmHandler.GetFSMState)
+	apiGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
+	apiGroup.GET(pathFsmEvents, fsmHandler.GetFSMEvents)
+	apiGroup.GET(pathFsmStates, fsmHandler.GetFSMStates)
+
+	// Add OPTIONS handlers for CORS preflight requests
+	apiGroup.OPTIONS(pathFsmState, func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+	apiGroup.OPTIONS(pathFsmEvents, func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+	apiGroup.OPTIONS(pathFsmStates, func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
+	// Create and register block handler for block operations
+	blockHandler := NewBlockHandler(repo.BlockchainClient, logger)
+
+	// Register block invalidation/revalidation endpoints
+	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
+	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
+	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
+
+	// Add OPTIONS handlers for block operations
+	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+	apiGroup.OPTIONS("/block/revalidate", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+	apiGroup.OPTIONS("/blocks/invalid", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
 
 	return h, nil
 }

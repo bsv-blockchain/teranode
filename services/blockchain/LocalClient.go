@@ -114,6 +114,11 @@ func (c LocalClient) GetBlockGraphData(ctx context.Context, periodMillis uint64)
 func (c LocalClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	return c.store.GetLastNBlocks(ctx, n, includeOrphans, fromHeight)
 }
+
+func (c LocalClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	return c.store.GetLastNInvalidBlocks(ctx, n)
+}
+
 func (c LocalClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	return c.store.GetSuitableBlock(ctx, blockHash)
 }

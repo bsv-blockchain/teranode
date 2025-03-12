@@ -368,12 +368,15 @@ func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhas
 func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
+
 func (s *mockStore) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	panic("not implemented")
 }
+
 func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
 	panic("not implemented")
 }
+
 func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
 	panic("not implemented")
 }
@@ -408,6 +411,10 @@ func (s *mockStore) WaitUntilFSMTransitionFromIdleState(_ context.Context) error
 	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
+	panic("not implemented")
+}
+
+func (s *mockStore) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
 	panic("not implemented")
 }
 

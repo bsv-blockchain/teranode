@@ -631,6 +631,23 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 	}, nil
 }
 
+// GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
+func (b *Blockchain) GetLastNInvalidBlocks(ctx context.Context, request *blockchain_api.GetLastNInvalidBlocksRequest) (*blockchain_api.GetLastNInvalidBlocksResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetLastNInvalidBlocks",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	blockInfo, err := b.store.GetLastNInvalidBlocks(ctx, request.N)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetLastNInvalidBlocksResponse{
+		Blocks: blockInfo,
+	}, nil
+}
+
 // GetSuitableBlock finds a suitable block for mining purposes.
 func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSuitableBlock",

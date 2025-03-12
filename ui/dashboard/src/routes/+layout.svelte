@@ -110,6 +110,12 @@
         path: '/updates',
         label: $i18n.t('page.updates.menu-label'),
       },
+      {
+        icon: 'icon-admin-line',
+        iconSelected: 'icon-admin-solid',
+        path: '/admin',
+        label: $i18n.t('page.admin.menu-label'),
+      },
       // {
       //   icon: 'icon-bell-line',
       //   iconSelected: 'icon-bell-solid',

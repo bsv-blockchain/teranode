@@ -1,7 +1,7 @@
 {
   "comp": {
     "footer": {
-      "copyright": "© {{ year }} BSV Blockchain Org.",
+      "copyright": " BSV Blockchain Org.",
       "privacy": "Privacy",
       "privacy_url": "https://www.bsvblockchain.org/privacy",
       "terms": "Terms of Use",
@@ -338,6 +338,10 @@
     "updates": {
       "menu-label": "Updates",
       "title": "Updates"
+    },
+    "admin": {
+      "menu-label": "Admin",
+      "title": "Admin Dashboard"
     }
   },
   "notifications": {
@@ -378,7 +382,7 @@
     }
   },
   "global": {
-    "warning": "⚠️ Alpha testing in progress. Expect breaks and resets.",
-    "warning_2": "---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----"
+    "warning": "",
+    "warning_2": "---- Alpha Testing in Progress  Expect Breaks & Resets! ----"
   }
 }

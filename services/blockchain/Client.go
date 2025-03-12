@@ -374,6 +374,17 @@ func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans boo
 	return resp.Blocks, nil
 }
 
+func (c *Client) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	resp, err := c.client.GetLastNInvalidBlocks(ctx, &blockchain_api.GetLastNInvalidBlocksRequest{
+		N: n,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Blocks, nil
+}
+
 // GetSuitableBlock finds a suitable block for mining purposes.
 func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	resp, err := c.client.GetSuitableBlock(ctx, &blockchain_api.GetSuitableBlockRequest{

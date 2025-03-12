@@ -44,6 +44,9 @@ type ClientI interface {
 	// GetLastNBlocks retrieves the most recent N blocks.
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)
 
+	// GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
+	GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error)
+
 	// GetSuitableBlock finds a suitable block for mining purposes.
 	GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error)
 
@@ -151,6 +154,8 @@ type ClientI interface {
 //	return hashes
 // }
 
+const notImplemented = "not implemented"
+
 var _ ClientI = &MockBlockchain{}
 
 type MockBlockchain struct {
@@ -195,19 +200,19 @@ func (s *MockBlockchain) GetBlockStats(ctx context.Context) (*model.BlockStats, 
 	}, nil
 }
 func (s *MockBlockchain) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	if s.Block == nil {
@@ -278,71 +283,74 @@ func (s *MockBlockchain) Subscribe(ctx context.Context, source string) (chan *bl
 	return nil, nil
 }
 func (s *MockBlockchain) GetState(ctx context.Context, key string) ([]byte, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) SetState(ctx context.Context, key string, data []byte) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) IsFSMCurrentState(_ context.Context, state FSMStateType) (bool, error) {
 	return s.CurrentState == state, nil
 }
 func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
 	return nil
 }
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) Run(ctx context.Context, source string) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) CatchUpBlocks(ctx context.Context) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) LegacySync(ctx context.Context) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) Idle(ctx context.Context) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) SendFSMEvent(ctx context.Context, event FSMEventType) error {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
-	panic("not implemented")
+	panic(notImplemented)
 }
 func (s *MockBlockchain) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
 	panic("implement me")
 }
 func (s *MockBlockchain) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	panic("implement me")
+}
+func (s *MockBlockchain) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	panic(notImplemented)
 }

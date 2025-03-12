@@ -10,6 +10,14 @@
   export let radius = 10
   export let offsetX = 0
 
+  // Handle predefined sizes
+  if (size === 'small') {
+    size = 16;
+    thickness = 2;
+    radius = 6;
+    gap = 20;
+  }
+
   let dash
   let marginLeft = 0
   $: {
@@ -23,7 +31,7 @@
     height={size}
     width={size}
     style="animation-duration:{speed}ms;"
-    class="svelte-spinner"
+    class="svelte-spinner {size === 16 ? 'spinner-small' : ''}"
     viewBox="0 0 32 32"
     style:--margin-left={marginLeft + 'px'}
   >

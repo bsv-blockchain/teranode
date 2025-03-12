@@ -87,6 +87,7 @@
   .toolbar .left {
     display: flex;
     justify-content: flex-start;
+    flex: 1;
   }
 
   .toolbar .right {
