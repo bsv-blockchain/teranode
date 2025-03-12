@@ -973,14 +973,6 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Blocks until the FSM transitions from the IDLE state
-	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		s.logger.Errorf("[RPC Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
-		return err
-	}
-
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return nil
 	}

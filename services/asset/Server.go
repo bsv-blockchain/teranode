@@ -172,14 +172,6 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Blocks until the FSM transitions from the IDLE state
-	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		v.logger.Errorf("[Asset Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
-		return err
-	}
-
 	if v.httpServer != nil {
 		g.Go(func() error {
 			err := v.httpServer.Start(ctx, v.httpAddr)
@@ -192,7 +184,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	// Blocks until the FSM transitions from the IDLE state
-	err = v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
+	err := v.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
 		v.logger.Errorf("[Asset Service] Failed to wait for FSM transition from IDLE state: %s", err)
 
