@@ -1389,3 +1389,23 @@ func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chain
 
 	return nil
 }
+
+func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expectedHash []byte, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		bestBlockHeader, _, err := node.BlockchainClient.GetBestBlockHeader(ctx)
+
+		if err != nil {
+			return errors.NewProcessingError("failed to get best block header: %w", err)
+		}
+
+		if bytes.Equal(expectedHash, bestBlockHeader.Hash().CloneBytes()) {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return errors.NewProcessingError("timeout waiting for block acceptance")
+		}
+	}
+}

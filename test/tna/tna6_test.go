@@ -80,19 +80,22 @@ func (suite *TNA6TestSuite) TestAcceptanceNextBlock() {
 	// Get the first node's clients
 	ba := testEnv.Nodes[0].BlockassemblyClient
 	bc := testEnv.Nodes[0].BlockchainClient
+	node0 := testEnv.Nodes[0]
 
 	// Mine a block
 	blockHash, err := helper.MineBlock(ctx, testEnv.Nodes[0].Settings, ba, logger)
 	require.NoError(t, err, "Failed to mine block")
 	require.NotNil(t, blockHash, "Block hash should not be nil")
+	t.Logf("Block successfully created: %v", blockHash)
 
-	// Wait for the block to be accepted and processed
-	time.Sleep(2 * time.Second)
+	// Instead of sleeping for 2 seconds, wait for the block to be accepted
+	err = helper.WaitForBlockAccepted(ctx, node0, blockHash, 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for block acceptance")
+	t.Logf("Block accepted: %v", blockHash)
 
 	// Verify the block was accepted by checking the best block
 	bestBlockHeader, _, err := bc.GetBestBlockHeader(ctx)
 	require.NoError(t, err, "Failed to get best block header")
-
 	require.Equal(t, blockHash, bestBlockHeader.Hash().CloneBytes(),
 		"Best block hash should match mined block hash")
 
