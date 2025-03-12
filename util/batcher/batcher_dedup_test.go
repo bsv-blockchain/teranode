@@ -341,56 +341,74 @@ func Test_TimePartitionedMap(t *testing.T) {
 	})
 
 	t.Run("Expired buckets cleanup", func(t *testing.T) {
-		// Create a map with very small bucket duration and only 2 buckets max
-		bucketDuration := 100 * time.Millisecond
+		// Create a map with larger bucket duration to make test more stable
+		bucketDuration := 500 * time.Millisecond
 		m := NewTimePartitionedMap[int, string](bucketDuration, 2)
 
 		// Add items to first bucket
 		m.Set(1, "value1")
 		m.Set(2, "value2")
 
+		// Wait for half a bucket duration before adding to second bucket
+		time.Sleep(bucketDuration / 2)
+
 		// Add items to second bucket
 		m.Set(3, "value3")
 		m.Set(4, "value4")
 
-		// Verify all items exist
-		_, exists1 := m.Get(1)
-		require.True(t, exists1)
-
-		_, exists2 := m.Get(2)
-		require.True(t, exists2)
-
-		val3, exists3 := m.Get(3)
-		val4, exists4 := m.Get(4)
-
-		// First bucket items might already be expired due to timing
-		// but second bucket items should definitely exist
-		if !exists3 || val3 != "value3" {
-			t.Errorf("Expected key 3 to exist with value 'value3'")
+		// Verify all items exist initially
+		for i := 1; i <= 4; i++ {
+			_, exists := m.Get(i)
+			require.True(t, exists, "key %d should exist initially", i)
 		}
 
-		if !exists4 || val4 != "value4" {
-			t.Errorf("Expected key 4 to exist with value 'value4'")
-		}
+		// Wait for first bucket to expire and force a cleanup
+		time.Sleep(bucketDuration * 2)
 
-		// Wait for first bucket to expire and force a cleanup by accessing the map
-		time.Sleep(bucketDuration * 2) // Sleep for 2x bucket duration
+		// Add items to third bucket to trigger cleanup of first bucket
+		m.Set(5, "value5")
+		m.Set(6, "value6")
 
-		// Add to a new bucket to trigger cleanup - this should remove the first bucket
-		// due to maxBuckets = 2
-		m.Set(5, "value5") // This will trigger a cleanup of old buckets
+		// Force a second cleanup attempt to ensure consistency
+		time.Sleep(bucketDuration / 2)
+		m.Set(7, "value7")
 
 		// First bucket items should be gone
-		_, exists1 = m.Get(1)
-		_, exists2 = m.Get(2)
-
-		if exists1 {
-			t.Errorf("Expected key 1 to be expired from the map")
+		for i := 1; i <= 2; i++ {
+			_, exists := m.Get(i)
+			require.False(t, exists, "key %d should be expired", i)
 		}
 
-		if exists2 {
-			t.Errorf("Expected key 2 to be expired from the map")
+		// Later items should still exist
+		val5, exists5 := m.Get(5)
+		require.True(t, exists5, "key 5 should exist")
+		require.Equal(t, "value5", val5)
+
+		// Add more items to ensure cleanup
+		m.Set(8, "value8")
+		m.Set(9, "value9")
+
+		// Wait for second bucket to expire and force a cleanup
+		time.Sleep(bucketDuration * 2)
+
+		// Add items to fourth bucket to trigger cleanup of second bucket
+		m.Set(10, "value10")
+		m.Set(11, "value11")
+
+		// Force a second cleanup attempt to ensure consistency
+		time.Sleep(bucketDuration / 2)
+		m.Set(12, "value12")
+
+		// Second bucket items should be gone
+		for i := 5; i <= 6; i++ {
+			_, exists := m.Get(i)
+			require.False(t, exists, "key %d should be expired", i)
 		}
+
+		// Later items should still exist
+		val10, exists10 := m.Get(10)
+		require.True(t, exists10, "key 10 should exist")
+		require.Equal(t, "value10", val10)
 	})
 
 	t.Run("Count method", func(t *testing.T) {

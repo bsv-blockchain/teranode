@@ -32,6 +32,11 @@ import (
 func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
 	switch storeURL.Scheme {
 	case "null":
+		// Prevent null stores from using TTL functionality
+		if storeURL.Query().Get("localTTLStore") != "" {
+			return nil, errors.NewStorageError("null store does not support TTL functionality")
+		}
+
 		store, err = null.New(logger)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating null blob store", err)
