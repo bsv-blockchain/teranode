@@ -39,9 +39,30 @@ message Peer {
   message GetPeersResponse {
     repeated Peer peers = 1;
   }
+
+
+  message BanPeerRequest {
+    string addr = 1;
+    int64 until = 2;
+}
+
+message BanPeerResponse {
+    bool ok = 1;
+}
+
+message UnbanPeerRequest {
+    string addr = 1;
+}
+
+message UnbanPeerResponse {
+    bool ok = 1;
+}
+
   
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
+    rpc BanPeer(BanPeerRequest) returns (BanPeerResponse) {}
+    rpc UnbanPeer(UnbanPeerRequest) returns (UnbanPeerResponse) {}
   }
   

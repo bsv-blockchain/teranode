@@ -21,6 +21,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/alert/alert_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	p2pservice "github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -49,6 +51,12 @@ type Server struct {
 	// blockchainClient provides access to blockchain operations
 	blockchainClient blockchain.ClientI
 
+	// peerClient provides access to peer operations
+	peerClient peer.ClientI
+
+	// p2pClient provides access to p2p operations
+	p2pClient p2pservice.ClientI
+
 	// utxoStore manages UTXO operations
 	utxoStore utxo.Store
 
@@ -63,7 +71,7 @@ type Server struct {
 }
 
 // New creates and returns a new Server instance with the provided dependencies.
-func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
@@ -73,6 +81,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient b
 		blockchainClient:    blockchainClient,
 		utxoStore:           utxoStore,
 		blockassemblyClient: blockassemblyClient,
+		peerClient:          peerClient,
+		p2pClient:           p2pClient,
 	}
 }
 
@@ -244,7 +254,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			"localhost:8332",
 		)
 	} else {
-		s.appConfig.Services.Node = NewNodeConfig(s.logger, s.blockchainClient, s.utxoStore, s.blockassemblyClient, s.settings)
+		s.appConfig.Services.Node = NewNodeConfig(s.logger, s.blockchainClient, s.utxoStore, s.blockassemblyClient, s.peerClient, s.p2pClient, s.settings)
 	}
 
 	// Load the datastore service

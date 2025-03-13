@@ -1,11 +1,17 @@
 #!/bin/bash
 
+# Source the utilities
+source "$(dirname "$0")/postgres/db_utils.sh"
+
 # Remove the data folder...
 rm -rf "$(dirname "$0")/../data"
 
+# Get credentials
+get_credentials
+
 # Drop all postgres tables
-psql postgres://teranode:teranode@localhost:5432/teranode -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions; drop table if exists bans;"
-psql postgres://teranode:teranode@localhost:5432/coinbase -c "SET client_min_messages TO WARNING; drop table if exists coinbase_utxos; drop table if exists spendable_utxos_balance; drop table if exists spendable_utxos_log; drop table if exists spendable_utxos; drop table if exists blocks; drop table if exists state;"
+psql "$(get_pg_url teranode)"  -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions; drop table if exists bans;"
+psql "$(get_pg_url coinbase)" -c "SET client_min_messages TO WARNING; drop table if exists coinbase_utxos; drop table if exists spendable_utxos_balance; drop table if exists spendable_utxos_log; drop table if exists spendable_utxos; drop table if exists blocks; drop table if exists state;"
 
 # Flush aerospike
 # aql -c "truncate test.utxo;"

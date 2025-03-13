@@ -20,7 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
-	"github.com/bitcoin-sv/teranode/services/p2p"
+	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
@@ -693,8 +693,10 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		peerCount += len(newPeerInfo.Peers)
 	}
 
-	for _, np := range newPeerInfo.Peers {
-		s.logger.Debugf("new peer: %v", np)
+	if newPeerInfo != nil {
+		for _, np := range newPeerInfo.Peers {
+			s.logger.Debugf("new peer: %v", np)
+		}
 	}
 
 	infos := make([]*bsvjson.GetPeerInfoResult, 0, peerCount)
@@ -995,11 +997,6 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 	}
 
-	banList, _, err := p2p.GetBanList(ctx, s.logger, s.settings)
-	if err != nil {
-		return nil, err
-	}
-
 	// Handle the command
 	switch c.Command {
 	case "add":
@@ -1018,18 +1015,27 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			expirationTime = time.Now().Add(24 * time.Hour)
 		}
 
-		// ban teranode peers
-		err = banList.Add(ctx, c.IPOrSubnet, expirationTime)
-		if err == nil {
-			success = true
+		expirationTimeInt64 := expirationTime.Unix()
 
-			s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+		// ban teranode peers
+		banPeerResponse, err := s.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{
+			Addr:  c.IPOrSubnet,
+			Until: expirationTimeInt64,
+		})
+		if err == nil {
+			if banPeerResponse.Ok {
+				success = true
+
+				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+			} else {
+				s.logger.Errorf("Failed to add ban for %s until %v", c.IPOrSubnet, expirationTime)
+			}
 		} else {
 			s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
 		}
 
 		// and ban legacy peers
-		until := expirationTime.Unix()
+		until := expirationTimeInt64
 
 		resp, err := s.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{
 			Addr:  c.IPOrSubnet,
@@ -1060,11 +1066,17 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	case "remove":
 		var success bool
 
-		err = banList.Remove(ctx, c.IPOrSubnet)
-		if err != nil {
+		unbanPeerResponse, err := s.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{
+			Addr: c.IPOrSubnet,
+		})
+		if err == nil {
+			if unbanPeerResponse.Ok {
+				success = true
+			} else {
+				s.logger.Errorf("Failed to unban teranode peer: %v", err)
+			}
+		} else {
 			s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
-
-			success = false
 		}
 
 		// unban legacy peer

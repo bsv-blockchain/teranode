@@ -826,6 +826,24 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	return resp, nil
 }
 
+func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
+	err := s.banList.Add(ctx, peer.Addr, time.Unix(peer.Until, 0))
+	if err != nil {
+		return nil, err
+	}
+
+	return &p2p_api.BanPeerResponse{Ok: true}, nil
+}
+
+func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
+	err := s.banList.Remove(ctx, peer.Addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
+}
+
 // contains checks if a slice of strings contains a specific string.
 func contains(slice []string, item string) bool {
 	for _, s := range slice {

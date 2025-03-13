@@ -75,3 +75,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 func (c *Client) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
 	return c.client.GetPeers(ctx, &emptypb.Empty{})
 }
+
+func (c *Client) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
+	return c.client.BanPeer(ctx, peer)
+}
+
+func (c *Client) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
+	return c.client.UnbanPeer(ctx, peer)
+}

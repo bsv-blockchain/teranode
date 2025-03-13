@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -31,10 +30,11 @@ import (
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	ma "github.com/multiformats/go-multiaddr"
-	madns "github.com/multiformats/go-multiaddr-dns"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/ordishs/gocore"
 )
+
+const errorCreatingDhtMessage = "[P2PNode] error creating DHT"
 
 type P2PNode struct {
 	config                    P2PConfig
@@ -101,23 +101,9 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 
 	// If a private DHT is configured, set up the private network
 	if config.UsePrivateDHT {
-		s := ""
-		s += fmt.Sprintln("/key/swarm/psk/1.0.0/")
-		s += fmt.Sprintln("/base16/")
-		s += config.SharedKey
-
-		psk, err := pnet.DecodeV1PSK(bytes.NewBuffer([]byte(s)))
+		h, err = setUpPrivateNetwork(config, pk)
 		if err != nil {
-			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding shared key", err)
-		}
-
-		h, err = libp2p.New(
-			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
-			libp2p.Identity(*pk),
-			libp2p.PrivateNetwork(psk),
-		)
-		if err != nil {
-			return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
+			return nil, errors.NewServiceError("[P2PNode] error setting up private network", err)
 		}
 	} else {
 		// If no private DHT is configured, create a standard libp2p host
@@ -161,41 +147,89 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 	return node, nil
 }
 
+func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error) {
+	var h host.Host
+
+	s := ""
+	s += fmt.Sprintln("/key/swarm/psk/1.0.0/")
+	s += fmt.Sprintln("/base16/")
+	s += config.SharedKey
+
+	psk, err := pnet.DecodeV1PSK(bytes.NewBuffer([]byte(s)))
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding shared key", err)
+	}
+
+	h, err = libp2p.New(
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
+		libp2p.Identity(*pk),
+		libp2p.PrivateNetwork(psk),
+	)
+	if err != nil {
+		return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
+	}
+
+	return h, nil
+}
+
+func (s *P2PNode) startStaticPeerConnector(ctx context.Context) {
+	if len(s.config.StaticPeers) == 0 {
+		s.logger.Infof("[P2PNode] no static peers to connect to - skipping connection attempt")
+		return
+	}
+
+	go func() {
+		logged := false
+
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Infof("[P2PNode] shutting down")
+				return
+			default:
+				allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
+				if allConnected {
+					if !logged {
+						s.logger.Infof("[P2PNode] all static peers connected")
+					}
+
+					logged = true
+					// it is possible that a peer disconnects, so we need to keep checking
+					time.Sleep(30 * time.Second)
+				} else {
+					logged = false
+
+					s.logger.Infof("[P2PNode] all static peers NOT connected")
+
+					time.Sleep(5 * time.Second)
+				}
+			}
+		}
+	}()
+}
+
+func (s *P2PNode) initGossipSub(ctx context.Context, topicNames []string) error {
+	ps, err := pubsub.NewGossipSub(ctx, s.host,
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictSign)) // Ensure messages are signed and verified
+	if err != nil {
+		return err
+	}
+
+	topics, shouldReturn, err := subscribeToTopics(topicNames, ps, s)
+	if shouldReturn {
+		return err
+	}
+
+	s.pubSub = ps
+	s.topics = topics
+
+	return nil
+}
+
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 	s.logger.Infof("[%s] starting", s.config.ProcessName)
 
-	if len(s.config.StaticPeers) == 0 {
-		s.logger.Infof("[P2PNode] no static peers to connect to - skipping connection attempt")
-	} else {
-		go func(ctx context.Context) {
-			logged := false
-
-			for {
-				select {
-				case <-ctx.Done():
-					s.logger.Infof("[P2PNode] shutting down")
-					return
-				default:
-					allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
-					if allConnected {
-						if !logged {
-							s.logger.Infof("[P2PNode] all static peers connected")
-						}
-
-						logged = true
-						// it is possible that a peer disconnects, so we need to keep checking
-						time.Sleep(30 * time.Second)
-					} else {
-						logged = false
-
-						s.logger.Infof("[P2PNode] all static peers NOT connected")
-
-						time.Sleep(5 * time.Second)
-					}
-				}
-			}
-		}(ctx)
-	}
+	s.startStaticPeerConnector(ctx)
 
 	go func() {
 		if err := s.discoverPeers(ctx, topicNames); err != nil {
@@ -203,18 +237,26 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 		}
 	}()
 
-	ps, err := pubsub.NewGossipSub(ctx, s.host)
-	if err != nil {
+	if err := s.initGossipSub(ctx, topicNames); err != nil {
 		return err
 	}
 
+	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolID), s.streamHandler)
+
+	return nil
+}
+
+func subscribeToTopics(topicNames []string, ps *pubsub.PubSub, s *P2PNode) (map[string]*pubsub.Topic, bool, error) {
 	topics := map[string]*pubsub.Topic{}
 
 	var topic *pubsub.Topic
+
+	var err error
+
 	for _, topicName := range topicNames {
 		topic, err = ps.Join(topicName)
 		if err != nil {
-			return err
+			return nil, true, err
 		}
 
 		s.logger.Infof("[P2PNode] joined topic: %s", topicName)
@@ -222,12 +264,7 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 		topics[topicName] = topic
 	}
 
-	s.pubSub = ps
-	s.topics = topics
-
-	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolID), s.streamHandler)
-
-	return nil
+	return topics, false, nil
 }
 
 func (s *P2PNode) Stop(ctx context.Context) error {
@@ -400,7 +437,7 @@ func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string
 	i := len(staticPeers)
 
 	for _, peerAddr := range staticPeers {
-		peerInfo, err := peer.AddrInfoFromP2pAddr(ma.StringCast(peerAddr))
+		peerInfo, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(peerAddr))
 		if err != nil {
 			s.logger.Errorf("[P2PNode] failed to get peerInfo from  %s: %v", peerAddr, err)
 			continue
@@ -437,7 +474,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 	}
 
 	if err != nil {
-		return errors.NewServiceError("[P2PNode] error creating DHT", err)
+		return errors.NewServiceError(errorCreatingDhtMessage, err)
 	}
 
 	if kademliaDHT == nil {
@@ -562,7 +599,7 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error
 
 	kademliaDHT, err := dht.New(ctx, h, options...)
 	if err != nil {
-		return nil, errors.NewServiceError("[P2PNode] error creating DHT", err)
+		return nil, errors.NewServiceError(errorCreatingDhtMessage, err)
 	} else if err = kademliaDHT.Bootstrap(ctx); err != nil {
 		return nil, errors.NewServiceError("[P2PNode] error bootstrapping DHT", err)
 	}
@@ -595,7 +632,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 	}
 
 	for _, ba := range bootstrapAddresses {
-		bootstrapAddr, err := ma.NewMultiaddr(ba)
+		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
 			return nil, errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s", ba, err)
 		}
@@ -605,7 +642,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 			return nil, errors.NewServiceError("[P2PNode] failed to get peerInfo from  %s", ba, err)
 		}
 		// get the IP from the multiaddress
-		ip, err := getIPFromMultiaddr(ctx, peerInfo.Addrs[0])
+		ip, err := getIPFromMultiaddr(peerInfo.Addrs[0])
 		if err != nil {
 			s.logger.Warnf("[P2PNode] failed to get IP from multiaddress %s", ba, err)
 			s.logger.Warnf("peerInfo: %+v\n", peerInfo)
@@ -633,7 +670,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 
 	kademliaDHT, err := dht.New(ctx, host, options...)
 	if err != nil {
-		return nil, errors.NewServiceError("[P2PNode] error creating DHT", err)
+		return nil, errors.NewServiceError(errorCreatingDhtMessage, err)
 	}
 
 	err = kademliaDHT.Bootstrap(ctx)
@@ -726,7 +763,7 @@ func (s *P2PNode) BytesReceived() uint64 {
 
 type PeerInfo struct {
 	ID    peer.ID
-	Addrs []ma.Multiaddr
+	Addrs []multiaddr.Multiaddr
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
@@ -749,45 +786,24 @@ func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 
 // TODO: remove
 
-func getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
-	// Try to get the IP address component
-	if ip, err := maddr.ValueForProtocol(ma.P_IP4); err == nil {
-		return net.ParseIP(ip), nil
+func getIPFromMultiaddr(addr multiaddr.Multiaddr) (string, error) {
+	// First try to get DNS component
+	if value, err := addr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
+		return value, nil
 	}
 
-	if ip, err := maddr.ValueForProtocol(ma.P_IP6); err == nil {
-		return net.ParseIP(ip), nil
+	if value, err := addr.ValueForProtocol(multiaddr.P_DNS6); err == nil {
+		return value, nil
 	}
 
-	// If it's a DNS multiaddr, resolve it
-	if _, err := maddr.ValueForProtocol(ma.P_DNS4); err == nil {
-		return resolveDNS(ctx, maddr)
+	// If no DNS, try IP
+	if value, err := addr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+		return value, nil
 	}
 
-	if _, err := maddr.ValueForProtocol(ma.P_DNS6); err == nil {
-		return resolveDNS(ctx, maddr)
+	if value, err := addr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+		return value, nil
 	}
 
-	return nil, nil // Not an IP or resolvable DNS address
-}
-
-func resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, error) {
-	resolver := madns.DefaultResolver
-
-	addrs, err := resolver.Resolve(ctx, dnsAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(addrs) == 0 {
-		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no addresses found for %s", dnsAddr))
-	}
-	// Get the IP from the first resolved address
-	for _, proto := range []int{ma.P_IP4, ma.P_IP6} {
-		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
-			return net.ParseIP(ipStr), nil
-		}
-	}
-
-	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no IP address found in resolved multiaddr %s", dnsAddr))
+	return "", errors.New(errors.ERR_ERROR, "no IP or DNS component found in multiaddr")
 }

@@ -3,12 +3,17 @@ package alert
 
 import (
 	"context"
+	"time"
 
 	"github.com/bitcoin-sv/alert-system/app/config"
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
+	"github.com/bitcoin-sv/teranode/services/p2p"
+	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -35,18 +40,26 @@ type Node struct {
 	// blockassemblyClient handles block assembly operations
 	blockassemblyClient *blockassembly.Client
 
+	// peerClient handles peer operations
+	peerClient peer.ClientI
+
+	// p2pClient handles p2p operations
+	p2pClient p2p.ClientI
+
 	// settings contains node configuration
 	settings *settings.Settings
 }
 
 // NewNodeConfig creates a new Node instance with the provided dependencies.
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store,
-	blockassemblyClient *blockassembly.Client, tSettings *settings.Settings) config.NodeInterface {
+	blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface {
 	return &Node{
 		logger:              logger,
 		blockchainClient:    blockchainClient,
 		utxoStore:           utxoStore,
 		blockassemblyClient: blockassemblyClient,
+		peerClient:          peerClient,
+		p2pClient:           p2pClient,
 		settings:            tSettings,
 	}
 }
@@ -87,16 +100,62 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 }
 
 // BanPeer adds the peer's IP address to the ban list
-// TODO depends on #913
 func (n *Node) BanPeer(ctx context.Context, peer string) error {
-	n.logger.Warnf("IMPLEMENT Banning peer %s", peer)
+	banned := false
+	// ban p2p peer for 100 years
+	resp, err := n.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: peer, Until: time.Now().Add(24 * 365 * 100 * time.Hour).Unix()})
+	if err != nil {
+		return err
+	}
+
+	if resp.Ok {
+		banned = true
+	}
+
+	// ban legacy peer
+	legacyResp, err := n.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{Addr: peer, Until: time.Now().Add(24 * 365 * 100 * time.Hour).Unix()})
+	if err != nil {
+		return err
+	}
+
+	if !legacyResp.Ok {
+		banned = true
+	}
+
+	if !banned {
+		return errors.NewError("failed to ban peer %s", peer)
+	}
+
 	return nil
 }
 
-// UnbanPeer removes the peer's IP address from the ban list
-// TODO depends on #913
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
-	n.logger.Warnf("IMPLEMENT Unbanning peer %s", peer)
+	unbanned := false
+
+	// unban p2p peer
+	resp, err := n.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{Addr: peer})
+	if err != nil {
+		return err
+	}
+
+	if resp.Ok {
+		unbanned = true
+	}
+
+	// unban legacy peer
+	legacyResp, err := n.peerClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{Addr: peer})
+	if err != nil {
+		return err
+	}
+
+	if !legacyResp.Ok {
+		unbanned = true
+	}
+
+	if !unbanned {
+		return errors.NewError("failed to unban peer %s", peer)
+	}
+
 	return nil
 }
 

@@ -30,7 +30,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 
 	t.Run("empty", func(t *testing.T) {
 		utxoStore := memory.New(ulogger.TestLogger{})
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
 		_, err := node.AddToConsensusBlacklist(ctx, nil)
 		require.Error(t, err)
@@ -42,7 +42,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
 		funds := []models.Fund{{
 			TxOut: models.TxOut{
@@ -115,7 +115,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		// check that the utxo is unfrozen = 0
 		require.Equal(t, 5, utxoSpend.Status)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
 		funds := []models.Fund{{
 			TxOut: models.TxOut{
@@ -163,9 +163,9 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("empty", func(t *testing.T) {
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, nil, nil, tSettings)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, nil, nil, nil, nil, tSettings)
 
-		response, err := node.AddToConfiscationTransactionWhitelist(ctx, nil)
+		response, err := node.AddToConsensusBlacklist(ctx, nil)
 		require.Error(t, err)
 		require.Nil(t, response)
 	})
@@ -176,7 +176,7 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, tSettings)
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
 		btTx := tx.Clone()
 		_ = btTx

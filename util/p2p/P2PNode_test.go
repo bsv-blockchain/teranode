@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
@@ -10,8 +11,23 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/assert"
 )
+
+func generateTestPrivateKey(t *testing.T) string {
+	// Generate a new Ed25519 key pair using libp2p's crypto package
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	assert.NoError(t, err)
+
+	// Marshal the private key using libp2p's marshaler
+	privBytes, err := crypto.MarshalPrivateKey(priv)
+	assert.NoError(t, err)
+
+	// Encode as hex
+	return hex.EncodeToString(privBytes)
+}
 
 func TestSendToPeer(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
@@ -112,12 +128,16 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 
 	bestBlockTopicName := fmt.Sprintf("%s-%s", topicPrefix, bbtn)
 
+	// Generate valid Ed25519 private keys for both nodes
+	privKey1 := generateTestPrivateKey(t)
+	privKey2 := generateTestPrivateKey(t)
+
 	// Create two P2PNode instances
 	config1 := P2PConfig{
 		ProcessName:     "test1",
 		IP:              "127.0.0.1",
 		Port:            12345,
-		PrivateKey:      "",
+		PrivateKey:      privKey1,
 		SharedKey:       "",
 		UsePrivateDHT:   false,
 		OptimiseRetries: false,
@@ -129,7 +149,7 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 		ProcessName:     "test2",
 		IP:              "127.0.0.1",
 		Port:            12346,
-		PrivateKey:      "",
+		PrivateKey:      privKey2,
 		SharedKey:       "",
 		UsePrivateDHT:   false,
 		OptimiseRetries: false,
@@ -416,4 +436,181 @@ func TestSendToTopic(t *testing.T) {
 	assert.Equal(t, uint64(len(message)), node1.BytesReceived(), "Node1 should have received the correct number of bytes")
 	assert.Equal(t, uint64(len(message)), node1.BytesSent(), "Node1 should have sent the correct number of bytes")
 	assert.Equal(t, uint64(len(message)), node2.BytesSent(), "Node2 should have sent the correct number of bytes")
+}
+
+func TestGetIPFromMultiaddr(t *testing.T) {
+	tests := []struct {
+		name    string
+		addr    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "IPv4 with TCP port",
+			addr:    "/ip4/127.0.0.1/tcp/8080",
+			want:    "127.0.0.1",
+			wantErr: false,
+		},
+		{
+			name:    "IPv6 with TCP port",
+			addr:    "/ip6/::1/tcp/8080",
+			want:    "::1",
+			wantErr: false,
+		},
+		{
+			name:    "IPv4 without port",
+			addr:    "/ip4/192.168.1.1",
+			want:    "192.168.1.1",
+			wantErr: false,
+		},
+		{
+			name:    "Invalid multiaddr",
+			addr:    "invalid",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "DNS multiaddr",
+			addr:    "/dns4/example.com/tcp/8080",
+			want:    "example.com",
+			wantErr: false,
+		},
+		{
+			name:    "IPv4 with multiple components",
+			addr:    "/ip4/10.0.0.1/tcp/1234/ws",
+			want:    "10.0.0.1",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			maddr, err := multiaddr.NewMultiaddr(tt.addr)
+			if err != nil && !tt.wantErr {
+				t.Fatalf("Failed to create multiaddr: %v", err)
+			}
+
+			if err != nil {
+				return
+			}
+
+			got, err := getIPFromMultiaddr(maddr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getIPFromMultiaddr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if got != tt.want {
+				t.Errorf("getIPFromMultiaddr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartStaticPeerConnector(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := settings.NewSettings()
+
+	tests := []struct {
+		name        string
+		staticPeers []string
+		wantLogs    bool
+	}{
+		{
+			name:        "no static peers",
+			staticPeers: []string{},
+			wantLogs:    true,
+		},
+		{
+			name:        "with static peers",
+			staticPeers: []string{"/ip4/127.0.0.1/tcp/12346/p2p/12D3KooWQvCkC8YiCTjRYXdyhNnncFRPKVxjE9u7rQKh2oaEXxQ6"},
+			wantLogs:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := P2PConfig{
+				ProcessName:   "test",
+				IP:            "127.0.0.1",
+				Port:          12345,
+				StaticPeers:   tt.staticPeers,
+				UsePrivateDHT: false,
+				Advertise:     false,
+			}
+
+			node, err := NewP2PNode(logger, tSettings, config, nil)
+			assert.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+
+			// Start the connector
+			node.startStaticPeerConnector(ctx)
+
+			// Wait for the context to be done
+			<-ctx.Done()
+		})
+	}
+}
+
+func TestInitGossipSub(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := settings.NewSettings()
+
+	tests := []struct {
+		name       string
+		topicNames []string
+		wantErr    bool
+	}{
+		{
+			name:       "single topic",
+			topicNames: []string{"test-topic"},
+			wantErr:    false,
+		},
+		{
+			name:       "multiple topics",
+			topicNames: []string{"test-topic-1", "test-topic-2"},
+			wantErr:    false,
+		},
+		{
+			name:       "no topics",
+			topicNames: []string{},
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := P2PConfig{
+				ProcessName:   "test",
+				IP:            "127.0.0.1",
+				Port:          12345,
+				UsePrivateDHT: false,
+				Advertise:     false,
+			}
+
+			node, err := NewP2PNode(logger, tSettings, config, nil)
+			assert.NoError(t, err)
+
+			ctx := context.Background()
+			err = node.initGossipSub(ctx, tt.topicNames)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, node.pubSub)
+
+				// Verify topics were created
+				assert.Equal(t, len(tt.topicNames), len(node.topics))
+
+				for _, topicName := range tt.topicNames {
+					topic, exists := node.topics[topicName]
+					assert.True(t, exists)
+					assert.NotNil(t, topic)
+				}
+			}
+		})
+	}
 }

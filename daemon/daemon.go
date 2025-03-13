@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/services/legacy"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/services/propagation"
 	"github.com/bitcoin-sv/teranode/services/rpc"
@@ -453,12 +454,24 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			return err
 		}
 
+		peerClient, err := peer.NewClient(ctx, logger, tSettings)
+		if err != nil {
+			return err
+		}
+
+		p2pClient, err := p2p.NewClient(ctx, logger, tSettings)
+		if err != nil {
+			return err
+		}
+
 		if err = sm.AddService("Alert", alert.New(
 			logger.New("alert"),
 			tSettings,
 			blockchainClient,
 			utxoStore,
 			blockassemblyClient,
+			peerClient,
+			p2pClient,
 		)); err != nil {
 			return err
 		}
