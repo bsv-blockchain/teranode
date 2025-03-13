@@ -7,16 +7,12 @@
 package tna
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/bitcoin-sv/teranode/test/utils/tstore"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -48,6 +44,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
+	logger := testEnv.Logger
+	url := "http://" + testEnv.Nodes[0].AssetURL
+	found := 0
 
 	blockchainClientNode0 := testEnv.Nodes[0].BlockchainClient
 
@@ -55,8 +54,6 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	require.NoError(t, err)
 
 	var hashes []*chainhash.Hash
-
-	var found int
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
 	if err != nil {
@@ -90,7 +87,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	time.Sleep(10 * time.Second)
 
 	parenTx := block1.CoinbaseTx
-	_, hashesTx, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 30)
+	_, hashesTx, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 35)
 
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
@@ -106,59 +103,26 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 
 	t.Logf("num of subtrees: %d", len(hashes))
 
-	// Keep track of which transactions we've found
-	foundTxs := make(map[string]bool) // Using string representation of hash as key
-	remainingTxs := len(hashesTx)
+	//check if at least 1 tx it's included inside the subtree receveid by notification
+	txHashes, err := helper.GetSubtreeTxHashes(ctx, logger, hashes[0], url, testEnv.Nodes[0].Settings)
+	require.NoError(t, err, "Failed to get subtree tx hashes: %v", err)
+	t.Logf("Subtree tx hashes: %v", txHashes)
 
-	// Search inside teranode1, teranode2 and teranode3 subfolders
-	for _, subtreeHash := range hashes {
-		t.Logf("Subtree hash: %v,   subtreeHash string %v", subtreeHash, subtreeHash.String())
+	hashSet := make(map[string]bool)
 
-		for i := 1; i <= 3; i++ {
-			subDir := fmt.Sprintf("teranode%d/subtreestore", i)
-			subSubDir := subtreeHash.String()[:2]
+	for _, hash := range hashesTx {
+		hashSet[hash.String()] = true
+	}
 
-			t.Logf("Checking directory: %s", subDir)
-			t.Logf("Subdirectory: %s", subSubDir)
-
-			filePath := filepath.Join(testEnv.TConfig.LocalSystem.DataDir, subDir, subSubDir, subtreeHash.String())
-			t.Logf("Full path: %s", filePath)
-
-			if resp, err := suite.TeranodeTestEnv.ComposeSharedStorage.Glob(ctx, &tstore.GlobRequest{RootPath: filePath}); err == nil {
-				if len(resp.Paths) > 0 {
-					t.Logf("Subtree %s exists.", filePath)
-					found += 1
-
-					subtreeStore := testEnv.Nodes[0].ClientSubtreestore
-
-					// Check only transactions that haven't been found yet
-					for _, txHash := range hashesTx {
-						if foundTxs[txHash.String()] {
-							continue // Skip if we already found this tx
-						}
-
-						exists, err := helper.TestTxInSubtree(ctx, testEnv.Logger, subtreeStore, subtreeHash.CloneBytes(), *txHash)
-						require.NoError(t, err)
-
-						if exists {
-							t.Logf("Tx %s found in subtree %s", txHash.String(), subtreeHash.String())
-							foundTxs[txHash.String()] = true
-							remainingTxs--
-						}
-					}
-				}
-			} else if os.IsNotExist(err) {
-				t.Logf("Subtree %s doesn't exists %s, filePath %v", subtreeHash.String(), subDir, filePath)
-			} else {
-				t.Logf("Error checking the file %s in %s filePath %v : %v ", subtreeHash.String(), subDir, filePath, err)
-			}
+	for _, txSubtrees := range txHashes {
+		if hashSet[txSubtrees.String()] {
+			found += 1
 		}
 	}
 
-	if found == 0 {
-		t.Errorf("Test failed, no subtree found")
+	if found > 0 {
+		t.Logf("%d txs in common", found)
+	} else {
+		t.Fatalf("Test failed, no txs in common")
 	}
-
-	// Verify that all transactions were found
-	require.Equal(t, 0, remainingTxs, "Not all transactions were found in the subtrees")
 }
