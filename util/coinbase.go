@@ -9,10 +9,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 )
 
-// var (
-// 	serializedHeightVersion = 2
-// )
-
 func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
 	height, _, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
 	return height, err

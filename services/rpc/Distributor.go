@@ -1,4 +1,4 @@
-package distributor
+package rpc
 
 import (
 	"bytes"
@@ -156,7 +156,7 @@ func NewQuicDistributor(logger ulogger.Logger, tSettings *settings.Settings, opt
 	}
 
 	client := &http.Client{
-		Transport: &http3.RoundTripper{
+		Transport: &http3.Transport{
 			TLSClientConfig: tlsConf,
 		},
 	}

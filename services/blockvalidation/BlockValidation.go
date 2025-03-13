@@ -34,7 +34,6 @@ import (
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/deduplicator"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -101,7 +100,7 @@ type BlockValidation struct {
 	subtreeValidationClient subtreevalidation.Interface
 
 	// subtreeDeDuplicator prevents duplicate processing of subtrees
-	subtreeDeDuplicator *deduplicator.DeDuplicator
+	subtreeDeDuplicator *DeDuplicator
 
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
@@ -169,7 +168,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		recentBlocksBloomFiltersExpiration: bloomExpiration,
 		validatorClient:                    validatorClient,
 		subtreeValidationClient:            subtreeValidationClient,
-		subtreeDeDuplicator:                deduplicator.New(tSettings.BlockValidation.SubtreeTTL),
+		subtreeDeDuplicator:                NewDeDuplicator(tSettings.BlockValidation.SubtreeTTL),
 		lastValidatedBlocks:                expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                        expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:                      expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes

@@ -438,7 +438,7 @@ func TestSendToTopic(t *testing.T) {
 	assert.Equal(t, uint64(len(message)), node2.BytesSent(), "Node2 should have sent the correct number of bytes")
 }
 
-func TestGetIPFromMultiaddr(t *testing.T) {
+func TestGetIPFromMultiaddr_Server(t *testing.T) {
 	tests := []struct {
 		name    string
 		addr    string

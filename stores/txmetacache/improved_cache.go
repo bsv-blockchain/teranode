@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/types"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -101,7 +100,7 @@ type ImprovedCache struct {
 
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
 // trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
-func NewImprovedCache(maxBytes int, bucketType types.BucketType) (*ImprovedCache, error) {
+func NewImprovedCache(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	LogCacheSize() // log whether we are using small or large cache
 
 	if maxBytes <= 0 {
@@ -121,15 +120,16 @@ func NewImprovedCache(maxBytes int, bucketType types.BucketType) (*ImprovedCache
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
 
+	switch bucketType {
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
-	if bucketType == types.Unallocated {
+	case Unallocated:
 		for i := 0; i < BucketsCount; i++ {
 			c.buckets[i] = &bucketUnallocated{}
 			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
 				return nil, errors.NewProcessingError("error creating unallocated cache", err)
 			}
 		}
-	} else if bucketType == types.Preallocated {
+	case Preallocated:
 		c.trimRatio = trimRatio
 
 		for i := 0; i < BucketsCount; i++ {
@@ -138,7 +138,7 @@ func NewImprovedCache(maxBytes int, bucketType types.BucketType) (*ImprovedCache
 				return nil, errors.NewProcessingError("error creating preallocated cache", err)
 			}
 		}
-	} else { // trimmed cache
+	default: // trimmed cache
 		for i := 0; i < BucketsCount; i++ {
 			c.buckets[i] = &bucketTrimmed{}
 			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {

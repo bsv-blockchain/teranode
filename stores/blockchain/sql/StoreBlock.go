@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
-	sqlite_errors "github.com/bitcoin-sv/teranode/util/sqlite"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -251,7 +250,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 		// check whether this is a sqlite exists constraint error
 		var sqliteErr *sqlite.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite_errors.SQLITE_CONSTRAINT {
+		if errors.As(err, &sqliteErr) && sqliteErr.Code() == SQLITE_CONSTRAINT {
 			return 0, 0, nil, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 		}
 

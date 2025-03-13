@@ -24,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
-	"github.com/bitcoin-sv/teranode/util/quorum"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -67,7 +66,7 @@ var (
 	// once ensures the quorum is initialized only once
 	once sync.Once
 	// q is a singleton instance of the quorum manager used for subtree validation
-	q *quorum.Quorum
+	q *Quorum
 )
 
 // New creates a new Server instance with the provided dependencies.
@@ -111,11 +110,11 @@ func New(
 
 		var absoluteQuorumTimeout = tSettings.SubtreeValidation.QuorumAbsoluteTimeout
 
-		q, err = quorum.New(
+		q, err = NewQuorum(
 			u.logger,
 			u.subtreeStore,
 			quorumPath,
-			quorum.WithAbsoluteTimeout(absoluteQuorumTimeout),
+			WithAbsoluteTimeout(absoluteQuorumTimeout),
 		)
 	})
 

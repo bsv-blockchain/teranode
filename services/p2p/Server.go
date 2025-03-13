@@ -22,7 +22,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
-	"github.com/bitcoin-sv/teranode/util/p2p"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -51,7 +50,7 @@ const (
 // Server represents the P2P server instance and implements the P2P service functionality.
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                       *p2p.P2PNode              // The P2P network node instance
+	P2PNode                       *P2PNode                  // The P2P network node instance
 	logger                        ulogger.Logger            // Logger instance for the server
 	settings                      *settings.Settings        // Configuration settings
 	bitcoinProtocolID             string                    // Bitcoin protocol identifier
@@ -141,7 +140,7 @@ func NewServer(
 	staticPeers := tSettings.P2P.StaticPeers
 	privateKey := tSettings.P2P.PrivateKey
 
-	config := p2p.P2PConfig{
+	config := P2PConfig{
 		ProcessName:     "peer",
 		IP:              p2pIP,
 		Port:            p2pPort,
@@ -153,7 +152,7 @@ func NewServer(
 		StaticPeers:     staticPeers,
 	}
 
-	p2pNode, err := p2p.NewP2PNode(logger, tSettings, config, blocksKafkaProducerClient)
+	p2pNode, err := NewP2PNode(logger, tSettings, config, blocksKafkaProducerClient)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}
@@ -269,7 +268,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), m.Reason)
 
-		rejectedTxMessage := p2p.RejectedTxMessage{
+		rejectedTxMessage := RejectedTxMessage{
 			TxID:   hash.String(),
 			Reason: m.Reason,
 			PeerID: s.P2PNode.HostID().String(),
@@ -364,7 +363,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
-	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerID: s.P2PNode.HostID().String()})
+	msgBytes, err := json.Marshal(BestBlockMessage{PeerID: s.P2PNode.HostID().String()})
 	if err != nil {
 		s.logger.Errorf("[sendBestBlockMessage] json marshal error: %v", err)
 	}
@@ -385,9 +384,9 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	// define vars here to prevent too many allocs
 	var (
 		notification    *blockchain.Notification
-		blockMessage    p2p.BlockMessage
-		miningOnMessage p2p.MiningOnMessage
-		subtreeMessage  p2p.SubtreeMessage
+		blockMessage    BlockMessage
+		miningOnMessage MiningOnMessage
+		subtreeMessage  SubtreeMessage
 		header          *model.BlockHeader
 		meta            *model.BlockHeaderMeta
 		msgBytes        []byte
@@ -422,7 +421,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					continue
 				}
 
-				blockMessage = p2p.BlockMessage{
+				blockMessage = BlockMessage{
 					Hash:       hash.String(),
 					Height:     meta.Height,
 					DataHubURL: s.AssetHTTPAddressURL,
@@ -445,7 +444,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					continue
 				}
 
-				miningOnMessage = p2p.MiningOnMessage{
+				miningOnMessage = MiningOnMessage{
 					Hash:         header.Hash().String(),
 					PreviousHash: header.HashPrevBlock.String(),
 					DataHubURL:   s.AssetHTTPAddressURL,
@@ -469,7 +468,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 			case model.NotificationType_Subtree:
 				// if it's a subtree notification send it on the subtree channel.
-				subtreeMessage = p2p.SubtreeMessage{
+				subtreeMessage = SubtreeMessage{
 					Hash:       hash.String(),
 					DataHubURL: s.AssetHTTPAddressURL,
 					PeerID:     s.P2PNode.HostID().String(),
@@ -559,11 +558,11 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string) {
 	var (
-		bestBlockMessage p2p.BestBlockMessage
+		bestBlockMessage BestBlockMessage
 		pid              peer.ID
 		bh               *model.BlockHeader
 		bhMeta           *model.BlockHeaderMeta
-		blockMessage     p2p.BlockMessage
+		blockMessage     BlockMessage
 		msgBytes         []byte
 	)
 
@@ -578,7 +577,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	}
 
 	// decode request
-	bestBlockMessage = p2p.BestBlockMessage{}
+	bestBlockMessage = BestBlockMessage{}
 
 	err := json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
@@ -606,7 +605,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
-	blockMessage = p2p.BlockMessage{
+	blockMessage = BlockMessage{
 		Hash:       bh.Hash().String(),
 		Height:     bhMeta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
@@ -629,13 +628,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Debugf("[handleBlockTopic] got p2p block notification")
 
 	var (
-		blockMessage p2p.BlockMessage
+		blockMessage BlockMessage
 		hash         *chainhash.Hash
 		err          error
 	)
 
 	// decode request
-	blockMessage = p2p.BlockMessage{}
+	blockMessage = BlockMessage{}
 
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
@@ -691,13 +690,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
 	var (
-		subtreeMessage p2p.SubtreeMessage
+		subtreeMessage SubtreeMessage
 		hash           *chainhash.Hash
 		err            error
 	)
 
 	// decode request
-	subtreeMessage = p2p.SubtreeMessage{}
+	subtreeMessage = SubtreeMessage{}
 
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
@@ -751,12 +750,12 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {
 	var (
-		miningOnMessage p2p.MiningOnMessage
+		miningOnMessage MiningOnMessage
 		err             error
 	)
 
 	// decode request
-	miningOnMessage = p2p.MiningOnMessage{}
+	miningOnMessage = MiningOnMessage{}
 
 	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {

@@ -1,4 +1,4 @@
-package deduplicator
+package blockvalidation
 
 import (
 	"context"
@@ -22,7 +22,7 @@ type DeDuplicator struct {
 	cache          map[chainhash.Hash]*entry
 }
 
-func New(expiryDuration time.Duration) *DeDuplicator {
+func NewDeDuplicator(expiryDuration time.Duration) *DeDuplicator {
 	return &DeDuplicator{
 		mu:             sync.Mutex{},
 		expiryDuration: expiryDuration,

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/util/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +20,7 @@ func init() {
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
-	cache, _ := NewImprovedCache(128*1024, types.Trimmed)
+	cache, _ := NewImprovedCache(128*1024, Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 

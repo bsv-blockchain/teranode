@@ -13,7 +13,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
+	"github.com/bitcoin-sv/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -40,7 +40,7 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	logger := mock_logger.NewTestLogger()
+	logger := mocklogger.NewTestLogger()
 
 	blockchainClient, err := blockchain_service.New(ctx, logger, getTestSettings(), blockchainStore, nil)
 	require.NoError(t, err)

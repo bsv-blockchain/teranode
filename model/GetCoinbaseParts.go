@@ -86,7 +86,7 @@ func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, 
 
 // AddressToScript comment
 func AddressToScript(address string) (script []byte, err error) {
-	decoded, err := util.DecodeString(address)
+	decoded, err := DecodeString(address)
 	if err != nil {
 		return nil, err
 	}

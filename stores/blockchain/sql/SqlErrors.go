@@ -1,5 +1,6 @@
-package sqlite
+package sql
 
+//nolint:gosec,stylecheck,revive,golint
 const (
 	SQLITE_OK         = 0   // Successful result
 	SQLITE_ERROR      = 1   // SQL error or missing database

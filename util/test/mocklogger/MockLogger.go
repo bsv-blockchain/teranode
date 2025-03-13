@@ -1,4 +1,4 @@
-package mock_logger
+package mocklogger
 
 import (
 	"sync"

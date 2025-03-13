@@ -1,4 +1,4 @@
-package deduplicator
+package blockvalidation
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func TestDeDuplicatorDeduplicate(t *testing.T) {
 			return nil
 		}
 
-		d := New(2)
+		d := NewDeDuplicator(2)
 		ctx := context.Background()
 
 		_, err := d.DeDuplicate(ctx, chainhash.Hash{}, fn)

@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
-	"github.com/bitcoin-sv/teranode/util/quorum"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -37,7 +36,7 @@ func TestLock(t *testing.T) {
 		_ = os.RemoveAll(tSettings.SubtreeValidation.QuorumPath)
 	}()
 
-	q, err := quorum.New(ulogger.TestLogger{}, exister, tSettings.SubtreeValidation.QuorumPath)
+	q, err := NewQuorum(ulogger.TestLogger{}, exister, tSettings.SubtreeValidation.QuorumPath)
 	require.NoError(t, err)
 
 	hash := chainhash.HashH([]byte("test"))

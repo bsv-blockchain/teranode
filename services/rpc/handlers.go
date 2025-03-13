@@ -24,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/distributor"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -490,7 +489,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
-	d, err := distributor.NewDistributor(context.Background(), s.logger, s.settings)
+	d, err := NewDistributor(context.Background(), s.logger, s.settings)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create distributor", err)
 	}

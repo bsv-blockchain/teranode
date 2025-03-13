@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -48,6 +47,14 @@ type CacheStats struct {
 	TotalElementsAdded uint64
 }
 
+type BucketType int
+
+const (
+	Unallocated BucketType = iota
+	Preallocated
+	Trimmed
+)
+
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, options ...int) (utxo.Store, error) {
 	if _, ok := utxoStore.(*TxMetaCache); ok {
 		// txMetaStore is a TxMetaCache, this is not allowed
@@ -62,7 +69,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 		maxMB = options[0]
 	}
 
-	cache, err := NewImprovedCache(maxMB*1024*1024, types.Trimmed)
+	cache, err := NewImprovedCache(maxMB*1024*1024, Trimmed)
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating cache", err)
 	}

@@ -7,14 +7,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func Test_Batcher2(t *testing.T) {
-	t.Run("Test_Batcher2", func(t *testing.T) {
-
-	})
-}
-
 type batchStoreItem struct {
-	// TODO
 }
 
 func Benchmark_Batcher2(b *testing.B) {

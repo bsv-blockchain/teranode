@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util/test/mock_logger"
+	"github.com/bitcoin-sv/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRetry(t *testing.T) {
-	logger := mock_logger.NewTestLogger()
+	logger := mocklogger.NewTestLogger()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -128,7 +128,7 @@ func TestRetryTimer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recordedSleeps = nil
 			ctx := context.Background()
-			logger := mock_logger.NewTestLogger()
+			logger := mocklogger.NewTestLogger()
 			errorCount := 0
 			f := func() (string, error) {
 				if errorCount < tc.simulateErrors {

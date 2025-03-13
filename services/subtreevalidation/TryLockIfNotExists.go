@@ -1,4 +1,4 @@
-package quorum
+package subtreevalidation
 
 import (
 	"context"
@@ -50,7 +50,7 @@ type Quorum struct {
 	existerOpts     []options.FileOption
 }
 
-func New(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...QuorumOption) (*Quorum, error) {
+func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...QuorumOption) (*Quorum, error) {
 	if path == "" {
 		return nil, errors.NewConfigurationError("Path is required")
 	}

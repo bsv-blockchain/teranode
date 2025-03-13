@@ -1,4 +1,4 @@
-package util
+package model
 
 // Copied from github.com/drewwells/go-bitpay-client/encoding/base58
 /*
@@ -9,7 +9,6 @@ base58 returns encoded text suitable for use with Bitcoin.  Bitcoin compatible b
 
 import (
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
 
@@ -62,62 +61,4 @@ func decode(src []byte) ([]byte, int, error) {
 func DecodeString(s string) ([]byte, error) {
 	dst, _, err := decode([]byte(s))
 	return dst, err
-}
-
-// Radix of the base58 encoding system.
-const Radix = len(base58table)
-
-// BitsPerDigit - Bits of entropy per base 58 digit.
-var BitsPerDigit = math.Log2(float64(Radix))
-
-// MaxEncodedLen - returns the maximum possible length
-// of a base58 encoding.  This number may be larger than the
-// encoded slice.
-func MaxEncodedLen(b []byte) int {
-	maxlen := int(math.Ceil(float64(len(b)) / BitsPerDigit * 8))
-	return maxlen
-}
-
-// Encode creates Bitcoin compatible Base58 encoded strings
-// from a byte slice.  The length is variable based on same
-// sized input slice.
-func encode(src []byte) ([]byte, int) {
-	var dst []byte
-
-	x := new(big.Int).SetBytes(src)
-	r := new(big.Int)
-	m := big.NewInt(58)
-	zero := big.NewInt(0)
-	s := ""
-
-	/* While x > 0 */
-	for x.Cmp(zero) > 0 {
-		/* x, r = (x / 58, x % 58) */
-		x.QuoRem(x, m, r)
-		/* Prepend ASCII character */
-		s = string(base58table[r.Int64()]) + s
-		dst = append(dst, base58table[r.Int64()])
-	}
-
-	/* For number of leading 0's in bytes, prepend 1 */
-	for _, v := range src {
-		if v != 0 {
-			break
-		}
-
-		dst = append(dst, base58table[0])
-	}
-
-	for i := 0; i < len(dst)/2; i++ {
-		dst[i], dst[len(dst)-1-i] =
-			dst[len(dst)-1-i], dst[i]
-	}
-
-	return dst, len(dst)
-}
-
-// EncodeToString returns a string from a byte slice.
-func EncodeToString(src []byte) string {
-	dst, _ := encode(src)
-	return string(dst)
 }
