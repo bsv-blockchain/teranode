@@ -504,6 +504,8 @@ func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *pro
 //   - error: error if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	if err := ps.processTransaction(ctx, req); err != nil {
+		ps.logger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+
 		return nil, errors.WrapGRPC(err)
 	}
 
@@ -544,8 +546,10 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				// TODO how can we send the real error back and not just a string?
-				response.Errors[idx] = errors.Wrap(err)
+				e := errors.Wrap(err)
+				ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
+
+				response.Errors[idx] = e
 			} else {
 				response.Errors[idx] = nil
 			}
@@ -555,6 +559,8 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	if err := g.Wait(); err != nil {
+		ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
+
 		return nil, errors.WrapGRPC(err)
 	}
 

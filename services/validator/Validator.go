@@ -210,6 +210,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // Returns error if validation fails.
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
+		v.logger.Errorf("[ValidateWithOptions] failed to validate transaction: %v", err)
+
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()
 

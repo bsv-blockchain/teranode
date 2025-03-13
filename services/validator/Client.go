@@ -198,6 +198,8 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			CreateConflicting:    &validationOptions.CreateConflicting,
 		})
 		if err != nil {
+			c.logger.Errorf("[ValidateWithOptions] failed to validate non-batched transaction: %v", err)
+
 			return nil, errors.UnwrapGRPC(err)
 		}
 
@@ -228,6 +230,8 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		if r.err != nil {
+			c.logger.Errorf("[ValidateWithOptions] failed to validate batched transaction: %v", r.err)
+
 			return nil, r.err
 		}
 	}
