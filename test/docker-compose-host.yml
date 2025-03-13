@@ -84,7 +84,7 @@ services:
         condition: service_started
       aerospike-1:
         condition: service_started
-    entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1"
       JAEGER_SERVICE_NAME: teranode-1
@@ -110,7 +110,7 @@ services:
         condition: service_started
       aerospike-2:
         condition: service_started
-    entrypoint: [ "/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    entrypoint: [ "/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode2"
       JAEGER_SERVICE_NAME: teranode-2
@@ -134,7 +134,7 @@ services:
         condition: service_started
       aerospike-3:
         condition: service_started
-    entrypoint: [ "/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run" ]
+    entrypoint: [ "/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode3"
       JAEGER_SERVICE_NAME: teranode-3
@@ -171,41 +171,3 @@ services:
       - ../deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
       - ./data/aerospike3/logs:/var/log/aerospike
       - ./data/aerospike3/data:/opt/aerospike/data
-  set-fsm-state-1:
-    <<: *teranode-base
-    container_name: set-fsm-state-1
-    # profiles:
-    #   - skip-teranode
-    depends_on:
-      - teranode-1
-    network_mode: "host"
-    entrypoint: [ "/app/wait.sh", "localhost", "18087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
-    environment:
-      SETTINGS_CONTEXT: "docker.host.teranode1"
-    volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./wait.sh:/app/wait.sh
-  set-fsm-state-2:
-    <<: *teranode-base
-    container_name: set-fsm-state-2
-    depends_on:
-      - teranode-2
-    network_mode: "host"
-    entrypoint: [ "/app/wait.sh", "localhost", "28087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
-    environment:
-      SETTINGS_CONTEXT: "docker.host.teranode2"
-    volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./wait.sh:/app/wait.sh
-  set-fsm-state-3:
-    <<: *teranode-base
-    container_name: set-fsm-state-3
-    depends_on:
-      - teranode-3
-    network_mode: "host"
-    entrypoint: [ "/app/wait.sh", "localhost", "38087", "5", "--", "/app/teranode-cli", "setfsmstate", "-fsmstate", "running" ]
-    environment:
-      SETTINGS_CONTEXT: "docker.host.teranode3"
-    volumes:
-      - ../settings_local.conf:/app/settings_local.conf
-      - ./wait.sh:/app/wait.sh
