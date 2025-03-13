@@ -948,10 +948,45 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 
 // WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
 func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
-	c.logger.Infof("[Blockchain Client] Waiting for FSM to transition from the IDLE state")
+	c.logger.Infof("[Blockchain Client] Waiting for FSM to transition from IDLE state...")
 
-	if _, err := c.client.WaitUntilFSMTransitionFromIdleState(ctx, &emptypb.Empty{}); err != nil {
+	// Create a context with cancel function to stop the ticker when we're done
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	defer cancelWait()
+
+	// Start a ticker to log the waiting message every 10 seconds
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Use a goroutine to handle the periodic logging
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				c.logger.Infof("[Blockchain Client] Still waiting for FSM to transition from IDLE state...")
+			case <-waitCtx.Done():
+				return
+			}
+		}
+	}()
+
+	// Wait for the FSM to transition
+	_, err := c.client.WaitUntilFSMTransitionFromIdleState(ctx, &emptypb.Empty{})
+
+	// Cancel the ticker context to stop the logging
+	cancelWait()
+
+	if err != nil {
+		c.logger.Errorf("[Blockchain Client] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
+	}
+
+	// Log the new FSM state
+	newState, stateErr := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if stateErr != nil {
+		c.logger.Errorf("[Blockchain Client] Failed to get new FSM state after transition: %s", stateErr)
+	} else {
+		c.logger.Infof("[Blockchain Client] FSM successfully transitioned from IDLE to %v", newState)
 	}
 
 	return nil
