@@ -576,6 +576,77 @@ var TestNetParams = Params{
 	HDCoinType: 1, // all coins use 1
 }
 
+// TeraTestNetParams defines the network parameters for the tera test Bitcoin network
+var TeraTestNetParams = Params{
+	Name:        "teratestnet",
+	Net:         wire.TeraTestNet,
+	DefaultPort: "18333",
+
+	// Chain parameters
+	GenesisBlock: &testNetGenesisBlock,
+	GenesisHash:  &testNetGenesisHash,
+	PowLimit:     testNetPowLimit,
+	PowLimitBits: 0x207fffff, // very easy pow limit
+
+	BIP0034Height: 1,
+	BIP0065Height: 1,
+	BIP0066Height: 1,
+	CSVHeight:     1,
+
+	UahfForkHeight: 0, // always enabled
+
+	DaaForkHeight:            0, // always enabled
+	GenesisActivationHeight:  1,
+	MaxCoinbaseScriptSigSize: 100,
+	CoinbaseMaturity:         10, // coinbase matures after 10 confirmations
+
+	SubsidyReductionInterval: 210000,
+	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
+	ReduceMinDifficulty:      true,
+	NoDifficultyAdjustment:   false,
+	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
+	GenerateSupported:        false,
+
+	// Consensus rule change deployments.
+	//
+	// The miner confirmation window is defined as:
+	//   target proof of work timespan / target proof of work spacing
+	RuleChangeActivationThreshold: 1512, // 75% of MinerConfirmationWindow
+	MinerConfirmationWindow:       2016,
+	Deployments: [DefinedDeployments]ConsensusDeployment{
+		DeploymentTestDummy: {
+			BitNumber:  28,
+			StartTime:  0,             // Always available for vote
+			ExpireTime: math.MaxInt64, // Never expires
+		},
+		DeploymentCSV: {
+			BitNumber:  0,
+			StartTime:  0,             // Always available for vote
+			ExpireTime: math.MaxInt64, // Never expires
+		},
+	},
+
+	// Mempool parameters
+	RelayNonStdTxs: true,
+
+	// The prefix for the cashaddress
+	CashAddressPrefix: "bsvtest", // always bsvtest for testnet
+
+	// Address encoding magics
+	LegacyPubKeyHashAddrID: 0x6f, // starts with m or n
+	LegacyScriptHashAddrID: 0xc4, // starts with 2
+	PrivateKeyID:           0xef, // starts with 9 (uncompressed) or c (compressed)
+
+	// BIP32 hierarchical deterministic extended key magics
+	HDPrivateKeyID: [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
+	HDPublicKeyID:  [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
+
+	// BIP44 coin type used in the hierarchical deterministic path for
+	// address generation.
+	HDCoinType: 1, // all coins use 1
+}
+
 var (
 	// ErrDuplicateNet describes an error where the parameters for a Bitcoin
 	// network could not be set due to the network already being a standard
@@ -681,6 +752,8 @@ func GetChainParams(network string) (*Params, error) {
 		return &RegressionNetParams, nil
 	case "stn":
 		return &StnParams, nil
+	case "teratestnet":
+		return &TeraTestNetParams, nil
 	default:
 		return nil, errors.NewProcessingError("unknown network %s", network)
 	}
@@ -699,4 +772,5 @@ func init() {
 	mustRegister(&TestNetParams)
 	mustRegister(&RegressionNetParams)
 	mustRegister(&StnParams)
+	mustRegister(&TeraTestNetParams)
 }
