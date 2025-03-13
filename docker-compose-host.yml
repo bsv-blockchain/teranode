@@ -4,17 +4,10 @@ x-teranode-base: &teranode-base
   depends_on:
     - postgres
     - kafka-shared
-  volumes:
-    - ./data:/app/data
 
 x-teranode-commands-base: &teranode-commands-base
   image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-commands:latest
   network_mode: "host"
-  # depends_on:
-  #   - postgres
-  #   - kafka-shared
-  # volumes:
-  #   - ./data:/app/data
 
 x-teranode-coinbase-base: &teranode-coinbase-base
   image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest 
@@ -22,13 +15,10 @@ x-teranode-coinbase-base: &teranode-coinbase-base
   depends_on:
     - postgres
     - kafka-shared
-  # volumes:
-  #   - ./data:/app/data
 
 
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-7.2.0.3_1
-  # mem_limit: 1024m
   network_mode: "host"
   command: --config-file /etc/aerospike.conf
 
