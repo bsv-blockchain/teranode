@@ -182,8 +182,12 @@ const (
 
 	// TestNet represents the test network (version 3). This is the SVNode testnet
 	TestNet BitcoinNet = 0xf4f3e5f4
+
 	// TeraTestNet represents the teranode test network. This is the teranode testnet
 	TeraTestNet BitcoinNet = 0x0c09010d
+
+	// TeraScalingTestNet represents the teranode scaling test network. This is the teranode scaling testnet
+	TeraScalingTestNet BitcoinNet = 0x00000004
 
 	Custom BitcoinNet = 0x00000001
 
@@ -194,12 +198,13 @@ const (
 // bnStrings is a map of bitcoin networks back to their constant names for
 // pretty printing.
 var bnStrings = map[BitcoinNet]string{
-	MainNet:     "MainNet",
-	RegTestNet:  "RegTest",
-	TestNet:     "TestNet",
-	TeraTestNet: "TeraTestNet",
-	Custom:      "Custom",
-	STN:         "STN",
+	MainNet:            "MainNet",
+	RegTestNet:         "RegTest",
+	TestNet:            "TestNet",
+	TeraTestNet:        "TeraTestNet",
+	TeraScalingTestNet: "TSTN",
+	Custom:             "Custom",
+	STN:                "STN",
 }
 
 // String returns the BitcoinNet in human-readable form.
