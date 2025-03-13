@@ -74,8 +74,8 @@ services:
 
   teranode-1:
     <<: *teranode-base
-    profiles:
-      - skip-teranode
+    # profiles:
+    #   - skip-teranode
     container_name: teranode-1
     depends_on:
       postgres:
@@ -174,8 +174,8 @@ services:
   set-fsm-state-1:
     <<: *teranode-base
     container_name: set-fsm-state-1
-    profiles:
-      - skip-teranode
+    # profiles:
+    #   - skip-teranode
     depends_on:
       - teranode-1
     network_mode: "host"

@@ -308,13 +308,22 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 
 func TestShouldAllowFairTxUseRpcWithDockerNodes(t *testing.T) {
 	t.Skip("Test is disabled")
+	tc, err := testdaemon.NewTestContainer(t, testdaemon.TestContainersConfig{
+		ComposeFile: "../docker-compose-host.yml",
+	})
+	require.NoError(t, err)
+
+	node1 := tc.GetNodeClients(t, "docker.host.teranode2")
+	node1.CallRPC(t, "generate", []interface{}{101})
+
+	tc.StopNode(t, "teranode-1")
+
 	td := testdaemon.New(t, testdaemon.TestOptions{
 		EnableRPC:        true,
 		EnableP2P:        true,
 		EnableValidator:  true,
 		KillTeranode:     true,
 		SettingsOverride: settings.NewSettings("docker.host.teranode1"),
-		StartDockerNetwork: true,
 	})
 
 	t.Cleanup(func() {
@@ -322,16 +331,23 @@ func TestShouldAllowFairTxUseRpcWithDockerNodes(t *testing.T) {
 	})
 
 	// set run state
-	err := td.BlockchainClient.Run(td.Ctx, "test")
+	err = td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
-	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	time.Sleep(5 * time.Second)
+
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
 	require.NoError(t, err)
 
-	// tSettings := td.Settings
+	// generate 1 block
+	_, err = td.CallRPC("generate", []interface{}{1})
+	require.NoError(t, err)
 
-	time.Sleep(180 * time.Second)
+	// verify blockheight on node1
+	block102, err := node1.BlockchainClient.GetBlockByHeight(tc.Ctx, 102)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint32(102), block102.Height)
 
 	// block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	// require.NoError(t, err)
