@@ -11,10 +11,9 @@
 //    $ go test -v -run "^TestTNC2_2TestSuite$" -tags test_tnc
 //
 // 2. Run specific test cases:
-//    $ cd test/tnc
-//    $ go test -v -run "^TestTNC2_2TestSuite$/TestCandidateBlockStorage$" -tags test_tnc
-//    $ go test -v -run "^TestTNC2_2TestSuite$/TestCandidateBlockRetention$" -tags test_tnc
-//    $ go test -v -run "^TestTNC2_2TestSuite$/TestConcurrentCandidateStorage$" -tags test_tnc
+//    $ go test -v -run "^TestTNC2_2TestSuite$/TestCandidateBlockStorage$" -tags test_tnc ./test/tnc/tnc2_2_test.go
+//    $ go test -v -run "^TestTNC2_2TestSuite$/TestCandidateBlockRetention$" -tags test_tnc ./test/tnc/tnc2_2_test.go
+//    $ go test -v -run "^TestTNC2_2TestSuite$/TestConcurrentCandidateStorage$" -tags test_tnc ./test/tnc/tnc2_2_test.go
 //
 // Prerequisites:
 // - Go 1.19 or later

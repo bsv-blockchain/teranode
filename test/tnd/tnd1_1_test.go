@@ -1,9 +1,8 @@
 //go:build test_all || test_tnd || test_functional
 
 // How to run this test:
-// $ cd test/tnd/
-// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagation$" -tags test_tnd
-// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagationWithNotifications$" -tags test_tnd
+// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagation$" -tags test_tnd ./test/tnd/tnd1_1_test.go
+// $ go test -v -run "^TestTND1_1TestSuite$/TestBlockPropagationWithNotifications$" -tags test_tnd ./test/tnd/tnd1_1_test.go
 
 package tnd
 

@@ -1,11 +1,10 @@
 //go:build test_all || test_tnc
 
 // How to run this test manually:
-// $ cd test/tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags test_tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$" -tags test_tnc
-// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount2$" -tags test_tnc
+// $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc ./test/tnc/tnc1_3_test.go
+// $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags test_tnc ./test/tnc/tnc1_3_test.go
+// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$" -tags test_tnc ./test/tnc/tnc1_3_test.go
+// $ go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount2$" -tags test_tnc ./test/tnc/tnc1_3_test.go
 
 package tnc
 
@@ -95,7 +94,6 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	require.NoError(t, err)
 	t.Logf(("Block 1: %v"), block1.Header.Hash().String())
 
-
 	coinbaseTx := block1.CoinbaseTx
 
 	coinbasePrivKey1 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
@@ -130,9 +128,9 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	utxoHash, _ := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), output, uint32(0))
 	//check the tx is in the utxostore
 	testSpend0 := &utxo.Spend{
-		TxID:      coinbaseTx.TxIDChainHash(),
-		Vout:      uint32(0),
-		UTXOHash:  utxoHash,
+		TxID:     coinbaseTx.TxIDChainHash(),
+		Vout:     uint32(0),
+		UTXOHash: utxoHash,
 	}
 	resp, err := node0.UtxoStore.GetSpend(ctx, testSpend0)
 	require.NoError(t, err)
@@ -163,7 +161,7 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	// err = newTx.AddP2PKHOutputFromAddress("1Jp7AZdMQ3hyfMfk3kJe31TDj8oppZLYdK", coinbaseTx.TotalInputSatoshis())
 	// require.NoError(t, err)
 
-	err = newTx.PayToAddress(address.AddressString, sats + remainder)
+	err = newTx.PayToAddress(address.AddressString, sats+remainder)
 	require.NoError(t, err)
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey1.PrivKey})

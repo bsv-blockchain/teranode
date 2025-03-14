@@ -10,9 +10,8 @@
 //    $ go test -v -run "^TestTNC1_2TestSuite$" -tags test_tnc
 //
 // 2. Run specific test cases:
-//    $ cd test/tnc
-//    $ go test -v -run "^TestTNC1_2TestSuite$/TestCheckPrevBlockHash$" -tags test_tnc
-//    $ go test -v -run "^TestTNC1_2TestSuite$/TestPrevBlockHashAfterReorg$" -tags test_tnc
+//    $ go test -v -run "^TestTNC1_2TestSuite$/TestCheckPrevBlockHash$" -tags test_tnc ./test/tnc/tnc1_2_test.go
+//    $ go test -v -run "^TestTNC1_2TestSuite$/TestPrevBlockHashAfterReorg$" -tags test_tnc ./test/tnc/tnc1_2_test.go
 //
 // Prerequisites:
 // - Go 1.19 or later

@@ -91,8 +91,8 @@ func TestTNB6TestSuite(t *testing.T) {
 // 3. Multiple outputs in a single transaction are handled correctly
 //
 // To run the test:
-// $ cd test/tnb/
-// $ go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb
+// $ go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb ./test/tnb/tnb6_test.go
+
 func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context

@@ -10,8 +10,7 @@
 //    $ go test -v -run "^TestTNC1_1TestSuite$" -tags tnc
 //
 // 2. Run specific test cases:
-//    $ cd test/tnc
-//    $ go test -v -run "^TestTNC1_1TestSuite$/TestVerifyMerkleRootCalculation$" -tags test_tnc
+//    $ go test -v -run "^TestTNC1_1TestSuite$/TestVerifyMerkleRootCalculation$" -tags test_tnc ./test/tnc/tnc1_1_test.go
 //
 // Prerequisites:
 // - Go 1.19 or later

@@ -10,8 +10,7 @@
 // 3. Concurrent transaction propagation under load
 //
 // How to run this test manually:
-// $ cd test/tna
-// $ go test -v -run "^TestTNA2TestSuite$/TestTxsReceivedAllNodes$" -tags test_tna
+// $ go test -v -run "^TestTNA2TestSuite$/TestTxsReceivedAllNodes$" -tags test_tna ./test/tna/tna2_test.go
 
 package tna
 

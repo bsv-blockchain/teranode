@@ -1,9 +1,8 @@
 //go:build test_all || test_tnj
 
 // How to run this test manually:
-//
-// $ cd test/tnj
-// $ go test -v -run "^$TNJLockTimeTestSuite/TestLocktimeScenarios$" --tags test_tnj
+// $ go test -v -run "^$TNJLockTimeTestSuite/TestLocktimeScenarios$" -tags test_tnj ./test/tnj/locktime_test.go
+
 package tnj
 
 import (

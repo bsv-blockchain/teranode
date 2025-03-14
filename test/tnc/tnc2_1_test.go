@@ -12,9 +12,8 @@ package tnc
 //    $ go test -v -run "^TestTNC2_1TestSuite$" -tags test_tnc
 //
 // 2. Run specific test cases:
-//    $ cd test/tnc
-//    $ go test -v -run "^TestTNC2_1TestSuite$/TestUniqueCandidateIdentifiers$" -tags test_tnc
-//    $ go test -v -run "^TestTNC2_1TestSuite$/TestConcurrentCandidateIdentifiers$" -tags test_tnc
+//    $ go test -v -run "^TestTNC2_1TestSuite$/TestUniqueCandidateIdentifiers$" -tags test_tnc ./test/tnc/tnc2_1_test.go
+//    $ go test -v -run "^TestTNC2_1TestSuite$/TestConcurrentCandidateIdentifiers$" -tags test_tnc ./test/tnc/tnc2_1_test.go
 //
 // Prerequisites:
 // - Go 1.19 or later

@@ -1,8 +1,7 @@
 //go:build test_all || test_tna
 
 // How to run this test manually:
-// $ cd test/tna
-// $ go test -v -run "^TestTNA1TestSuite$/TestBroadcastNewTxAllNodes$" -tags test_tna
+// $ go test -v -run "^TestTNA1TestSuite$/TestBroadcastNewTxAllNodes$" -tags test_tna ./test/tna/tna1_test.go
 
 package tna
 

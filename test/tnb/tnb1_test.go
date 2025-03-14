@@ -6,9 +6,10 @@
 // go test -v -tags test_tnb ./test/tnb
 //
 // Run a specific test:
-// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$"
-// go test -v -tags test_tnb -run "^TestTNB1TestSuite$/TestNoReformattingRequired$"
-//
+// go test -v -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$" -tags test_tnb ./test/tnb/tnb1_test.go
+// go test -v -run "^TestTNB1TestSuite$/TestNoReformattingRequired$" -tags test_tnb ./test/tnb/tnb1_test.go
+// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags test_tnb ./test/tnb/tnb1_test.go
+
 // Run with test coverage:
 // go test -v -tags test_tnb -coverprofile=coverage.out ./test/tnb
 // go tool cover -html=coverage.out
@@ -23,10 +24,6 @@
 // 4. Subscribe to blockchain service and get the subtree hash
 // 5. Check if all the transaction hashes are included in the subtree
 // TODO: Send the same transactions through TxDistributor and check if they are included in each nodes' subtree
-
-// How to run manually:
-// cd test/tnb
-// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags test_tnb
 
 package tnb
 
@@ -270,14 +267,4 @@ func (suite *TNB1TestSuite) TestNoReformattingRequired() {
 		}
 	}
 	require.Empty(t, missingTxs, "Transactions not found in block's subtrees: %v", missingTxs)
-}
-
-func allTransactionsIncluded(pendingTxs map[chainhash.Hash]bool) bool {
-	for _, included := range pendingTxs {
-		if !included {
-			return false
-		}
-	}
-
-	return true
 }

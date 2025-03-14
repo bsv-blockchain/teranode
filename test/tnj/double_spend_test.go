@@ -1,8 +1,8 @@
 //go:build test_all || test_tnj
 
 // How to run this test manually:
-// $ cd test/tnj
-// $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestDoubleSpendMultipleUtxos$" -tags test_tnj
+// $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestDoubleSpendMultipleUtxos$" -tags test_tnj ./test/tnj/double_spend_test.go
+// $ go test -v -run "^TestTNJDoubleSpendTestSuite$/TestRejectLongerChainWithDoubleSpend$" -tags test_tnj ./test/tnj/double_spend_test.go
 package tnj
 
 import (

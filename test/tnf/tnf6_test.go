@@ -1,8 +1,7 @@
 //go:build test_all || test_tnf
 
 // How to run this test:
-// $ cd test/tnf/
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" --tags test_tnf
+// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" -tags test_tnf ./test/tnf/tnf6_test.go
 package tnf
 
 import (

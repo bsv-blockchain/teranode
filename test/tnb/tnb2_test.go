@@ -37,8 +37,8 @@ func TestTNB2TestSuite(t *testing.T) {
 }
 
 // How to run this test:
-// $ cd test/tnb/
-// $ go test -v -run "^TestTNB2TestSuite$/TestUTXOValidation$" -tags test_tnb
+// $ go test -v -run "^TestTNB2TestSuite$/TestUTXOValidation$" -tags test_tnb ./test/tnb/tnb2_test.go
+// $ go test -v -run "^TestTNB2TestSuite$/TestScriptValidation$" -tags test_tnb ./test/tnb/tnb2_test.go
 //
 // TestUTXOValidation verifies that Teranode correctly validates transaction inputs against the UTXO set.
 // This test ensures that double-spending is prevented across nodes by:

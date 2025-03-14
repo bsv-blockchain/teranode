@@ -7,8 +7,8 @@ package tne
 // $ go test -v -run "^TestTNE1_1TestSuite$" -tags test_functional
 
 // How to run this test:
-// $ cd test/tne/
-// $ go test -v -run "^TestTNE1_1TestSuite$/TestNode_DoNotVerifyTransactionsIfAlreadyVerified$" -tags test_tne
+// $ go test -v -run "^TestTNE1_1TestSuite$/TestNode_DoNotVerifyTransactionsIfAlreadyVerified$" -tags test_tne ./test/tne/tne1_1_test.go
+
 import (
 	"fmt"
 	"testing"
