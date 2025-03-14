@@ -1,0 +1,8 @@
+.md-grid {
+    max-width: 100% !important;  /* Make the main content take full width */
+}
+
+.md-main__inner {
+    max-width: 85%;  /* Adjust based on preference */
+    margin: 0 auto;  /* Center content */
+}

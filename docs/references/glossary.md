@@ -30,7 +30,7 @@
 
 **gRPC**: A high-performance, open-source universal RPC framework.
 
-**Initial Block Download (IBD)**: The process of downloading and validating the entire blockchain when setting up a new node.
+**Initial Sync**: The process of downloading and validating the entire blockchain when setting up a new node.
 
 **Kademlia**: A distributed hash table used for efficient routing and peer discovery in P2P networks.
 

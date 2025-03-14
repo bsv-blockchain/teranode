@@ -70,6 +70,7 @@ kubectl logs -n teranode-operator -l app=blockchain -f
 ## Production Considerations
 
 For production deployments:
+
 - Create backups before updating
 - Review release notes for breaking changes
 - Test updates in a staging environment first

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 550">
+    <!-- Main Block Outline -->
+    <rect x="100" y="50" width="400" height="490" fill="white" stroke="black" stroke-width="2"/>
+
+    <!-- Block Header Box -->
+    <rect x="120" y="80" width="360" height="120" fill="white" stroke="black" stroke-width="1"/>
+    <text x="130" y="70" font-family="Arial" font-size="16" font-weight="bold">Block Header</text>
+
+    <!-- Header Fields -->
+    <line x1="300" y1="80" x2="300" y2="200" stroke="black" stroke-width="1"/>
+
+    <!-- Left side header fields -->
+    <text x="130" y="100" font-family="Arial" font-size="14">Version</text>
+    <text x="130" y="130" font-family="Arial" font-size="14">PrevBlock</text>
+    <text x="130" y="160" font-family="Arial" font-size="14">MerkleRoot</text>
+
+    <!-- Right side header fields -->
+    <text x="320" y="100" font-family="Arial" font-size="14">Time</text>
+    <text x="320" y="130" font-family="Arial" font-size="14">Bits</text>
+    <text x="320" y="160" font-family="Arial" font-size="14">Nonce</text>
+
+    <!-- Coinbase Transaction - Blue highlighted -->
+    <rect x="120" y="220" width="360" height="30" fill="#4285F4" stroke="#4285F4" stroke-width="1" rx="3" ry="3"/>
+    <text x="225" y="240" font-family="Arial" font-size="14" fill="white">Coinbase Transaction</text>
+
+    <!-- Transaction Boxes -->
+    <rect x="120" y="260" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="280" font-family="Arial" font-size="14">Transaction 1</text>
+
+    <rect x="120" y="300" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="320" font-family="Arial" font-size="14">Transaction 2</text>
+
+    <rect x="120" y="340" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="360" font-family="Arial" font-size="14">Transaction 3</text>
+
+    <rect x="120" y="380" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="400" font-family="Arial" font-size="14">Transaction 4</text>
+
+    <rect x="120" y="420" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="440" font-family="Arial" font-size="14">Transaction 5</text>
+
+    <text x="300" y="470" font-family="Arial" font-size="14" text-anchor="middle">...</text>
+
+    <rect x="120" y="490" width="360" height="30" fill="white" stroke="black" stroke-width="1"/>
+    <text x="250" y="510" font-family="Arial" font-size="14">Transaction N</text>
+
+    <!-- Title -->
+    <text x="300" y="30" font-family="Arial" font-size="22" font-weight="bold" text-anchor="middle">Legacy Block</text>
+</svg>

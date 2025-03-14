@@ -159,24 +159,24 @@ Once a Coinbase UTXO has matured, it becomes spendable. The Coinbase Service wil
 ## 5. Technology and specific Stores
 
 1. **Go (Golang)**:
-  - The primary programming language used for the implementation.
+    - The primary programming language used for the implementation.
 
 2. **gRPC**:
-  - A high-performance, open-source universal RPC framework that leverages HTTP/2 for transport, Protocol Buffers as the interface description language, and provides features such as authentication, load balancing, and more.
+    - A high-performance, open-source universal RPC framework that leverages HTTP/2 for transport, Protocol Buffers as the interface description language, and provides features such as authentication, load balancing, and more.
 
 3. **Protocol Buffers (protobuf)**:
-  - A language-neutral, platform-neutral, extensible mechanism for serializing structured data, similar to XML or JSON but smaller, faster, and simpler. It's used to define the API schema (`coinbase_api.proto`) and generate corresponding Go code.
+    - A language-neutral, platform-neutral, extensible mechanism for serializing structured data, similar to XML or JSON but smaller, faster, and simpler. It's used to define the API schema (`coinbase_api.proto`) and generate corresponding Go code.
 
 4. **Bitcoin SV (BSV) Libraries**:
-  - `github.com/libsv/go-bt`: A Go library used for building and signing Bitcoin transactions.
-  - `github.com/libsv/go-bk`: Includes utilities for Bitcoin keys, used here for operations like WIF (Wallet Import Format) decoding, which is a common way to represent private keys in Bitcoin.
-  - `github.com/libsv/go-bt/v2/bscript`: Used for handling Bitcoin scripts, which are part of the locking and unlocking mechanism that controls spending of bitcoins.
+    - `github.com/libsv/go-bt`: A Go library used for building and signing Bitcoin transactions.
+    - `github.com/libsv/go-bk`: Includes utilities for Bitcoin keys, used here for operations like WIF (Wallet Import Format) decoding, which is a common way to represent private keys in Bitcoin.
+    - `github.com/libsv/go-bt/v2/bscript`: Used for handling Bitcoin scripts, which are part of the locking and unlocking mechanism that controls spending of bitcoins.
 
 5. **PostgreSQL & SQLite**:
-  - PostgreSQL is the production database recommendation for the Coinbase Service. SQLite can be optionally used for testing and development environments. The database engine being used executes SQL queries accordingly.
+    - PostgreSQL is the production database recommendation for the Coinbase Service. SQLite can be optionally used for testing and development environments. The database engine being used executes SQL queries accordingly.
 
 6. **gocore**:
-  - A package for configuration management.
+    - A package for configuration management.
 
 
 ## 6. Directory Structure and Main Files
@@ -222,7 +222,7 @@ To run the Coinbase Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Coinbase=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
 
 ## 8. Configuration options (settings flags)
 

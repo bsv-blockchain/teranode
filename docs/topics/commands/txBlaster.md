@@ -5,8 +5,8 @@
 1. [Introduction](#1-introduction)
 2. [Architecture](#2-architecture)
 3. [Functionality](#3-functionality)
-- [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
-- [3.2. Worker Logic](#32-worker-logic)
+    - [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
+    - [3.2. Worker Logic](#32-worker-logic)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
@@ -23,6 +23,7 @@ This is intended for use in the test and staging networks, and it is not allowed
 ![TX_Blaster_Container_Diagram.png](img%2FTX_Blaster_Container_Diagram.png)
 
 The TX Blaster interacts with three (3) services, namely:
+
 1. **Coinbase**: For acquiring initial funds for transactions.
 2. **Propogation**: For transaction propagation across the network.
 3. **P2P**: For listening and tracking rejected transactions.

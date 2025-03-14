@@ -7,11 +7,13 @@ By setting specific environment variables, you can obtain more detailed logs tha
 #### Step 1: Understanding gRPC Log Levels
 
 By default, gRPC provides minimal logging. However, for debugging purposes, you can increase the verbosity of the logs by setting the environment variable `GRPC_VERBOSITY`. The available levels for `GRPC_VERBOSITY` are:
+
 - `ERROR`: Logs only error messages.
 - `INFO`: Logs informational messages (this is the default level).
 - `DEBUG`: Logs detailed debug messages, useful for tracking detailed behaviors.
 
 In addition to setting the verbosity, you can specify which gRPC components you want to trace by setting the `GRPC_TRACE` environment variable. Some of the commonly traced components include:
+
 - `client_channel`: Provides logs related to the client-side gRPC channel.
 - `round_robin`: Provides logs related to the round-robin load balancing mechanism.
 
@@ -25,6 +27,7 @@ export GRPC_TRACE=client_channel,round_robin
 ```
 
 Here’s what each of these does:
+
 - `GRPC_VERBOSITY=debug`: This sets the log verbosity to `debug`, which provides detailed logging of gRPC operations.
 - `GRPC_TRACE=client_channel,round_robin`: This specifies that logs should be generated for the `client_channel` and `round_robin` components of gRPC, which are useful for debugging connection handling and load balancing behaviors.
 
@@ -42,6 +45,7 @@ GRPC_VERBOSITY=debug GRPC_TRACE=client_channel,round_robin go run .
 #### Step 4: Interpreting the Logs
 
 After enabling gRPC logs, you will see more detailed output related to the gRPC client channels and round-robin load balancing. Some of the key log entries to watch for include:
+
 - **Connection and Reconnection Events**: Logs showing when the gRPC client establishes or re-establishes connections to a server.
 - **Load Balancing Events**: Logs detailing how the round-robin load balancer distributes calls across available servers.
 - **Error Details**: Detailed errors or warnings that may occur during RPCs, including retries or failures.

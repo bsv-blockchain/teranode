@@ -1,58 +1,38 @@
 # 📒 TXMeta Store
 
-## DEPRECATED - Kept for historical purposes only
-
+## DEPRECATED: Kept for historical purposes only
 
 
 ## Index
 
-1. [Description ](#1-description-)
+
+- [DEPRECATED: Kept for historical purposes only](#deprecated-kept-for-historical-purposes-only)
+1. [Description](#1-description)
 - [1.1 Purpose](#11-purpose)
 2. [Architecture](#2-architecture)
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
-- [📒 TXMeta Store](#-txmeta-store)
-  - [DEPRECATED - Kept for historical purposes only](#deprecated---kept-for-historical-purposes-only)
-  - [Index](#index)
-  - [1. Description](#1-description)
-    - [1.1 Purpose](#11-purpose)
-  - [2. Architecture](#2-architecture)
-  - [3. Data Model](#3-data-model)
-  - [4. Use Cases](#4-use-cases)
-    - [4.1. Asset Server](#41-asset-server)
-    - [4.2. Transaction Validation Service](#42-transaction-validation-service)
-    - [4.3. Block Validation Service](#43-block-validation-service)
-      - [4.3.1. Block Validation - TX Meta Cache](#431-block-validation---tx-meta-cache)
-      - [4.3.2. Block Validation - Validate Subtrees](#432-block-validation---validate-subtrees)
-      - [4.3.3. Block Validation - Store Coinbase TX Meta Data](#433-block-validation---store-coinbase-tx-meta-data)
-      - [4.3.4. Block Validation - Update TX Meta as Mined](#434-block-validation---update-tx-meta-as-mined)
-    - [4.4. Block Assembly Service](#44-block-assembly-service)
-  - [5. Technology](#5-technology)
-    - [5.1. Language and Libraries](#51-language-and-libraries)
-    - [5.2. Data Stores](#52-data-stores)
-    - [5.3. Data Purging](#53-data-purging)
-  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
-  - [7. How to run](#7-how-to-run)
-    - [7.1. How to run](#71-how-to-run)
-    - [7.2. Configuration options (settings flags)](#72-configuration-options-settings-flags)
-      - [Timeout Settings](#timeout-settings)
-      - [Time-to-Live (TTL) Settings](#time-to-live-ttl-settings)
-      - [Batch Processing Settings](#batch-processing-settings)
-      - [Block Validation - TX Meta Cache Settings](#block-validation---tx-meta-cache-settings)
-      - [Data Store Examples](#data-store-examples)
-5. [Technology ](#5-technology-)
+- [4.1. Asset Server](#41-asset-server)
+- [4.2. Transaction Validation Service](#42-transaction-validation-service)
+- [4.3. Block Validation Service](#43-block-validation-service)
+    - [4.3.1. Block Validation: TX Meta Cache](#431-block-validation-tx-meta-cache)
+    - [4.3.2. Block Validation: Validate Subtrees](#432-block-validation-validate-subtrees)
+    - [4.3.3. Block Validation: Store Coinbase TX Meta Data](#433-block-validation-store-coinbase-tx-meta-data)
+    - [4.3.4. Block Validation: Update TX Meta as Mined](#434-block-validation-update-tx-meta-as-mined)
+- [4.4. Block Assembly Service](#44-block-assembly-service)
+5. [Technology](#5-technology)
 - [5.1. Language and Libraries](#51-language-and-libraries)
 - [5.2. Data Stores](#52-data-stores)
 - [5.3. Data Purging](#53-data-purging)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
-- [ 7.1. How to run](#-71-how-to-run)
+- [7.1. How to run](#71-how-to-run)
 - [7.2. Configuration options (settings flags)](#72-configuration-options-settings-flags)
-   - [Timeout Settings](#timeout-settings)
-   - [Time-to-Live (TTL) Settings](#time-to-live-ttl-settings)
-   - [Batch Processing Settings](#batch-processing-settings)
-   - [Block Validation TX Meta Cache Settings ](#block-validation---tx-meta-cache-settings-)
-   - [Data Store Examples](#data-store-examples)
+    - [Timeout Settings](#timeout-settings)
+    - [Time-to-Live (TTL) Settings](#time-to-live-ttl-settings)
+    - [Batch Processing Settings](#batch-processing-settings)
+    - [Block Validation: TX Meta Cache Settings](#block-validation-tx-meta-cache-settings)
+    - [Data Store Examples](#data-store-examples)
 
 
 ## 1. Description
@@ -103,7 +83,7 @@ The TX Meta configuration implementation (datastore type) is consistent within a
 
 Notice how some of the databases are in-memory, while others are persistent (and shared with other services).
 
-More details about the specific stores can be found in the [Technology](#5-technology-) section.
+More details about the specific stores can be found in the [Technology](#5-technology) section.
 
 Notice how the architecture introduces an abstraction layer provided by the TX Meta Service, which then uses the TX Meta Store. Clients connect to the TX Meta Service through gRPC.
 
@@ -160,8 +140,8 @@ Note:
 
 
 - **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-  - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the tx meta store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
-  - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+    - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the tx meta store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
+    - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
 
 ## 4. Use Cases
 
@@ -185,7 +165,7 @@ The Transaction Validation Service will store the TX Meta when a transaction is 
 ### 4.3. Block Validation Service
 
 
-#### 4.3.1. Block Validation - TX Meta Cache
+#### 4.3.1. Block Validation: TX Meta Cache
 
 The Block Validation service uses a proxy cache for the TX Meta Store, which is used to cache the Tx Meta data for a short period of time (15 minutes TTL by default, which should be enough for the block to be mined). This is done to avoid repeated calls to the TX Meta Store for the same TX Meta data, which is a common scenario during block validation.
 
@@ -210,7 +190,7 @@ if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
 ```
 
 
-#### 4.3.2. Block Validation - Validate Subtrees
+#### 4.3.2. Block Validation: Validate Subtrees
 
 
 When the Block Validation service validates a subtree, it might find unknown (not previously "blessed") subtrees. This will happen with the first subtree of any block (given the miner would have re-computed the merkle root after creating the coinbase tx), but also for subtrees the node might have not received or might have failed to validate in the past. In this case, the validating node will fetch the missing subtree from the node that sent the block, and it will then proceed to validate the received subtree.
@@ -222,14 +202,14 @@ As part of that missing subtree validation, it will retrieve the tx meta data fo
 ![tx_meta_validate_subtree.svg](../services/img/plantuml/txmeta/tx_meta_validate_subtree.svg)
 
 
-#### 4.3.3. Block Validation - Store Coinbase TX Meta Data
+#### 4.3.3. Block Validation: Store Coinbase TX Meta Data
 
 
 ![tx_meta_transaction_validation_coinbase_tx.svg](../services/img/plantuml/txmeta/tx_meta_transaction_validation_coinbase_tx.svg)
 
 As part of the block validation, we store the coinbase tx meta data in the TX Meta Store.
 
-#### 4.3.4. Block Validation - Update TX Meta as Mined
+#### 4.3.4. Block Validation: Update TX Meta as Mined
 
 ![tx_meta_transaction_validation_set_as_mined.svg](../services/img/plantuml/txmeta/tx_meta_transaction_validation_set_as_mined.svg)
 
@@ -330,7 +310,7 @@ stores/txmeta/              # Directory for the txmeta store
 ## 7. How to run
 
 
-###  7.1. How to run
+### 7.1. How to run
 
 To run the TX Meta Store locally, you can execute the following command:
 
@@ -338,7 +318,7 @@ To run the TX Meta Store locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -TxMetaStore=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
 
 
 ### 7.2. Configuration options (settings flags)
@@ -355,7 +335,7 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 - `txmeta_store_maxMinedRoutines.{ENVIRONMENT}`: Maximum number of concurrent goroutines for processing mined transactions. Default is set to 4.
 
-#### Block Validation - TX Meta Cache Settings
+#### Block Validation: TX Meta Cache Settings
 - `blockvalidation_txMetaCacheEnabled`: Enables the TX Meta Cache for the Block Validation service. Default is set to `true`.
 
 #### Data Store Examples

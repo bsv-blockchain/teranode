@@ -5,16 +5,16 @@
 
 1. [Introduction](#1-introduction)
 2. [Key Concepts and Innovations](#2-key-concepts-and-innovations)
-- [2.1 Horizontal Scalability](#21-horizontal-scalability)
-- [2.2 Subtrees](#22-subtrees)
-- [2.3 Extended Transactions](#23-extended-transactions)
-- [2.4 Unbounded Block Size](#24-unbounded-block-size)
-- [2.5 Comparison with BTC](#25-comparison-with-btc)
+    - [2.1 Horizontal Scalability](#21-horizontal-scalability)
+    - [2.2 Subtrees](#22-subtrees)
+    - [2.3 Extended Transactions](#23-extended-transactions)
+    - [2.4 Unbounded Block Size](#24-unbounded-block-size)
+    - [2.5 Comparison with BTC](#25-comparison-with-btc)
 3. [System Architecture Overview](#3-system-architecture-overview)
 4. [Data Model and Propagation](#4-data-model-and-propagation)
-- [4.1 Bitcoin Data Model](#41-bitcoin-data-model)
-- [4.2 Teranode Data Model](#42-teranode-data-model)
-- [4.3 Network Behavior](#43-network-behavior)
+    - [4.1 Bitcoin Data Model](#41-bitcoin-data-model)
+    - [4.2 Teranode Data Model](#42-teranode-data-model)
+    - [4.3 Network Behavior](#43-network-behavior)
 5. [Node Workflow](#5-node-workflow)
 6. [Scalability and Performance](#6-scalability-and-performance)
 7. [Impact on End-Users and Developers](#7-impact-on-end-users-and-developers)
@@ -128,8 +128,8 @@ Key components of the Teranode architecture include:
         - UTXO Store
 
 3. Other Components:
-   - Kafka Message Broker
-   - Miners
+    - Kafka Message Broker
+    - Miners
 
 ![TERANODE_OVERVIEW.png](img/TERANODE_OVERVIEW.png)
 
@@ -140,6 +140,7 @@ For an introduction to each service, please check the [Teranode Microservices Ov
 ### 4.1 Bitcoin Data Model
 
 In the original Bitcoin model:
+
 - Transactions are broadcast and included in blocks as they are found.
 - Blocks contain all transaction data for the transactions included.
 
@@ -195,6 +196,7 @@ Teranode achieves high throughput through:
 ## 7. Impact on End-Users and Developers
 
 The Teranode architecture offers several benefits:
+
 - **Higher transaction throughput**: Enabling more transactions per second.
 - **Lower fees**: Due to increased capacity and efficiency.
 - **Faster transaction confirmation**: Through continuous subtree processing.
@@ -213,7 +215,6 @@ Please check the [Teranode BSV Glossary](../../references/glossary.md) for more 
 ## 9. Related Resources
 
 - [Teranode Microservices Overview](teranode-microservices-overview.md)
-
 - [Extended Transactions](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 - [Subtrees](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 - [Blocks](../datamodel/block_data_model.md): Contain lists of subtree identifiers, not transactions.

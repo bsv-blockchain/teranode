@@ -4,8 +4,8 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1 Service Initialization](#21-service-initialization)
-- [2.2 Receiving and Processing a new Block Notification](#22-receiving-and-processing-a-new-block-notification)
+    - [2.1 Service Initialization](#21-service-initialization)
+    - [2.2 Receiving and Processing a new Block Notification](#22-receiving-and-processing-a-new-block-notification)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -59,23 +59,23 @@ The service initializes through the following sequence:
 The service processes blocks through a polling mechanism:
 
 1. **Block Discovery**
-  - Retrieves last persisted block height from the Blockchain
-  - Determines if new blocks need processing based on `BlockPersisterPersistAge`. `BlockPersisterPersistAge` defines how many blocks behind the current tip the persister should stay. i.e. the service intentionally stays `BlockPersisterPersistAge` blocks behind the tip. This helps to avoid reorgs and ensures block finality.
+    - Retrieves last persisted block height from the Blockchain
+    - Determines if new blocks need processing based on `BlockPersisterPersistAge`. `BlockPersisterPersistAge` defines how many blocks behind the current tip the persister should stay. i.e. the service intentionally stays `BlockPersisterPersistAge` blocks behind the tip. This helps to avoid reorgs and ensures block finality.
 
 2. **Processing Flow**
-  - Retrieves the next block to process
-  - Converts block to bytes
-  - Persists block data to storage
-  - Creates and stores the associated files:
+    - Retrieves the next block to process
+    - Converts block to bytes
+    - Persists block data to storage
+    - Creates and stores the associated files:
     - Block file (.block)
     - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (as UTXO meta data).
     - UTXO additions (.utxo-additions), containing the UTXOs spent in the block. This represent a list of removed Txs (inputs)
     - UTXO deletions (.utxo-deletions), containing the UTXOs added to the block. This represents a list of added Txs (outputs), including the Coinbase Tx.
-  - Updates the local state with the new block height
+    - Updates the local state with the new block height
 
 3. **Sleep Mechanisms**
-  - On error: the services sleeps for a 1-minute period
-  - If no new blocks: The service sleeps for a configurable period if time (`BlockPersisterPersistSleep`)
+    - On error: the services sleeps for a 1-minute period
+    - If no new blocks: The service sleeps for a configurable period if time (`BlockPersisterPersistSleep`)
 
 
 In more detail:
@@ -136,16 +136,16 @@ type UTXODeletion struct {
 1. **Go (Golang):** The primary programming language used for developing the service.
 
 2. **Bitcoin SV (BSV) Libraries:**
-  - **Data Models and Utilities:** For handling BSV blockchain data structures and operations, including transaction and block processing.
+    - **Data Models and Utilities:** For handling BSV blockchain data structures and operations, including transaction and block processing.
 
 3. **Storage Libraries:**
-  - **Blob Store:** For retrieving the subtree blobs.
-  - **UTXO Store:** To access and store transaction metadata.
-  - **File Storage:** For saving the decorated block files.
+    - **Blob Store:** For retrieving the subtree blobs.
+    - **UTXO Store:** To access and store transaction metadata.
+    - **File Storage:** For saving the decorated block files.
 
 4. **Configuration and Logging:**
-  - **Dynamic Configuration:** For managing service settings, including Kafka broker URLs and worker configurations.
-  - **Logging:** For monitoring service operations, error handling, and debugging.
+    - **Dynamic Configuration:** For managing service settings, including Kafka broker URLs and worker configurations.
+    - **Logging:** For monitoring service operations, error handling, and debugging.
 
 
 ## 5. Directory Structure and Main Files
@@ -168,7 +168,7 @@ To run the Block Persister Service locally, you can execute the following comman
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockPersister=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Persister Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Persister Service locally.
 
 
 ## 7. Configuration options (settings flags)

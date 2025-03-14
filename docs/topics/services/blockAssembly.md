@@ -5,28 +5,30 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
-- [2.2. Receiving Transactions from the TX Validator Service](#22-receiving-transactions-from-the-tx-validator-service)
-- [3.2. Grouping Transactions into Subtrees](#32-grouping-transactions-into-subtrees)
-- [3.3. Creating Mining Candidates](#33-creating-mining-candidates)
-- [3.4. Submit Mining Solution](#34-submit-mining-solution)
-- [3.5. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#35-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
-- [3.5.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#351-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
-- [3.5.2. The block received is a new block, and it is the new chaintip.](#352-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
-- [3.5.3. The block received is a new block, but it represents a fork.](#353-the-block-received-is-a-new-block-but-it-represents-a-fork)
-- [3.6. Resetting the Block Assembly](#36-resetting-the-block-assembly)
+    - [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
+    - [2.2. Receiving Transactions from the TX Validator Service](#22-receiving-transactions-from-the-tx-validator-service)
+    - [2.3. Grouping Transactions into Subtrees](#23-grouping-transactions-into-subtrees)
+    - [2.4. Creating Mining Candidates](#24-creating-mining-candidates)
+    - [2.5. Submit Mining Solution](#25-submit-mining-solution)
+    - [2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
+    - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
+    - [2.6.2. The block received is a new block, and it is the new chaintip.](#262-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
+    - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
+        - [Fork Detection and Assessment](#fork-detection-and-assessment)
+        - [Chain Selection and Reorganization Process](#chain-selection-and-reorganization-process)
+    - [2.7. Resetting the Block Assembly](#27-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [Network and Communication Settings](#network-and-communication-settings)
-- [gRPC Client Settings](#grpc-client-settings)
-- [Subtree Management](#subtree-management)
-- [Block and Transaction Processing](#block-and-transaction-processing)
-- [Mining and Difficulty](#mining-and-difficulty)
-- [Service Control](#service-control)
+    - [Network and Communication Settings](#network-and-communication-settings)
+    - [gRPC Client Settings](#grpc-client-settings)
+    - [Subtree Management](#subtree-management)
+    - [Block and Transaction Processing](#block-and-transaction-processing)
+    - [Mining and Difficulty](#mining-and-difficulty)
+    - [Service Control](#service-control)
 9. [Other Resources](#9-other-resources)
 
 ## 1. Description
@@ -70,6 +72,7 @@ A high level diagram:
 
 
 Based on its settings, the Block Assembly receives TX notifications from the validator service via 3 different paths:
+
 * A Kafka topic.
 * A gRPC client.
 
@@ -78,10 +81,12 @@ The Block Assembly service also subscribes to the Blockchain service, and receiv
 ![Block_Assembly_Service_Component_Diagram.png](img%2FBlock_Assembly_Service_Component_Diagram.png)
 
 Finally, note that the Block Assembly benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
-Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+
+Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
+
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](..%2Flustre_fs.svg)
+![lustre_fs.svg](img/plantuml/lustre_fs.svg)
 
 
 ## 2. Functionality
@@ -109,7 +114,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - At a later stage, the Subtree Processor will group the transactions into subtrees, which will be used to create mining candidates.
 
 
-### 3.2. Grouping Transactions into Subtrees
+### 2.3. Grouping Transactions into Subtrees
 
 ![block_assembly_add_tx_to_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx_to_subtree.svg)
 
@@ -125,7 +130,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
 
 
-### 3.3. Creating Mining Candidates
+### 2.4. Creating Mining Candidates
 
 ![block_assembly_get_mining_candidate.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_get_mining_candidate.svg)
 
@@ -147,7 +152,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
 
 
-### 3.4. Submit Mining Solution
+### 2.5. Submit Mining Solution
 
 Once a miner solves the mining challenge, it submits a solution to the Block Assembly Service. The solution includes the nonce required to solve the mining challenge.
 
@@ -176,17 +181,17 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 
 
-### 3.5. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts
+### 2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts
 
 The block assembly service subscribes to the Blockchain service, and receives notifications (`model.NotificationType_Block`) when a new block is received from another node. The logic for processing these blocks can be found in the `BlockAssembler.go` file, `startChannelListeners` function.
 
 Once a new block has been received from another node, there are 4 scenarios to consider:
 
-### 3.5.1. The block received is the same as the current chaintip (i.e. the block we have already seen).
+### 2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).
 
 In this case, the block notification is redundant, and refers to a block that the service already considers the current chaintip. The service does nothing.
 
-### 3.5.2. The block received is a new block, and it is the new chaintip.
+### 2.6.2. The block received is a new block, and it is the new chaintip.
 
 In this scenario, another node has mined a new block that is now the new chaintip.
 
@@ -195,29 +200,29 @@ The service needs to "move up" the block. By this, we mean the process to identi
 ![block_assembly_move_up.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_move_up.svg)
 
 1. **Checking for the Best Block Header**:
-   - The `BlockAssembler` logs information indicating that the best block header (the header of the most recent block in the chain) is the same as the previous one. It then attempts to "move up" to this new block.
+    - The `BlockAssembler` logs information indicating that the best block header (the header of the most recent block in the chain) is the same as the previous one. It then attempts to "move up" to this new block.
 
 2. **Getting the Block from Blockchain Client**:
-   - `b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash())` fetches the block corresponding to the best blockchain block header.
+    - `b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash())` fetches the block corresponding to the best blockchain block header.
 
 3. **Processing the Block in SubtreeProcessor**:
-   - `b.subtreeProcessor.MoveForwardBlock(block)` is called, which initiates the process of updating the subtree processor with the new block.
+    - `b.subtreeProcessor.MoveForwardBlock(block)` is called, which initiates the process of updating the subtree processor with the new block.
 
 4. **SubtreeProcessor Handling**:
-   - In `MoveForwardBlock`, a channel for error handling is set up and a `moveBlockRequest` is sent to `moveForwardBlockChan`.
-   - This triggers the `case moveForwardReq := <-stp.moveForwardBlockChan` in `SubtreeProcessor`, which handles the request to move up a block.
-   - `stp.moveForwardBlock(ctx, moveForwardReq.block, false)` is called, which is where the main logic of handling the new block is executed.
+    - In `MoveForwardBlock`, a channel for error handling is set up and a `moveBlockRequest` is sent to `moveForwardBlockChan`.
+    - This triggers the `case moveForwardReq := <-stp.moveForwardBlockChan` in `SubtreeProcessor`, which handles the request to move up a block.
+    - `stp.moveForwardBlock(ctx, moveForwardReq.block, false)` is called, which is where the main logic of handling the new block is executed.
 
 5. **MoveForwardBlock Functionality**:
-   - This function cleans out transactions from the current subtrees that are also in the new block (to avoid duplication and maintain chain integrity).
-   - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
-   - The function handles the coinbase transaction (the first transaction in a block, used to reward miners). It processes the unspent transaction outputs (UTXOs) associated with the coinbase transaction.
-   - The function then compares the list of transactions that are pending to be mined, as maintained by the Block Assembly, with the transactions included in the newly received block. It identifies transactions from the pending list that were not included in the new block.
-   - A list of these remaining transactions is then created. These are the transactions that still require mining.
-   - The Subtree Processor assigns these remaining transactions to the current subtree. This subtree represents the first set of transactions that will be included in the next block to be assembled on top of the newly received block. This ensures that pending transactions are carried over for inclusion in future blocks mined by this node.
+    - This function cleans out transactions from the current subtrees that are also in the new block (to avoid duplication and maintain chain integrity).
+    - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
+    - The function handles the coinbase transaction (the first transaction in a block, used to reward miners). It processes the unspent transaction outputs (UTXOs) associated with the coinbase transaction.
+    - The function then compares the list of transactions that are pending to be mined, as maintained by the Block Assembly, with the transactions included in the newly received block. It identifies transactions from the pending list that were not included in the new block.
+    - A list of these remaining transactions is then created. These are the transactions that still require mining.
+    - The Subtree Processor assigns these remaining transactions to the current subtree. This subtree represents the first set of transactions that will be included in the next block to be assembled on top of the newly received block. This ensures that pending transactions are carried over for inclusion in future blocks mined by this node.
 
 
-### 3.5.3. The block received is a new block, but it represents a fork.
+### 2.6.3. The block received is a new block, but it represents a fork.
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
 
@@ -299,7 +304,7 @@ The following diagram illustrates how the Block Assembly service handles a chain
 
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
-### 3.6. Resetting the Block Assembly
+### 2.7. Resetting the Block Assembly
 
 
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
@@ -382,7 +387,7 @@ To run the Block Assembly Service locally, you can execute the following command
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockAssembly=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
 
 
 ## 8. Configuration options (settings flags)

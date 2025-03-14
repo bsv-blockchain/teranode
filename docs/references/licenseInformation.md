@@ -45,4 +45,4 @@ Contributions to this project are welcome. By contributing, you agree that your 
 
 ### Questions
 
-If you have questions about the license or how you can use this software, please review the full license text at http://www.apache.org/licenses/LICENSE-2.0
+If you have questions about the license or how you can use this software, please review the full license text at [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)

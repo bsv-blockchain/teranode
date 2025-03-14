@@ -3,40 +3,37 @@
 
 ## Index
 
-
-
 1. [Introduction](#1-introduction)
-- [1.1. Go Errors](#11-go-errors)
-- [1.2. Go Errors Best Practices](#12-go-errors---best-practices)
-- [1.3. Sentinel Errors](#13-sentinel-errors)
-- [1.4 Wrapping Errors](#14-wrapping-errors)
+    - [1.1. Go Errors](#11-go-errors)
+    - [1.2. Go Errors: Best Practices](#12-go-errors-best-practices)
+    - [1.3. Sentinel Errors](#13-sentinel-errors)
+    - [1.4 Wrapping Errors](#14-wrapping-errors)
 2. [Error Handling in Teranode](#2-error-handling-in-teranode)
-- [2.1. Error Handling Strategy](#21-error-handling-strategy)
-- [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
-- [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
-   - [Error Creation and Wrapping](#error-creation-and-wrapping)
-   - [Unwrapping Errors](#unwrapping-errors)
-   - [Best Practices for Error Wrapping](#best-practices-for-error-wrapping)
-- [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-   - [Converting Teranode Errors to gRPC Errors](#converting-teranode-errors-to-grpc-errors)
-   - [Converting gRPC Errors back to Teranode Errors](#converting-grpc-errors-back-to-teranode-errors)
-   - [Practical Example](#practical-example)
-   - [Best Practices](#best-practices)
-- [2.5. Extra Data in Error Handling](#25-extra-data-in-error-handling)
-   - [Error Structure](#error-structure)
-   - [Purpose and Usage](#purpose-and-usage)
-   - [Example Implementation](#example-implementation)
-   - [Type Assertions with Extra Data](#type-assertions-with-extra-data)
-   - [Usage Example](#usage-example)
-   - [Best Practices](#best-practices)
-- [2.6. Error Protobuf](#26-error-protobuf)
-   - [Error Protocol Definition](#error-protocol-definition)
-   - [Key Components](#key-components)
-   - [Purpose and Benefits](#purpose-and-benefits)
-   - [Integration with Teranode's Error Handling](#integration-with-teranodes-error-handling)
-   - [Best Practices](#best-practices)
-- [2.7. Unit Tests](#27-unit-tests)
-
+    - [2.1. Error Handling Strategy](#21-error-handling-strategy)
+    - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
+    - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
+      - [Error Creation and Wrapping](#error-creation-and-wrapping)
+      - [Unwrapping Errors](#unwrapping-errors)
+      - [Best Practices for Error Wrapping](#best-practices-for-error-wrapping)
+    - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
+        - [Converting Teranode Errors to gRPC Errors](#converting-teranode-errors-to-grpc-errors)
+        - [Converting gRPC Errors back to Teranode Errors](#converting-grpc-errors-back-to-teranode-errors)
+        - [Practical Example](#practical-example)
+        - [Best Practices](#best-practices)
+    - [2.5. Extra Data in Error Handling](#25-extra-data-in-error-handling)
+        - [Error Structure](#error-structure)
+        - [Purpose and Usage](#purpose-and-usage)
+        - [Example Implementation](#example-implementation)
+        - [Type Assertions with Extra Data](#type-assertions-with-extra-data)
+        - [Usage Example](#usage-example)
+        - [Best Practices](#best-practices)
+    - [2.6. Error Protobuf](#26-error-protobuf)
+        - [Error Protocol Definition](#error-protocol-definition)
+        - [Key Components](#key-components)
+        - [Purpose and Benefits](#purpose-and-benefits)
+        - [Integration with Teranode's Error Handling](#integration-with-teranodes-error-handling)
+        - [Best Practices](#best-practices)
+    - [2.7. Unit Tests](#27-unit-tests)
 
 ## 1. Introduction
 
@@ -81,7 +78,7 @@ if err != nil {
 This pattern encourages handling errors at the place they occur, rather than propagating them up the stack implicitly via exceptions.
 
 
-### 1.2. Go Errors - Best Practices
+### 1.2. Go Errors: Best Practices
 
 - Always check for errors where they might occur. Do not ignore returned error values or propagate them up.
 - Consider defining your custom error types for complex systems, which can add clarity and control in error handling.

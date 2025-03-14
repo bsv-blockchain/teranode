@@ -44,12 +44,12 @@ sudo kubefwd svc -n mainnet-1
 This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:4040).
 
 4. **Configure VS Code**:
-- Set up VS Code to connect to the remote debugger now running locally on your computer.
-- Avoid using the "cursor" feature, as it may cause connection issues.
-- If using kubefwd, ensure your debugger IP points to the correct service (e.g., use `asset:4040` for the asset service).
+    - Set up VS Code to connect to the remote debugger now running locally on your computer.
+    - Avoid using the "cursor" feature, as it may cause connection issues.
+    - If using kubefwd, ensure your debugger IP points to the correct service (e.g., use `asset:4040` for the asset service).
 
 5. **Start Debugging**:
-- Add breakpoints as needed.
-- Begin your debugging session.
+    - Add breakpoints as needed.
+    - Begin your debugging session.
 
 Note: When debugging multiple services, make sure to use the correct local DNS (e.g., `asset:4040`) for each service you're debugging.

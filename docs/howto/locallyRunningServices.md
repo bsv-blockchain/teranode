@@ -91,8 +91,6 @@ You can also run each service on its own:
    SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
    ```
 
-Each service has dedicated documentation with more detailed instructions. [See service documentation (TODO)](#service-documentation-link).
-
 ## 📜 Running Specific Commands
 
 For executing particular tasks, use commands found under the _cmd/_ directory:
@@ -106,7 +104,6 @@ For executing particular tasks, use commands found under the _cmd/_ directory:
    SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
    ```
 
-More information on commands is available in their respective documentation. [See command documentation](#command-documentation-link).
 
 ## 🖥 Running UI Dashboard
 
@@ -116,4 +113,8 @@ For UI Dashboard:
 make dev-dashboard
 ```
 
-Remember to replace `[YOUR_USERNAME]` with your actual username throughout all commands. This guide aims to provide a streamlined process for running services and nodes during development. If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.
+Remember to replace `[YOUR_USERNAME]` with your actual username throughout all commands.
+
+This guide aims to provide a streamlined process for running services and nodes during development.
+
+If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.

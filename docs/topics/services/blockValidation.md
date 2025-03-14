@@ -2,43 +2,26 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [🔍 Block Validation Service](#-block-validation-service)
-  - [Index](#index)
-  - [1. Description](#1-description)
-  - [2. Functionality](#2-functionality)
     - [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
     - [2.2. Validating blocks](#22-validating-blocks)
-      - [2.2.1. Overview](#221-overview)
-      - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
-      - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
-      - [2.2.4. Block Data Validation](#224-block-data-validation)
+        - [2.2.1. Overview](#221-overview)
+        - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
+        - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
+        - [2.2.4. Block Data Validation](#224-block-data-validation)
     - [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
-  - [3. gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
-  - [4. Data Model](#4-data-model)
-  - [5. Technology](#5-technology)
-  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
-  - [7. How to run](#7-how-to-run)
-  - [8. Configuration options (settings flags)](#8-configuration-options-settings-flags)
-    - [Network and Communication Settings](#network-and-communication-settings)
-    - [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
-    - [Performance and Optimization](#performance-and-optimization)
-    - [Storage and State Management](#storage-and-state-management)
-  - [9. Other Resources](#9-other-resources)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [Network and Communication Settings](#network-and-communication-settings)
-- [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
-- [Performance and Optimization](#performance-and-optimization)
-- [Storage and State Management](#storage-and-state-management)
+    - [Network and Communication Settings](#network-and-communication-settings)
+    - [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
+    - [Performance and Optimization](#performance-and-optimization)
+    - [Storage and State Management](#storage-and-state-management)
 9. [Other Resources](#9-other-resources)
-
 
 ## 1. Description
 
@@ -80,7 +63,7 @@ Finally, note that the Block Validation service benefits of the use of Lustre Fs
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../../misc/lustre_fs.svg)
+![lustre_fs.svg](img/plantuml/lustre_fs.svg)
 
 
 ## 2. Functionality
@@ -157,13 +140,13 @@ Effectively, the following validations are performed:
 - A block must include at least one transaction, which is the Coinbase transaction.
 
 - A block timestamp must not be too far in the past or the future.
-  - The block time specified in the header must be larger than the Median-Time-Past (MTP) calculated from the previous block index. MTP is calculated by taking the timestamps of the last 11 blocks and finding the median (More details in BIP113).
-  - The block time specified in the header must not be larger than the adjusted current time plus two hours (“maximum future block time”).
+    - The block time specified in the header must be larger than the Median-Time-Past (MTP) calculated from the previous block index. MTP is calculated by taking the timestamps of the last 11 blocks and finding the median (More details in BIP113).
+    - The block time specified in the header must not be larger than the adjusted current time plus two hours (“maximum future block time”).
 
 - The first transaction in a block must be Coinbase. The transaction is Coinbase if the following requirements are satisfied:
-  - The Coinbase transaction has exactly one input.
-  - The input is null, meaning that the input’s previous hash is 0000…0000 and the input’s previous index is 0xFFFFFFFF.
-  - The Coinbase transaction must start with the serialized block height, to ensure block and transaction uniqueness.
+    - The Coinbase transaction has exactly one input.
+    - The input is null, meaning that the input’s previous hash is 0000…0000 and the input’s previous index is 0xFFFFFFFF.
+    - The Coinbase transaction must start with the serialized block height, to ensure block and transaction uniqueness.
 
 - The Coinbase transaction amount may not exceed block subsidy and all transaction fees (block reward).
 
@@ -202,22 +185,22 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 1. **Go Programming Language (Golang)**.
 
 2. **gRPC (Google Remote Procedure Call)**:
-  - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
+    - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
 3. **Blockchain Data Stores**:
-  - Integration with various stores such as UTXO (Unspent Transaction Output) store, blob store, and transaction metadata store.
+    - Integration with various stores such as UTXO (Unspent Transaction Output) store, blob store, and transaction metadata store.
 
 4. **Caching Mechanisms (ttlcache)**:
-  - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
+    - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
 5. **Configuration Management (gocore)**:
-  - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
+    - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
 6. **Networking and Protocol Buffers**:
-  - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
+    - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
 7. **Synchronization Primitives (sync)**:
-  - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
+    - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 
 ## 6. Directory Structure and Main Files
@@ -249,7 +232,7 @@ To run the Block Validation Service locally, you can execute the following comma
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockValidation=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Validation Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Validation Service locally.
 
 ## 8. Configuration options (settings flags)
 

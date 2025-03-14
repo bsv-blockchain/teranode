@@ -6,24 +6,24 @@
 2. [Architecture](#2-architecture)
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
-- [4.1. HTTP](#41-http)
-- [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
-- [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
-- [4.1.3. GetSubtree()](#413-getsubtree)
-- [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
-- [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
-- [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
-- [4.1.7. Search()](#417-search)
-- [4.1.8. GetBlockStats()](#418-getblockstats)
-- [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
-- [4.1.10. GetBlockForks()](#4110-getblockforks)
-- [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
-- [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
+    - [4.1. HTTP](#41-http)
+        - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
+        - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
+        - [4.1.3. GetSubtree()](#413-getsubtree)
+        - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
+        - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
+        - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
+        - [4.1.7. Search()](#417-search)
+        - [4.1.8. GetBlockStats()](#418-getblockstats)
+        - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
+        - [4.1.10. GetBlockForks()](#4110-getblockforks)
+        - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
+        - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
-- [7.1. How to run](#71-how-to-run)
-- [7.2  Configuration options (settings flags)](#72--configuration-options-settings-flags)
+    - [7.1. How to run](#71-how-to-run)
+    - [7.2 Configuration options (settings flags)](#72-configuration-options-settings-flags)
 8. [Other Resources](#8-other-resources)
 
 
@@ -81,7 +81,7 @@ Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../../misc/lustre_fs.svg)
+![lustre_fs.svg](img/plantuml/lustre_fs.svg)
 
 
 ## 3. Data Model
@@ -255,10 +255,10 @@ To run the Asset Server locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Asset Server locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Asset Server locally.
 
 
-### 7.2  Configuration options (settings flags)
+### 7.2 Configuration options (settings flags)
 
 1. **HTTP Server Configuration**
     - `asset_httpListenAddress`: Address for the Asset Service to listen for HTTP requests.

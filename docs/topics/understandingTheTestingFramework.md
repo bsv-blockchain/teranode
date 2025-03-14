@@ -6,43 +6,43 @@
 Bitcoin SV node testing presents unique challenges that standard testing frameworks can't fully address:
 
 1. **Complex Distributed Systems**
-- Multiple nodes need to interact
-- Network conditions must be simulated
-- State must be synchronized across components
-- Services need to be orchestrated independently
+    - Multiple nodes need to interact
+    - Network conditions must be simulated
+    - State must be synchronized across components
+    - Services need to be orchestrated independently
 
 2. **State Management**
-- Blockchain state must be maintained consistently
-- UTXO set needs to be tracked
-- Multiple data stores must stay synchronized
-- Test state needs to be cleanly reset between runs
+    - Blockchain state must be maintained consistently
+    - UTXO set needs to be tracked
+    - Multiple data stores must stay synchronized
+    - Test state needs to be cleanly reset between runs
 
 3. **Real-world Scenarios**
-- Network partitions
-- Node failures
-- Service degradation
-- Race conditions
-- Data consistency challenges
+    - Network partitions
+    - Node failures
+    - Service degradation
+    - Race conditions
+    - Data consistency challenges
 
 ### Core Design Principles
 
 1. **Isolation**
-- Each test runs in its own containerized environment
-- State is cleanly reset between tests
-- Network conditions can be controlled
-- Services can be manipulated independently
+    - Each test runs in its own containerized environment
+    - State is cleanly reset between tests
+    - Network conditions can be controlled
+    - Services can be manipulated independently
 
 2. **Observability**
-- Comprehensive logging across all components
-- Health checks for all services
-- Clear error reporting
-- State inspection capabilities
+    - Comprehensive logging across all components
+    - Health checks for all services
+    - Clear error reporting
+    - State inspection capabilities
 
 3. **Reproducibility**
-- Deterministic test environments
-- Consistent initial states
-- Controlled timing and sequencing
-- Docker-based setup ensures consistency
+    - Deterministic test environments
+    - Consistent initial states
+    - Controlled timing and sequencing
+    - Docker-based setup ensures consistency
 
 ## Testing Strategy
 
@@ -50,21 +50,21 @@ Bitcoin SV node testing presents unique challenges that standard testing framewo
 The framework uses three nodes by default because this is the minimum number needed to test:
 
 1. **Network Consensus**
-- Majority agreement (2 out of 3)
-- Fork resolution
-- Chain selection
+    - Majority agreement (2 out of 3)
+    - Fork resolution
+    - Chain selection
 
 2. **Network Propagation**
-- Transaction broadcasting
-- Block propagation
-- Peer discovery
-- Network partitioning scenarios
+    - Transaction broadcasting
+    - Block propagation
+    - Peer discovery
+    - Network partitioning scenarios
 
 3. **Failure Scenarios**
-- Node isolation
-- Service degradation
-- Recovery processes
-- State synchronization
+    - Node isolation
+    - Service degradation
+    - Recovery processes
+    - State synchronization
 
 ### Service Organization
 
@@ -80,6 +80,7 @@ Node Instance
 ```
 
 This architecture allows:
+
 - Independent service control
 - Isolated failure testing
 - Clear responsibility boundaries
@@ -89,6 +90,7 @@ This architecture allows:
 
 ### TNA (Node Responsibilities)
 Tests verify fundamental node behavior:
+
 - Transaction broadcasting
 - Block collection
 - Network communication
@@ -98,6 +100,7 @@ Why it matters: These tests ensure the basic functionality that makes a node par
 
 ### TNB (Transaction Validation)
 Focuses on:
+
 - Transaction format verification
 - Script validation
 - Fee calculation
@@ -107,6 +110,7 @@ Why it matters: Transaction validation is critical for maintaining network conse
 
 ### TNC (Block Assembly)
 Tests cover:
+
 - Merkle tree construction
 - Transaction ordering
 - Coinbase creation
@@ -116,6 +120,7 @@ Why it matters: Proper block assembly ensures valid block creation and mining op
 
 ### TEC (Error Cases)
 Verifies system resilience:
+
 - Service failures
 - Network partitions
 - Resource exhaustion

@@ -4,18 +4,17 @@
 
 
 1. [Introduction](#1-introduction)
-- [1.1. Summary](#11-summary)
-- [1.2. Data Transformation for Compatibility](#12-data-transformation-for-compatibility)
-- [1.3. Phased Migration Towards Teranode](#13-phased-migration-towards-teranode)
+    - [1.1. Summary](#11-summary)
+    - [1.2. Data Transformation for Compatibility](#12-data-transformation-for-compatibility)
+    - [1.3. Phased Migration Towards Teranode](#13-phased-migration-towards-teranode)
 2. [Architecture](#2-architecture)
 3. [Data Model](#3-data-model)
 4. [Functionality](#4-functionality)
-- [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
-   - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
-   - [4.1.2. Processing New Blocks](#412-processing-new-blocks)
+    - [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
+        - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
+        - [4.1.2. Processing New Blocks](#412-processing-new-blocks)
 5. [Technology](#5-technology)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [How to run](#7-how-to-run)
+6. [How to run](#6-how-to-run)
 7. [Other Resources](#7-other-resources)
 
 
@@ -197,15 +196,12 @@ Technology highlights:
 
 - **Database Technologies** (ffldb, leveldb, sqlite): Used as block data stores. Each has its use cases:
 
-  - **ffldb**: Optimized for blockchain data storage and retrieval. Default and recommended choice.
-  - **leveldb**: A fast key-value storage library suitable for indexing blockchain data.
-  - **sqlite**: An embedded SQL database engine for simpler deployment and structured data queries.
+    - **ffldb**: Optimized for blockchain data storage and retrieval. Default and recommended choice.
+    - **leveldb**: A fast key-value storage library suitable for indexing blockchain data.
+    - **sqlite**: An embedded SQL database engine for simpler deployment and structured data queries.
 
-## 6. Directory Structure and Main Files
 
-- TODO
-
-## 7. How to run
+## 6. How to run
 
 To run the P2P Legacy Service locally, you can execute the following command:
 
@@ -213,7 +209,7 @@ To run the P2P Legacy Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Legacy=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the P2P Legacy Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the P2P Legacy Service locally.
 
 
 ## 7. Other Resources

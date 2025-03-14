@@ -4,41 +4,41 @@
 ## Index
 
 - [Naming Conventions](#naming-conventions)
-  - [Introduction](#introduction)
-  - [General Principles](#general-principles)
+    - [Introduction](#introduction)
+    - [General Principles](#general-principles)
     - [Clarity and Readability Over Brevity](#clarity-and-readability-over-brevity)
     - [Consistency Within the Project](#consistency-within-the-project)
     - [Use of Descriptive Names, Avoiding Generic Names When Possible](#use-of-descriptive-names-avoiding-generic-names-when-possible)
-  - [Package Names](#package-names)
+    - [Package Names](#package-names)
     - [Short, Lowercase, and One-word Names](#short-lowercase-and-one-word-names)
     - [Avoidance of Common Names Like "util" or "helper"](#avoidance-of-common-names-like-util-or-helper)
     - [Examples and Exceptions](#examples-and-exceptions)
-  - [Variable Names](#variable-names)
+    - [Variable Names](#variable-names)
     - [Short Yet Descriptive Names](#short-yet-descriptive-names)
     - [CamelCase for Exportable Variables and camelCase for Internal Variables](#camelcase-for-exportable-variables-and-camelcase-for-internal-variables)
     - [Common Idioms](#common-idioms)
-  - [Function Names](#function-names)
+    - [Function Names](#function-names)
     - [Use of Descriptive Verbs and Nouns](#use-of-descriptive-verbs-and-nouns)
     - [Naming Conventions for Constructors, Getters, and Setters](#naming-conventions-for-constructors-getters-and-setters)
     - [Error Handling Functions and Their Naming Patterns](#error-handling-functions-and-their-naming-patterns)
-  - [Interface Names](#interface-names)
-    - [Single Method Interfaces with "-er" Suffix](#single-method-interfaces-with--er-suffix)
+    - [Interface Names](#interface-names)
+    - [Single Method Interfaces with "er" Suffix](#single-method-interfaces-with-er-suffix)
     - [Use of Descriptive Names for More Complex Interfaces](#use-of-descriptive-names-for-more-complex-interfaces)
-  - [Type Names](#type-names)
+    - [Type Names](#type-names)
     - [Avoidance of Redundant or Tautological Names](#avoidance-of-redundant-or-tautological-names)
     - [Use of Clear and Specific Names for Custom Types](#use-of-clear-and-specific-names-for-custom-types)
-  - [Commenting](#commenting)
+    - [Commenting](#commenting)
     - [Best Practices for Writing Clear and Helpful Comments](#best-practices-for-writing-clear-and-helpful-comments)
-  - [Error Handling](#error-handling)
+    - [Error Handling](#error-handling)
     - [Effective Use of Go's Error Handling Paradigm](#effective-use-of-gos-error-handling-paradigm)
     - [Patterns for Error Creation, Propagation, and Checking](#patterns-for-error-creation-propagation-and-checking)
-  - [Concurrency](#concurrency)
+    - [Concurrency](#concurrency)
     - [Best Practices for Using Goroutines and Channels](#best-practices-for-using-goroutines-and-channels)
     - [Patterns for Avoiding Common Concurrency Pitfalls](#patterns-for-avoiding-common-concurrency-pitfalls)
-  - [Testing](#testing)
+    - [Testing](#testing)
     - [Writing Effective Unit Tests Using the "testing" Package](#writing-effective-unit-tests-using-the-testing-package)
     - [Use of Table-Driven Tests for Comprehensive Coverage](#use-of-table-driven-tests-for-comprehensive-coverage)
-  - [Dependency Management](#dependency-management)
+    - [Dependency Management](#dependency-management)
     - [Use of Modules for Managing Dependencies](#use-of-modules-for-managing-dependencies)
     - [Strategies for Keeping Dependencies Up to Date and Secure](#strategies-for-keeping-dependencies-up-to-date-and-secure)
 
@@ -48,8 +48,8 @@
 
 The Teranode BSV implementation follows the Go programming language's naming conventions and best practices. These conventions are based on the official Go documentation, effective Go, and the Go community's accepted practices. To know more about them, please check:
 
-- https://go.dev/doc/effective_go
-- https://go.dev/talks/2014/names.slide#1
+- [Effective Go](https://go.dev/doc/effective_go)
+- [What's in a name?](https://go.dev/talks/2014/names.slide#1)
 
 The naming conventions and best practices outlined in this document provide a summary of these coding and naming best practices, together with additional guidelines specific to the Teranode BSV implementation.
 
@@ -134,31 +134,31 @@ The naming conventions and best practices outlined in this document provide a su
 #### Error Handling Functions and Their Naming Patterns
 
 - Name functions that return errors with action verbs: `Open`, `Read`, `Write`.
-  - It's clear from the context that an error can be returned. Context should suggest an error can be returned, e.g., `os.Open`.
+    - It's clear from the context that an error can be returned. Context should suggest an error can be returned, e.g., `os.Open`.
 - Avoid "Error" in names; return type already implies error possibility.
 
 ### Interface Names
 
-#### Single Method Interfaces with "-er" Suffix
+#### Single Method Interfaces with "er" Suffix
 
 - For interfaces with a single method, use a name ending in "-er" to describe the action performed by the method, such as `Reader`, `Writer`, or `Closer`.
 
 #### Use of Descriptive Names for More Complex Interfaces
 
 - For interfaces with multiple methods, choose descriptive names that capture the overall functionality or role of the interface, rather than following the "-er" suffix rule.
-  - For example, `FileSystem` for an interface that encapsulates various file system operations, or `DatabaseConnector` for an interface managing database connections.
+    - For example, `FileSystem` for an interface that encapsulates various file system operations, or `DatabaseConnector` for an interface managing database connections.
 
 ### Type Names
 
 #### Avoidance of Redundant or Tautological Names
 
 - Avoid names that repeat the package name or provide no additional information about the type.
-  - For instance, instead of `http.HttpClient`, simply use `http.Client` to prevent redundancy.
+    - For instance, instead of `http.HttpClient`, simply use `http.Client` to prevent redundancy.
 
 #### Use of Clear and Specific Names for Custom Types
 
 - Choose names that clearly and specifically describe what the custom type represents or does, ensuring they are intuitive and meaningful.
-  - For example, `Block` for a type representing block information, or `SubtreeProcessor` for a type that processes subtrees.
+    - For example, `Block` for a type representing block information, or `SubtreeProcessor` for a type that processes subtrees.
 
 ### Commenting
 
@@ -178,19 +178,18 @@ The naming conventions and best practices outlined in this document provide a su
 
 ```go
 if err != nil {
-// Handle error
+ // Handle error
 }
 ```
 
 #### Patterns for Error Creation, Propagation, and Checking
 
-**- TBD**
 
 - **Propagating Errors**: When an error occurs, return it to the caller instead of handling it unless you can resolve it or it's critical to continue execution.
 
 ```go
 if err != nil {
-return err
+ return err
 }
 ```
 
@@ -225,7 +224,7 @@ By following these guidelines, you can leverage Go's concurrency features effect
 
 ```go
 func TestXxx(t *testing.T) {
-// Test code here
+ // Test code here
 }
 ```
 
@@ -233,7 +232,7 @@ func TestXxx(t *testing.T) {
 
 ```go
 if got != want {
-t.Errorf("got %q, want %q", got, want)
+ t.Errorf("got %q, want %q", got, want)
 }
 ```
 
@@ -243,22 +242,22 @@ t.Errorf("got %q, want %q", got, want)
 
 ```go
 var tests = []struct {
-input string
-want  string
-}{
-{"input1", "want1"},
-{"input2", "want2"},
-// More test cases
+    input string
+    want  string
+    }{
+      {"input1", "want1"},
+      {"input2", "want2"},
+	  // More test cases
 }
 
 for _, tt := range tests {
-testname := fmt.Sprintf("%s,%s", tt.input, tt.want)
-t.Run(testname, func(t *testing.T) {
-ans := MyFunc(tt.input)
-if ans != tt.want {
-t.Errorf("got %s, want %s", ans, tt.want)
-}
-})
+    testname := fmt.Sprintf("%s,%s", tt.input, tt.want)
+    t.Run(testname, func(t *testing.T) {
+      ans := MyFunc(tt.input)
+      if ans != tt.want {
+          t.Errorf("got %s, want %s", ans, tt.want)
+      }
+    })
 }
 ```
 

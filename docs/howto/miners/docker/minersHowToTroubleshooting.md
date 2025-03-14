@@ -9,7 +9,6 @@ Last modified: 22-January-2025
     - [Health Checks and System Monitoring](#health-checks-and-system-monitoring)
         - [Service Status](#service-status)
         - [Detailed Container/Pod Health](#detailed-containerpod-health)
-        - [Viewing Health Check Logs](#viewing-health-check-logs)
         - [Monitoring System Resources](#monitoring-system-resources)
     - [Recovery Procedures](#recovery-procedures)
         - [Third Party Component Failure](#third-party-component-failure)

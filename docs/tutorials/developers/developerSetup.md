@@ -3,17 +3,30 @@
 This guide assists you in setting up the Teranode project on your machine. The below assumes you are running a recent version of Mac OS.
 
 
+## Index
+
 1. [Install Go](#1-install-go)
 2. [Set Go Environment Variables](#2-set-go-environment-variables)
-3. [Python & Dependencies](#3-python--dependencies)
-- [Python:](#python)
-- [Pip (Python Package Installer):](#pip-python-package-installer)
-- [PyYAML:](#pyyaml)
+3. [Python and Dependencies](#3-python-and-dependencies)
+    - [3.1 Install Python (via Homebrew)](#31-install-python-via-homebrew)
+    - [3.2 (Recommended) Use a Python Virtual Environment to install PyYAML](#32-recommended-use-a-python-virtual-environment-to-install-pyyaml)
+    - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
+    - [3.4 Verify Installation](#34-verify-installation)
+    - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools)
 4. [Project Dependencies](#4-project-dependencies)
-5. [Build & Install secp256k1](#5-build--install-secp256k1)
+5. [Build and Install secp256k1](#5-build-and-install-secp256k1)
 6. [Clone the Project and Install Additional Dependencies](#6-clone-the-project-and-install-additional-dependencies)
-7. [Configure Your Node Dev Settings](#7-configure-your-node-dev-settings)
+7. [Configure Your Node Dev Settings (Updated Example)](#7-configure-your-node-dev-settings-updated-example)
+    - [7.1 Open and Inspect `settings_local.conf`](#71-open-and-inspect-settings_localconf)
+    - [7.2 Duplicate and Customize the Template Lines](#72-duplicate-and-customize-the-template-lines)
+    - [7.3 Set Your Environment Variable](#73-set-your-environment-variable)
+    - [7.4 Verify](#74-verify)
+    - [7.5 Commit Your Changes (Optional)](#75-commit-your-changes-optional)
 8. [Run the Node](#8-run-the-node)
+9. [Troubleshooting](#9-troubleshooting)
+    - [9.1. Dependency errors and conflicts](#91-dependency-errors-and-conflicts)
+- [Next Steps](#next-steps)
+
 
 ## 1. Install Go
 
@@ -58,7 +71,7 @@ Both should display paths related to Go.
 ---
 
 
-## 3. Python & Dependencies
+## 3. Python and Dependencies
 
 ---
 
@@ -86,7 +99,7 @@ You can simply **replace** the old steps in your guide with the version below:
 
 ---
 
-## 3. Python & Dependencies
+## 3. Python and Dependencies
 
 ### 3.1 Install Python (via Homebrew)
 
@@ -167,7 +180,7 @@ protoc --version
 
 
 
-## 5. Build & Install secp256k1
+## 5. Build and Install secp256k1
 
 ---
 
@@ -316,7 +329,7 @@ If no errors are seen, you have successfully installed the project and are ready
 
 ## 9. Troubleshooting
 
-### 9.1. Dependency errors / conflics
+### 9.1. Dependency errors and conflicts
 
 Should you have errors with dependencies, try running the following commands:
 

@@ -9,25 +9,25 @@
 - [1.3 Key Concepts in Teranode's Implementation](#13-key-concepts-in-teranodes-implementation)
 2. [Core Concepts](#2-core-concepts)
 - [2.1 Double Spend Detection](#21-double-spend-detection)
-   - [2.1.1 First-Seen Rule Implementation](#211-first-seen-rule-implementation)
-   - [2.1.2 Detection During Transaction Validation](#212-detection-during-transaction-validation)
-   - [2.1.3 Detection During Block Validation](#213-detection-during-block-validation)
-   - [2.1.4 Subtree Validation Handling](#214-subtree-validation-handling)
-   - [2.1.5 Detection Outcomes](#215-detection-outcomes)
+    - [2.1.1 First-Seen Rule Implementation](#211-first-seen-rule-implementation)
+    - [2.1.2 Detection During Transaction Validation](#212-detection-during-transaction-validation)
+    - [2.1.3 Detection During Block Validation](#213-detection-during-block-validation)
+    - [2.1.4 Subtree Validation Handling](#214-subtree-validation-handling)
+    - [2.1.5 Detection Outcomes](#215-detection-outcomes)
 - [2.2 Transaction States](#22-transaction-states)
-   - [2.2.1 Non-conflicting Transactions](#221-non-conflicting-transactions)
-   - [2.2.2 Conflicting Transactions](#222-conflicting-transactions)
-   - [2.2.3 Child Transactions](#223-child-transactions)
+    - [2.2.1 Non-conflicting Transactions](#221-non-conflicting-transactions)
+    - [2.2.2 Conflicting Transactions](#222-conflicting-transactions)
+    - [2.2.3 Child Transactions](#223-child-transactions)
 - [2.3 Conflict Storage and Tracking](#23-conflict-storage-and-tracking)
-   - [2.3.1 UTXO Store](#231-utxo-store)
-   - [2.3.2 Subtree Storage](#232-subtree-storage)
-   - [2.3.3 Parent-Child Relationship](#233-parent-child-relationship)
+    - [2.3.1 UTXO Store](#231-utxo-store)
+    - [2.3.2 Subtree Storage](#232-subtree-storage)
+    - [2.3.3 Parent-Child Relationship](#233-parent-child-relationship)
 3. [Chain Reorganization Handling](#3-chain-reorganization-handling)
-   - [Phase 1: Mark Original as Conflicting](#phase-1-mark-original-as-conflicting)
-   - [Phase 2: Unspend Original](#phase-2-unspend-original)
-   - [Phase 3: Process Double Spend](#phase-3-process-double-spend)
-   - [Phase 4: Update Double Spend Status](#phase-4-update-double-spend-status)
-   - [Phase 5: Cleanup](#phase-5-cleanup)
+    - [Phase 1: Mark Original as Conflicting](#phase-1-mark-original-as-conflicting)
+    - [Phase 2: Unspend Original](#phase-2-unspend-original)
+    - [Phase 3: Process Double Spend](#phase-3-process-double-spend)
+    - [Phase 4: Update Double Spend Status](#phase-4-update-double-spend-status)
+    - [Phase 5: Cleanup](#phase-5-cleanup)
 4. [Other Resources](#4-other-resources)
 
 ---
@@ -217,8 +217,8 @@ The outcome of double spend detection varies based on the context:
 
 - Primary storage for conflict information
 - Stores conflict status in two ways:
-   - `conflicting` flag on transactions
-   - `conflictingChildren` list for parent transactions
+    - `conflicting` flag on transactions
+    - `conflictingChildren` list for parent transactions
 
 #### 2.3.2 Subtree Storage
 
@@ -250,13 +250,13 @@ This is handled through a **five-phase commit process**:
 ```
 Technical changes:
 - UTXO Store:
-   - Sets `conflicting = true` on tx_original
-   - Sets TTL for cleanup
-   - Updates `conflictingChildren[]` array in parent transactions
-   - Recursively marks all child transactions
+    - Sets `conflicting = true` on tx_original
+    - Sets TTL for cleanup
+    - Updates `conflictingChildren[]` array in parent transactions
+    - Recursively marks all child transactions
 - Subtree Store:
-   - Adds transaction hashes to `ConflictingNodes[]` array
-   - Persists updated subtree
+    - Adds transaction hashes to `ConflictingNodes[]` array
+    - Persists updated subtree
 ```
 
 
@@ -269,10 +269,10 @@ Technical changes:
 ```
 Technical changes:
 - UTXO Store:
-  - Clears `spendingTxID` from parent UTXOs
-  - Sets `unspendable = true` on parent UTXOs
-  - Removes spend markers from tx_original's outputs
-  - Maintains conflict flags and TTLs
+    - Clears `spendingTxID` from parent UTXOs
+    - Sets `unspendable = true` on parent UTXOs
+    - Removes spend markers from tx_original's outputs
+    - Maintains conflict flags and TTLs
 ```
 
 #### Phase 3: Process Double Spend
@@ -283,10 +283,10 @@ Technical changes:
 ```
 Technical changes:
 - UTXO Store:
-  - Sets `spendingTxID` to double spend transaction
-  - Creates new UTXOs for double spend outputs
-  - Ignores `unspendable` flag during spend
-  - No TTL set on double spend transaction
+    - Sets `spendingTxID` to double spend transaction
+    - Creates new UTXOs for double spend outputs
+    - Ignores `unspendable` flag during spend
+    - No TTL set on double spend transaction
 ```
 
 #### Phase 4: Update Double Spend Status
@@ -296,10 +296,10 @@ Technical changes:
 ```
 Technical changes:
 - UTXO Store:
-  - Sets `conflicting = false` on double spend
-  - Removes any TTL
+    - Sets `conflicting = false` on double spend
+    - Removes any TTL
 - Subtree Store:
-  - Removes hash from `ConflictingNodes[]` if present
+    - Removes hash from `ConflictingNodes[]` if present
 ```
 
 #### Phase 5: Cleanup
@@ -309,7 +309,7 @@ Technical changes:
 ```
 Technical changes:
 - UTXO Store:
-  - Sets `unspendable = false` on parent UTXOs
+    - Sets `unspendable = false` on parent UTXOs
 ```
 
 At the end of the process, the original transaction is now marked as conflicting, and the double spend transaction is considered valid. The UTXO set has been successfully transitioned to the new chain.

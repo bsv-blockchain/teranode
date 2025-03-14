@@ -3,6 +3,7 @@
 
 ## Index
 
+
 - [Block Notification Message Format](#block-notification-message-format)
     - [Block Topic](#block-topic)
     - [Message Structure](#message-structure)
@@ -25,7 +26,7 @@
         - [Receiving Messages](#receiving-messages)
     - [Error Cases](#error-cases)
 - [Transaction Validation Message Format](#transaction-validation-message-format)
-    - [Transaction Validation Topic ](#transaction-validation-topic-)
+    - [Transaction Validation Topic](#transaction-validation-topic)
     - [Message Structure](#message-structure)
     - [Field Specifications](#field-specifications)
         - [Height](#height)
@@ -150,10 +151,10 @@ return nil
 ### Message Structure
 The Kafka message consists of a binary value with two concatenated fields:
 
-| Field        | Size    | Format      | Description |
-|--------------|---------|-------------|-------------|
-| Subtree Hash | 32 bytes| Raw bytes   | BSV subtree hash |
-| DataHub URL  | Variable| UTF-8 string| URL pointing to the subtree data |
+| Field        | Size     | Format       | Description                      |
+|--------------|----------|--------------|----------------------------------|
+| Subtree Hash | 32 bytes | Raw bytes    | BSV subtree hash                 |
+| DataHub URL  | Variable | UTF-8 string | URL pointing to the subtree data |
 
 ### Field Specifications
 
@@ -336,12 +337,12 @@ The Kafka message consists of a binary value containing a transaction hash follo
 #### Content
 Either:
 1. Delete Command:
-   - Fixed value: "delete" (UTF-8 encoded)
-   - Size: 6 bytes
+    - Fixed value: "delete" (UTF-8 encoded)
+    - Size: 6 bytes
 
 2. Transaction Metadata:
-   - Variable size
-   - Serialized `Data` structure containing:
+    - Variable size
+    - Serialized `Data` structure containing:
      * Complete transaction (`bt.Tx`)
      * Parent transaction hashes
      * Block IDs

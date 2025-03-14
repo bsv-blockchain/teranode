@@ -2,71 +2,72 @@
 
 ## Index
 
+
 1. [Introduction](#1-introduction)
-- [Supported RPC Commands](#supported-rpc-commands)
-- [Unimplemented RPC Commands](#unimplemented-rpc-commands)
-- [Command help](#command-help)
-- [Authentication](#authentication)
+    - [Supported RPC Commands](#supported-rpc-commands)
+    - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
+    - [Command help](#command-help)
+    - [Authentication](#authentication)
 2. [Architecture](#2-architecture)
 3. [Functionality](#3-functionality)
-- [3.1. RPC Server Initialization and Configuration](#31-rpc-server-initialization-and-configuration)
-- [3.2. Command Request Version](#32-command---request-version)
-- [3.3. Command Get Best Block Hash](#33-command---get-best-block-hash)
-- [3.4. Command Get Block](#34-command---get-block)
-- [3.5. Command Get Block By Height](#35-command---get-block-by-height)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.6. Command Get Block Hash](#36-command---get-block-hash)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.7. Command Get Block Header](#37-command---get-block-header)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.8. Command Get Difficulty](#38-command---get-difficulty)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.9. Command Get Mining Info](#39-command---get-mining-info)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.10. Command Generate](#310-command---generate)
-- [3.11. Command Invalidate Block](#311-command---invalidate-block)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-    - [Important Notes:](#important-notes)
-- [3.12. Command Reconsider Block](#312-command---reconsider-block)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-    - [Important Notes:](#important-notes)
-- [3.13. Command Create Raw Transaction](#313-command---create-raw-transaction)
-    - [Input Parameters:](#input-parameters)
-    - [Steps:](#steps)
-    - [Outputs:](#outputs)
-- [3.14. Command Send Raw Transaction](#314-command---send-raw-transaction)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.15. Command Submit Mining Solution](#315-command---submit-mining-solution)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.16. Command Get Mining Candidate](#316-command---get-mining-candidate)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.17. Command Get Blockchain Info](#317-command---get-blockchain-info)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.18. Command Get Info](#318-command---get-info)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-- [3.19. Command Get Peer Info](#319-command---get-peer-info)
-    - [Process Flow](#process-flow)
-- [3.20. Command Set Ban](#320-command---set-ban)
-    - [Function Overview](#function-overview)
-    - [Process Flow](#process-flow)
-    - [Important Notes:](#important-notes)
+    - [3.1. RPC Server Initialization and Configuration](#31-rpc-server-initialization-and-configuration)
+    - [3.2. Command: Request Version](#32-command-request-version)
+    - [3.3. Command: Get Best Block Hash](#33-command-get-best-block-hash)
+    - [3.4. Command: Get Block](#34-command-get-block)
+    - [3.5. Command: Get Block By Height](#35-command-get-block-by-height)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.6. Command: Get Block Hash](#36-command-get-block-hash)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.7. Command: Get Block Header](#37-command-get-block-header)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.8. Command: Get Difficulty](#38-command-get-difficulty)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.9. Command: Get Mining Info](#39-command-get-mining-info)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.10. Command: Generate](#310-command-generate)
+    - [3.11. Command: Invalidate Block](#311-command-invalidate-block)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+        - [Important Notes:](#important-notes)
+    - [3.12. Command: Reconsider Block](#312-command-reconsider-block)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+        - [Important Notes:](#important-notes)
+    - [3.13. Command: Create Raw Transaction](#313-command-create-raw-transaction)
+        - [Input Parameters:](#input-parameters)
+        - [Steps:](#steps)
+        - [Outputs:](#outputs)
+    - [3.14. Command: Send Raw Transaction](#314-command-send-raw-transaction)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.15. Command: Submit Mining Solution](#315-command-submit-mining-solution)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.16. Command: Get Mining Candidate](#316-command-get-mining-candidate)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.17. Command: Get Blockchain Info](#317-command-get-blockchain-info)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.18. Command: Get Info](#318-command-get-info)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+    - [3.19. Command: Get Peer Info](#319-command-get-peer-info)
+        - [Process Flow](#process-flow)
+    - [3.20. Command: Set Ban](#320-command-set-ban)
+        - [Function Overview](#function-overview)
+        - [Process Flow](#process-flow)
+        - [Important Notes:](#important-notes)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [Settings](#6-settings)
-- [Core Settings from `gocore` Configuration:](#core-settings-from-gocore-configuration)
-- [Usage of Settings:](#usage-of-settings)
+    - [Core Settings from `gocore` Configuration:](#core-settings-from-gocore-configuration)
+    - [Usage of Settings:](#usage-of-settings)
 7. [How to run](#7-how-to-run)
 8. [Other Resources](#8-other-resources)
 
@@ -149,7 +150,8 @@ The below table summarises the services supported in the current version:
 ### Command help
 
 A description of the commands can be found in the `rpcserverhelp.go` file in the `bsvd` repository:
-https://github.com/bitcoinsv/bsvd/blob/master/rpcserverhelp.go
+
+- [rpcserverhelp.go](https://github.com/bitcoinsv/bsvd/blob/master/rpcserverhelp.go)
 
 Teranode RPC server is designed to be compatible with the Bitcoin RPC interface, as implemented in the `bsvd` repository.
 
@@ -163,10 +165,13 @@ All RPC commands require a valid username and password for authentication. The s
 ![RPC_Component_Context_Diagram.png](img/RPC_Component_Context_Diagram.png)
 
 The RPC server is a standalone service that listens for incoming requests and processes them based on the command type. The server starts by initializing the HTTP server and setting up the necessary configurations.
+
 It then listens for incoming requests and routes them to the appropriate handler based on the command type. The handler processes the request, executes the command, and returns the response to the client.
 
 In order to serve some of the requests, the RPC server interacts with the Teranode core services to fetch the required data.
+
 For example, when a `getblock` command is received, the server interacts with the blockchain service to fetch the block data.
+
 Also, when a `generate` command is received, the server interacts with the miner service to generate the requested number of blocks.
 
 
@@ -175,7 +180,7 @@ Also, when a `generate` command is received, the server interacts with the miner
 
 ### 3.1. RPC Server Initialization and Configuration
 
-### 3.2. Command - Request Version
+### 3.2. Command: Request Version
 
 The `version` command is used to retrieve the version information of the RPC server. The RPC server processes this command by constructing a response with the server version information and returning it to the client.
 
@@ -188,7 +193,7 @@ The `version` command is used to retrieve the version information of the RPC ser
     - **minor**: Minor version number
     - **patch**: Patch version number
 
-### 3.3. Command - Get Best Block Hash
+### 3.3. Command: Get Best Block Hash
 
 The `getbestblockhash` command is used to retrieve the hash of the best (most recent) block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the hash of the best block.
 
@@ -197,17 +202,20 @@ The `getbestblockhash` command is used to retrieve the hash of the best (most re
 #### (Success) Response Fields:
 - **hash**: The hex-encoded hash of the best block in the main chain
 
-### 3.4. Command - Get Block
+### 3.4. Command: Get Block
 
 The `getblock` command is used to retrieve information about a specific block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the block data based on the provided block hash.
 
 ![rpc-get-block.svg](img/plantuml/rpc/rpc-get-block.svg)
 
 #### (Success) Response Fields:
+
 When verbosity=0:
+
 - Returns hex-encoded serialized block data
 
 When verbosity=1 or 2:
+
 - **hash**: The block hash (same as provided)
 - **confirmations**: Number of confirmations
 - **size**: The block size in bytes
@@ -223,7 +231,7 @@ When verbosity=1 or 2:
 - **nextblockhash**: Hash of the next block (if available)
 
 
-### 3.5. Command - Get Block By Height
+### 3.5. Command: Get Block By Height
 
 The `getblockbyheight` command returns information about a block at a specific height in the blockchain. The response format varies based on the verbosity parameter.
 
@@ -244,26 +252,32 @@ The `getblockbyheight` command returns information about a block at a specific h
 ![rpc-get-block-by-height.svg](img/plantuml/rpc/rpc-get-block-by-height.svg)
 
 1. **Request Processing**:
-- Receives request with block height and verbosity level
-- Validates input parameters
+
+    - Receives request with block height and verbosity level
+    - Validates input parameters
 
 2. **Block Retrieval**:
-- Queries blockchain service to get block at specified height
-- If block not found, returns appropriate error
+
+    - Queries blockchain service to get block at specified height
+    - If block not found, returns appropriate error
 
 3. **Response Construction**:
-- For verbosity=0:
-    - Returns hex-encoded serialized block data
-- For verbosity=1:
-    - Returns JSON object with block header information and transaction IDs
-- For verbosity=2:
-    - Returns JSON object with complete block information including full transaction data
+
+    - For verbosity=0:
+        - Returns hex-encoded serialized block data
+    - For verbosity=1:
+        - Returns JSON object with block header information and transaction IDs
+    - For verbosity=2:
+        - Returns JSON object with complete block information including full transaction data
 
 #### (Success) Response Fields:
+
 When verbosity=0:
+
 - Returns hex-encoded serialized block data
 
 When verbosity=1 or 2:
+
 - **hash**: The block hash
 - **confirmations**: Number of confirmations
 - **size**: Block size in bytes
@@ -280,7 +294,7 @@ When verbosity=1 or 2:
 - **tx**: Array of transaction IDs (verbosity=1) or full transaction data (verbosity=2)
 
 
-### 3.6. Command - Get Block Hash
+### 3.6. Command: Get Block Hash
 
 The `getblockhash` command returns the hash of a block at a specific height in the blockchain.
 
@@ -297,21 +311,25 @@ The `getblockhash` command returns the hash of a block at a specific height in t
 ![rpc-get-block-hash.svg](img/plantuml/rpc/rpc-get-block-hash.svg)
 
 1. **Request Processing**:
-- Receives request with block height (index)
-- Validates input parameter
+
+    - Receives request with block height (index)
+    - Validates input parameter
 
 2. **Block Retrieval**:
-- Queries blockchain service to get block at specified height
-- Extracts hash from retrieved block
+
+    - Queries blockchain service to get block at specified height
+    - Extracts hash from retrieved block
 
 3. **Response Construction**:
-- Returns the block hash as a string
+
+    - Returns the block hash as a string
 
 #### (Success) Response Fields:
+
 - Returns string containing the hex-encoded hash of the block at the specified height
 
 
-### 3.7. Command - Get Block Header
+### 3.7. Command: Get Block Header
 
 The `getblockheader` command returns information about a block's header given its hash. The response format varies based on the verbose parameter.
 
@@ -331,25 +349,31 @@ The `getblockheader` command returns information about a block's header given it
 ![rpc-get-block-header.svg](img/plantuml/rpc/rpc-get-block-header.svg)
 
 1. **Request Processing**:
-- Receives request with block hash and verbose flag
-- Validates block hash format
+
+    - Receives request with block hash and verbose flag
+    - Validates block hash format
 
 2. **Header Retrieval**:
-- Queries blockchain service to get block header and metadata
-- If block not found, returns appropriate error
+
+    - Queries blockchain service to get block header and metadata
+    - If block not found, returns appropriate error
 
 3. **Response Construction**:
-- For verbose=false:
-    - Returns hex-encoded serialized header data
-- For verbose=true:
-    - Calculates difficulty from bits
-    - Returns JSON object with detailed header information
+
+    - For verbose=false:
+        - Returns hex-encoded serialized header data
+    - For verbose=true:
+        - Calculates difficulty from bits
+        - Returns JSON object with detailed header information
 
 #### (Success) Response Fields:
+
 When verbose=false:
+
 - Returns hex-encoded serialized header data
 
 When verbose=true:
+
 - **hash**: The block hash (same as provided)
 - **version**: Block version
 - **versionHex**: Block version in hexadecimal
@@ -361,7 +385,7 @@ When verbose=true:
 - **difficulty**: Calculated difficulty
 - **height**: Height of the block in the blockchain
 
-### 3.8. Command - Get Difficulty
+### 3.8. Command: Get Difficulty
 
 The `getdifficulty` command returns the proof-of-work difficulty as a multiple of the minimum difficulty.
 
@@ -377,18 +401,21 @@ The `getdifficulty` command returns the proof-of-work difficulty as a multiple o
 ![rpc-get-difficulty.svg](img/plantuml/rpc/rpc-get-difficulty.svg)
 
 1. **Request Processing**:
-- Receives request for current difficulty
-- Initializes tracing and metrics
+
+    - Receives request for current difficulty
+    - Initializes tracing and metrics
 
 2. **Difficulty Retrieval**:
-- Queries block assembly service for current difficulty
-- If retrieval fails, returns appropriate error
+
+    - Queries block assembly service for current difficulty
+    - If retrieval fails, returns appropriate error
 
 3. **Response Construction**:
-- Returns the difficulty value directly to the client
+
+    - Returns the difficulty value directly to the client
 
 
-### 3.9. Command - Get Mining Info
+### 3.9. Command: Get Mining Info
 
 The `getmininginfo` command returns various mining-related information including block chain state, current block statistics, and network mining parameters.
 
@@ -404,19 +431,23 @@ The `getmininginfo` command returns various mining-related information including
 ![rpc-get-mining-info.svg](img/plantuml/rpc/rpc-get-mining-info.svg)
 
 1. **Request Processing**:
-- Receives request for mining information
-- Initializes tracing and metrics
+
+    - Receives request for mining information
+    - Initializes tracing and metrics
 
 2. **Data Retrieval**:
-- Queries blockchain service for best block header and metadata
-- Calculates network hash rate based on difficulty and target block time
-- If retrieval fails, returns appropriate error
+
+    - Queries blockchain service for best block header and metadata
+    - Calculates network hash rate based on difficulty and target block time
+    - If retrieval fails, returns appropriate error
 
 3. **Response Construction**:
-- Compiles mining information into a structured response
-- Returns comprehensive mining state data
+
+    - Compiles mining information into a structured response
+    - Returns comprehensive mining state data
 
 #### (Success) Response Fields:
+
 - **blocks**: The current block height
 - **currentblocksize**: Size of the latest best block in bytes
 - **currentblocktx**: Number of transactions in the latest best block
@@ -428,7 +459,7 @@ The `getmininginfo` command returns various mining-related information including
 
 
 
-### 3.10. Command - Generate
+### 3.10. Command: Generate
 
 The `generate` command is used to generate a specified number of blocks on the blockchain. The RPC server processes this command by interacting with the blockchain service to create the requested number of blocks.
 
@@ -457,14 +488,14 @@ if err != nil {
 
 
 - **Considerations:**
-  - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
-  - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
+    - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
+    - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
 
 #### (Success) Response Fields:
 - Returns nil on success
 
 
-### 3.11. Command - Invalidate Block
+### 3.11. Command: Invalidate Block
 
 The `invalidateblock` command permanently marks a block as invalid, as if it violated a consensus rule.
 
@@ -481,24 +512,28 @@ The `invalidateblock` command permanently marks a block as invalid, as if it vio
 ![rpc-invalidate-block.svg](img/plantuml/rpc/rpc-invalidate-block.svg)
 
 1. **Request Processing**:
-- Receives request with block hash
-- Validates block hash format
-- Initializes tracing and metrics
+
+    - Receives request with block hash
+    - Validates block hash format
+    - Initializes tracing and metrics
 
 2. **Block Invalidation**:
-- Sends invalidation request to blockchain service
-- If invalidation fails, returns appropriate error
+
+    - Sends invalidation request to blockchain service
+    - If invalidation fails, returns appropriate error
 
 3. **Response Construction**:
-- Returns nil on successful invalidation
-- Returns error if operation fails
+
+    - Returns nil on successful invalidation
+    - Returns error if operation fails
 
 #### Important Notes:
+
 - This command should be used with extreme caution as it can cause chain reorganization
 - Invalidating a block also invalidates all blocks built on top of it
 
 
-### 3.12. Command - Reconsider Block
+### 3.12. Command: Reconsider Block
 
 The `reconsiderblock` command removes the invalid status of a block and its descendants, allowing them to be reconsidered for inclusion in the blockchain. This command is typically used to undo the effects of `invalidateblock`.
 
@@ -515,19 +550,23 @@ The `reconsiderblock` command removes the invalid status of a block and its desc
 ![rpc-reconsider-block.svg](img/plantuml/rpc/rpc-reconsider-block.svg)
 
 1. **Request Processing**:
-- Receives request with block hash
-- Validates block hash format
-- Initializes tracing and metrics
+
+    - Receives request with block hash
+    - Validates block hash format
+    - Initializes tracing and metrics
 
 2. **Block Reconsideration**:
-- Sends revalidation request to blockchain service
-- If revalidation fails, returns appropriate error
+
+    - Sends revalidation request to blockchain service
+    - If revalidation fails, returns appropriate error
 
 3. **Response Construction**:
-- Returns nil on successful reconsideration
-- Returns error if operation fails
+
+    - Returns nil on successful reconsideration
+    - Returns error if operation fails
 
 #### Important Notes:
+
 - This command removes the invalid status set by `invalidateblock`
 - The block and its descendants will be reconsidered for inclusion in the best chain
 - May trigger chain reorganization if the reconsidered chain has more work
@@ -535,7 +574,7 @@ The `reconsiderblock` command removes the invalid status of a block and its desc
 
 
 
-### 3.13. Command - Create Raw Transaction
+### 3.13. Command: Create Raw Transaction
 
 The `createrawtransaction` RPC method is used in Bitcoin to manually create a raw transaction. This transaction is not broadcast to the network but returned as a hex-encoded string. The created transaction could then be further modified, signed, and eventually broadcast using other RPC commands.
 
@@ -556,14 +595,14 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 
 
 3. **Process Inputs**:
-  - For each input, it validates the transaction ID and constructs the transaction input structure.
-  - If a `LockTime` is set and not zero, it adjusts the sequence number to allow for the lock time to be effective.
+    - For each input, it validates the transaction ID and constructs the transaction input structure.
+    - If a `LockTime` is set and not zero, it adjusts the sequence number to allow for the lock time to be effective.
 
 
 4. **Process Outputs**:
-  - Validates the amount for each output to ensure it's within the valid monetary range.
-  - Validates each output address, ensuring it's a supported type and appropriate for the network.
-  - Creates a payment script for each address and constructs the transaction output.
+    - Validates the amount for each output to ensure it's within the valid monetary range.
+    - Validates each output address, ensuring it's a supported type and appropriate for the network.
+    - Creates a payment script for each address and constructs the transaction output.
 
 
 5. **Set Transaction LockTime**: If provided, sets the transaction's lock time.
@@ -578,7 +617,7 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 
 
 
-### 3.14. Command - Send Raw Transaction
+### 3.14. Command: Send Raw Transaction
 
 The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-signed raw transaction to the network. This command broadcasts the raw transaction hex to the connected nodes in the blockchain network for inclusion in a block.
 
@@ -587,41 +626,47 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 
 - **Purpose**: To submit a raw, serialized, and hex-encoded transaction to the blockchain network.
 - **Parameters**:
-  - `cmd`: Contains the raw transaction data and any command-specific parameters.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+    - `cmd`: Contains the raw transaction data and any command-specific parameters.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
 - **Return Value**:
-  - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
-  - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
+    - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
+    - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
 
 #### Process Flow
 
 ![rpc-send-raw-transaction.svg](img/plantuml/rpc/rpc-send-raw-transaction.svg)
 
 1. **Input Parsing**:
-  - The function receives a command (`bsvjson.SendRawTransactionCmd`) which includes the hex-encoded string of the transaction.
-  - It checks if the hexadecimal string has an odd length and prepends a "0" if necessary to ensure correct decoding.
+
+    - The function receives a command (`bsvjson.SendRawTransactionCmd`) which includes the hex-encoded string of the transaction.
+    - It checks if the hexadecimal string has an odd length and prepends a "0" if necessary to ensure correct decoding.
 
 2. **Hex Decoding**:
-  - Attempts to decode the hexadecimal string into bytes.
-  - If decoding fails, it returns an error using `rpcDecodeHexError`, indicating the hex string was malformed.
+
+    - Attempts to decode the hexadecimal string into bytes.
+    - If decoding fails, it returns an error using `rpcDecodeHexError`, indicating the hex string was malformed.
 
 3. **Transaction Deserialization**:
-  - Attempts to construct a transaction object from the decoded bytes using a transaction parsing library (assumed to be `bt.NewTxFromBytes`).
-  - If the transaction cannot be parsed, it returns an error stating the transaction is deserializable, indicating structural issues with the transaction data.
+
+    - Attempts to construct a transaction object from the decoded bytes using a transaction parsing library (assumed to be `bt.NewTxFromBytes`).
+    - If the transaction cannot be parsed, it returns an error stating the transaction is deserializable, indicating structural issues with the transaction data.
 
 4. **Transaction Distribution Setup**:
-  - Initializes a `Distributor` object responsible for handling the broadcasting of transactions to the Propagation servers.
-  - If the distributor cannot be created (due to configuration errors, connection issues, etc.), it returns an initialization error.
+
+    - Initializes a `Distributor` object responsible for handling the broadcasting of transactions to the Propagation servers.
+    - If the distributor cannot be created (due to configuration errors, connection issues, etc.), it returns an initialization error.
 
 5. **Transaction Broadcasting**:
-  - Calls a method (`d.SendTransaction`) on the distributor to send the transaction to the network.
-  - If broadcasting fails, it returns an error indicating that the transaction was rejected along with a message detailing the reason (e.g., network errors, validation failures on the network side).
+
+    - Calls a method (`d.SendTransaction`) on the distributor to send the transaction to the network.
+    - If broadcasting fails, it returns an error indicating that the transaction was rejected along with a message detailing the reason (e.g., network errors, validation failures on the network side).
 
 6. **Success Response**:
-  - If the transaction is successfully broadcast, the function returns a success response, which includes the transaction ID of the broadcast transaction
+
+    - If the transaction is successfully broadcast, the function returns a success response, which includes the transaction ID of the broadcast transaction
 
 
-### 3.15. Command - Submit Mining Solution
+### 3.15. Command: Submit Mining Solution
 
 The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining solution to the network. This command allows miners to propose a potential new block to be added to the blockchain.
 
@@ -629,11 +674,11 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 - **Purpose**: To submit a mining solution, which represents a potential new block, for validation and inclusion in the blockchain.
 - **Parameters**:
-  - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+    - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
 - **Return Value**:
-  - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
-  - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
+    - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
+    - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
 
 #### Process Flow
 
@@ -641,22 +686,23 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 
 1. **Command Parsing**:
-  - The function receives a command (`bsvjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
+    - The function receives a command (`bsvjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
 
 2. **JSON Unmarshaling**:
-  - Attempts to unmarshal the JSON string into a `model.MiningSolution` struct.
-  - If unmarshaling fails, it returns an error, indicating that the JSON string was malformed or incompatible with the expected structure.
+    - Attempts to unmarshal the JSON string into a `model.MiningSolution` struct.
+    - If unmarshaling fails, it returns an error, indicating that the JSON string was malformed or incompatible with the expected structure.
 
 3. **Solution Submission**:
-  - Calls the `SubmitMiningSolution` method on the `blockAssemblyClient` to submit the mining solution to the Block Assembly.
-  - The Block Assembly validates the solution and, if successful, propagates it to other nodes in the network.
-  - If submission fails, it returns an error indicating why the solution was rejected (e.g., invalid solution, network errors).
+    - Calls the `SubmitMiningSolution` method on the `blockAssemblyClient` to submit the mining solution to the Block Assembly.
+    - The Block Assembly validates the solution and, if successful, propagates it to other nodes in the network.
+    - If submission fails, it returns an error indicating why the solution was rejected (e.g., invalid solution, network errors).
 
 #### (Success) Response Fields:
+
 - Returns nil on success
 
 
-### 3.16. Command - Get Mining Candidate
+### 3.16. Command: Get Mining Candidate
 
 The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candidate block for mining. This command allows miners to obtain the necessary information to attempt mining a new block.
 
@@ -664,27 +710,28 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 
 - **Purpose**: To request a mining candidate, which represents a potential new block template, from the node.
 - **Parameters**:
-  - The function doesn't take any specific parameters from the RPC call.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
+    - The function doesn't take any specific parameters from the RPC call.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
 - **Return Value**:
-  - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
-  - On failure: Returns an error detailing why the mining candidate could not be retrieved.
+    - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
+    - On failure: Returns an error detailing why the mining candidate could not be retrieved.
 
 #### Process Flow
 
 ![rpc-get-mining-solution.svg](img/plantuml/rpc/rpc-get-mining-solution.svg)
 
 1. **Mining Candidate Retrieval**:
-  - Calls the `GetMiningCandidate` method on the `blockAssemblyClient` to retrieve a mining candidate.
-  - The Block Assembly generates the latest block template from the blockchain's current state.
+    - Calls the `GetMiningCandidate` method on the `blockAssemblyClient` to retrieve a mining candidate.
+    - The Block Assembly generates the latest block template from the blockchain's current state.
 
 2. **Error Handling**:
-  - If the retrieval fails, the function returns the error to the caller.
+    - If the retrieval fails, the function returns the error to the caller.
 
 3. **Response**:
-  - If successful, the function returns the mining candidate object (`mc`).
+    - If successful, the function returns the mining candidate object (`mc`).
 
 #### (Success) Response Fields:
+
 - **id**: Hex-encoded mining candidate ID
 - **prevhash**: Previous block hash
 - **coinbaseValue**: Value for coinbase transaction
@@ -698,7 +745,7 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 - **coinbase**: Hex-encoded coinbase transaction (if requested)
 
 
-### 3.17. Command - Get Blockchain Info
+### 3.17. Command: Get Blockchain Info
 
 The `getblockchaininfo` command returns information about the current blockchain state, including network name, block count, and other blockchain-related data.
 
@@ -707,8 +754,8 @@ The `getblockchaininfo` command returns information about the current blockchain
 - **Purpose**: To retrieve comprehensive information about the current state of the blockchain.
 - **Parameters**: None
 - **Return Value**:
-  - On success: Returns a JSON object containing blockchain state information
-  - On failure: Returns an error describing what went wrong
+    - On success: Returns a JSON object containing blockchain state information
+    - On failure: Returns an error describing what went wrong
 
 #### Process Flow
 
@@ -716,24 +763,25 @@ The `getblockchaininfo` command returns information about the current blockchain
 
 
 1. **Request Processing**:
-  - Receives request for blockchain information
-  - No parameters to validate
+    - Receives request for blockchain information
+    - No parameters to validate
 
 2. **Blockchain Query**:
-  - Retrieves the best block header and metadata from the blockchain service
-  - If retrieval fails, returns an error
+    - Retrieves the best block header and metadata from the blockchain service
+    - If retrieval fails, returns an error
 
 3. **Response Construction**:
-  - Constructs response object containing:
-    - Chain name (main, test, regtest)
-    - Current block count
-    - Header count
-    - Best block hash
-    - Current difficulty
-    - Chain work
-    - Additional metadata (pruning status, soft fork information)
+    - Constructs response object containing:
+        - Chain name (main, test, regtest)
+        - Current block count
+        - Header count
+        - Best block hash
+        - Current difficulty
+        - Chain work
+        - Additional metadata (pruning status, soft fork information)
 
 #### (Success) Response Fields:
+
 - **chain**: The name of the blockchain network (main, test, regtest)
 - **blocks**: The current number of blocks in the chain
 - **headers**: Number of headers in the chain (currently hardcoded to 863341)
@@ -746,7 +794,7 @@ The `getblockchaininfo` command returns information about the current blockchain
 - **softforks**: Array of active soft forks (currently empty)
 
 
-### 3.18. Command - Get Info
+### 3.18. Command: Get Info
 
 The `getinfo` command returns general information about the node's state, including version information, network status, and blockchain details.
 
@@ -754,28 +802,29 @@ The `getinfo` command returns general information about the node's state, includ
 - **Purpose**: To retrieve general information about the node's current state and configuration.
 - **Parameters**: None
 - **Return Value**:
-  - On success: Returns a JSON object containing node state information
-  - On failure: Returns an error if blockchain height cannot be retrieved
+    - On success: Returns a JSON object containing node state information
+    - On failure: Returns an error if blockchain height cannot be retrieved
 
 #### Process Flow
 
 ![rpc-get-info.svg](img/plantuml/rpc/rpc-get-info.svg)
 
 1. **Height Retrieval**:
-  - Queries blockchain service for current best height and time
-  - If query fails, sets height to 0 and logs error
+    - Queries blockchain service for current best height and time
+    - If query fails, sets height to 0 and logs error
 
 2. **Response Construction**:
-  - Builds response containing:
-    - Server version
-    - Protocol version
-    - Current block height
-    - Network time offset
-    - Connection count
-    - Network type (testnet/mainnet/stn)
-    - Minimum relay fee
+    - Builds response containing:
+        - Server version
+        - Protocol version
+        - Current block height
+        - Network time offset
+        - Connection count
+        - Network type (testnet/mainnet/stn)
+        - Minimum relay fee
 
 #### (Success) Response Fields:
+
 - **version**: Server version (currently 1)
 - **protocolversion**: Protocol version being used
 - **blocks**: Current block height
@@ -788,15 +837,15 @@ The `getinfo` command returns general information about the node's state, includ
 - **relayfee**: Minimum relay fee for transactions (currently 100 sat/KB)
 
 
-### 3.19. Command - Get Peer Info
+### 3.19. Command: Get Peer Info
 
 The `getpeerinfo` command returns data about each connected network peer as an array of JSON objects.
 
 - **Purpose**: To retrieve detailed information about all connected peers, both legacy and new P2P connections.
 - **Parameters**: None
 - **Return Value**:
-  - On success: Returns an array of peer information objects
-  - On failure: Returns partial information if at least one peer service responds
+    - On success: Returns an array of peer information objects
+    - On failure: Returns partial information if at least one peer service responds
 
 #### Process Flow
 
@@ -804,26 +853,32 @@ The `getpeerinfo` command returns data about each connected network peer as an a
 
 
 1. **Legacy Peer Information**:
-  - Queries legacy peer service for connected peer information
-  - If query fails, logs as non-critical error
-  - Processes legacy peer data if available
+
+    - Queries legacy peer service for connected peer information
+    - If query fails, logs as non-critical error
+    - Processes legacy peer data if available
 
 2. **P2P Information**:
-  - Queries new P2P service for connected peer information
-  - If query fails, logs as error
-  - Processes P2P data if available
+
+    - Queries new P2P service for connected peer information
+    - If query fails, logs as error
+    - Processes P2P data if available
 
 3. **Information Aggregation**:
-  - Combines information from both sources
-  - Creates unified peer information objects
-  - Includes connection details, network stats, and state information
+
+    - Combines information from both sources
+    - Creates unified peer information objects
+    - Includes connection details, network stats, and state information
 
 4. **Response Construction**:
-  - Returns array of peer information objects
-  - Each object contains available peer details based on connection type
+
+    - Returns array of peer information objects
+    - Each object contains available peer details based on connection type
 
 #### (Success) Response Fields:
+
 For each peer:
+
 - **id**: Peer ID
 - **addr**: The IP address and port of the peer
 - **addrlocal**: Local address (legacy peers only)
@@ -846,7 +901,7 @@ For each peer:
 
 The command aggregates peer information from both the legacy P2P service and the new P2P service, providing a comprehensive view of all connected peers.
 
-### 3.20. Command - Set Ban
+### 3.20. Command: Set Ban
 
 The `setban` command adds or removes an IP address or subnet from the banned list. This command is used for network management and peer control.
 
@@ -866,20 +921,21 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 ![rpc-set-ban.svg](img/plantuml/rpc/rpc-set-ban.svg)
 
 1. **Request Processing**:
-- Receives request with IP/subnet and command
-- Validates input parameters
-- Initializes tracing and metrics
+    - Receives request with IP/subnet and command
+    - Validates input parameters
+    - Initializes tracing and metrics
 
 2. **Ban List Management**:
-- Retrieves current ban list
-- Processes add/remove command
-- Updates ban list accordingly
+    - Retrieves current ban list
+    - Processes add/remove command
+    - Updates ban list accordingly
 
 3. **Response Construction**:
-- Returns nil on successful operation
-- Returns error if operation fails
+    - Returns nil on successful operation
+    - Returns error if operation fails
 
 #### Important Notes:
+
 - For "add" command:
     - If bantime is 0, defaults to 24 hours
     - If absolute is true, bantime is treated as Unix timestamp
@@ -938,7 +994,7 @@ To run the RPC Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -RPC=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the RPC Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the RPC Service locally.
 
 
 ## 8. Other Resources

@@ -2,27 +2,14 @@
 
 ## Index
 
-
-## Index
-
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
-3. [UTXO - Data Model](#3-utxo---data-model)
-- [2.1. What is an UTXO?](#21-what-is-an-utxo)
-   - [3.2. How are UTXOs stored?](#32-how-are-utxos-stored)
-   - [3.3. UTXO Meta Data](#33-utxo-meta-data)
-4. [Use Cases](#4-use-cases)
-- [🗃️ UTXO Store](#️-utxo-store)
-  - [Index](#index)
-  - [Index](#index-1)
-  - [1. Description](#1-description)
-  - [2. Architecture](#2-architecture)
-  - [3. UTXO - Data Model](#3-utxo---data-model)
-  - [2.1. What is an UTXO?](#21-what-is-an-utxo)
+3. [UTXO: Data Model](#3-utxo-data-model)
+    - [2.1. What is an UTXO?](#21-what-is-an-utxo)
     - [3.2. How are UTXOs stored?](#32-how-are-utxos-stored)
     - [3.3. UTXO Meta Data](#33-utxo-meta-data)
-  - [4. Use Cases](#4-use-cases)
-    - [4.1. Asset Server:](#41-asset-server)
+4. [Use Cases](#4-use-cases)
+    - [4.1. Asset Server](#41-asset-server)
     - [4.2. Block Persister](#42-block-persister)
     - [4.3. Block Assembly](#43-block-assembly)
     - [4.4. Block Validation](#44-block-validation)
@@ -30,22 +17,13 @@
     - [4.6. Transaction Validator](#46-transaction-validator)
     - [4.7. UTXO Batch Processing and External Storage mode](#47-utxo-batch-processing-and-external-storage-mode)
     - [4.8. Alert System and UTXO Management](#48-alert-system-and-utxo-management)
-  - [5. Technology](#5-technology)
+5. [Technology](#5-technology)
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
     - [5.3. Data Purging](#53-data-purging)
-  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
-  - [7. Running the Store Locally](#7-running-the-store-locally)
-    - [How to run](#how-to-run)
-  - [8. Settings](#8-settings)
-  - [9. Other Resources](#9-other-resources)
-5. [Technology](#5-technology)
-- [5.1. Language and Libraries](#51-language-and-libraries)
-- [5.2. Data Stores](#52-data-stores)
-- [5.3. Data Purging](#53-data-purging)
-- [ 6. Directory Structure and Main Files](#-6-directory-structure-and-main-files)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [Running the Store Locally](#7-running-the-store-locally)
-- [    How to run](#----how-to-run)
+    - [How to run](#how-to-run)
 8. [Settings](#8-settings)
 9. [Other Resources](#9-other-resources)
 
@@ -76,6 +54,7 @@ It handles the core functionalities of the UTXO Store:
 - No cross-transaction state is stored.
 
 The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as well as **re-assign** them.
+
 - BSV is the only blockchain that allows legal recourse for lost asset (token) recovery to legally rightful owners by design. The Alert System can also freeze assets based on court injunctions and legal notices.
 - Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.
 
@@ -84,13 +63,13 @@ The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as w
 The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
 
 
-![UTXO_Store_Container_Context_Diagram.png](../servicesO_Store_Container_Context_Diagram.png)
+![UTXO_Store_Container_Context_Diagram.png](../services/img/UTXO_Store_Container_Context_Diagram.png)
 
 
 The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.
 
 
-![UTXO_Store_Component_Context_Diagram.png](../servicesO_Store_Component_Context_Diagram.png)
+![UTXO_Store_Component_Context_Diagram.png](../services/img/UTXO_Store_Component_Context_Diagram.png)
 
 The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
 
@@ -132,7 +111,7 @@ Notice how SqlLite and the In-Memory store are in-memory, while Aerospike and Po
 More details about the specific stores can be found in the [Technology](#5-technology) section.
 
 
-## 3. UTXO - Data Model
+## 3. UTXO: Data Model
 
 ## 2.1. What is an UTXO?
 
@@ -269,7 +248,7 @@ To know more about the UTXO data model, please read more [here](../datamodel/utx
 
 ## 4. Use Cases
 
-### 4.1. Asset Server:
+### 4.1. Asset Server
 
 ![utxo_asset_service_diagram.svg](../services/img/plantuml/utxo/utxo_asset_service_diagram.svg)
 
@@ -366,21 +345,21 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
 ![utxo_freeze_reassign.svg](../services/img/plantuml/utxo/utxo_freeze_reassign.svg)
 
 1. **Freezing UTXOs**: The alert system can request to freeze specific UTXOs, preventing them from being spent.
-   - Checks if the UTXO exists
-   - If the UTXO is already spent, it returns "SPENT"
-   - If the UTXO is already frozen, it returns "FROZEN"
-   - Otherwise, it marks the UTXO as frozen by setting its spending TxID to 32 'FF' bytes
+    - Checks if the UTXO exists
+    - If the UTXO is already spent, it returns "SPENT"
+    - If the UTXO is already frozen, it returns "FROZEN"
+    - Otherwise, it marks the UTXO as frozen by setting its spending TxID to 32 'FF' bytes
 
 2. **Unfreezing UTXOs**: Previously frozen UTXOs can be unfrozen, allowing them to be spent again.
-   - Checks if the UTXO exists and is frozen
-   - If frozen, it removes the freeze mark
-   - If not frozen, it returns an error
+    - Checks if the UTXO exists and is frozen
+    - If frozen, it removes the freeze mark
+    - If not frozen, it returns an error
 
 3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
-   - Verifies the UTXO exists and is frozen
-   - Updates the UTXO hash to the new value
-   - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
-   - Logs the reassignment for audit purposes
+    - Verifies the UTXO exists and is frozen
+    - Updates the UTXO hash to the new value
+    - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+    - Logs the reassignment for audit purposes
 
 ## 5. Technology
 
@@ -430,7 +409,7 @@ The following datastores are supported (either in development / experimental or 
 
 Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
-##  6. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```
 UTXO Store Package Structure (stores/utxo)
@@ -493,7 +472,7 @@ UTXO Store Package Structure (stores/utxo)
 ## 7. Running the Store Locally
 
 
-###     How to run
+### How to run
 
 To run the UTXO Store locally, you can execute the following command:
 
@@ -501,7 +480,7 @@ To run the UTXO Store locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
 
 ## 8. Settings
 
@@ -531,81 +510,81 @@ Additionally, the following Aerospike-related settings allow to further configur
    ```go
    if gocore.Config().GetBool("aerospike_debug", true) {
    ```
-   - **Description**: Enables or disables debug mode for Aerospike client.
-   - **Default Value**: `true`
-   - **Purpose**: Provides detailed logging for debugging purposes.
+    - **Description**: Enables or disables debug mode for Aerospike client.
+    - **Default Value**: `true`
+    - **Purpose**: Provides detailed logging for debugging purposes.
 
 2. **Store Batcher Enabled**
    ```go
    storeBatcherEnabled := gocore.Config().GetBool("txmeta_store_storeBatcherEnabled", true)
    ```
-   - **Description**: Enables or disables batching for store operations.
-   - **Default Value**: `true`
-   - **Purpose**: Controls whether store operations should be batched to improve performance.
+    - **Description**: Enables or disables batching for store operations.
+    - **Default Value**: `true`
+    - **Purpose**: Controls whether store operations should be batched to improve performance.
 
 3. **Store Batcher Size**
    ```go
    batchSize, _ := gocore.Config().GetInt("txmeta_store_storeBatcherSize", 256)
    ```
-   - **Description**: Sets the batch size for store operations.
-   - **Default Value**: `256`
-   - **Purpose**: Defines the number of transactions to batch before processing.
+    - **Description**: Sets the batch size for store operations.
+    - **Default Value**: `256`
+    - **Purpose**: Defines the number of transactions to batch before processing.
 
 4. **Store Batcher Duration**
    ```go
    batchDuration, _ := gocore.Config().GetInt("txmeta_store_storeBatcherDurationMillis", 10)
    ```
-   - **Description**: Sets the duration in milliseconds for batching store operations.
-   - **Default Value**: `10`
-   - **Purpose**: Defines the maximum time to wait before processing a batch of transactions.
+    - **Description**: Sets the duration in milliseconds for batching store operations.
+    - **Default Value**: `10`
+    - **Purpose**: Defines the maximum time to wait before processing a batch of transactions.
 
 5. **Get Batcher Enabled**
    ```go
    getBatcherEnabled := gocore.Config().GetBool("txmeta_store_getBatcherEnabled", true)
    ```
-   - **Description**: Enables or disables batching for get operations.
-   - **Default Value**: `true`
-   - **Purpose**: Controls whether get operations should be batched to improve performance.
+    - **Description**: Enables or disables batching for get operations.
+    - **Default Value**: `true`
+    - **Purpose**: Controls whether get operations should be batched to improve performance.
 
 6. **Get Batcher Size**
    ```go
    batchSize, _ := gocore.Config().GetInt("txmeta_store_getBatcherSize", 1024)
    ```
-   - **Description**: Sets the batch size for get operations.
-   - **Default Value**: `1024`
-   - **Purpose**: Defines the number of UTXO get requests to batch before processing.
+    - **Description**: Sets the batch size for get operations.
+    - **Default Value**: `1024`
+    - **Purpose**: Defines the number of UTXO get requests to batch before processing.
 
 7. **Get Batcher Duration**
    ```go
    batchDuration, _ := gocore.Config().GetInt("txmeta_store_getBatcherDurationMillis", 10)
    ```
-   - **Description**: Sets the duration in milliseconds for batching get operations.
-   - **Default Value**: `10`
-   - **Purpose**: Defines the maximum time to wait before processing a batch of get requests.
+    - **Description**: Sets the duration in milliseconds for batching get operations.
+    - **Default Value**: `10`
+    - **Purpose**: Defines the maximum time to wait before processing a batch of get requests.
 
 8. **Spend Batcher Enabled**
    ```go
    spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
    ```
-   - **Description**: Enables or disables batching for spend operations.
-   - **Default Value**: `true`
-   - **Purpose**: Controls whether spend operations should be batched to improve performance.
+    - **Description**: Enables or disables batching for spend operations.
+    - **Default Value**: `true`
+    - **Purpose**: Controls whether spend operations should be batched to improve performance.
 
 9. **Spend Batcher Size**
    ```go
    batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
    ```
-   - **Description**: Sets the batch size for spend operations.
-   - **Default Value**: `256`
-   - **Purpose**: Defines the number of UTXO spend requests to batch before processing.
+    - **Description**: Sets the batch size for spend operations.
+    - **Default Value**: `256`
+    - **Purpose**: Defines the number of UTXO spend requests to batch before processing.
 
 10. **Spend Batcher Duration**
     ```go
     batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
     ```
-   - **Description**: Sets the duration in milliseconds for batching spend operations.
-   - **Default Value**: `10`
-   - **Purpose**: Defines the maximum time to wait before processing a batch of spend requests.
+    - **Description**: Sets the duration in milliseconds for batching spend operations.
+    - **Default Value**: `10`
+    - **Purpose**: Defines the maximum time to wait before processing a batch of spend requests.
 
 
 

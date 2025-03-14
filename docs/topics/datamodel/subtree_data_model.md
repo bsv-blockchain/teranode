@@ -75,7 +75,7 @@ Subtrees only include transaction IDs, not full transaction data, since all node
 
 2. Subtrees allow nodes to confirm they have all relevant transactions and update their state accordingly without having to process large amounts of data repeatedly.
 
-![TERANODE_SubTree.png](../architecture/img/TERANODE_SubTree.png)
+![TERANODE_SubTree.svg](../architecture/img/TERANODE_SubTree.svg)
 
 ## Additional Resources
 

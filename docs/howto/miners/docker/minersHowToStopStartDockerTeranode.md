@@ -11,7 +11,7 @@ Last modified: 22-January-2025
 
 Starting your Teranode instance involves initializing all the necessary services in the correct order. The Docker Compose configuration file handles this complexity for us.
 
-This guide assumes you have previously followed the [installation guide](../../../../docs/howto/miners/docker/minersHowToInstallation.md) and have a working Teranode setup.
+This guide assumes you have previously followed the [installation guide](./minersHowToInstallation.md) and have a working Teranode setup.
 
 Follow these steps to **start** your node:
 
@@ -28,38 +28,33 @@ Or to the mainnet Docker compose folder:
 ```bash
 cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
 ```
-
 2. **Pull Latest Images **(optional, but recommended before each start)**:**
 
 ```
 docker-compose pull
 ```
-
-4. **Start the Teranode Stack:**
+3. **Start the Teranode Stack:**
 
 ```
 docker-compose up -d
 ```
 
 This command starts all services defined in the `docker-compose.yml` file in detached mode.
-
-5. **Verify Service Startup:**
+4. **Verify Service Startup:**
 
 ```
 docker-compose ps
 ```
 
 Ensure all services show a status of "Up" or "Healthy".
-
-6. **Monitor Startup Logs:**
+5. **Monitor Startup Logs:**
 
 ```
 docker-compose logs -f
 ```
 
 This allows you to watch the startup process in real-time.
-
-7. **Check Individual Service Logs:**
+6. **Check Individual Service Logs:**
 
 If a specific service isn't starting correctly, check its logs. Example:
 
@@ -68,8 +63,7 @@ docker-compose logs -f legacy
 docker-compose logs -f blockchain
 docker-compose logs -f asset
 ```
-
-8. **Verify Network Connections:**
+7. **Verify Network Connections:**
 Once all services are up, ensure the node is responsive:
 
 ```bash
@@ -87,27 +81,25 @@ And that it is connected to its peers:
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getpeerinfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
 ```
-
-
-9. **Check Synchronization Status:**
+8. **Check Synchronization Status:**
 Monitor the blockchain synchronization process:
 
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockchaininfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
 ```
-
-10. **Access Monitoring Tools:**
+9. **Access Monitoring Tools:**
 
 - Open Grafana at http://localhost:3005 to view system metrics.
 - Check Prometheus at http://localhost:9090 for raw metrics data.
 
-11. **Troubleshooting:**
+
+10.**Troubleshooting:**
 
 - If any service fails to start, check its specific logs and configuration.
 - Ensure all required ports are open and not conflicting with other applications.
 - Verify that all external dependencies (Kafka, Postgres, Aerospike) are running correctly.
 
-12. **Post-start Checks:**
+11.**Post-start Checks:**
 
 Remember, the initial startup may take some time, especially if this is the first time starting the node or if there's a lot of blockchain data to sync. Be patient and monitor the logs for any issues.
 

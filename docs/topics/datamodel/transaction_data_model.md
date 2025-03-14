@@ -54,7 +54,7 @@ In the Extended Format, we extend the input structure to include the previous lo
 | Sequence_no                    | Used to iterate inputs inside a payment channel. Input is final when nSequence = 0xFFFFFFFF | 4 bytes                         |
 | **Previous TX satoshi output** | **Output value in satoshis of previous input**                                              | **8 bytes**                     |
 | **Previous TX script length**  | **Non negative integer VI = VarInt**                                                        | **1 - 9 bytes**                 |
-| **Previous TX locking script** | **Script**                                                                                  | **\<script length>-many bytes** |
+| **Previous TX locking script** | **Script**                                                                                  | **script length - many bytes**  |
 
 The Extended Format is not backwards compatible, but has been designed in such a way that existing software should not read a transaction in Extend Format as a valid (partial) transaction. The Extended Format header (0000000000EF) will be read as an empty transaction with a future nLock time in a library that does not support the Extended Format.
 
@@ -64,14 +64,14 @@ Bitcoin Transactions are broadcast and included in blocks as they are found.
 
 _Current Transaction format:_
 
-| Field           | Description                                          | Size                                             |
-|-----------------|------------------------------------------------------|--------------------------------------------------|
-| Version no      | currently 2                                          | 4 bytes                                          |
-| In-counter      | positive integer VI = [[VarInt]]                     | 1 - 9 bytes                                      |
-| list of inputs  | Transaction Input  Structure                         | <in-counter> qty with variable length per input  |
-| Out-counter     | positive integer VI = [[VarInt]]                     | 1 - 9 bytes                                      |
-| list of outputs | Transaction Output Structure                         | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                          |
+| Field           | Description                                                                                            | Size                                              |
+|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
+| Version no      | currently 2                                                                                            | 4 bytes                                           |
+| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
+| list of inputs  | Transaction Input  Structure                                                                           | <in-counter> qty with variable length per input   |
+| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
+| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
+| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
 
 As opposed to that, the Extended Format includes additional metadata, and is bundled within subtrees containers for efficient processing and propagation.
 

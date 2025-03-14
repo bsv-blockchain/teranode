@@ -6,7 +6,7 @@ Last modified: 6-March-2025
 
 - [Configuring Setting Files](#configuring-setting-files)
 - [Optional vs Required services](#optional-vs-required-services)
-- [Reference Settings](#reference---settings)
+- [Reference Settings](#settings-reference)
 
 ## Configuring Setting Files
 
@@ -34,6 +34,6 @@ The Block and UTXO persister services are optional and can be disabled. If enabl
 As Teranode does not retain historical transaction data, this data can be useful for analytics and historical lookups, but comes with additional storage and processing overhead.
 Additionally, it can be used as a backup for the UTXO store.
 
-## Reference - Settings
+## Settings Reference
 
 You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

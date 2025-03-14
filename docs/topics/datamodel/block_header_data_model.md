@@ -13,4 +13,4 @@ The block header is a data structure that contains metadata about a block. It is
 
 ## Additional Resources
 
-- [Block](./block_data_model.md)
+- [Block Data Model](./block_data_model.md)

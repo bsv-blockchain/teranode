@@ -4,18 +4,18 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Initialization](#21-initialization)
-- [2.2. UTXO Freezing](#22-utxo-freezing)
-- [2.3. UTXO Unfreezing](#23-utxo-unfreezing)
-- [2.4. UTXO Reassignment](#24-utxo-reassignment)
-- [2.5. Block Invalidation](#25-block-invalidation)
+    - [2.1. Initialization](#21-initialization)
+    - [2.2. UTXO Freezing](#22-utxo-freezing)
+    - [2.3. UTXO Unfreezing](#23-utxo-unfreezing)
+    - [2.4. UTXO Reassignment](#24-utxo-reassignment)
+    - [2.5. Block Invalidation](#25-block-invalidation)
 3. [Technology](#3-technology)
 4. [Directory Structure and Main Files](#4-directory-structure-and-main-files)
 5. [How to run](#5-how-to-run)
 6. [Configuration options (settings flags)](#6-configuration-options-settings-flags)
-- [Alert Service Configuration](#alert-service-configuration)
-- [Network Configuration](#network-configuration)
-- [P2P Configuration](#p2p-configuration)
+    - [Alert Service Configuration](#alert-service-configuration)
+    - [Network Configuration](#network-configuration)
+    - [P2P Configuration](#p2p-configuration)
 7. [Other Resources](#7-other-resources)
 
 
@@ -85,14 +85,14 @@ The Alert Service initializes the necessary components and services to start pro
 2. The Alert Service initializes the Prometheus metrics.
 
 3. The Main function calls the `Init` method on the Alert Service:
-  - The service loads its configuration.
-  - It initializes the datastore (database connection). This is a dependency for the alert library, which uses the datastore to store alert data.
-  - It creates and stores a genesis alert in the database.
-  - If enabled, it verifies the RPC connection to the Bitcoin node.
+    - The service loads its configuration.
+    - It initializes the datastore (database connection). This is a dependency for the alert library, which uses the datastore to store alert data.
+    - It creates and stores a genesis alert in the database.
+    - If enabled, it verifies the RPC connection to the Bitcoin node.
 
 4. After initialization, the Main function calls the `Start` method:
-  - The Alert Service creates a new P2P Server instance.
-  - It starts the P2P Server.
+    - The Alert Service creates a new P2P Server instance.
+    - It starts the P2P Server.
 
 5. The Alert Service is now fully initialized and running.
 
@@ -104,9 +104,9 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to freeze.
 2. The Alert Service iterates through each fund:
-  - It retrieves the transaction data from the UTXO Store.
-  - Calculates the UTXO hash.
-  - Calls the UTXO Store to freeze the UTXO.
+    - It retrieves the transaction data from the UTXO Store.
+    - Calculates the UTXO hash.
+    - Calls the UTXO Store to freeze the UTXO.
 3. The UTXO Store interacts with the database to mark the UTXO as frozen.
 4. Depending on the success of the freeze operation, the Alert Service adds the result to either the processed or notProcessed list.
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
@@ -119,15 +119,15 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to potentially unfreeze.
 2. The Alert Service iterates through each fund:
-  - It retrieves the transaction data from the UTXO Store.
-  - Calculates the UTXO hash.
-  - Checks if the fund is eligible for unfreezing by comparing the EnforceAtHeight.Stop with the current block height.
+    - It retrieves the transaction data from the UTXO Store.
+    - Calculates the UTXO hash.
+    - Checks if the fund is eligible for unfreezing by comparing the EnforceAtHeight.Stop with the current block height.
 3. If the fund is eligible for unfreezing:
-  - The Alert Service calls the UTXO Store to unfreeze the UTXO.
-  - The UTXO Store interacts with the database to mark the UTXO as unfrozen.
-  - Depending on the success of the unfreeze operation, the Alert Service adds the result to either the processed or notProcessed list.
+    - The Alert Service calls the UTXO Store to unfreeze the UTXO.
+    - The UTXO Store interacts with the database to mark the UTXO as unfrozen.
+    - Depending on the success of the unfreeze operation, the Alert Service adds the result to either the processed or notProcessed list.
 4. If the fund is not eligible for unfreezing:
-  - The Alert Service adds it to the notProcessed list with a reason.
+    - The Alert Service adds it to the notProcessed list with a reason.
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
 
@@ -138,17 +138,17 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConfiscationTransactionWhitelist` with a list of transactions.
 2. The Alert Service iterates through each transaction:
-  - It parses the transaction from the provided hex string.
+    - It parses the transaction from the provided hex string.
 3. For each input in the transaction:
-  - The Alert Service retrieves the parent transaction data from the UTXO Store.
-  - It calculates the old UTXO hash based on the parent transaction output.
-  - It extracts the public key from the input's unlocking script.
-  - It creates a new locking script using the extracted public key.
-  - It calculates a new UTXO hash based on the new locking script.
+    - The Alert Service retrieves the parent transaction data from the UTXO Store.
+    - It calculates the old UTXO hash based on the parent transaction output.
+    - It extracts the public key from the input's unlocking script.
+    - It creates a new locking script using the extracted public key.
+    - It calculates a new UTXO hash based on the new locking script.
 4. The Alert Service calls the UTXO Store to reassign the UTXO:
-  - The UTXO Store updates the database to reflect the new UTXO assignment.
+    - The UTXO Store updates the database to reflect the new UTXO assignment.
 5. Depending on the success of the reassignment operation:
-  - The Alert Service adds the result to either the processed or notProcessed list.
+    - The Alert Service adds the result to either the processed or notProcessed list.
 6. After processing all inputs of all transactions, the Alert Service returns an AddToConfiscationTransactionWhitelistResponse to the P2P network.
 
 
@@ -162,16 +162,16 @@ The Alert Service initializes the necessary components and services to start pro
 2. The Alert Service forwards this request to the Blockchain Client.
 
 3. The Blockchain Client interacts with the Blockchain Store to:
-  - Mark the specified block as invalid.
-  - Retrieve all transactions from the invalidated block.
+    - Mark the specified block as invalid.
+    - Retrieve all transactions from the invalidated block.
 
 4. For each transaction in the invalidated block:
-  - The Blockchain Client re-validates the transaction.
-  - If the transaction is still valid, it's added back to the Block Assembly service, for re-inclusion in the next mined block.
+    - The Blockchain Client re-validates the transaction.
+    - If the transaction is still valid, it's added back to the Block Assembly service, for re-inclusion in the next mined block.
 
 5. The Blockchain Client then:
-  - Retrieves the block immediately preceding the invalidated block.
-  - Sets the chain tip to this previous block, effectively removing the invalidated block from the main chain.
+    - Retrieves the block immediately preceding the invalidated block.
+    - Sets the chain tip to this previous block, effectively removing the invalidated block from the main chain.
 
 6. The Blockchain Client confirms the invalidation process to the Alert Service.
 
@@ -181,34 +181,34 @@ The Alert Service initializes the necessary components and services to start pro
 ## 3. Technology
 
 1. **Go Programming Language:**
-   - The Alert service is implemented in Go (Golang).
+    - The Alert service is implemented in Go (Golang).
 
 2. **gRPC and Protocol Buffers:**
-   - Uses gRPC for inter-service communication.
-   - Protocol Buffers (`.proto` files in `alert_api/`) define the service API and data structures.
+    - Uses gRPC for inter-service communication.
+    - Protocol Buffers (`.proto` files in `alert_api/`) define the service API and data structures.
 
 3. **Database Technologies:**
-   - Supports both SQLite and PostgreSQL:
+    - Supports both SQLite and PostgreSQL:
      - SQLite for development and lightweight deployments.
      - PostgreSQL for production environments.
-   - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
+    - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
 
 4. **gocore Library:**
-   - Utilized for managing application configurations.
-   - Handles statistics gathering and operational settings.
+    - Utilized for managing application configurations.
+    - Handles statistics gathering and operational settings.
 
 5. **P2P Networking:**
-   - Implements peer-to-peer communication for alert distribution.
-   - Uses libp2p library for P2P network stack.
-   - Includes custom topic name and protocol ID for Bitcoin alert system.
+    - Implements peer-to-peer communication for alert distribution.
+    - Uses libp2p library for P2P network stack.
+    - Includes custom topic name and protocol ID for Bitcoin alert system.
 
 6. **Prometheus for Metrics:**
-   - Metrics collection and reporting implemented in `metrics.go`.
-   - Used for monitoring the performance and health of the Alert service.
+    - Metrics collection and reporting implemented in `metrics.go`.
+    - Used for monitoring the performance and health of the Alert service.
 
 7. **Bitcoin-specific Libraries:**
-   - Uses `github.com/libsv/go-bt/v2` for Bitcoin transaction handling.
-   - Integrates with `github.com/bitcoin-sv/alert-system` for core alert functionality.
+    - Uses `github.com/libsv/go-bt/v2` for Bitcoin transaction handling.
+    - Integrates with `github.com/bitcoin-sv/alert-system` for core alert functionality.
 
 ## 4. Directory Structure and Main Files
 
@@ -255,7 +255,7 @@ To run the Alert Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Alert=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Alert Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Alert Service locally.
 
 
 ## 6. Configuration options (settings flags)

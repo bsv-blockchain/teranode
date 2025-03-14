@@ -1,0 +1,171 @@
+site_name: Teranode
+theme:
+  name: material
+  logo: topics/architecture/img/bsvblockchain_logo.svg
+  favicon: topics/architecture/img/bsvblockchain_blue_logo.svg
+  features:
+    - navigation.tabs  # Enables top navigation tabs
+    - navigation.tabs.sticky  # Keeps tabs visible when scrolling
+    - navigation.sections  # Enables subsections in top navigation
+    - navigation.expand  # Expands all sections by default
+    - navigation.instant  # Enables faster navigation
+    - search.suggest  # Improves search results
+    - search.highlight  # Highlights search terms in results
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Developer Setup: tutorials/developers/developerSetup.md
+      - Git Commit Signing Guide: tutorials/developers/gitCommitSigningSetupGuide.md
+      - Miners Getting Started: tutorials/miners/minersGettingStarted.md
+  - How-To Guides:
+      - Running Services Locally: howto/locallyRunningServices.md
+      - Debugging Teranode: howto/howToRemoteDebugTeranode.md
+      - Generating Protobuf: howto/generatingProtobuf.md
+      - Adding Protobuf: howto/addingNewProtobufServices.md
+      - Configuring gRPC Logging: howto/configuringGrpcLogging.md
+      - Running Tests: howto/runningTests.md
+      - Automated Testing: howto/automatedTestingHowTo.md
+      - Makefile Guide: howto/makefile.md
+      - Bug Reporting: howto/bugReporting.md
+      - Miners:
+          - Using Test Miner: howto/miners/howToUseTheTestMiner.md
+          - Installation:
+              - Docker: howto/miners/docker/minersHowToInstallation.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToInstallation.md
+              - Deprecated: howto/miners/kubernetes/minersHowToInstallationDeprecated.md
+          - Configuration:
+              - Docker: howto/miners/docker/minersHowToConfigureTheNode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToConfigureTheNode.md
+              - Aerospike Tuning: howto/miners/minersHowToAerospikeTuning.md
+              - Asset Server Interaction: howto/miners/minersHowToInteractWithAssetServer.md
+              - FSM Interaction: howto/miners/minersHowToInteractWithFSM.md
+              - RPC Server Interaction: howto/miners/minersHowToInteractWithRPCServer.md
+          - Start/Stop:
+              - Docker: howto/miners/docker/minersHowToStopStartDockerTeranode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode.md
+          - Updating Teranode:
+              - Docker: howto/miners/docker/minersUpdatingTeranode.md
+              - Kubernetes: howto/miners/kubernetes/minersUpdatingTeranode.md
+          - Security Best Practices:
+              - Docker: howto/miners/docker/minersSecurityBestPractices.md
+              - Kubernetes: howto/miners/kubernetes/minersSecurityBestPractices.md
+          - Troubleshooting:
+              - Docker: howto/miners/docker/minersHowToTroubleshooting.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToTroubleshooting.md
+          - Additional:
+              - Reset Teranode: howto/miners/minersHowToResetTeranode.md
+              - Sync the Node: howto/miners/minersHowToSyncTheNode.md
+              - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md
+              - Managing Disk Space: howto/miners/minersManagingDiskSpace.md
+              - Backup (Kubernetes): howto/miners/kubernetes/minersHowToBackup.md
+  - Key Topics:
+      - Architecture Overview: topics/architecture/teranode-overall-system-design.md
+      - Microservices Overview: topics/architecture/teranode-microservices-overview.md
+      - State Management: topics/architecture/stateManagement.md
+      - Understanding Double Spends: topics/architecture/understandingDoubleSpends.md
+      - Technology Stack: topics/technologyStack.md
+      - Teranode Introduction: topics/teranodeIntro.md
+      - Understanding the Testing Framework: topics/understandingTheTestingFramework.md
+      - Core Services:
+          - Alert Service: topics/services/alert.md
+          - Asset Server: topics/services/assetServer.md
+          - Block Assembly: topics/services/blockAssembly.md
+          - Block Validation: topics/services/blockValidation.md
+          - Blockchain: topics/services/blockchain.md
+          - Propagation: topics/services/propagation.md
+          - Subtree Validation: topics/services/subtreeValidation.md
+          - Validator: topics/services/validator.md
+      - Overlay Services:
+          - Block Persister: topics/services/blockPersister.md
+          - Coinbase: topics/services/coinbase.md
+          - P2P: topics/services/p2p.md
+          - P2P Bootstrap: topics/services/p2pBootstrap.md
+          - P2P Legacy: topics/services/p2pLegacy.md
+          - RPC: topics/services/rpc.md
+          - UTXO Persister: topics/services/utxoPersister.md
+      - Stores:
+          - Blob Store: topics/stores/blob.md
+          - TX Meta Store: topics/stores/txmeta.md
+          - UTXO Store: topics/stores/utxo.md
+      - Data Model:
+          - Block Data Model: topics/datamodel/block_data_model.md
+          - Block Header Model: topics/datamodel/block_header_data_model.md
+          - Subtree Data Model: topics/datamodel/subtree_data_model.md
+          - Transaction Data Model: topics/datamodel/transaction_data_model.md
+          - UTXO Data Model: topics/datamodel/utxo_data_model.md
+      - Kafka:
+          - Kafka Overview: topics/kafka/kafka.md
+      - Commands:
+          - Chain Integrity: topics/commands/chainIntegrity.md
+          - Propagation Blaster: topics/commands/propagationBlaster.md
+          - Seeder: topics/commands/seeder.md
+          - TX Blaster: topics/commands/txBlaster.md
+  - Reference:
+      - Project Structure: references/projectStructure.md
+      - API & Protobuf:
+          - Error Handling: references/errorHandling.md
+          - Glossary: references/glossary.md
+          - Naming Conventions: references/namingConventions.md
+          - Kafka Message Format: references/kafkaMessageFormat.md
+          - Network Consensus Rules: references/networkConsensusRules.md
+          - Protobuf API:
+              - Alert Proto: references/protobuf_docs/alertProto.md
+              - Block Assembly Proto: references/protobuf_docs/blockassemblyProto.md
+              - Blockchain Proto: references/protobuf_docs/blockchainProto.md
+              - Block Validation Proto: references/protobuf_docs/blockvalidationProto.md
+              - Coinbase Proto: references/protobuf_docs/coinbaseProto.md
+              - Propagation Proto: references/protobuf_docs/propagationProto.md
+              - Subtree Validation Proto: references/protobuf_docs/subtreevalidationProto.md
+              - Validator Proto: references/protobuf_docs/validatorProto.md
+      - Core Services:
+          - Alert Service: references/services/alert_reference.md
+          - Asset Service: references/services/asset_reference.md
+          - Block Assembly: references/services/blockassembly_reference.md
+          - Block Validation: references/services/blockvalidation_reference.md
+          - Blockchain: references/services/blockchain_reference.md
+          - Propagation: references/services/propagation_reference.md
+          - Subtree Validation: references/services/subtreevalidation_reference.md
+          - Validator: references/services/validator_reference.md
+      - Overlay Services:
+          - Block Persister: references/services/blockpersister_reference.md
+          - Coinbase Service: references/services/coinbase_reference.md
+          - P2P: references/services/p2p_reference.md
+          - P2P Legacy Service: references/services/legacy_reference.md
+          - RPC: references/services/rpc_reference.md
+          - UTXO Persister: references/services/utxopersister_reference.md
+      - Stores:
+          - Blob Store: references/stores/blob_reference.md
+          - UTXO Store: references/stores/utxo_reference.md
+      - Miscellaneous:
+          - Licensing: references/licenseInformation.md
+          - Prometheus Metrics: references/prometheusMetrics.md
+          - Settings: references/settings.md
+          - Teranode Daemon Reference: references/teranodeDaemonReference.md
+          - Testing Technical Reference: references/testingTechnicalReference.md
+          - Third-Party Software Requirements: references/thirdPartySoftwareRequirements.md
+
+
+markdown_extensions:
+  - toc
+  - tables
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences  # Ensures correct nested list behavior
+  - pymdownx.tasklist  # Enables checkbox-style lists
+  - pymdownx.betterem  # Fixes bold/italic parsing issues
+  - pymdownx.tabbed
+  - pymdownx.smartsymbols
+  - pymdownx.caret
+
+
+copyright: "Copyright © 2025 BSV Blockchain Org."
+
+extra:
+  generator: false  # Hides "Made with Material for MkDocs"
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bitcoin-sv/teranode
+
+extra_css:
+  - overrides/custom.css

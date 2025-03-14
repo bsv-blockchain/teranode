@@ -2,28 +2,26 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
-- [2.2. Receving subtrees for validation](#22-receving-subtrees-for-validation)
-- [2.3. Validating the Subtrees](#23-validating-the-subtrees)
+    - [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
+    - [2.2. Receving subtrees for validation](#22-receving-subtrees-for-validation)
+    - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-- [Key Changes and Additions:](#key-changes-and-additions)
+    - [Key Changes and Additions:](#key-changes-and-additions)
 7. [How to Run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [gRPC Settings](#grpc-settings)
-- [Subtree Configuration](#subtree-configuration)
-- [Kafka Configuration](#kafka-configuration)
-- [Block Validation Settings](#block-validation-settings)
-- [Tx Metadata Processing](#tx-metadata-processing)
-- [UTXO Store Settings](#utxo-store-settings)
-- [Miscellaneous](#miscellaneous)
+    - [gRPC Settings](#grpc-settings)
+    - [Subtree Configuration](#subtree-configuration)
+    - [Kafka Configuration](#kafka-configuration)
+    - [Block Validation Settings](#block-validation-settings)
+    - [Tx Metadata Processing](#tx-metadata-processing)
+    - [UTXO Store Settings](#utxo-store-settings)
+    - [Miscellaneous](#miscellaneous)
 9. [Other Resources](#9-other-resources)
-
 
 ## 1. Description
 
@@ -34,7 +32,7 @@ The Subtree Validator is responsible for ensuring the integrity and consistency 
 2. **Transaction Legitimacy**: Ensures all transactions within subtrees are valid, including checks for double-spending.
 
 3. **Decorates the Subtree with additional metadata**: Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service).
-   - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
+    - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
 
 
 ![Subtree_Validation_Service_Container_Diagram.png](img/Subtree_Validation_Service_Container_Diagram.png)
@@ -67,7 +65,7 @@ Finally, note that the Subtree Validation service benefits of the use of Lustre 
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../../misc/lustre_fs.svg)
+![lustre_fs.svg](img/plantuml/lustre_fs.svg)
 
 
 
@@ -141,22 +139,22 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 
 
 2. **gRPC (Google Remote Procedure Call)**:
-- Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
+    - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
 4. **Data Stores**:
-- Integration with various stores: blob store, and UTXO store.
+    - Integration with various stores: blob store, and UTXO store.
 
 5. **Caching Mechanisms (ttlcache)**:
-- Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
+    - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
 6. **Configuration Management (gocore)**:
-- Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
+    - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
 7. **Networking and Protocol Buffers**:
-- Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
+    - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
 8. **Synchronization Primitives (sync)**:
-- Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
+    - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 
 ## 6. Directory Structure and Main Files
@@ -198,7 +196,7 @@ To run the Subtree Validation Service locally, you can execute the following com
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -SubtreeValidation=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Subtree Validation Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Subtree Validation Service locally.
 
 ## 8. Configuration options (settings flags)
 

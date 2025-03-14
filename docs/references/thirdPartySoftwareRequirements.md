@@ -2,8 +2,8 @@
 
 ## Index
 
-- [Introduction ](#introduction-)
-- [ Apache Kafka](#-apache-kafka)
+- [Introduction](#introduction)
+- [Apache Kafka](#apache-kafka)
     - [What is Kafka?](#what-is-kafka)
     - [Kafka in BSV Teranode](#kafka-in-bsv-teranode)
 - [PostgreSQL](#postgresql)
@@ -13,7 +13,7 @@
     - [What is Aerospike?](#what-is-aerospike)
     - [How Aerospike is Used in Teranode](#how-aerospike-is-used-in-teranode)
 - [Shared Storage](#shared-storage)
-- [Grafana + Prometheus](#grafana--prometheus)
+- [Grafana and Prometheus](#grafana-and-prometheus)
     - [What is Grafana?](#what-is-grafana)
     - [What is Prometheus?](#what-is-prometheus)
     - [Grafana and Prometheus in Teranode](#grafana-and-prometheus-in-teranode)
@@ -28,7 +28,7 @@ BSV provides both a `docker compose` that initialises all dependencies within a 
 This section will outline the various vendors in use in Teranode.
 
 
-##  Apache Kafka
+## Apache Kafka
 
 
 
@@ -124,7 +124,7 @@ Benefits of Using Lustre with Teranode:
 Note - if using Docker Compose, the shared Docker storage, which is automatically managed by `docker compose`, is used instead. This approach provides a more accessible testing environment while still allowing for essential functionality and performance evaluation.
 
 
-## Grafana + Prometheus
+## Grafana and Prometheus
 
 
 

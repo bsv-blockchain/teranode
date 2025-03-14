@@ -55,9 +55,9 @@ The application code can be found in `/teranode-p2pbootstrap/Server.go`.
 
 
 1. **Libp2p Host Creation**: Using the `libp2p.New` function, a new libp2p host is created with specific options:
-   - Listenw on a settings-driven given address and port.
-   - A generated private key is used to identify the node.
-   - Sets up a private network with the generated PSK.
+    - Listenw on a settings-driven given address and port.
+    - A generated private key is used to identify the node.
+    - Sets up a private network with the generated PSK.
 
 2. **Distributed Hash Table (DHT) Configuration**: A DHT is initialized with the host, using the specified mode (`ModeServer`) and protocol prefix.
 

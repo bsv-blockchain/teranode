@@ -59,6 +59,7 @@ teranode/
 │   ├── asset/                    # Asset Service
 │   ├── blockassembly/            # Block Assembly Service
 │   ├── blockchain/               # Blockchain Service
+│   ├── blockpersister/           # Block Persister Service
 │   ├── blockvalidation/          # Block Validation Service
 │   ├── legacy/                   # Legacy P2P services
 │   ├── miner/                    # Miner Service

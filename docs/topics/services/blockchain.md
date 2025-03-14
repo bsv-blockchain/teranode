@@ -2,13 +2,8 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [🌐 Blockchain Service](#-blockchain-service)
-  - [Index](#index)
-  - [1. Description](#1-description)
-  - [2. Functionality](#2-functionality)
     - [2.1. Service initialization](#21-service-initialization)
     - [2.2. Adding a new block to the blockchain](#22-adding-a-new-block-to-the-blockchain)
     - [2.3. Sending new block notifications to the Block Persister](#23-sending-new-block-notifications-to-the-block-persister)
@@ -20,25 +15,15 @@
     - [2.9. Invalidating a Block](#29-invalidating-a-block)
     - [2.10. Subscribing to Blockchain Events](#210-subscribing-to-blockchain-events)
     - [2.11. Triggering a Subscription Notification](#211-triggering-a-subscription-notification)
-  - [3. gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
-  - [4. Data Model](#4-data-model)
-  - [5. Technology](#5-technology)
-  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
-  - [7. How to run](#7-how-to-run)
-  - [8. Configuration options (settings flags)](#8-configuration-options-settings-flags)
-    - [Blockchain Service Configuration](#blockchain-service-configuration)
-    - [Operational Settings](#operational-settings)
-    - [Mining and Difficulty Settings](#mining-and-difficulty-settings)
-  - [9. Other Resources](#9-other-resources)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [Blockchain Service Configuration](#blockchain-service-configuration)
-- [Operational Settings](#operational-settings)
-- [Mining and Difficulty Settings](#mining-and-difficulty-settings)
+    - [Blockchain Service Configuration](#blockchain-service-configuration)
+    - [Operational Settings](#operational-settings)
+    - [Mining and Difficulty Settings](#mining-and-difficulty-settings)
 9. [Other Resources](#9-other-resources)
 
 
@@ -73,13 +58,13 @@ To fulfill its purpose, the service interfaces with a blockchain store for data 
 Explanation of the sequence:
 
 1. **New Method:**
-  - The `Main` requests a new instance of the `Blockchain` service by calling the `New` function with a logger.
-  - Inside the `New` method, the `Blockchain Service` performs initialization tasks including setting up the blockchain store, initializing various channels, and preparing the context and subscriptions.
+    - The `Main` requests a new instance of the `Blockchain` service by calling the `New` function with a logger.
+    - Inside the `New` method, the `Blockchain Service` performs initialization tasks including setting up the blockchain store, initializing various channels, and preparing the context and subscriptions.
 
 2. **Start Method:**
-  - The `Main` calls the `Start` method on the `Blockchain` service instance.
-  - The `Blockchain Service` starts server operations, including channel listeners and the GRPC server.
-  - The service enters a loop handling notifications and subscriptions.
+    - The `Main` calls the `Start` method on the `Blockchain` service instance.
+    - The `Blockchain Service` starts server operations, including channel listeners and the GRPC server.
+    - The service enters a loop handling notifications and subscriptions.
 
 ### 2.2. Adding a new block to the blockchain
 
@@ -87,7 +72,7 @@ Explanation of the sequence:
 There are 2 clients invoking this endpoint:
 
 1. **The `Block Assembly` service:**
-   - The `Block Assembly` service calls the `AddBlock` method on the `Blockchain Service` to add a new mined block to the blockchain.
+    - The `Block Assembly` service calls the `AddBlock` method on the `Blockchain Service` to add a new mined block to the blockchain.
 
 The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:
 
@@ -95,7 +80,7 @@ The sequence diagram for the Block Assembly to add a new block to the blockchain
 
 
 2. **The `Block Validation` service:**
-   - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
+    - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
 
 The sequence diagram for the Block Validation to add a new block to the blockchain is as follows:
 
@@ -266,6 +251,7 @@ The methods `GetBlockHeader`, `GetBlockHeaders`, and `GetBlockHeaderIDs` in the 
         - Returns the IDs in a `GetBlockHeaderIDsResponse`.
 
 Each of these methods serves a specific need:
+
 - `GetBlockHeader` is for fetching detailed information about a single block.
 - `GetBlockHeaders` is useful for getting information about a sequence of blocks.
 - `GetBlockHeaderIDs` provides a lighter way to retrieve just the IDs of a range of block headers without the additional metadata.
@@ -289,6 +275,7 @@ The Blockchain service provides a subscription mechanism for clients to receive 
 ![blockchain_subscribe.svg](img/plantuml/blockchain/blockchain_subscribe.svg)
 
 In this diagram, the sequence of operations is as follows:
+
 1. The `Client` sends a `Subscribe` request to the `Blockchain Client`.
 2. The `Blockchain Server` receives the subscription request and adds it to the `Subscription Store` (a map of subscriber channels).
 3. The server then enters a loop where it waits for either the client's context to be done (indicating disconnection) or the subscription to end.
@@ -305,15 +292,15 @@ There are two distinct paths for sending notifications, notifications originatin
 ![blockchain_send_notifications.svg](img/plantuml/blockchain/blockchain_send_notifications.svg)
 
 1. **Path 1: Notification Originating from Blockchain Server**
-   - The `Blockchain Server` processes an `AddBlock` or a `SetBlockSubtreesSet` call. The `AddBlock` sequence can be seen in the diagram above.
-   - Inside this method, it creates a notification of type `MiningOn` or `Block`.
-   - The server then calls its own `SendNotification` method to disseminate this notification.
-   - The `Subscription Store` is queried to send the notification to all relevant subscribers.
+    - The `Blockchain Server` processes an `AddBlock` or a `SetBlockSubtreesSet` call. The `AddBlock` sequence can be seen in the diagram above.
+    - Inside this method, it creates a notification of type `MiningOn` or `Block`.
+    - The server then calls its own `SendNotification` method to disseminate this notification.
+    - The `Subscription Store` is queried to send the notification to all relevant subscribers.
 
 2. **Path 2: Notification from Block Assembly Through Blockchain Client**
-   - The `Block Assembly` component requests the `Blockchain Client` to send a notification, of type `model.NotificationType_Subtree`.
-   - The `Blockchain Client` then communicates with the `Blockchain Server` to invoke the `SendNotification` method.
-   - Similar to Path 1, the server uses the `Subscription Store` to distribute the notification to all subscribers.
+    - The `Block Assembly` component requests the `Blockchain Client` to send a notification, of type `model.NotificationType_Subtree`.
+    - The `Blockchain Client` then communicates with the `Blockchain Server` to invoke the `SendNotification` method.
+    - Similar to Path 1, the server uses the `Subscription Store` to distribute the notification to all subscribers.
 
 In both scenarios, the mechanism for reaching the subscribers through the `Subscription Store` remains consistent.
 
@@ -361,27 +348,27 @@ The table structure is designed to store comprehensive information about each bl
 
 
 1. **PostgreSQL Database:**
-  - The primary store technology for the blockchain service.
-  - Used for persisting blockchain data such as blocks, block headers, and state information.
-  - SQL scripts and functions (`/stores/blockchain/sql`) facilitate querying and manipulating blockchain data within the PostgreSQL database.
+    - The primary store technology for the blockchain service.
+    - Used for persisting blockchain data such as blocks, block headers, and state information.
+    - SQL scripts and functions (`/stores/blockchain/sql`) facilitate querying and manipulating blockchain data within the PostgreSQL database.
 
 2. **Go Programming Language:**
-  - The service is implemented in Go (Golang).
+    - The service is implemented in Go (Golang).
 
 3. **gRPC and Protocol Buffers:**
-  - The service uses gRPC for inter-service communication.
-  - Protocol Buffers (`.proto` files) are used for defining the service API and data structures, ensuring efficient and strongly-typed data exchange.
+    - The service uses gRPC for inter-service communication.
+    - Protocol Buffers (`.proto` files) are used for defining the service API and data structures, ensuring efficient and strongly-typed data exchange.
 
 4. **gocore Library:**
-  - Utilized for managing application configurations and statistics gathering.
+    - Utilized for managing application configurations and statistics gathering.
 
 5. **Model Layer (in `/model`):**
-  - Represents the data structures and business logic related to blockchain operations.
-  - Contains definitions for blocks and other blockchain components.
+    - Represents the data structures and business logic related to blockchain operations.
+    - Contains definitions for blocks and other blockchain components.
 
 6. **Prometheus for Metrics:**
-  - Client in `metrics.go`.
-  - Used for monitoring the performance and health of the service.
+    - Client in `metrics.go`.
+    - Used for monitoring the performance and health of the service.
 
 
 ## 6. Directory Structure and Main Files
@@ -493,7 +480,7 @@ To run the Blockchain Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Blockchain=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Blockchain Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.
 
 
 ## 8. Configuration options (settings flags)

@@ -5,20 +5,20 @@
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
 3. [Technology](#3-technology)
-- [3.1 Overview](#31-overview)
-- [3.2 Store Options](#32-store-options)
+    - [3.1 Overview](#31-overview)
+    - [3.2 Store Options](#32-store-options)
 4. [Data Model](#4-data-model)
 5. [Use Cases](#5-use-cases)
-- [5.1. Asset Server (HTTP) Get Transactions](#51-asset-server-http---get-transactions)
-- [5.2. Asset Server (HTTP) Get Subtrees](#52-asset-server-http---get-subtrees)
-- [5.3. Block Assembly](#53-block-assembly)
-- [5.4. Block Validation](#54-block-validation)
-- [5.5 Propagation TXStore Set()](#55-propagation---txstore-set)
+    - [5.1. Asset Server (HTTP): Get Transactions](#51-asset-server-http-get-transactions)
+    - [5.2. Asset Server (HTTP): Get Subtrees](#52-asset-server-http-get-subtrees)
+    - [5.3. Block Assembly](#53-block-assembly)
+    - [5.4. Block Validation](#54-block-validation)
+    - [5.5 Propagation: TXStore Set()](#55-propagation-txstore-set)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [Locally Running the store](#7-locally-running-the-store)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-- [8.1. TX Store Configuration](#81-tx-store-configuration)
-- [8.2. SubTree Store Configuration](#82-subtree-store-configuration)
+    - [8.1. TX Store Configuration](#81-tx-store-configuration)
+    - [8.2. SubTree Store Configuration](#82-subtree-store-configuration)
 9. [Other Resources](#9-other-resources)
 
 
@@ -163,11 +163,11 @@ Options for configuring these stores are managed through the `options` package.
 
 ## 5. Use Cases
 
-### 5.1. Asset Server (HTTP) - Get Transactions
+### 5.1. Asset Server (HTTP): Get Transactions
 
 ![asset_server_http_get_transaction.svg](..%2Fservices%2Fimg%2Fplantuml%2Fassetserver%2Fasset_server_http_get_transaction.svg)
 
-### 5.2. Asset Server (HTTP) - Get Subtrees
+### 5.2. Asset Server (HTTP): Get Subtrees
 
 ![asset_server_http_get_subtree.svg](..%2Fservices%2Fimg%2Fplantuml%2Fassetserver%2Fasset_server_http_get_subtree.svg)
 
@@ -194,7 +194,7 @@ gRPC endpoints:
 
 
 
-### 5.5 Propagation - TXStore Set()
+### 5.5 Propagation: TXStore Set()
 
 ![txStore_propagation_set.svg](..%2Fservices%2Fimg%2Fplantuml%2Fassetserver%2FtxStore_propagation_set.svg)
 

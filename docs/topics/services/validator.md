@@ -5,10 +5,10 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
-- [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
-- [2.3. Validating the Transaction](#23-validating-the-transaction)
-- [2.4. Post-validation: Updating stores and propagating the transaction](#24-post-validation-updating-stores-and-propagating-the-transaction)
+    - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
+    - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
+    - [2.3. Validating the Transaction](#23-validating-the-transaction)
+    - [2.4. Post-validation: Updating stores and propagating the transaction](#24-post-validation-updating-stores-and-propagating-the-transaction)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -21,6 +21,7 @@
 ## 1. Description
 
 The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go component responsible for:
+
 1. Receiving new transactions from the `Propagation`service,
 2. Validating them,
 3. Persisting the data into the utxo store,
@@ -50,20 +51,21 @@ Should the node require to start the validator as an independent service, the `s
 ![tx_validator_init.svg](img/plantuml/validator/tx_validator_init.svg)
 
 * **`NewServer` Function**:
-1. Initialize a new `Server` instance.
-2. Create channels for new and dead subscriptions.
-3. Initialize a map for subscribers.
-4. Create a context for subscriptions and a corresponding cancellation function.
-5. Return the newly created `Server` instance.
+
+    1. Initialize a new `Server` instance.
+    2. Create channels for new and dead subscriptions.
+    3. Initialize a map for subscribers.
+    4. Create a context for subscriptions and a corresponding cancellation function.
+    5. Return the newly created `Server` instance.
 
 * **`Init` Function**:
-1. Create a new validator instance within the server.
-2. Handle any errors during the creation of the validator.
-3. Return the outcome (success or error).
+    1. Create a new validator instance within the server.
+    2. Handle any errors during the creation of the validator.
+    3. Return the outcome (success or error).
 
 * **`Start` Function**:
-1. Start a goroutine to manage new and dead subscriptions.
-2. Start the gRPC server and handle any errors.
+    1. Start a goroutine to manage new and dead subscriptions.
+    2. Start the gRPC server and handle any errors.
 
 ### 2.2. Receiving Transaction Validation Requests
 
@@ -79,13 +81,13 @@ BlockValidation and Propagation invoke the validator process with and without ba
 
 2. **Subtree Validation**:
     - The SubtreeValidation module `blessMissingTransaction()` function invokes `Validate()` on the Validator client.
-   - The Validator validates the transaction.
+    - The Validator validates the transaction.
 
 ### 2.3. Validating the Transaction
 
 For every transaction received, Teranode must validate:
  - All inputs against the existing UTXO-set, verifying if the input(s) can be spent,
-   - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
+    - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
  - Bitcoin consensus rules,
  - Local policies (if any),
  - whether the script execution returns `true.
@@ -190,9 +192,9 @@ The above represents an implementation of the core Teranode validation rules:
 
 - A transaction must be final, meaning that either of the following conditions is met:
 
-  - The sequence number in all inputs is equal to 0xffffffff, or
+    - The sequence number in all inputs is equal to 0xffffffff, or
 
-  - The lock time is:
+    - The lock time is:
 
     - Equal to zero, or
 
@@ -200,15 +202,15 @@ The above represents an implementation of the core Teranode validation rules:
 
     - Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.
 
-  - No output must be Pay-to-Script-Hash (P2SH)
+    - No output must be Pay-to-Script-Hash (P2SH)
 
-  - A new transaction must not have any output which includes P2SH, as creation of new P2SH transactions is not allowed.
+    - A new transaction must not have any output which includes P2SH, as creation of new P2SH transactions is not allowed.
 
-  - Historical P2SH transactions (if any) must still be supported by Teranode, allowing these transactions to be spent.
+    - Historical P2SH transactions (if any) must still be supported by Teranode, allowing these transactions to be spent.
 
-  - A transaction must not spend frozen UTXOs (see 3.13 – Integration with Alert System)
+    - A transaction must not spend frozen UTXOs (see 3.13 – Integration with Alert System)
 
-  - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
+    - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
 
 
 
@@ -221,15 +223,15 @@ Once a Tx is validated, the Validator will update the UTXO store with the new Tx
 
 - The Server receives a validation request and calls the `Validate` method on the Validator struct.
 - If the transaction is valid:
-   - The Validator marks the transaction's input UTXOs as spent in the UTXO Store.
-   - The Validator registers the new transaction in the UTXO Store.
-   - The Validator sends the transaction to the Subtree Validation Service, either via Kafka or gRPC batches.
-   - The Validator sends the transaction to the Block Assembly Service for inclusion in a block.
-   - The Validator stores the new UTXOs generated by the transaction in the UTXO Store.
+    - The Validator marks the transaction's input UTXOs as spent in the UTXO Store.
+    - The Validator registers the new transaction in the UTXO Store.
+    - The Validator sends the transaction to the Subtree Validation Service, either via Kafka or gRPC batches.
+    - The Validator sends the transaction to the Block Assembly Service for inclusion in a block.
+    - The Validator stores the new UTXOs generated by the transaction in the UTXO Store.
 
 - If the transaction is invalid:
-   - The Server sends invalid transaction notifications to all P2P Service subscribers.
-   - The rejected Tx is not stored or tracked in any store, and it is simply discarded.
+    - The Server sends invalid transaction notifications to all P2P Service subscribers.
+    - The rejected Tx is not stored or tracked in any store, and it is simply discarded.
 
 
 We can see the submission to the Subtree Validation Service here:
@@ -299,9 +301,9 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 6. **LibSV**: Another Go library for Bitcoin SV, used for transaction-related operations.
 
 7. **Other Utilities and Libraries**:
-  - `sync/atomic`, `strings`, `strconv`, `time`, `io`, `net/url`, `os`, `bytes`, and other standard Go packages for various utility functions.
-  - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
-  - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
+    - `sync/atomic`, `strings`, `strconv`, `time`, `io`, `net/url`, `os`, `bytes`, and other standard Go packages for various utility functions.
+    - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
+    - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
 
 
 ## 6. Directory Structure and Main Files
@@ -336,7 +338,7 @@ To run the Validator locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Validator locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.
 
 
 ## 8. Configuration options (settings flags)

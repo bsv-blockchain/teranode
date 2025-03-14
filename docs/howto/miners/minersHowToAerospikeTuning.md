@@ -24,7 +24,9 @@ By default, the Aerospike data is written to a single mount mounted in the aeros
 
 # Sanity Checking
 
+```
 asadm -e "info"
 asadm -e "summary -l"
+```
 
 For more information about Aerospike, you can access the [Aerospike documentation](https://www.aerospike.com/docs).

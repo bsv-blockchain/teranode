@@ -10,7 +10,7 @@ Last modified: 22-January-2025
 - [Software Requirements](#software-requirements)
 - [Network Considerations](#network-considerations)
 - [Installation Process](#installation-process)
-    - [ Teranode Initial Block Synchronization](#-teranode-initial-block-synchronization)
+    - [Teranode Initial Block Synchronization](#teranode-initial-block-synchronization)
         - [Full P2P Download](#full-p2p-download)
         - [Initial Data Set Installation](#initial-data-set-installation)
     - [Teranode Installation Types](#teranode-installation-types)
@@ -18,13 +18,12 @@ Last modified: 22-January-2025
         - [Docker Container](#docker-container)
         - [Docker Compose](#docker-compose)
     - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
-- [Reference Settings](#reference---settings)
+- [Reference Settings](#settings-reference)
 
 
 ## Introduction
 
 This guide provides step-by-step instructions for installing Teranode using Docker Compose. Notice that this approach is only recommended for testing purposes and not for production usage.
-
 
 This guide is applicable to:
 
@@ -99,7 +98,7 @@ Key considerations:
 ## Installation Process
 
 
-###  Teranode Initial Block Synchronization
+### Teranode Initial Block Synchronization
 
 
 
@@ -341,8 +340,8 @@ Example output:
 
 
 4. **Teranode Blockchain Viewer**: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
-   - **Port**: Exposed on port **8090** of the asset container.
-   - **Access URL**: http://localhost:8090/viewer
+    - **Port**: Exposed on port **8090** of the asset container.
+    - **Access URL**: http://localhost:8090/viewer
 
 Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
@@ -406,6 +405,6 @@ Additional Notes:
 If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
 
 
-## Reference - Settings
+## Settings Reference
 
 You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your Docker Compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

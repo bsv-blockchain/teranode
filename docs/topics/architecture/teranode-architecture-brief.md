@@ -1,4 +1,3 @@
-
 ![BSVBA-Logo_FC.svg](img%2FBSVBA-Logo_FC.svg)
 
 ---

@@ -32,12 +32,12 @@ This document describes the processes involved in configuring, deploying, and ma
 For each microservice, we maintain several YAML files that define its behavior within a Kubernetes cluster. These files include:
 
 - **Application YAML Configuration Files**: These files manage the deployment setup of containerized applications. For example, `txblaster.yaml` specifies the deployment details for the TXBlaster service. Key fields within these files include:
-  - `name`: Serves as a base prefix for application naming within Kubernetes.
-  - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
-  - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
-  - `role`: Defines which Kubernetes nodes can run the application, based on assigned roles. Node roles can be checked with the command `$ kubectl get node -L role`.
-  - `replicas`: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.
-  - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
+    - `name`: Serves as a base prefix for application naming within Kubernetes.
+    - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
+    - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
+    - `role`: Defines which Kubernetes nodes can run the application, based on assigned roles. Node roles can be checked with the command `$ kubectl get node -L role`.
+    - `replicas`: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.
+    - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
     ```
     volumes:
       - name: lustre-storage
@@ -75,19 +75,19 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 - Install the AWS Command Line Interface (CLI) via Homebrew: `brew install awscli`. Check the [AWS CLI Installation Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) for other installation methods.
 - Run `aws configure` to set up the AWS Command Line Interface (CLI).
 - Enter the `AWS Access Key ID`, `AWS Secret Access Key`, `Default region name` (e.g., `eu-north-1`), and `Default output format` as required.
-  - Please check with your DevOPS team for the specific credentials available to you.
+    - Please check with your DevOPS team for the specific credentials available to you.
 
 
 ### Kubernetes (k8s) Cluster Access
 
 1. **Kubectl Installation**:
-   - Install kubectl via Homebrew: `brew install kubectl`.
+    - Install kubectl via Homebrew: `brew install kubectl`.
 
 2. **Configure kubeconfig for EKS**:
-   - Use the `aws eks update-kubeconfig` command to configure kubectl to interact with your Amazon EKS clusters.
-   - Example: `aws eks update-kubeconfig --name aws-teranode-playground --region <region>`
+    - Use the `aws eks update-kubeconfig` command to configure kubectl to interact with your Amazon EKS clusters.
+    - Example: `aws eks update-kubeconfig --name aws-teranode-playground --region <region>`
      - For example, the staging environment supported regions include `ap-south-1`, `eu-west-1`, and `us-east-1`.
-   - Verify the configuration with `kubectl config view`. Alternatively, you can verify the raw data in the `~/.kube/config` file.
+    - Verify the configuration with `kubectl config view`. Alternatively, you can verify the raw data in the `~/.kube/config` file.
 
 3. **Zsh Configuration**:
 - Download the `k8s_shortcuts.sh` shortcuts file from the shared repository and place it in the home directory.
@@ -137,7 +137,7 @@ Lustre is a type of parallel distributed file system, primarily used for large-s
 
 Teranode microservices make use of the Lustre file system in order to share information related to subtrees, eliminating the need for redundant propagation of subtrees over grpc or message queues.
 
-![lustre_fs.svg](..%2F..%2Flustre_fs.svg)
+![lustre_fs.svg](../../topics/services/img/plantuml/lustre_fs.svg)
 
 As seen in the diagram above, the Block Validation, Block Assembly and Asset Services share a lustre file system storage. The data is ultimately persisted in AWS S3.
 
@@ -148,7 +148,7 @@ As seen in the diagram above, the Block Validation, Block Assembly and Asset Ser
 
 1. **Environment Shortcuts**:
 - Define aliases for switching between environments (e.g., `m1`, `m2`, `m3`) in `.zprofile`.
-  - Please check with your DevOPS team for the specific environments available to you.
+    - Please check with your DevOPS team for the specific environments available to you.
 
 2. **Namespace Configuration**:
 - Use `kcn` command to switch Kubernetes namespaces easily.
@@ -201,14 +201,14 @@ Example:
 #### Resetting a Service
 
 - **To reset a Service**:
-  - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example (for the p2pbootstrap namespace) can be seen here:
+    - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example (for the p2pbootstrap namespace) can be seen here:
     ```sh
     kubectl delete pod -n p2pbootstrap --all
     ```
-  - This command deletes all pods in the namespace `p2pbootstrap`, which should cause them to be recreated based on their deployment or stateful set configurations.
+    - This command deletes all pods in the namespace `p2pbootstrap`, which should cause them to be recreated based on their deployment or stateful set configurations.
 
 - **To reset a specific service in all namespaces**:
-  - Example to reset the p2p service can be seen here:
+    - Example to reset the p2p service can be seen here:
     ```sh
     kubectl delete pod p2p1
     ```
@@ -274,11 +274,11 @@ k describe pvc subtree-lustre-pv
 #### Forwarding Ports
 
 - **To forward a pod port to localhost**:
-  - Set the Kubernetes configuration file:
+    - Set the Kubernetes configuration file:
     ```sh
     export KUBECONFIG=~/.kube/config
     ```
-  - Forward the port:
+    - Forward the port:
     ```sh
     kubectl port-forward asset1-63453452352-23452 8090:8090
     ```

@@ -5,8 +5,8 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
-- [2.2. Propagating Transactions](#22-propagating-transactions)
+    - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
+    - [2.2. Propagating Transactions](#22-propagating-transactions)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -21,6 +21,7 @@
 The `Propagation Service` is designed to handle the propagation of transactions across a peer-to-peer Teranode network.
 
 At a glance, the Propagation service:
+
 1. Receives new transactions through various communication methods.
 2. Stores transactions in the tx store.
 3. Sends the transaction to the Validator service for further processing.
@@ -79,19 +80,19 @@ The Propagation Service deals with the extended transaction format, as seen belo
 Main technologies involved:
 
 1. **Go Programming Language (Golang)**:
-  - The entire service is written in Go.
+    - The entire service is written in Go.
 
 2. **Peer-to-Peer (P2P) Networking**:
-  - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
-  - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
+    - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
+    - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
 
 3. **Networking Protocols (HTTP)**
 
 4. **Cryptography**:
-  - The use of `crypto` packages for RSA key generation and TLS (Transport Layer Security) configuration for secure communication.
+    - The use of `crypto` packages for RSA key generation and TLS (Transport Layer Security) configuration for secure communication.
 
 5. **gRPC and Protocol Buffers**:
-  - gRPC, indicated by the use of `google.golang.org/grpc`, is a high-performance, open-source universal RPC framework. It uses Protocol Buffers as its interface definition language.
+    - gRPC, indicated by the use of `google.golang.org/grpc`, is a high-performance, open-source universal RPC framework. It uses Protocol Buffers as its interface definition language.
 
 
 ## 6. Directory Structure and Main Files
@@ -119,7 +120,7 @@ To run the Propagation Service locally, you can execute the following command:
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Propagation=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Propagation Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Propagation Service locally.
 
 
 ## 8. Configuration options (settings flags)

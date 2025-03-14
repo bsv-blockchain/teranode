@@ -3,14 +3,15 @@
 Last modified: 6-March-2025
 
 # Index
-- [Introduction ](#introduction-)
+
+- [Introduction](#introduction)
 - [Prerequisites](#prerequisites)
 - [Deployment with Minikube](#deployment-with-minikube)
-    1. [Start Minikube](#1-start-minikube)
-    2. [Deploy Dependencies](#2-deploy-dependencies)
-    3. [Create persistent volume provider](#3-create-persistent-volume-provider)
-    4. [Load Teranode Images](#4-load-teranode-images)
-    5. [Deploy Teranode](#5-deploy-teranode)
+  1. [Start Minikube](#1-start-minikube)
+  2. [Deploy Dependencies](#2-deploy-dependencies)
+  3. [Create persistent volume provider](#3-create-persistent-volume-provider)
+  4. [Load Teranode Images](#4-load-teranode-images)
+  5. [Deploy Teranode](#5-deploy-teranode)
 - [Verifying the Deployment](#verifying-the-deployment)
 - [Production Considerations](#production-considerations)
 - [Other Resources](#other-resources)
@@ -24,6 +25,7 @@ This guide provides instructions for deploying Teranode in a Kubernetes environm
 ## Prerequisites
 
 Before you begin, ensure you have the following tools installed and configured:
+
 - [Docker](https://docs.docker.com/get-docker/)
 - [Minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
@@ -73,11 +75,11 @@ For this example, we will create a local folder and expose it to Minikube via a 
 docker volume create nfs-volume
 
 docker run -d \
-  --name nfs-server \
-  -e NFS_EXPORT_0='/minikube-storage *(rw,no_subtree_check,fsid=0,no_root_squash)' \
-  -v nfs-volume:/minikube-storage \
-  --cap-add SYS_ADMIN \
-  -p 2049:2049 \
+    --name nfs-server \
+    -e NFS_EXPORT_0='/minikube-storage *(rw,no_subtree_check,fsid=0,no_root_squash)' \
+    -v nfs-volume:/minikube-storage \
+    --cap-add SYS_ADMIN \
+    -p 2049:2049 \
   erichough/nfs-server
 
 # connect the nfs-server to the minikube network
@@ -182,6 +184,7 @@ kubectl logs -n teranode-operator -l app=blockchain -f
 ## Production Considerations
 
 For production deployments, consider:
+
 - Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services
 - Implementing proper security measures (network policies, RBAC, etc.)
 - Setting up monitoring and alerting
