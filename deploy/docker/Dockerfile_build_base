@@ -1,6 +1,6 @@
 # docker file used to build the docker image.
 # The build process is now integrated into CICD
-# To use: enable the 'build base container image' Workflow (usually disabled), then push a commit to master/staging branch.
+# To use: enable the 'build base container image' Workflow (usually disabled), then push a commit to main/staging branch.
 # you can authenticate to ecr using this:
 # $ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
 

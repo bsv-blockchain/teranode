@@ -4,7 +4,7 @@
 ### Overview
 The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and it is triggered on two specific conditions:
 1. Push events to the tags that match 'v*' or 'scaling-v*'.
-2. Push events to the branches: 'master' and 'staging'.
+2. Push events to the branches: 'main' and 'staging'.
 
 ### Environment Variables
 - `REPO`: Specifies the repository name, set to 'teranode'.
