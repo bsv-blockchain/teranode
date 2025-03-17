@@ -302,7 +302,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SharedKey:          getString("p2p_shared_key", "", alternativeContext...),
 			StaticPeers:        getMultiString("p2p_static_peers", "|", []string{}, alternativeContext...),
 			SubtreeTopic:       getString("p2p_subtree_topic", "", alternativeContext...),
-			TopicPrefix:        getString("p2p_topic_prefix", "", alternativeContext...),
 			DHTProtocolID:      getString("p2p_dht_protocol_id", "", alternativeContext...),
 			DHTUsePrivate:      getBool("p2p_dht_use_private", false, alternativeContext...),
 			OptimiseRetries:    getBool("p2p_optimise_retries", false, alternativeContext...),

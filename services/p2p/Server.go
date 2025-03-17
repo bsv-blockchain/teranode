@@ -88,7 +88,7 @@ func NewServer(
 		return nil, errors.NewConfigurationError("p2p_port not set in config")
 	}
 
-	topicPrefix := tSettings.P2P.TopicPrefix
+	topicPrefix := tSettings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
 		return nil, errors.NewConfigurationError("p2p_topic_prefix not set in config")
 	}

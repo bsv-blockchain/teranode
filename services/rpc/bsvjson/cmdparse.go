@@ -14,6 +14,8 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 )
 
+const overflowsDestinationType = "overflows destination type %v"
+
 // makeParams creates a slice of interface values for the given struct.
 func makeParams(rt reflect.Type, rv reflect.Value) []interface{} {
 	numFields := rt.NumField()
@@ -321,7 +323,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 			srcInt := src.Int()
 			if dest.OverflowInt(srcInt) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -335,7 +337,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 			srcInt := src.Int()
 			if srcInt < 0 || dest.OverflowUint(uint64(srcInt)) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -361,7 +363,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 			srcUint := src.Uint()
 			if srcUint > uint64(1<<63)-1 {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -374,7 +376,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 
 			if dest.OverflowInt(srcInt64) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -388,7 +390,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 			srcUint := src.Uint()
 			if dest.OverflowUint(srcUint) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -456,7 +458,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 
 			if dest.OverflowInt(srcInt) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -478,7 +480,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 
 			if dest.OverflowUint(srcUint) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)
@@ -499,7 +501,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 
 			if dest.OverflowFloat(srcFloat) {
 				str := fmt.Sprintf("parameter #%d '%s' "+
-					"overflows destination type %v",
+					overflowsDestinationType,
 					paramNum, fieldName, destBaseType)
 
 				return makeError(ErrInvalidType, str)

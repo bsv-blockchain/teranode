@@ -297,7 +297,6 @@ type P2PSettings struct {
 	StaticPeers []string
 
 	SubtreeTopic string
-	TopicPrefix  string
 
 	DHTProtocolID   string
 	DHTUsePrivate   bool

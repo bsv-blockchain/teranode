@@ -96,6 +96,9 @@ type Params struct {
 	// Net defines the magic bytes used to identify the network.
 	Net wire.BitcoinNet
 
+	// TopicPrefix defines the prefix used for blockchain topics in libP2P.
+	TopicPrefix string
+
 	// DefaultPort defines the default peer-to-peer port for the network.
 	DefaultPort string
 
@@ -220,6 +223,7 @@ type Params struct {
 var MainNetParams = Params{
 	Name:        "mainnet",
 	Net:         wire.MainNet,
+	TopicPrefix: "mainnet.github.com/bitcoin-sv/teranode",
 	DefaultPort: "8333",
 	DNSSeeds: []DNSSeed{
 		{"seed.bitcoinsv.io", true},
@@ -329,6 +333,7 @@ var MainNetParams = Params{
 var StnParams = Params{
 	Name:        "stn",
 	Net:         wire.STN,
+	TopicPrefix: "stn.github.com/bitcoin-sv/teranode",
 	DefaultPort: "9333",
 	DNSSeeds:    []DNSSeed{},
 
@@ -407,6 +412,7 @@ var StnParams = Params{
 var RegressionNetParams = Params{
 	Name:        "regtest",
 	Net:         wire.RegTestNet,
+	TopicPrefix: "regtest.github.com/bitcoin-sv/teranode",
 	DefaultPort: "18444",
 	DNSSeeds:    []DNSSeed{},
 
@@ -485,6 +491,7 @@ var RegressionNetParams = Params{
 var TestNetParams = Params{
 	Name:        "testnet",
 	Net:         wire.TestNet,
+	TopicPrefix: "testnet.github.com/bitcoin-sv/teranode",
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoinsv.io", true},
@@ -580,6 +587,7 @@ var TestNetParams = Params{
 var TeraTestNetParams = Params{
 	Name:        "teratestnet",
 	Net:         wire.TeraTestNet,
+	TopicPrefix: "teratestnet.github.com/bitcoin-sv/teranode",
 	DefaultPort: "18333",
 
 	// Chain parameters
@@ -651,6 +659,7 @@ var TeraTestNetParams = Params{
 var TeraScalingTestNetParams = Params{
 	Name:        "tstn",
 	Net:         wire.TeraScalingTestNet,
+	TopicPrefix: "tstn.github.com/bitcoin-sv/teranode",
 	DefaultPort: "18333",
 
 	// Chain parameters

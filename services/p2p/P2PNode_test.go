@@ -114,7 +114,7 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 	tSettings := settings.NewSettings()
 	ctx := context.Background()
 
-	topicPrefix := tSettings.P2P.TopicPrefix
+	topicPrefix := tSettings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
 		t.Log("p2p_topic_prefix not set in config")
 		t.FailNow()
@@ -225,7 +225,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 	tSettings := settings.NewSettings()
 	ctx := context.Background()
 
-	topicPrefix := tSettings.P2P.TopicPrefix
+	topicPrefix := tSettings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
 		t.Log("p2p_topic_prefix not set in config")
 		t.FailNow()

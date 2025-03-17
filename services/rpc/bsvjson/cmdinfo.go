@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const isNotRegistered = "%q is not registered"
+
 // CmdMethod returns the method for the passed command.  The provided command
 // type must be a registered type.  All commands provided by this package are
 // registered by default.
@@ -23,7 +25,7 @@ func CmdMethod(cmd interface{}) (string, error) {
 	registerLock.RUnlock()
 
 	if !ok {
-		str := fmt.Sprintf("%q is not registered", method)
+		str := fmt.Sprintf(isNotRegistered, method)
 		return "", makeError(ErrUnregisteredMethod, str)
 	}
 
@@ -41,7 +43,7 @@ func MethodUsageFlags(method string) (UsageFlag, error) {
 	registerLock.RUnlock()
 
 	if !ok {
-		str := fmt.Sprintf("%q is not registered", method)
+		str := fmt.Sprintf(isNotRegistered, method)
 		return 0, makeError(ErrUnregisteredMethod, str)
 	}
 
@@ -247,7 +249,7 @@ func MethodUsageText(method string) (string, error) {
 	registerLock.RUnlock()
 
 	if !ok {
-		str := fmt.Sprintf("%q is not registered", method)
+		str := fmt.Sprintf(isNotRegistered, method)
 		return "", makeError(ErrUnregisteredMethod, str)
 	}
 

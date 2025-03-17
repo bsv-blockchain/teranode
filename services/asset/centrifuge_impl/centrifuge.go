@@ -26,6 +26,12 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+const (
+	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
+	AccessControlAllowHeaders     = "Access-Control-Allow-Headers"
+	AccessControlAllowCredentials = "Access-Control-Allow-Credentials"
+)
+
 // Centrifuge represents a Centrifuge server instance that manages real-time
 // blockchain data broadcasting and client connections.
 type Centrifuge struct {
@@ -444,9 +450,9 @@ func authMiddleware(h http.Handler) http.Handler {
 		r = r.WithContext(newCtx)
 
 		header := w.Header()
-		header.Set("Access-Control-Allow-Origin", "*")
-		header.Add("Access-Control-Allow-Headers", "*")
-		header.Set("Access-Control-Allow-Credentials", "true")
+		header.Set(AccessControlAllowOrigin, "*")
+		header.Add(AccessControlAllowHeaders, "*")
+		header.Set(AccessControlAllowCredentials, "true")
 
 		h.ServeHTTP(w, r)
 	})
@@ -494,9 +500,9 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 		}
 
 		header := w.Header()
-		header.Set("Access-Control-Allow-Origin", "*")
-		header.Add("Access-Control-Allow-Headers", "*")
-		header.Set("Access-Control-Allow-Credentials", "true")
+		header.Set(AccessControlAllowOrigin, "*")
+		header.Add(AccessControlAllowHeaders, "*")
+		header.Set(AccessControlAllowCredentials, "true")
 
 		w.WriteHeader(http.StatusOK)
 	}
@@ -543,9 +549,9 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 		}
 
 		header := w.Header()
-		header.Set("Access-Control-Allow-Origin", "*")
-		header.Add("Access-Control-Allow-Headers", "*")
-		header.Set("Access-Control-Allow-Credentials", "true")
+		header.Set(AccessControlAllowOrigin, "*")
+		header.Add(AccessControlAllowHeaders, "*")
+		header.Set(AccessControlAllowCredentials, "true")
 
 		w.WriteHeader(http.StatusOK)
 	}
