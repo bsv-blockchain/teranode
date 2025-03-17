@@ -189,7 +189,6 @@ func TestMaxTxSizePolicy(t *testing.T) {
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
 }
-
 func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 

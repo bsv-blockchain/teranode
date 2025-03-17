@@ -111,6 +111,10 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
 	}
 
+	if txScriptInterpreter == nil {
+		logger.Warnf("No script interpreter registered for %s, available interpreters: %v", TxInterpreterGoBDK, TxScriptInterpreterFactory)
+	}
+
 	return &TxValidator{
 		logger:      logger,
 		settings:    tSettings,
@@ -199,6 +203,14 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 }
 
 func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
+	if tv == nil {
+		return errors.NewTxInvalidError("tx validator is nil")
+	}
+
+	if tv.interpreter == nil {
+		return errors.NewTxInvalidError("tx interpreter is nil, available interpreters: %v", TxScriptInterpreterFactory)
+	}
+
 	consensus := true
 	if validationOptions != nil && validationOptions.disableConsensus {
 		consensus = false

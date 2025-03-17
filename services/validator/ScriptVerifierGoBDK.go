@@ -46,10 +46,12 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 	// teranode : mainnet  testnet   regtest  stn
 	// bdk  :    main      test  regtest  stn
 	chainNameMap := map[string]string{
-		"mainnet": "main",
-		"stn":     "stn",
-		"testnet": "test",
-		"regtest": "regtest",
+		"mainnet":     "main",
+		"stn":         "stn",
+		"tstn":        "test",
+		"teratestnet": "test",
+		"testnet":     "test",
+		"regtest":     "regtest",
 	}
 
 	return chainNameMap[pa.Name]
@@ -78,6 +80,8 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 		GenesisActivationHeight:      pa.GenesisActivationHeight,
 	}
 	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
+		l.Errorf("Failed to set global script config for GoBDK: %v", err)
+
 		return nil
 	}
 
