@@ -1,4 +1,4 @@
-package testdaemon
+package daemon
 
 import (
 	"bytes"
@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
-	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
@@ -52,7 +51,7 @@ type TestDaemon struct {
 	Ctx                   context.Context
 	ctxCancel             context.CancelFunc
 	Logger                *ulogger.ErrorTestLogger
-	d                     *daemon.Daemon
+	d                     *Daemon
 	BlockchainClient      blockchain.ClientI
 	BlockAssemblyClient   *blockassembly.Client
 	PropagationClient     *propagation.Client
@@ -87,7 +86,7 @@ func (je *JSONError) Error() string {
 	return fmt.Sprintf("code: %d, message: %s", je.Code, je.Message)
 }
 
-func New(t *testing.T, opts TestOptions) *TestDaemon {
+func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := ulogger.NewErrorTestLogger(t, cancel)
@@ -98,6 +97,7 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	if opts.KillTeranode {
+		// Kill teranode processes
 		cmd := exec.Command("sh", "-c", "kill -9 $(pgrep -f teranode)")
 		_ = cmd.Run()
 	}
@@ -174,7 +174,7 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 
 	readyCh := make(chan struct{})
 
-	d := daemon.New()
+	d := New()
 
 	services := []string{
 		"-all=0",
@@ -242,10 +242,10 @@ func New(t *testing.T, opts TestOptions) *TestDaemon {
 
 	privKey := w.PrivKey
 
-	subtreeStore, err := daemon.GetSubtreeStore(logger, tSettings)
+	subtreeStore, err := GetSubtreeStore(logger, tSettings)
 	require.NoError(t, err)
 
-	utxoStore, err := daemon.GetUtxoStore(ctx, logger, tSettings)
+	utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
 	require.NoError(t, err)
 
 	assert.NotNil(t, blockchainClient)
@@ -677,4 +677,9 @@ func isKafkaRunning() bool {
 	_ = conn.Close()
 
 	return true
+}
+
+func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
+	err := td.d.ServiceManager.ResetContext()
+	require.NoError(t, err)
 }

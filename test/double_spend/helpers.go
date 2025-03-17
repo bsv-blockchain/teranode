@@ -7,18 +7,18 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/teranode/test/testdaemon"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 )
 
-func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
-	td = testdaemon.New(t, testdaemon.TestOptions{
+func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
+	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		UtxoStoreOverride: utxoStoreOverride,
 	})
 
@@ -41,12 +41,12 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *testdaemo
 	err1 := td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal)
 	require.NoError(t, err1)
 
-	td.Logger.SkipCancelOnFail(true)
+	// td.Logger.SkipCancelOnFail(true)
 
 	err2 := td.PropagationClient.ProcessTransaction(td.Ctx, txDoubleSpend)
 	require.Error(t, err2) // This should fail as it is a double spend
 
-	td.Logger.SkipCancelOnFail(false)
+	// td.Logger.SkipCancelOnFail(false)
 
 	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
 	require.NoError(t, err)

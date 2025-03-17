@@ -105,6 +105,12 @@ func GetListenerInfos() []string {
 	return sortedListeners
 }
 
+func (sm *ServiceManager) ResetContext() error {
+	sm.Ctx, sm.cancelFunc = context.WithCancel(context.Background())
+
+	return nil
+}
+
 func (sm *ServiceManager) AddService(name string, service Service) error {
 	sm.dependencyChannelsMux.Lock()
 	sm.dependencyChannels = append(sm.dependencyChannels, make(chan bool))

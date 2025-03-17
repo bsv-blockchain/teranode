@@ -186,7 +186,7 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
 		if err != nil {
 			// TODO: just logging now, consider adding retry
-			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store: %v", err)
+			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
 		b.logger.Infof("[Blockchain][Init] Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
@@ -207,7 +207,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	go b.startSubscriptions()
 
-	if err := b.startHTTP(); err != nil {
+	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
 	}
 
@@ -223,29 +223,42 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // startHTTP initializes and starts the HTTP server for the blockchain service.
-func (b *Blockchain) startHTTP() error {
+func (b *Blockchain) startHTTP(ctx context.Context) error {
 	httpAddress := b.settings.BlockChain.HTTPListenAddress
 	if httpAddress == "" {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
 	}
 
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	e.Use(middleware.Recover())
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+	}))
+
+	e.GET("/invalidate/:hash", b.invalidateHandler)
+	e.GET("/revalidate/:hash", b.revalidateHandler)
+
 	go func() {
-		e := echo.New()
-		e.HideBanner = true
-		e.HidePort = true
+		<-ctx.Done()
 
-		e.Use(middleware.Recover())
+		err := e.Shutdown(context.Background())
+		if err != nil {
+			b.logger.Errorf("[Blockchain] %s (http) service shutdown error: %s", err)
+		}
+	}()
 
-		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-			AllowOrigins: []string{"*"},
-			AllowMethods: []string{echo.GET},
-		}))
-
-		e.GET("/invalidate/:hash", b.invalidateHandler)
-		e.GET("/revalidate/:hash", b.revalidateHandler)
-
+	go func() {
 		if err := e.Start(httpAddress); err != nil {
-			b.logger.Errorf("[Blockchain][Start] failed to start http server: %v", err)
+			if err == http.ErrServerClosed {
+				b.logger.Infof("[Blockchain][Start] http server shutdown")
+			} else {
+				b.logger.Errorf("[Blockchain][Start] failed to start http server: %v", err)
+			}
 		}
 	}()
 

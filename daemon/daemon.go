@@ -50,8 +50,10 @@ type Daemon struct {
 	doneCh        chan struct{}
 	closeDoneOnce sync.Once
 
-	stopCh        chan struct{} // Channel to signal when all services have stopped
-	closeStopOnce sync.Once
+	stopCh         chan struct{} // Channel to signal when all services have stopped
+	closeStopOnce  sync.Once
+	server         *http.Server // Add this field
+	ServiceManager *servicemanager.ServiceManager
 }
 
 func New() *Daemon {
@@ -60,12 +62,24 @@ func New() *Daemon {
 		closeStopOnce: sync.Once{},
 		doneCh:        make(chan struct{}),
 		stopCh:        make(chan struct{}),
+		server:        nil,
 	}
 }
 
 func (d *Daemon) Stop(timeout ...time.Duration) error {
 	if traceCloser != nil {
 		_ = traceCloser.Close()
+	}
+
+	// Gracefully shutdown the HTTP server if it exists
+	if d.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := d.server.Shutdown(ctx); err != nil {
+			// Log error but continue with shutdown
+			fmt.Printf("Error shutting down health check server: %v\n", err)
+		}
 	}
 
 	d.closeDoneOnce.Do(func() { close(d.doneCh) })
@@ -99,6 +113,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	}
 
 	sm := servicemanager.NewServiceManager(logger)
+	d.ServiceManager = sm
 
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -172,6 +187,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		WriteTimeout:      60 * time.Second,  // Maximum duration before timing out writes of response
 		IdleTimeout:       120 * time.Second, // Maximum amount of time to wait for the next request
 	}
+	d.server = server // Store the reference
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

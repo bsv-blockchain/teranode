@@ -1,4 +1,4 @@
-package testdaemon
+package testcontainers
 
 import (
 	"bytes"
@@ -174,6 +174,11 @@ func (tc *TestClient) CallRPC(t *testing.T, method string, params []interface{})
 				"message": "Method not found"
 		}
 	*/
+
+	type JSONError struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
 
 	// Check if the response body contains an error
 	var jsonResponse struct {

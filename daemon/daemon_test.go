@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"strconv"
 	"testing"
 	"time"
@@ -134,12 +132,4 @@ func TestDaemon_Start_Basic(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for readyCh")
 	}
-}
-
-func isKafkaRunning() bool {
-	port, _ := gocore.Config().GetInt("KAFKA_PORT", 9092)
-
-	_, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
-
-	return err == nil
 }

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/test/testdaemon"
 	"github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -512,7 +512,7 @@ func testDoubleSpendFork(t *testing.T, utxoStore string) {
 	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], block103bTxHashes)
 }
 
-func createConflictingBlock(t *testing.T, td *testdaemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, originalTxs []*bt.Tx, nonce uint32) *model.Block {
+func createConflictingBlock(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, originalTxs []*bt.Tx, nonce uint32) *model.Block {
 	// Get previous block so we can create an alternate bock for this block with a double spend in it.
 	previousBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, originalBlock.Height-1)
 	require.NoError(t, err)
@@ -554,7 +554,7 @@ func createConflictingBlock(t *testing.T, td *testdaemon.TestDaemon, originalBlo
 	return newBlock
 }
 
-func createFork(t *testing.T, td *testdaemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, nonce uint32) *model.Block {
+func createFork(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, nonce uint32) *model.Block {
 	// Get previous block so we can create an alternate bock for this block with no conflicting transactions.
 	previousBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, originalBlock.Height-1)
 	require.NoError(t, err)
