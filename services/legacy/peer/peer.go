@@ -10,7 +10,6 @@ import (
 	"container/list"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/legacy/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -482,6 +482,8 @@ type Peer struct {
 	protocolVersion      uint32 // negotiated protocol version
 	sendHeadersPreferred bool   // peer sent a sendheaders message
 	verAckReceived       bool
+	verAckMtx            sync.Mutex // protects verAckSent
+	verAckSent           bool
 	syncPeer             bool
 
 	wireEncoding wire.MessageEncoding
@@ -2009,12 +2011,12 @@ func (p *Peer) readRemoteVersionMsg() error {
 			reason)
 		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
 
-		return errors.New(reason)
+		return errors.NewProcessingError(reason)
 	}
 
 	// Detect self connections.
 	if !p.cfg.TstAllowSelfConnection && sentNonces.Exists(msg.Nonce) {
-		return errors.New("disconnecting peer connected to self")
+		return errors.NewProcessingError("disconnecting peer connected to self")
 	}
 
 	// Negotiate the protocol version and set the services to what the remote
@@ -2049,7 +2051,7 @@ func (p *Peer) readRemoteVersionMsg() error {
 		rejectMsg := p.cfg.Listeners.OnVersion(p, msg)
 		if rejectMsg != nil {
 			_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
-			return errors.New(rejectMsg.Reason)
+			return errors.NewProcessingError(rejectMsg.Reason)
 		}
 	}
 
@@ -2069,7 +2071,7 @@ func (p *Peer) readRemoteVersionMsg() error {
 			reason)
 		_ = p.writeMessage(rejectMsg, wire.LatestEncoding)
 
-		return errors.New(reason)
+		return errors.NewProcessingError(reason)
 	}
 
 	return nil
@@ -2188,7 +2190,18 @@ func (p *Peer) negotiateOutboundProtocol() error {
 		return err
 	}
 
-	return p.readRemoteVersionMsg()
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- p.readRemoteVersionMsg()
+	}()
+
+	if err := p.sendVerack(); err != nil {
+		return err
+	}
+
+	// Wait for VERACK from the remote peer
+	return <-errCh
 }
 
 // start begins processing input and output messages.
@@ -2218,7 +2231,7 @@ func (p *Peer) start() error {
 		reason := "protocol negotiation timeout"
 		p.DisconnectWithWarning(reason)
 
-		return errors.New(reason)
+		return errors.NewProcessingError(reason)
 	}
 	p.logger.Debugf("Connected to %s", p.Addr())
 
@@ -2230,13 +2243,30 @@ func (p *Peer) start() error {
 	go p.outHandler()
 	go p.pingHandler()
 
-	// Send our verack message now that the IO processing machinery has started.
-	p.QueueMessage(wire.NewMsgVerAck(), nil)
+	if err := p.sendVerack(); err != nil {
+		return err
+	}
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		p.QueueMessage(wire.NewMsgProtoconf(0, p.cfg.AllowBlockPriority), nil)
 	}()
+
+	return nil
+}
+
+func (p *Peer) sendVerack() error {
+	p.verAckMtx.Lock()
+	defer p.verAckMtx.Unlock()
+
+	if !p.verAckSent {
+		verackMsg := wire.NewMsgVerAck()
+		if err := p.writeMessage(verackMsg, wire.BaseEncoding); err != nil {
+			return errors.NewProcessingError("failed to send verack message", err)
+		}
+
+		p.verAckSent = true
+	}
 
 	return nil
 }

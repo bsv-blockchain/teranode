@@ -856,6 +856,15 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		t.Fatal("Peer did not send version message")
 	}
 
+	select {
+	case msg := <-outboundMessages:
+		if _, ok := msg.(*wire.MsgVerAck); !ok {
+			t.Fatalf("Expected verack message, got [%s]", msg.Command())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Peer did not send verack message")
+	}
+
 	// Remote peer writes version message advertising invalid protocol version 1
 	invalidVersionMsg := wire.NewMsgVersion(remoteNA, localNA, 0, 0)
 	invalidVersionMsg.ProtocolVersion = 1

@@ -132,7 +132,7 @@ func NewImprovedCache(maxBytes int, bucketType BucketType) (*ImprovedCache, erro
 	case Preallocated:
 		c.trimRatio = trimRatio
 
-		for i := 0; i < BucketsCount; i++ {
+		for i := range BucketsCount {
 			c.buckets[i] = &bucketPreallocated{}
 			if err := c.buckets[i].Init(maxBucketBytes, c.trimRatio); err != nil {
 				return nil, errors.NewProcessingError("error creating preallocated cache", err)
@@ -474,8 +474,8 @@ func (b *bucketTrimmed) cleanLockedMap() {
 
 func (b *bucketTrimmed) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(b.numberOfItems)
-	s.TotalElementsAdded += uint64(b.elementsAdded)
+	s.EntriesCount += uint64(b.numberOfItems)       // nolint:gosec
+	s.TotalElementsAdded += uint64(b.elementsAdded) // nolint:gosec
 	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
@@ -511,12 +511,12 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 
 	var kvLenBuf [4]byte
 
-	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // nolint:gosec // higher order 8 bits of key's length
 	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
-	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // nolint:gosec // higher order 8 bits of value's length
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
-	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint:gosec
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
@@ -722,7 +722,7 @@ func (b *bucketTrimmed) Del(h uint64) {
 }
 
 func (b *bucketTrimmed) getMapSize() uint64 {
-	return uint64(b.m.Length())
+	return uint64(b.m.Length()) // nolint:gosec
 }
 
 // bucketPreallocated is a bucket with preallocated memory for chunks.
@@ -802,9 +802,9 @@ func (b *bucketPreallocated) cleanLockedMap(startingOffset int) {
 
 		// adjust the idx for each item, since we removed the first half of the chunks/
 		// we only take items in the second half of the chunks, i.e. after the byteOffsetRemoved
-		if int(idx) >= startingOffset {
+		if int(idx) >= startingOffset { // nolint:gosec
 			// calculate the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
-			adjustedIdx := idx - uint64(startingOffset)
+			adjustedIdx := idx - uint64(startingOffset) // nolint:gosec
 			bmNew[k] = adjustedIdx | (b.gen << bucketSizeBits)
 		}
 	}
@@ -863,12 +863,12 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 
 	var kvLenBuf [4]byte
 
-	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // nolint: gosec // higher order 8 bits of key's length
 	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
-	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // nolint: gosec // higher order 8 bits of value's length
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
-	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint: gosec
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
@@ -908,7 +908,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 			}
 
 			// writing needs to start form the end of the kept chunks.
-			idx = chunkSize * uint64(numOfChunksToKeep)
+			idx = chunkSize * uint64(numOfChunksToKeep) // nolint: gosec
 			idxNew = idx + kvLen
 			// calculate the where the next write should occur based on new index
 			chunkIdx = idx / chunkSize
@@ -1131,12 +1131,12 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 
 	var kvLenBuf [4]byte
 
-	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // nolint: gosec // higher order 8 bits of key's length
 	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
-	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // higher order 8 bits of value's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // nolint: gosec // higher order 8 bits of value's length
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
-	kvLen := uint64(len(kvLenBuf) + len(k) + len(v))
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint: gosec
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
