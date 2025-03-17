@@ -30,6 +30,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -280,9 +281,7 @@ func Test_MinFeePolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings()
 
-			coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
-
-			coinbaseTx, err := bt.NewTxFromString(coinbaseHex)
+			coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 			require.NoError(t, err)
 
 			output := coinbaseTx.Outputs[0]
