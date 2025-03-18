@@ -1,142 +1,196 @@
 # Kafka Message Format Reference Documentation
 
+This document provides comprehensive information about the message formats used in Kafka topics within the Teranode ecosystem. All message formats are defined using Protocol Buffers (protobuf), providing a  structured and efficient serialization mechanism.
 
 ## Index
 
-
+- [Protobuf Overview](#protobuf-overview)
 - [Block Notification Message Format](#block-notification-message-format)
     - [Block Topic](#block-topic)
     - [Message Structure](#message-structure)
     - [Field Specifications](#field-specifications)
-        - [Block Hash](#block-hash)
-        - [DataHub URL](#datahub-url)
-    - [Example (Pseudo representation)](#example-pseudo-representation)
+        - [hash](#hash)
+        - [URL](#url)
+    - [Example](#example)
     - [Code Examples](#code-examples)
         - [Sending Messages](#sending-messages)
         - [Receiving Messages](#receiving-messages)
 - [Subtree Notification Message Format](#subtree-notification-message-format)
     - [Subtree Topic](#subtree-topic)
-    - [Message Structure](#message-structure)
-    - [Field Specifications](#field-specifications)
-        - [Subtree Hash](#subtree-hash)
-        - [DataHub URL](#datahub-url)
-    - [Message Format Example](#message-format-example)
-    - [Code Examples](#code-examples)
-        - [Sending Messages](#sending-messages)
-        - [Receiving Messages](#receiving-messages)
+    - [Message Structure](#message-structure-1)
+    - [Field Specifications](#field-specifications-1)
+        - [hash](#hash-1)
+        - [URL](#url-1)
+    - [Example](#example-1)
+    - [Code Examples](#code-examples-1)
+        - [Sending Messages](#sending-messages-1)
+        - [Receiving Messages](#receiving-messages-1)
     - [Error Cases](#error-cases)
 - [Transaction Validation Message Format](#transaction-validation-message-format)
     - [Transaction Validation Topic](#transaction-validation-topic)
-    - [Message Structure](#message-structure)
-    - [Field Specifications](#field-specifications)
-        - [Height](#height)
-        - [Transaction](#transaction)
-    - [Message Format Example](#message-format-example)
-    - [Code Examples](#code-examples)
-        - [Sending Messages](#sending-messages)
-        - [Receiving Messages](#receiving-messages)
-    - [Error Cases](#error-cases)
-- [Transaction Metadata Delete Message Format](#transaction-metadata-delete-message-format)
+    - [Message Structure](#message-structure-2)
+    - [Field Specifications](#field-specifications-2)
+        - [tx](#tx)
+        - [height](#height)
+        - [options](#options)
+    - [Example](#example-2)
+    - [Code Examples](#code-examples-2)
+        - [Sending Messages](#sending-messages-2)
+        - [Receiving Messages](#receiving-messages-2)
+    - [Error Cases](#error-cases-1)
+- [Transaction Metadata Message Format](#transaction-metadata-message-format)
     - [TxMeta Topic](#txmeta-topic)
-    - [Message Structure](#message-structure)
-    - [Field Specifications](#field-specifications)
-        - [Transaction Hash](#transaction-hash)
-        - [Content](#content)
-- [Data Structures](#data-structures)
+    - [Message Structure](#message-structure-3)
+    - [Field Specifications](#field-specifications-3)
+        - [txHash](#txhash)
+        - [action](#action)
+        - [content](#content)
     - [Transaction Metadata](#transaction-metadata)
-    - [Message Format Example](#message-format-example)
-    - [Code Examples](#code-examples)
-        - [Sending Messages](#sending-messages)
-        - [Receiving Messages](#receiving-messages)
+    - [Example](#example-3)
+    - [Code Examples](#code-examples-3)
+        - [Sending Messages](#sending-messages-3)
+        - [Receiving Messages](#receiving-messages-3)
+    - [Error Cases](#error-cases-2)
 - [Rejected Transaction Message Format](#rejected-transaction-message-format)
-- [Rejected Transaction Topic](#rejected-transaction-topic)
-    - [Message Structure](#message-structure)
-    - [Field Specifications](#field-specifications)
-        - [Transaction Hash](#transaction-hash)
-        - [Error Message](#error-message)
-    - [Message Format Example](#message-format-example)
-    - [Code Examples](#code-examples)
-        - [Sending Messages](#sending-messages)
-        - [Receiving Messages](#receiving-messages)
-    - [Downstream Message Structure](#downstream-message-structure)
+    - [Rejected Transaction Topic](#rejected-transaction-topic)
+    - [Message Structure](#message-structure-4)
+    - [Field Specifications](#field-specifications-4)
+        - [txHash](#txhash-1)
+        - [reason](#reason)
+    - [Example](#example-4)
+    - [Code Examples](#code-examples-4)
+        - [Sending Messages](#sending-messages-4)
+        - [Receiving Messages](#receiving-messages-4)
+    - [Error Cases](#error-cases-3)
+- [Inventory Message Format](#inventory-message-format)
+    - [Inventory Topic](#inventory-topic)
+    - [Message Structure](#message-structure-5)
+    - [Field Specifications](#field-specifications-5)
+        - [peerAddress](#peeraddress)
+        - [inv](#inv)
+    - [Example](#example-5)
+    - [Code Examples](#code-examples-5)
+        - [Sending Messages](#sending-messages-5)
+        - [Receiving Messages](#receiving-messages-5)
+    - [Error Cases](#error-cases-4)
+- [Final Block Message Format](#final-block-message-format)
+    - [Final Block Topic](#final-block-topic)
+    - [Message Structure](#message-structure-6)
+    - [Field Specifications](#field-specifications-6)
+        - [header](#header)
+        - [transaction_count](#transaction_count)
+        - [size_in_bytes](#size_in_bytes)
+        - [subtree_hashes](#subtree_hashes)
+        - [coinbase_tx](#coinbase_tx)
+        - [height](#height-1)
+    - [Example](#example-6)
+    - [Code Examples](#code-examples-6)
+        - [Sending Messages](#sending-messages-6)
+        - [Receiving Messages](#receiving-messages-6)
+    - [Error Cases](#error-cases-5)
+- [General Code Examples](#general-code-examples)
+    - [Serializing Messages](#serializing-messages)
+    - [Deserializing Messages](#deserializing-messages)
 - [Other Resources](#other-resources)
+
+
+## Protobuf Overview
+
+Protocol Buffers (protobuf) is a language-neutral, platform-neutral, extensible mechanism for serializing structured data. In Teranode, all Kafka messages are defined and serialized using protobuf.
+
+The protobuf definitions for Kafka messages are located in `util/kafka/kafka_message/kafka_messages.proto`.
 
 
 ## Block Notification Message Format
 
 ### Block Topic
 
-`kafka_blocksConfig` is the Kafka topic used for broadcasting block notifications. This topic is used to notify subscribers of new blocks as they are added to the blockchain.
+`kafka_blocksConfig` is the Kafka topic used for broadcasting block notifications. This topic notifies subscribers about new blocks as they are added to the blockchain.
 
 ### Message Structure
-The Kafka message consists of a binary value with two concatenated fields:
 
-| Field      | Size    | Format      | Description |
-|------------|---------|-------------|-------------|
-| Block Hash | 32 bytes| Raw bytes   | BSV block hash |
-| DataHub URL| Variable| UTF-8 string| URL pointing to the block data |
+The block notification message is defined in protobuf as `KafkaBlockTopicMessage`:
+
+```protobuf
+message KafkaBlockTopicMessage {
+  bytes hash = 1;  // Block hash (32 bytes)
+  string URL = 2;  // URL pointing to block data
+}
+```
 
 ### Field Specifications
 
-#### Block Hash
-- Fixed size: 32 bytes
-- Format: Raw bytes representation of the BSV block hash
-- Validation: Must be exactly 32 bytes long
-
-#### DataHub URL
-- Size: Variable length
-- Format: UTF-8 encoded string
+#### hash
+- Type: bytes
+- Description: Raw bytes representation of the BSV block hash (32 bytes)
 - Required: Yes
-- Content: Valid URL pointing to block data location
 
-### Example (Pseudo representation)
+#### URL
+- Type: string
+- Description: URL pointing to the location where the full block data can be retrieved
+- Required: Yes
 
-```hex
-// Message value (hex representation)
-<32 bytes of block hash><variable length DataHub URL>
+### Example
 
-Example:
-7d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a + https://datahub.example.com/blocks/123
- ```
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "hash": "<binary data - 32 bytes>",
+  "URL": "https://datahub.example.com/blocks/123"
+}
+```
 
 ### Code Examples
 
 #### Sending Messages
 ```go
-// Prepare message
-hash := block.Hash() // assumes this returns *chainhash.Hash
+// Create the block notification message
+blockHash := block.Hash() // assumes this returns *chainhash.Hash
 dataHubUrl := "https://datahub.example.com/blocks/123"
 
-// Construct message value
-value := make([]byte, 0, chainhash.HashSize+len(dataHubUrl))
-value = append(value, hash.CloneBytes()...)
-value = append(value, []byte(dataHubUrl)...)
+// Create a new protobuf message
+message := &kafkamessage.KafkaBlockTopicMessage{
+    Hash: blockHash[:],
+    URL:  dataHubUrl,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize block message: %w", err)
+}
 
 // Send to Kafka
 producer.Publish(&kafka.Message{
-Value: value,
+    Value: data,
 })
 ```
 
 #### Receiving Messages
 ```go
-// Handle incoming message
-func handleMessage(msg *kafka.Message) error {
-if msg == nil {
-return nil
-}
+// Handle incoming block notification message
+func handleBlockMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
 
-// Extract block hash (first 32 bytes)
-hash, err := chainhash.NewHash(msg.Value[:32])
-if err != nil {
-return fmt.Errorf("invalid block hash: %w", err)
-}
+    // Deserialize from protobuf format
+    blockMessage := &kafkamessage.KafkaBlockTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, blockMessage); err != nil {
+        return fmt.Errorf("failed to deserialize block message: %w", err)
+    }
 
-// Extract DataHub URL (remaining bytes)
-dataHubUrl := string(msg.Value[32:])
+    // Extract block hash (32 bytes)
+    var blockHash chainhash.Hash
+    copy(blockHash[:], blockMessage.Hash)
 
-// Process the message...
-return nil
+    // Extract DataHub URL
+    dataHubUrl := blockMessage.URL
+
+    // Process the block notification...
+    log.Printf("Received block notification for %s, data at: %s", blockHash.String(), dataHubUrl)
+    return nil
 }
 ```
 
@@ -146,86 +200,99 @@ return nil
 
 ### Subtree Topic
 
-`kafka_subtreesConfig` is the Kafka topic used for broadcasting subtree notifications. This topic is used to notify subscribers of new subtrees as they are created.
+`kafka_subtreesConfig` is the Kafka topic used for broadcasting subtree notifications. This topic notifies subscribers about new subtrees as they are created.
 
 ### Message Structure
-The Kafka message consists of a binary value with two concatenated fields:
 
-| Field        | Size     | Format       | Description                      |
-|--------------|----------|--------------|----------------------------------|
-| Subtree Hash | 32 bytes | Raw bytes    | BSV subtree hash                 |
-| DataHub URL  | Variable | UTF-8 string | URL pointing to the subtree data |
+The subtree notification message is defined in protobuf as `KafkaSubtreeTopicMessage`:
+
+```protobuf
+message KafkaSubtreeTopicMessage {
+  bytes hash = 1;  // Subtree hash (32 bytes)
+  string URL = 2;  // URL pointing to subtree data
+}
+```
 
 ### Field Specifications
 
-#### Subtree Hash
-- Fixed size: 32 bytes
-- Format: Raw bytes representation of the BSV subtree hash
-- Validation: Must be exactly 32 bytes long
-
-#### DataHub URL
-- Size: Variable length
-- Format: UTF-8 encoded string
+#### hash
+- Type: bytes
+- Description: Raw bytes representation of the BSV subtree hash (32 bytes)
 - Required: Yes
-- Content: Valid URL pointing to subtree data location
 
-### Message Format Example
-```
-[32 bytes subtree hash][variable length DataHub URL]
+#### URL
+- Type: string
+- Description: URL pointing to the location where the full subtree data can be retrieved
+- Required: Yes
 
-Example:
-7d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a + https://datahub.example.com/subtrees/123
+### Example
+
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "hash": "<binary data - 32 bytes>",
+  "URL": "https://datahub.example.com/subtrees/123"
+}
 ```
 
 ### Code Examples
 
 #### Sending Messages
 ```go
-// Prepare message
-hash := subtree.Hash() // assumes this returns *chainhash.Hash
+// Create the subtree notification message
+subtreeHash := subtree.Hash() // assumes this returns *chainhash.Hash
 dataHubUrl := "https://datahub.example.com/subtrees/123"
 
-// Construct message value
-value := make([]byte, 0, chainhash.HashSize+len(dataHubUrl))
-value = append(value, hash.CloneBytes()...)
-value = append(value, []byte(dataHubUrl)...)
+// Create a new protobuf message
+message := &kafkamessage.KafkaSubtreeTopicMessage{
+    Hash: subtreeHash[:],
+    URL:  dataHubUrl,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize subtree message: %w", err)
+}
 
 // Send to Kafka
 producer.Publish(&kafka.Message{
-    Value: value,
+    Value: data,
 })
 ```
 
 #### Receiving Messages
 ```go
-// Handle incoming message
-func handleMessage(msg *kafka.Message) error {
+// Handle incoming subtree notification message
+func handleSubtreeMessage(msg *kafka.Message) error {
     if msg == nil {
         return nil
     }
 
-    // Validate minimum message length
-    if len(msg.Value) < 32 {
-        return fmt.Errorf("invalid message length: got %d bytes, want at least 32", len(msg.Value))
+    // Deserialize from protobuf format
+    subtreeMessage := &kafkamessage.KafkaSubtreeTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, subtreeMessage); err != nil {
+        return fmt.Errorf("failed to deserialize subtree message: %w", err)
     }
 
-    // Extract subtree hash (first 32 bytes)
-    hash, err := chainhash.NewHash(msg.Value[:32])
-    if err != nil {
-        return fmt.Errorf("invalid subtree hash: %w", err)
-    }
+    // Extract subtree hash (32 bytes)
+    var subtreeHash chainhash.Hash
+    copy(subtreeHash[:], subtreeMessage.Hash)
 
-    // Extract DataHub URL (remaining bytes)
-    dataHubUrl := string(msg.Value[32:])
+    // Extract DataHub URL
+    dataHubUrl := subtreeMessage.URL
 
-    // Process the message...
+    // Process the subtree notification...
+    log.Printf("Received subtree notification for %s, data at: %s", subtreeHash.String(), dataHubUrl)
     return nil
 }
 ```
 
 ### Error Cases
-- Message length less than 32 bytes: ERR_INVALID_ARGUMENT
-- Invalid hash format: ERR_INVALID_ARGUMENT
+- Invalid message format: Message cannot be unmarshaled to KafkaSubtreeTopicMessage
+- Empty or malformed hash: Hash does not contain exactly 32 bytes
+- Invalid URL: DataHub URL is empty or not properly formatted
 
 ---
 
@@ -234,300 +301,817 @@ func handleMessage(msg *kafka.Message) error {
 
 ### Transaction Validation Topic
 
-`kafka_validatortxsConfig` is the Kafka topic used for broadcasting transaction validation messages. This topic is used to notify subscribers of transactions that require validation.
+`kafka_validatortxsConfig` is the Kafka topic used for sending transactions from the Propagation service to the Validator for validation.
 
 ### Message Structure
-The Kafka message consists of a binary value containing transaction data and validation height:
 
-| Field        | Size       | Format        | Description                 |
-|--------------|------------|---------------|-----------------------------|
-| Height       | 4 bytes    | uint32 (LE)   | Block height for validation |
-| Transaction  | Variable   | Raw bytes     | Raw transaction data        |
+The transaction validation message is defined in protobuf as `KafkaTxValidationTopicMessage`:
+
+```protobuf
+message KafkaTxValidationTopicMessage {
+  bytes tx = 1;                     // Complete BSV transaction
+  uint32 height = 2;                // Current blockchain height
+  KafkaTxValidationOptions options = 3;  // Optional validation options
+}
+
+message KafkaTxValidationOptions {
+  bool skipUtxoCreation = 1;        // Skip UTXO creation if true
+  bool addTXToBlockAssembly = 2;    // Add transaction to block assembly if true
+  bool skipPolicyChecks = 3;        // Skip policy checks if true
+  bool createConflicting = 4;       // Allow conflicting transactions if true
+}
+```
 
 ### Field Specifications
 
-#### Height
-- Fixed size: 4 bytes
-- Format: Unsigned 32-bit integer, little-endian encoding
-- Purpose: Specifies the block height at which validation rules should be applied
-
-#### Transaction
-- Size: Variable length
-- Format: Raw bytes of the BSV transaction
+#### tx
+- Type: bytes
+- Description: Raw bytes of the complete BSV transaction
 - Required: Yes
-- Content: Complete serialized transaction data in extended format
 
-### Message Format Example
-```
-[4 bytes height][variable length transaction data]
+#### height
+- Type: uint32
+- Description: Current blockchain height, used for validation rules that depend on height
+- Required: Yes
 
-Example:
-00001000 (height 4096 in little-endian) + [raw transaction bytes]
+#### options
+- Type: KafkaTxValidationOptions
+- Description: Special options that modify the validation behavior
+- Required: No (if not provided, default values are used)
+
+##### KafkaTxValidationOptions
+
+###### skipUtxoCreation
+- Type: bool
+- Description: When true, the validator will not create UTXO entries for this transaction
+- Default: false
+
+###### addTXToBlockAssembly
+- Type: bool
+- Description: When true, the validated transaction will be added to block assembly
+- Default: true
+
+###### skipPolicyChecks
+- Type: bool
+- Description: When true, certain policy validation checks will be skipped
+- Default: false
+
+###### createConflicting
+- Type: bool
+- Description: When true, the validator may create a transaction that conflicts with existing UTXOs
+- Default: false
+
+### Example
+
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "tx": "<binary data - variable length>",
+  "height": 12345,
+  "options": {
+    "skipUtxoCreation": false,
+    "addTXToBlockAssembly": true,
+    "skipPolicyChecks": false,
+    "createConflicting": false
+  }
+}
 ```
 
 ### Code Examples
 
 #### Sending Messages
 ```go
-// Prepare message
-validatorData := &validator.TxValidationData{
-    Tx:     transactionBytes,
-    Height: chaincfg.GenesisActivationHeight,
+// Create the transaction validation message
+transactionBytes := tx.Serialize() // serialized transaction bytes
+currentHeight := uint32(12345)     // current blockchain height
+
+// Create options (using defaults in this example)
+options := &kafkamessage.KafkaTxValidationOptions{
+    SkipUtxoCreation:     false,
+    AddTXToBlockAssembly: true,
+    SkipPolicyChecks:     false,
+    CreateConflicting:    false,
+}
+
+// Create a new protobuf message
+message := &kafkamessage.KafkaTxValidationTopicMessage{
+    Tx:      transactionBytes,
+    Height:  currentHeight,
+    Options: options,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize transaction validation message: %w", err)
 }
 
 // Send to Kafka
 producer.Publish(&kafka.Message{
-    Value: validatorData.Bytes(),
+    Value: data,
 })
 ```
 
 #### Receiving Messages
 ```go
-// Handle incoming message
-func handleMessage(bytes []byte) (*TxValidationData, error) {
-    // Check minimum length requirement for height field
-    if len(bytes) < 4 {
-        return nil, errors.New(errors.ERR_ERROR, "input bytes too short")
+// Handle incoming transaction validation message
+func handleTxValidationMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
     }
 
-    data := &TxValidationData{}
-
-    // Extract height from first 4 bytes (little-endian)
-    data.Height = binary.LittleEndian.Uint32(bytes[:4])
-
-    // Extract transaction data (remaining bytes)
-    if len(bytes) > 4 {
-        data.Tx = make([]byte, len(bytes[4:]))
-        copy(data.Tx, bytes[4:])
+    // Deserialize from protobuf format
+    txValidationMessage := &kafkamessage.KafkaTxValidationTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, txValidationMessage); err != nil {
+        return fmt.Errorf("failed to deserialize transaction validation message: %w", err)
     }
 
-    return data, nil
+    // Extract transaction data
+    txBytes := txValidationMessage.Tx
+    height := txValidationMessage.Height
+    options := txValidationMessage.Options
+
+    // Parse the transaction
+    tx, err := bsvutil.NewTxFromBytes(txBytes)
+    if err != nil {
+        return fmt.Errorf("invalid transaction data: %w", err)
+    }
+
+    // Process the transaction with the provided options...
+    skipUtxoCreation := options.SkipUtxoCreation
+    addToBlockAssembly := options.AddTXToBlockAssembly
+    skipPolicyChecks := options.SkipPolicyChecks
+    createConflicting := options.CreateConflicting
+
+    // Perform validation based on options...
+    return validateTransaction(tx, height, skipUtxoCreation, addToBlockAssembly, skipPolicyChecks, createConflicting)
 }
 ```
 
 ### Error Cases
-- Message length less than 4 bytes: ERR_ERROR ("input bytes too short")
+- Invalid message format: Message cannot be unmarshaled to KafkaTxValidationTopicMessage
+- Empty or invalid transaction: Transaction bytes cannot be parsed
+- Invalid height: Height is too high compared to the current blockchain height
 
 ---
 
 
-## Transaction Metadata Delete Message Format
+## Transaction Metadata Message Format
 
 ### TxMeta Topic
 
-`kafka_txmetaConfig` is the Kafka topic used for broadcasting transaction metadata for validated transactions. This topic is used to notify subscribers of transactions that require deletion from the metadata cache.
+`kafka_txmetaConfig` is the Kafka topic used for broadcasting transaction metadata for validated transactions. This topic allows the Validator to either add new transaction metadata or request deletion of previously shared metadata.
 
 ### Message Structure
-The Kafka message consists of a binary value containing a transaction hash followed by either:
-- The complete transaction metadata (if we intend the consumers to store or cache this new metadata), or
-- A delete command (if we intend the consumers to delete previously shared metadata).
 
-| Field        | Size    | Format      | Description                 |
-|--------------|---------|-------------|-----------------------------|
-| TX Hash      | 32 bytes| Raw bytes   | Transaction hash            |
-| Content      | Variable| Binary/Text | Either metadata or "delete" |
+The transaction metadata message is defined in protobuf as `KafkaTxMetaTopicMessage`:
+
+```protobuf
+enum KafkaTxMetaActionType {
+  ADD = 0;    // Add or update transaction metadata
+  DELETE = 1; // Delete transaction metadata
+}
+
+message KafkaTxMetaTopicMessage {
+  bytes txHash = 1;                 // Transaction hash (32 bytes)
+  KafkaTxMetaActionType action = 2; // Action type (add or delete)
+  bytes content = 3;                // Serialized transaction metadata (only used for ADD)
+}
+```
 
 ### Field Specifications
 
-#### Transaction Hash
-- Fixed size: 32 bytes (chainhash.HashSize)
-- Format: Raw bytes representation of the transaction hash
-- Validation: Must be exactly 32 bytes long
+#### txHash
+- Type: bytes
+- Description: Raw bytes representation of the transaction hash (32 bytes)
+- Required: Yes
 
-#### Content
-Either:
-1. Delete Command:
-    - Fixed value: "delete" (UTF-8 encoded)
-    - Size: 6 bytes
+#### action
+- Type: KafkaTxMetaActionType (enum)
+- Description: Specifies whether to add/update metadata (ADD) or delete metadata (DELETE)
+- Required: Yes
+- Values:
+  - ADD (0): Add or update transaction metadata
+  - DELETE (1): Delete transaction metadata
 
-2. Transaction Metadata:
-    - Variable size
-    - Serialized `Data` structure containing:
-     * Complete transaction (`bt.Tx`)
-     * Parent transaction hashes
-     * Block IDs
-     * Fee
-     * Size in bytes
-     * Coinbase flag
-     * Lock time
+#### content
+- Type: bytes
+- Description: Serialized transaction metadata
+- Required: Only when action is ADD; should be empty when action is DELETE
+- Content: Serialized transaction metadata that includes transaction details, parent transaction hashes, block IDs, fees, and other relevant information
 
-## Data Structures
+### Transaction Metadata
 
-#### Transaction Metadata
-```go
-type Data struct {
-    Tx             *bt.Tx            // Complete transaction
-    ParentTxHashes []chainhash.Hash  // Parent transaction IDs
-    BlockIDs       []uint32          // Block heights
-    Fee            uint64            // Transaction fee in satoshis
-    SizeInBytes    uint64            // Serialized size
-    IsCoinbase     bool             // Coinbase indicator
-    LockTime       uint32            // Lock time
-}
+The content field contains serialized transaction metadata, which typically includes:
 
-type Tx struct {
-    Inputs   []*Input
-    Outputs  []*Output
-    Version  uint32
-    LockTime uint32
+- Complete transaction content
+- Parent transaction hashes (inputs)
+- Block heights where the transaction appears
+- Transaction fee
+- Size in bytes
+- Flags (e.g., whether it's a coinbase transaction)
+- Lock time
+
+### Example
+
+Here's a JSON representation of an ADD message (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "txHash": "<binary data - 32 bytes>",
+  "action": 0,  // ADD
+  "content": "<binary data - serialized transaction metadata>"
 }
 ```
 
-### Message Format Example
-```
-[32 bytes tx hash][either "delete" or serialized metadata]
+Here's a JSON representation of a DELETE message:
 
-Examples:
-1. Delete command:
-   7d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a + delete
-
-2. Metadata:
-   7d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a + [serialized metadata]
+```json
+{
+  "txHash": "<binary data - 32 bytes>",
+  "action": 1,  // DELETE
+  "content": ""  // Empty for DELETE operations
+}
 ```
 
 ### Code Examples
 
 #### Sending Messages
 ```go
-// Send delete command
+// Example 1: Send ADD transaction metadata message
+txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+metadataContent := serializeMetadata(metadata) // serialize transaction metadata
+
+// Create a new protobuf message for adding metadata
+addMessage := &kafkamessage.KafkaTxMetaTopicMessage{
+    TxHash: txHash,
+    Action: kafkamessage.KafkaTxMetaActionType_ADD,
+    Content: metadataContent,
+}
+
+// Serialize to protobuf format
+addData, err := proto.Marshal(addMessage)
+if err != nil {
+    return fmt.Errorf("failed to serialize ADD metadata message: %w", err)
+}
+
+// Send to Kafka
 producer.Publish(&kafka.Message{
-    Value: append(txHash.CloneBytes(), []byte("delete")...),
+    Value: addData,
 })
 
-// Send metadata
-data, err := utxoStore.Create(ctx, tx, blockHeight)
-if err != nil {
-    return err
+// Example 2: Send DELETE transaction metadata message
+txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+
+// Create a new protobuf message for deleting metadata
+deleteMessage := &kafkamessage.KafkaTxMetaTopicMessage{
+    TxHash: txHash,
+    Action: kafkamessage.KafkaTxMetaActionType_DELETE,
+    // Content is empty for DELETE operations
 }
+
+// Serialize to protobuf format
+deleteData, err := proto.Marshal(deleteMessage)
+if err != nil {
+    return fmt.Errorf("failed to serialize DELETE metadata message: %w", err)
+}
+
+// Send to Kafka
 producer.Publish(&kafka.Message{
-    Value: append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...),
+    Value: deleteData,
 })
 ```
 
 #### Receiving Messages
 ```go
-func handleMessage(msg *kafka.Message) error {
-    if msg == nil || len(msg.Value) <= chainhash.HashSize {
+// Handle incoming transaction metadata message
+func handleTxMetaMessage(msg *kafka.Message) error {
+    if msg == nil {
         return nil
     }
 
-    hash := chainhash.Hash(msg.Value[:chainhash.HashSize])
-    content := msg.Value[chainhash.HashSize:]
-
-    if bytes.Equal(content, []byte("delete")) {
-        return handleDelete(&hash)
+    // Deserialize from protobuf format
+    txMetaMessage := &kafkamessage.KafkaTxMetaTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, txMetaMessage); err != nil {
+        return fmt.Errorf("failed to deserialize transaction metadata message: %w", err)
     }
 
-    return handleMetadata(&hash, content)
+    // Extract transaction hash
+    var txHash chainhash.Hash
+    copy(txHash[:], txMetaMessage.TxHash)
+
+    // Process based on action type
+    switch txMetaMessage.Action {
+    case kafkamessage.KafkaTxMetaActionType_ADD:
+        // Handle ADD operation
+        metadata := deserializeMetadata(txMetaMessage.Content)
+        return handleAddMetadata(txHash, metadata)
+
+    case kafkamessage.KafkaTxMetaActionType_DELETE:
+        // Handle DELETE operation
+        return handleDeleteMetadata(txHash)
+
+    default:
+        return fmt.Errorf("unknown action type: %d", txMetaMessage.Action)
+    }
 }
 ```
+
+### Error Cases
+- Invalid message format: Message cannot be unmarshaled to KafkaTxMetaTopicMessage
+- Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
+- Unknown action type: Action is not a recognized KafkaTxMetaActionType enum value
+- Missing content for ADD: Content field is empty when Action is ADD
 
 ---
 
 ## Rejected Transaction Message Format
 
-`kafka_rejectedTxConfig` is the Kafka topic used for broadcasting rejected transactions. This topic is used to notify subscribers of transactions that have been rejected during validation.
+### Rejected Transaction Topic
 
-## Rejected Transaction Topic
+`kafka_rejectedTxConfig` is the Kafka topic used for broadcasting rejected transactions. This topic notifies subscribers about transactions that have been rejected during validation.
 
 ### Message Structure
-The Kafka message consists of a binary value containing a transaction hash and an error message:
 
-| Field        | Size    | Format      | Description                       |
-|--------------|---------|-------------|-----------------------------------|
-| TX Hash      | 32 bytes| Raw bytes   | Double SHA256 hash of transaction |
-| Error Message| Variable| UTF-8 string| Rejection reason                  |
+The rejected transaction message is defined in protobuf as `KafkaRejectedTxTopicMessage`:
 
+```protobuf
+message KafkaRejectedTxTopicMessage {
+  bytes txHash = 1;  // Transaction hash (32 bytes)
+  string reason = 2; // Rejection reason
+}
+```
 
 ### Field Specifications
 
-#### Transaction Hash
-- Fixed size: 32 bytes (chainhash.HashSize)
-- Format: Raw bytes of double SHA256 hash
+#### txHash
+- Type: bytes
+- Description: Raw bytes of the transaction hash (32 bytes), computed as double SHA256 hash
 - Computation: `sha256(sha256(transaction_bytes))`
-- Validation: Must be exactly 32 bytes long
+- Required: Yes
 
-#### Error Message
-- Size: Variable length
-- Format: UTF-8 encoded string
-- Content: Description of why the transaction was rejected
+#### reason
+- Type: string
+- Description: Human-readable description of why the transaction was rejected
+- Required: Yes
 
-### Message Format Example
-```
-[32 bytes tx hash][variable length error message]
+### Example
 
-Example:
-7d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a2d1c7a5c9f6e4b3a + "insufficient fee"
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "txHash": "<binary data - 32 bytes>",
+  "reason": "Insufficient fee for transaction size"
+}
 ```
 
 ### Code Examples
 
 #### Sending Messages
 ```go
-// Prepare and send rejected transaction message
-txHash := tx.TxIDChainHash() // returns double-hashed transaction ID
+// Create the rejected transaction message
+txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+reasonStr := "Insufficient fee for transaction size"
+
+// Create a new protobuf message
+message := &kafkamessage.KafkaRejectedTxTopicMessage{
+    TxHash: txHash,
+    Reason: reasonStr,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize rejected transaction message: %w", err)
+}
+
+// Send to Kafka
 producer.Publish(&kafka.Message{
-    Value: append(txHash.CloneBytes(), err.Error()...),
+    Value: data,
 })
 ```
 
 #### Receiving Messages
 ```go
-func handleMessage(msg *kafka.Message) error {
-    if msg == nil || len(msg.Value) <= chainhash.HashSize {
+// Handle incoming rejected transaction message
+func handleRejectedTxMessage(msg *kafka.Message) error {
+    if msg == nil {
         return nil
     }
 
-    // Extract transaction hash (first 32 bytes)
-    hash, err := chainhash.NewHash(msg.Value[:chainhash.HashSize])
-    if err != nil {
-        return fmt.Errorf("error getting chainhash: %w", err)
+    // Deserialize from protobuf format
+    rejectedTxMessage := &kafkamessage.KafkaRejectedTxTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, rejectedTxMessage); err != nil {
+        return fmt.Errorf("failed to deserialize rejected transaction message: %w", err)
     }
+
+    // Extract transaction hash
+    var txHash chainhash.Hash
+    copy(txHash[:], rejectedTxMessage.TxHash)
 
     // Extract rejection reason
-    reason := string(msg.Value[chainhash.HashSize:])
+    reason := rejectedTxMessage.Reason
 
-    // Create rejection message
-    rejectedTxMessage := p2p.RejectedTxMessage{
-        TxId:   hash.String(),
-        Reason: reason,
-        PeerId: p2pNodeID,
-    }
-
-    // Process the rejection...
+    // Process the rejected transaction notification...
+    log.Printf("Transaction %s was rejected: %s", txHash.String(), reason)
     return nil
 }
 ```
 
-### Downstream Message Structure
+### Error Cases
+- Invalid message format: Message cannot be unmarshaled to KafkaRejectedTxTopicMessage
+- Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
+- Missing reason: Reason field is empty
 
-After processing, the rejection is formatted as JSON:
-```json
-{
-    "txId": "hash_in_hex_string",
-    "reason": "rejection_reason",
-    "peerId": "p2p_node_identifier"
+## Inventory Message Format
+
+### Inventory Topic
+
+The inventory message topic is used for broadcasting inventory vectors between components. This allows components to notify each other about available blocks, transactions, and other data.
+
+### Message Structure
+
+The inventory message is defined in protobuf as `KafkaInvTopicMessage`:
+
+```protobuf
+message KafkaInvTopicMessage {
+  string peerAddress = 1;  // Address of the peer
+  repeated Inv inv = 2;    // List of inventory items
 }
 
+message Inv {
+  InvType type = 1;  // Type of inventory item
+  bytes hash = 2;    // Hash of the inventory item
+}
+
+enum InvType {
+  Error         = 0;
+  Tx            = 1;
+  Block         = 2;
+  FilteredBlock = 3;
+}
 ```
 
+### Field Specifications
+
+#### peerAddress
+- Type: string
+- Description: Network address of the peer that has the inventory item
+- Required: Yes
+
+#### inv
+- Type: repeated Inv
+- Description: List of inventory items
+- Required: Yes
+
+##### Inv
+
+###### type
+- Type: InvType (enum)
+- Description: Type of inventory item
+- Required: Yes
+- Values:
+  - Error (0): Error or unknown type
+  - Tx (1): Transaction
+  - Block (2): Block
+  - FilteredBlock (3): Filtered block
+
+###### hash
+- Type: bytes
+- Description: Hash of the inventory item (32 bytes)
+- Required: Yes
+
+### Example
+
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "peerAddress": "192.168.1.10:8333",
+  "inv": [
+    {
+      "type": 1,  // Tx
+      "hash": "<binary data - 32 bytes>"
+    },
+    {
+      "type": 2,  // Block
+      "hash": "<binary data - 32 bytes>"
+    }
+  ]
+}
+```
+
+### Code Examples
+
+#### Sending Messages
+```go
+// Create the inventory message
+peerAddress := "192.168.1.10:8333"
+
+// Create inventory items
+invItems := []*kafkamessage.Inv{
+    {
+        Type: kafkamessage.InvType_Tx,
+        Hash: txHash[:], // 32-byte transaction hash
+    },
+    {
+        Type: kafkamessage.InvType_Block,
+        Hash: blockHash[:], // 32-byte block hash
+    },
+}
+
+// Create a new protobuf message
+message := &kafkamessage.KafkaInvTopicMessage{
+    PeerAddress: peerAddress,
+    Inv:         invItems,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize inventory message: %w", err)
+}
+
+// Send to Kafka
+producer.Publish(&kafka.Message{
+    Value: data,
+})
+```
+
+#### Receiving Messages
+```go
+// Handle incoming inventory message
+func handleInvMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
+
+    // Deserialize from protobuf format
+    invMessage := &kafkamessage.KafkaInvTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, invMessage); err != nil {
+        return fmt.Errorf("failed to deserialize inventory message: %w", err)
+    }
+
+    // Extract peer address
+    peerAddr := invMessage.PeerAddress
+
+    // Process inventory items
+    for _, inv := range invMessage.Inv {
+        var hash chainhash.Hash
+        copy(hash[:], inv.Hash)
+
+        switch inv.Type {
+        case kafkamessage.InvType_Tx:
+            log.Printf("Received transaction inventory from %s: %s", peerAddr, hash.String())
+            // Process transaction inventory...
+
+        case kafkamessage.InvType_Block:
+            log.Printf("Received block inventory from %s: %s", peerAddr, hash.String())
+            // Process block inventory...
+
+        case kafkamessage.InvType_FilteredBlock:
+            log.Printf("Received filtered block inventory from %s: %s", peerAddr, hash.String())
+            // Process filtered block inventory...
+
+        default:
+            log.Printf("Received unknown inventory type %d from %s: %s", inv.Type, peerAddr, hash.String())
+        }
+    }
+
+    return nil
+}
+```
+
+### Error Cases
+- Invalid message format: Message cannot be unmarshaled to KafkaInvTopicMessage
+- Empty peer address: PeerAddress field is empty
+- Invalid inventory item: Hash does not contain exactly 32 bytes or Type is unrecognized
+
+## Final Block Message Format
+
+### Final Block Topic
+
+`kafka_blocksFinalConfig` is the Kafka topic used for broadcasting finalized blocks. This topic notifies subscribers about blocks that have been fully validated and accepted into the blockchain.
+
+### Message Structure
+
+The final block message is defined in protobuf as `KafkaBlocksFinalTopicMessage`:
+
+```protobuf
+message KafkaBlocksFinalTopicMessage {
+    bytes header = 1;                    // Block header bytes
+    uint64 transaction_count = 2;        // Number of transactions in block
+    uint64 size_in_bytes = 3;            // Size of block in bytes
+    repeated bytes subtree_hashes = 4;   // Merkle tree subtree hashes
+    bytes coinbase_tx = 5;               // Coinbase transaction bytes
+    uint32 height = 6;                   // Block height
+}
+```
+
+### Field Specifications
+
+#### header
+- Type: bytes
+- Description: Serialized block header
+- Required: Yes
+
+#### transaction_count
+- Type: uint64
+- Description: Total number of transactions in the block
+- Required: Yes
+
+#### size_in_bytes
+- Type: uint64
+- Description: Total size of the block in bytes
+- Required: Yes
+
+#### subtree_hashes
+- Type: repeated bytes
+- Description: List of Merkle tree subtree hashes that compose the block
+- Required: Yes
+
+#### coinbase_tx
+- Type: bytes
+- Description: Serialized coinbase transaction
+- Required: Yes
+
+#### height
+- Type: uint32
+- Description: Block height in the blockchain
+- Required: Yes
+
+### Example
+
+Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
+
+```json
+{
+  "header": "<binary data - 80 bytes>",
+  "transaction_count": 2500,
+  "size_in_bytes": 1048576,
+  "subtree_hashes": [
+    "<binary data - 32 bytes>",
+    "<binary data - 32 bytes>",
+    "<binary data - 32 bytes>"
+  ],
+  "coinbase_tx": "<binary data - variable length>",
+  "height": 12345
+}
+```
+
+### Code Examples
+
+#### Sending Messages
+```go
+// Create the final block message
+blockHeader := block.Header.Serialize() // serialized block header bytes
+txCount := uint64(block.Transactions.Len())
+blockSize := uint64(block.SerializedSize())
+
+// Get subtree hashes
+subtreeHashes := make([][]byte, len(merkleTree.SubTrees))
+for i, subtree := range merkleTree.SubTrees {
+    subtreeHashes[i] = subtree.Hash()[:]
+}
+
+// Get coinbase transaction
+coinbaseTx := block.Transactions[0].Serialize()
+blockHeight := uint32(block.Height)
+
+// Create a new protobuf message
+message := &kafkamessage.KafkaBlocksFinalTopicMessage{
+    Header:          blockHeader,
+    TransactionCount: txCount,
+    SizeInBytes:     blockSize,
+    SubtreeHashes:   subtreeHashes,
+    CoinbaseTx:      coinbaseTx,
+    Height:          blockHeight,
+}
+
+// Serialize to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize final block message: %w", err)
+}
+
+// Send to Kafka
+producer.Publish(&kafka.Message{
+    Value: data,
+})
+```
+
+#### Receiving Messages
+```go
+// Handle incoming final block message
+func handleFinalBlockMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
+
+    // Deserialize from protobuf format
+    finalBlockMessage := &kafkamessage.KafkaBlocksFinalTopicMessage{}
+    if err := proto.Unmarshal(msg.Value, finalBlockMessage); err != nil {
+        return fmt.Errorf("failed to deserialize final block message: %w", err)
+    }
+
+    // Parse block header
+    header := wire.BlockHeader{}
+    if err := header.Deserialize(bytes.NewReader(finalBlockMessage.Header)); err != nil {
+        return fmt.Errorf("invalid block header: %w", err)
+    }
+
+    // Extract other fields
+    txCount := finalBlockMessage.TransactionCount
+    blockSize := finalBlockMessage.SizeInBytes
+    subtreeHashes := finalBlockMessage.SubtreeHashes
+    coinbaseTxBytes := finalBlockMessage.CoinbaseTx
+    height := finalBlockMessage.Height
+
+    // Parse coinbase transaction
+    coinbaseTx, err := bsvutil.NewTxFromBytes(coinbaseTxBytes)
+    if err != nil {
+        return fmt.Errorf("invalid coinbase transaction: %w", err)
+    }
+
+    // Process the final block...
+    log.Printf("Received final block at height %d with %d transactions (size: %d bytes)",
+              height, txCount, blockSize)
+
+    // Process subtree hashes...
+    for i, hashBytes := range subtreeHashes {
+        var hash chainhash.Hash
+        copy(hash[:], hashBytes)
+        log.Printf("  Subtree hash %d: %s", i, hash.String())
+    }
+
+    return nil
+}
+```
+
+### Error Cases
+- Invalid message format: Message cannot be unmarshaled to KafkaBlocksFinalTopicMessage
+- Invalid block header: Header bytes cannot be deserialized to a valid block header
+- Invalid coinbase transaction: Coinbase transaction bytes cannot be parsed
+- Missing subtree hashes: No subtree hashes provided
+
+## General Code Examples
+
+### Serializing Messages
+
+Here's a general example of how to serialize a protobuf message for Kafka:
+
+```go
+// Create a new message
+message := &kafkamessage.KafkaBlockTopicMessage{
+    Hash: blockHash[:],
+    URL:  datahubUrl,
+}
+
+// Serialize the message to protobuf format
+data, err := proto.Marshal(message)
+if err != nil {
+    return fmt.Errorf("failed to serialize message: %w", err)
+}
+
+// Send to Kafka
+producer.Publish(&kafka.Message{
+    Value: data,
+})
+```
+
+### Deserializing Messages
+
+Here's a general example of how to deserialize a protobuf message from Kafka:
+
+```go
+func handleBlockMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
+
+    // Create a new message container
+    blockMessage := &kafkamessage.KafkaBlockTopicMessage{}
+
+    // Deserialize the message from protobuf format
+    if err := proto.Unmarshal(msg.Value, blockMessage); err != nil {
+        return fmt.Errorf("failed to deserialize message: %w", err)
+    }
+
+    // Extract block hash
+    var blockHash chainhash.Hash
+    copy(blockHash[:], blockMessage.Hash)
+
+    // Extract DataHub URL
+    dataHubUrl := blockMessage.URL
+
+    // Process the message...
+    return nil
+}
+```
 
 ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ## Other Resources
 

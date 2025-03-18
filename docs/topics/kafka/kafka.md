@@ -121,6 +121,7 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 
 ## 5. Other Resources
 
+- [Kafka Message Format](../../references/kafkaMessageFormat.md)
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
 - [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 - [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
