@@ -9,7 +9,6 @@ import (
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/test/testcontainers"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,14 +16,18 @@ var (
 	// DEBUG DEBUG DEBUG
 	blockWait = 30 * time.Second
 )
+
 func TestMoveUp(t *testing.T) {
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../docker-compose-host.yml",
+		ComposeFile: "../../docker-compose-host.yml",
 	})
 	require.NoError(t, err)
 
 	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
 	node2.CallRPC(t, "generate", []interface{}{101})
+
+	block101, err := node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 101)
+	require.NoError(t, err)
 
 	tc.StopNode(t, "teranode-1")
 
@@ -46,18 +49,21 @@ func TestMoveUp(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 
-	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
-	require.NoError(t, err)
+	td.WaitForBlockHeight(t, block101, blockWait, true)
 
-	// generate 1 block
+	// generate 1 block on node1
 	_, err = td.CallRPC("generate", []interface{}{1})
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	block102, err := node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 102)
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)
 
-	assert.Equal(t, uint32(102), block102.Height)
+	time.Sleep(10 * time.Second)
+	_, err = node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 102)
+	require.NoError(t, err)
+
+	// assert.Equal(t, block102Node1.Header.Hash(), block102Node2.Header.Hash())
 }
 
 func TestMoveDownMoveUp(t *testing.T) {
@@ -100,11 +106,11 @@ func TestMoveDownMoveUp(t *testing.T) {
 	td.ResetServiceManagerContext(t)
 
 	td2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        true,
-		EnableValidator:  true,
+		EnableRPC:         true,
+		EnableP2P:         true,
+		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsOverride: settings.NewSettings("docker.host.teranode1"),
+		SettingsOverride:  settings.NewSettings("docker.host.teranode1"),
 	})
 
 	time.Sleep(10 * time.Second)
@@ -123,9 +129,9 @@ func TestMoveDownMoveUp(t *testing.T) {
 
 func TestTDRestart(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        false,
-		EnableValidator:  true,
+		EnableRPC:       true,
+		EnableP2P:       false,
+		EnableValidator: true,
 	})
 
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -144,9 +150,9 @@ func TestTDRestart(t *testing.T) {
 	td.ResetServiceManagerContext(t)
 
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        false,
-		EnableValidator:  true,
+		EnableRPC:         true,
+		EnableP2P:         false,
+		EnableValidator:   true,
 		SkipRemoveDataDir: true,
 	})
 

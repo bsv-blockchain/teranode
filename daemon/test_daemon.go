@@ -72,6 +72,7 @@ type TestOptions struct {
 	EnableRPC               bool
 	EnableP2P               bool
 	EnableValidator         bool
+	EnableLegacy            bool
 	StartDockerNetwork      bool
 	SettingsContextOverride string
 	SettingsOverride        *settings.Settings
@@ -196,6 +197,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	if opts.EnableValidator {
 		services = append(services, "-validator=1")
+	}
+
+	if opts.EnableLegacy {
+		services = append(services, "-legacy=1")
 	}
 
 	go d.Start(logger, services, tSettings, readyCh)
