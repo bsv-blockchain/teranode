@@ -16,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -102,7 +102,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 //   - error: Any error encountered during writing
 func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, returnWireBlock bool) error {
 	txCountVarInt := bt.VarInt(block.TransactionCount)
-	txCountVarIntLen := len(txCountVarInt)
+	txCountVarIntLen := txCountVarInt.Length()
 
 	if !returnWireBlock {
 		// write bitcoin block magic number
@@ -136,7 +136,7 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 	}
 
 	// write number of transactions
-	if _, err := w.Write(txCountVarInt); err != nil {
+	if _, err := w.Write(txCountVarInt.Bytes()); err != nil {
 		return err
 	}
 

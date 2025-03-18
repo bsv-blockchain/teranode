@@ -2202,9 +2202,7 @@ func (x *GetLastNInvalidBlocksRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetLastNInvalidBlocksRequest) ProtoMessage() {
-	// generated code
-}
+func (*GetLastNInvalidBlocksRequest) ProtoMessage() {}
 
 func (x *GetLastNInvalidBlocksRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[39]
@@ -2249,9 +2247,7 @@ func (x *GetLastNInvalidBlocksResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetLastNInvalidBlocksResponse) ProtoMessage() {
-	// generated code
-}
+func (*GetLastNInvalidBlocksResponse) ProtoMessage() {}
 
 func (x *GetLastNInvalidBlocksResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[40]

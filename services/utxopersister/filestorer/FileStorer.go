@@ -17,7 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/bytesize"
-	"github.com/libsv/go-bt"
+	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 

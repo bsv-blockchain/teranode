@@ -41,7 +41,6 @@ require (
 	github.com/libp2p/go-libp2p-kad-dht v0.29.0
 	github.com/libp2p/go-libp2p-pubsub v0.13.0
 	github.com/libsv/go-bk v0.1.6
-	github.com/libsv/go-bt v1.0.8
 	github.com/libsv/go-bt/v2 v2.2.5
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v0.7.3
@@ -55,7 +54,7 @@ require (
 	github.com/rs/zerolog v1.32.0
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v5 v5.1.1
-	github.com/spaolacci/murmur3 v1.1.0
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.35.0
@@ -97,6 +96,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
 	github.com/go-zeromq/zmq4 v0.15.0 // indirect
+	github.com/libsv/go-bt v1.0.8 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect

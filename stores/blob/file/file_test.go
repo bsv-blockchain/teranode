@@ -19,7 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/libsv/go-bt"
+	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/rand"

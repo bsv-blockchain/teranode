@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/libsv/go-bt"
+	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -129,12 +129,12 @@ func TestGenesisCoinbaseBytes(t *testing.T) {
 		t.Fatalf("Failed to create new tx from bytes: %v", err)
 	}
 
-	if coinbaseTx.GetTxID() != expected {
-		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expected, coinbaseTx.GetTxID())
+	if coinbaseTx.TxID() != expected {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expected, coinbaseTx.TxID())
 	}
 
-	if expectedCoinbaseHash != coinbaseTx.GetTxID() {
-		t.Fatalf("Incorrect genesis coinbase txid.\nexpected: %s\ngot:	%s", expectedCoinbaseHash, coinbaseTx.GetTxID())
+	if expectedCoinbaseHash != coinbaseTx.TxID() {
+		t.Fatalf("Incorrect genesis coinbase txid.\nexpected: %s\ngot:	%s", expectedCoinbaseHash, coinbaseTx.TxID())
 	}
 }
 
