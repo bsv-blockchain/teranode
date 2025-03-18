@@ -87,9 +87,6 @@ jobs:
           sources: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-amd64
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-arm64
-          platforms: |
-            linux/amd64
-            linux/arm64
 
       # Push manifest for GH Packages
       - name: Create version-specific multi-arch manifest
@@ -101,6 +98,3 @@ jobs:
           sources: |
             ghcr.io/${{ steps.repo-name.outputs.repo }}:${{ inputs.tag }}-amd64
             ghcr.io/${{ steps.repo-name.outputs.repo }}:${{ inputs.tag }}-arm64
-          platforms: |
-            linux/amd64
-            linux/arm64

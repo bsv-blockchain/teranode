@@ -1,0 +1,38 @@
+name: Remote build and push teranode images from pull requests
+
+on:
+  workflow_dispatch:
+#  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: '>=1.24.0'
+
+jobs:
+  # Tests and code lint
+  test_and_lint:
+    uses: ./.github/workflows/teranode_pr_tests.yaml
+    secrets: inherit
+
+  # Run remote build and deploy workflow
+  build-and-deploy:
+    uses: bitcoin-sv/.github/.github/workflows/build_and_deploy.yaml@main
+    with:
+      repository: ${{ github.repository }}
+      tag_latest: false
+      build_args: |
+        DEBUG=true
+        RACE=true
+        GITHUB_SHA=${{ github.sha }}
+        GITHUB_REF=${{ github.ref_name }}
+      use_packages: true
+      use_ecr: true
+      ecr_region: "eu-north-1"
+      ecr_repo: "teranode"
+      architectures: '["amd64", "arm64"]'
+      runner_labels: '{"amd64":"teranode-runner","arm64":"teranode-runner-arm","manifest":"ubuntu-latest"}'
+    secrets: inherit
