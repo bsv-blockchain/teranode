@@ -34,8 +34,7 @@ Dependencies:
     - Distributor client for transaction broadcasting
 
 How to Run:
-    cd test/tnb/
-    go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb
+    go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb ./test/tnb/tnb6_test.go
 
 Test Flow:
     1. Initialize test environment with required settings
@@ -48,9 +47,11 @@ Test Flow:
 package tnb
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/libsv/go-bk/bec"
@@ -140,8 +141,43 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	_, err = node1.DistributorClient.SendTransaction(ctx, tx)
 	require.NoError(t, err, "Failed to send transaction")
 
-	// Wait a moment for the transaction to be processed
-	time.Sleep(1 * time.Second)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// goroutine to check if tx exists in utxostore (removing time.Sleep)
+	utxoReady := make(chan *meta.Data)
+	go func() {
+		defer close(utxoReady)
+		for {
+			utxos, err := node1.UtxoStore.Get(ctx, tx.TxIDChainHash())
+			if err == nil && utxos != nil {
+				utxoReady <- utxos
+				return
+			}
+			select {
+			case <-ctxTimeout.Done():
+				return
+			default:
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+
+	select {
+	case utxos := <-utxoReady:
+		t.Logf("UTXO meta data: %+v\n", utxos)
+
+		if utxos.Tx != nil {
+			for i, out := range utxos.Tx.Outputs {
+				t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", i, out.Satoshis, *out.LockingScript)
+			}
+		} else {
+			t.Logf("No tx found into meta.Data")
+		}
+
+	case <-ctxTimeout.Done():
+		t.Fatalf("Timeout waiting for transaction to be processed")
+	}
 
 	require.NoError(t, err, "First output should be in UTXO set")
 
