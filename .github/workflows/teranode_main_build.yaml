@@ -11,6 +11,10 @@ on:
 #      - staging
 #      - release/*
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   # Tests and code lint
   test_and_lint:

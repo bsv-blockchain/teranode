@@ -1,6 +1,6 @@
 # These base images are able to be customized via build-args override
-ARG BASE_IMG=ghcr.io/bitcoin-sv/teranode-base:build-0d8daab
-ARG RUN_IMG=ghcr.io/bitcoin-sv/teranode-base:run-e8ff7fc
+ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
+ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
 
 ARG PLATFORM_ARCH=linux/amd64
 FROM ${BASE_IMG}

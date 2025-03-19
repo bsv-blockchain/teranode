@@ -106,8 +106,6 @@ jobs:
             GITHUB_REF=${{ github.ref_name }}
             ARCH=${{ inputs.arch }}
             VERSION=${{ inputs.tag }}
-            BASE_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-build-${{ steps.base.outputs.id }}
-            RUN_IMG=${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:base-run-${{ steps.run.outputs.id }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
             ghcr.io/${{ steps.repo-name.outputs.repo }}:${{ inputs.tag }}-${{ inputs.arch }}
