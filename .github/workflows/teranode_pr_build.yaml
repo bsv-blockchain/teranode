@@ -21,6 +21,9 @@ jobs:
   # Run remote build and deploy workflow
   build-and-deploy:
     uses: bitcoin-sv/.github/.github/workflows/build_and_deploy.yaml@main
+    permissions:
+      contents: read
+      packages: write
     with:
       repository: ${{ github.repository }}
       tag_latest: false
