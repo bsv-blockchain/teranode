@@ -31,6 +31,9 @@ var (
 	prometheusHandleHelp                 prometheus.Histogram
 	prometheusHandleSetBan               prometheus.Histogram
 	prometheusHandleGetMiningInfo        prometheus.Histogram
+	prometheusHandleFreeze               prometheus.Histogram
+	prometheusHandleUnfreeze             prometheus.Histogram
+	prometheusHandleReassign             prometheus.Histogram
 )
 
 var (
@@ -236,6 +239,33 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "get_mining_info",
 			Help:      "Histogram of calls to handleGetMiningInfo in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleFreeze = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "freeze",
+			Help:      "Histogram of calls to handleFreeze in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleUnfreeze = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "unfreeze",
+			Help:      "Histogram of calls to handleUnfreeze in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleReassign = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "reassign",
+			Help:      "Histogram of calls to handleReassign in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

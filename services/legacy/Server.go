@@ -321,7 +321,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	go s.server.Start()
-	s.logger.Infof("[Legacy Server] Internal server started")
+	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
 
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "legacy", s.settings.Legacy.GRPCListenAddress, func(server *grpc.Server) {

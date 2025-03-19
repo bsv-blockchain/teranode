@@ -24,6 +24,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, errors.NewConfigurationError("no legacy_grpcAddress setting found")
 	}
 
+	logger.Infof("[Legacy Client] Starting gRPC client on address %s\n", legacyGrpcAddress)
+
 	return NewClientWithAddress(ctx, logger, tSettings, legacyGrpcAddress)
 }
 

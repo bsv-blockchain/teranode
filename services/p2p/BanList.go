@@ -309,7 +309,7 @@ func (b *BanList) savePeerToDatabase(ctx context.Context, key string, info BanIn
         VALUES ($1, $2, $3)
         ON CONFLICT (key) DO UPDATE
         SET expiration_time = $2, subnet = $3
-    `, key, info.ExpirationTime, info.Subnet.String())
+    `, key, info.ExpirationTime.Format(time.RFC3339), info.Subnet.String())
 
 	if err != nil {
 		return errors.NewProcessingError("failed to save peer to database", err)
@@ -333,13 +333,21 @@ func (b *BanList) loadFromDatabase(ctx context.Context) error {
 		default:
 			var key string
 
+			var expirationTimeStr string
+
 			var expirationTime time.Time
 
 			var subnetStr string
 
-			err := rows.Scan(&key, &expirationTime, &subnetStr)
+			err := rows.Scan(&key, &expirationTimeStr, &subnetStr)
 			if err != nil {
 				return err
+			}
+
+			expirationTime, err = time.Parse(time.RFC3339, expirationTimeStr)
+			if err != nil {
+				b.logger.Errorf("Error parsing expiration time %s: %v", expirationTimeStr, err)
+				continue
 			}
 
 			_, subnet, err := net.ParseCIDR(subnetStr)

@@ -160,6 +160,11 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	// BSV mining methods
 	"getminingcandidate":   handleGetMiningCandidate,
 	"submitminingsolution": handleSubmitMiningSolution,
+
+	// BSV alert methods
+	"freeze":   handleFreeze,
+	"unfreeze": handleUnfreeze,
+	"reassign": handleReassign,
 }
 
 // list of commands that we recognize, but for which bsvd has no support because

@@ -684,6 +684,25 @@ type SetBanCmd struct {
 	Absolute   *bool
 }
 
+type FreezeCmd struct {
+	TxID     string
+	Vout     int
+	UTXOHash string
+}
+
+type UnfreezeCmd struct {
+	TxID     string
+	Vout     int
+	UTXOHash string
+}
+
+type ReassignCmd struct {
+	OldTxID     string
+	OldVout     int
+	OldUTXOHash string
+	NewUTXOHash string
+}
+
 // NewSetBanCmd returns a new instance which can be used to issue a setban JSON-RPC command.
 func NewSetBanCmd(ipOrSubnet string, command string, banTime *int64, absolute *bool) *SetBanCmd {
 	return &SetBanCmd{

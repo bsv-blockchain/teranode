@@ -1150,6 +1150,39 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	}, nil
 }
 
+func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleFreeze",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleFreeze),
+		tracing.WithLogMessage(s.logger, "[handleFreeze] called"),
+	)
+	defer deferFn()
+
+	return nil, nil
+}
+
+func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleUnfreeze",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleUnfreeze),
+		tracing.WithLogMessage(s.logger, "[handleUnfreeze] called"),
+	)
+	defer deferFn()
+
+	return nil, nil
+}
+
+func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleReassign",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleReassign),
+		tracing.WithLogMessage(s.logger, "[handleReassign] called"),
+	)
+	defer deferFn()
+
+	return nil, nil
+}
+
 // messageToHex serializes a message to the wire protocol encoding using the
 // latest protocol version and returns a hex-encoded string of the result.
 func (s *RPCServer) messageToHex(msg wire.Message) (string, error) {

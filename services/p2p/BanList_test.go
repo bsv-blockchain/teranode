@@ -271,3 +271,44 @@ func TestBanListChannel(t *testing.T) {
 		t.Fatal("Timed out waiting for events")
 	}
 }
+
+func TestClearBanlist(t *testing.T) {
+	banList, _, err := setupBanList(t)
+	require.NoError(t, err)
+
+	// Add an IP
+	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Add a subnet
+	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Clear the ban list
+	banList.Clear()
+
+	// Check that the ban list is empty
+	bannedPeers := banList.bannedPeers
+	require.Empty(t, bannedPeers)
+}
+
+func TestLoadFromDatabase(t *testing.T) {
+	banList, _, err := setupBanList(t)
+	require.NoError(t, err)
+
+	// Add an IP
+	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Add a subnet
+	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Load from database
+	err = banList.loadFromDatabase(context.Background())
+	require.NoError(t, err)
+
+	// Check that the ban list is loaded
+	bannedPeers := banList.bannedPeers
+	require.Equal(t, 2, len(bannedPeers))
+}
