@@ -45,24 +45,43 @@ var (
 	traceCloser       io.Closer
 )
 
+type externalService struct {
+	Name     string
+	InitFunc func() (servicemanager.Service, error)
+}
+
 type Daemon struct {
+	Ctx           context.Context
 	doneCh        chan struct{}
 	closeDoneOnce sync.Once
 
-	stopCh         chan struct{} // Channel to signal when all services have stopped
-	closeStopOnce  sync.Once
-	server         *http.Server // Add this field
-	ServiceManager *servicemanager.ServiceManager
+	stopCh           chan struct{} // Channel to signal when all services have stopped
+	closeStopOnce    sync.Once
+	server           *http.Server // Add this field
+	ServiceManager   *servicemanager.ServiceManager
+	externalServices []*externalService
 }
 
 func New() *Daemon {
+	ctx := context.Background()
+
 	return &Daemon{
-		closeDoneOnce: sync.Once{},
-		closeStopOnce: sync.Once{},
-		doneCh:        make(chan struct{}),
-		stopCh:        make(chan struct{}),
-		server:        nil,
+		Ctx:              ctx,
+		closeDoneOnce:    sync.Once{},
+		closeStopOnce:    sync.Once{},
+		doneCh:           make(chan struct{}),
+		stopCh:           make(chan struct{}),
+		server:           nil,
+		ServiceManager:   servicemanager.NewServiceManager(ctx, ulogger.New("ServiceManager")),
+		externalServices: make([]*externalService, 0),
 	}
+}
+
+func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager.Service, error)) {
+	d.externalServices = append(d.externalServices, &externalService{
+		Name:     name,
+		InitFunc: initFunc,
+	})
 }
 
 func (d *Daemon) Stop(timeout ...time.Duration) error {
@@ -111,8 +130,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		}
 	}
 
-	sm := servicemanager.NewServiceManager(logger)
-	d.ServiceManager = sm
+	sm := d.ServiceManager
 
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -140,7 +158,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		readyChInternal = readyCh[0]
 	}
 
-	err := startServices(sm.Ctx, logger, tSettings, sm, args, readyChInternal)
+	err := d.startServices(sm.Ctx, logger, tSettings, sm, args, readyChInternal)
 	if err != nil {
 		logger.Errorf("error starting services: %v", err)
 		sm.ForceShutdown()
@@ -224,7 +242,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 
 // startServices starts the services based on the command line arguments and the config file
 // nolint:gocognit
-func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string, readyCh chan<- struct{}) error {
+func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 
 	if readyCh != nil {
@@ -245,6 +263,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	startLegacy := shouldStart("Legacy", args)
 	startRPC := shouldStart("RPC", args)
 	startAlert := shouldStart("Alert", args)
+
+	appCount += len(d.externalServices)
 
 	if help || appCount == 0 {
 		printUsage()
@@ -829,6 +849,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			blockValidationClient,
 			blockassemblyClient,
 		)); err != nil {
+			return err
+		}
+	}
+
+	for _, externalService := range d.externalServices {
+		service, err := externalService.InitFunc()
+		if err != nil {
+			return err
+		}
+
+		if err := sm.AddService(externalService.Name, service); err != nil {
 			return err
 		}
 	}

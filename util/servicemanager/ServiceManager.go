@@ -45,18 +45,17 @@ type ServiceManager struct {
 }
 
 // NewServiceManager creates a new service manager or returns the existing instance
-func NewServiceManager(logger ulogger.Logger) *ServiceManager {
+func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
 	once.Do(func() {
-		instance = initServiceManager(logger)
+		instance = initServiceManager(ctx, logger)
 	})
 
 	return instance
 }
 
 // initServiceManager initializes a new ServiceManager instance
-func initServiceManager(logger ulogger.Logger) *ServiceManager {
-	ctx, cancelFunc := context.WithCancel(context.Background())
-
+func initServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
+	ctx, cancelFunc := context.WithCancel(ctx)
 	g, ctx := errgroup.WithContext(ctx)
 
 	sm := &ServiceManager{
