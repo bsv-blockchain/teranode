@@ -1,6 +1,6 @@
-# These values should be overwritten by buildx --build-args and replaced with cluster base/run ID from repo
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
+# These base images are able to be customized via build-args override
+ARG BASE_IMG=ghcr.io/bitcoin-sv/teranode-base:build-0d8daab
+ARG RUN_IMG=ghcr.io/bitcoin-sv/teranode-base:run-e8ff7fc
 
 ARG PLATFORM_ARCH=linux/amd64
 FROM ${BASE_IMG}
