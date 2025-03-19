@@ -3,175 +3,162 @@
 package validator
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
-	bdkconfig "github.com/bitcoin-sv/bdk/module/gobdk/config"
-	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator"
-	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/gocarina/gocsv"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
-// go test -v -tags test_validator ./test/...
+// go test -v -tags test_validator -timeout 60m ./test/services/validator/...
 
 var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
 
-type TxsExtended struct {
-	Txs    []*bt.Tx
-	TxsBin [][]byte
+// CsvDataRecord hold a data record for csv file
+type CsvDataRecord struct {
+	ChainNet        string
+	BlockHeight     uint32
+	TXID            string
+	TxHexExtended   string
+	UTXOHeights     string // string joinning utxo heights with separator |
+	DataUTXOHeights []uint32
+	Tx              *bt.Tx
 }
 
-func createScriptInterpreter(verifierType validator.TxInterpreter, logger ulogger.Logger, policy *settings.PolicySettings, params *chaincfg.Params) validator.TxScriptInterpreter {
-	createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[verifierType]
-	if !ok {
-		panic(fmt.Errorf("unable to find script interpreter %v", verifierType))
-	}
+// Benchmark run script verification with different verifier without
+// caring about the error
+//
+//	go test -bench=ScriptVerification -tags test_validator -timeout 120m ./test/services/validator/...
+func BenchmarkScriptVerification(b *testing.B) {
 
-	return createTxScriptInterpreter(logger, policy, params)
-}
+	csvDataFile := "mainnet_14207txs_b886413_WUH.csv"
 
-func Test_ScriptVerification(t *testing.T) {
-
-	tSettings := test.CreateBaseTestSettings()
-	testBlockID := "000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9"
-	eBlock, err := getTxs(testBlockID)
-	require.NoError(t, err)
-
-	t.Run("BDK Verify Extend Multi Routine", func(t *testing.T) {
-		testVerifyExtendMultiRoutines(t, eBlock.TxsBin)
-	})
-
-	t.Run("BDK Multi Routine", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoBDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockMultiRoutines(t, verifier, eBlock.Txs)
-	})
-
-	t.Run("GoSDK Multi Routine", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoSDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockMultiRoutines(t, verifier, eBlock.Txs)
-	})
-
-	t.Run("GoBt Multi Routine", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoBT", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockMultiRoutines(t, verifier, eBlock.Txs)
-	})
-
-	t.Run("BDK Verify Extend Sequential", func(t *testing.T) {
-		testVerifyExtendSequential(t, eBlock.TxsBin)
-	})
-
-	t.Run("BDK Sequential", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoBDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockSequential(t, verifier, eBlock.Txs)
-	})
-
-	t.Run("GoSDK Sequential", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoSDK", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockSequential(t, verifier, eBlock.Txs)
-	})
-
-	t.Run("GoBt Sequential", func(t *testing.T) {
-		verifier := createScriptInterpreter("GoBT", ulogger.TestLogger{}, tSettings.Policy, &chaincfg.MainNetParams)
-		testBlockSequential(t, verifier, eBlock.Txs)
-	})
-}
-
-func testVerifyExtendMultiRoutines(t *testing.T, txsBin [][]byte) {
-	bdkScriptConfig := bdkconfig.ScriptConfig{ChainNetwork: "main"}
-	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
-		panic(errors.New(errors.ERR_UNKNOWN, "gobdk was unable to set global config"))
-	}
-
-	g := errgroup.Group{}
-
-	// verify the scripts of all the transactions in parallel
-	for _, txBin := range txsBin {
-		g.Go(func() error {
-			return bdkscript.VerifyExtend(txBin, 725267, true)
-		})
-	}
-
-	err := g.Wait()
-	require.NoError(t, err)
-}
-func testVerifyExtendSequential(t *testing.T, txsBin [][]byte) {
-	bdkScriptConfig := bdkconfig.ScriptConfig{ChainNetwork: "main"}
-	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
-		panic(errors.New(errors.ERR_UNKNOWN, "gobdk was unable to set global config"))
-	}
-
-	// verify the scripts of all the transactions in parallel
-	for _, txBin := range txsBin {
-		err := bdkscript.VerifyExtend(txBin, 725267, true)
-		require.NoError(t, err)
-	}
-}
-
-func testBlockMultiRoutines(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
-	g := errgroup.Group{}
-
-	// verify the scripts of all the transactions in parallel
-	for _, tx := range txs {
-		g.Go(func() error {
-			return verifier.VerifyScript(tx, 725267, true, []uint32{725267})
-		})
-	}
-
-	err := g.Wait()
-	require.NoError(t, err)
-}
-
-func testBlockSequential(t *testing.T, verifier validator.TxScriptInterpreter, txs []*bt.Tx) {
-	for _, tx := range txs {
-		err := verifier.VerifyScript(tx, 725267, true, []uint32{725267})
-		require.NoError(t, err)
-	}
-}
-
-func getTxs(testBlockID string) (*TxsExtended, error) {
-	blockBytes, err := fetchBlockFromTestStore(testBlockID)
+	txsData, err := getTxsData(csvDataFile)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 
-	reader := bytes.NewReader(blockBytes)
-
-	maxNbTx := 44_407 // nb tx at block 000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9
-	txsExtend := &TxsExtended{}
-	for {
-		tx := &bt.Tx{}
-		if _, erri := tx.ReadFrom(reader); erri != nil {
-			if len(txsExtend.Txs) == maxNbTx {
-				break
-			} else {
-				return nil, errors.New(errors.ERR_ERROR, "error reading data, read %v txs, error : %v", len(txsExtend.Txs), err)
-			}
+	tLogger := &ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings()
+	scriptInterpreterTypes := []string{"GoBDK", "GoSDK", "GoBT"}
+	for _, siType := range scriptInterpreterTypes {
+		createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter(siType)]
+		if !ok {
+			panic(fmt.Errorf("unable to find script interpreter %v", siType))
 		}
 
-		txBin := tx.ExtendedBytes()
-		txsExtend.Txs = append(txsExtend.Txs, tx)
-		txsExtend.TxsBin = append(txsExtend.TxsBin, txBin)
+		scriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
+
+		testNameSequential := fmt.Sprintf("ScriptVerification Sequential %v", siType)
+		testNameMultiRoutine := fmt.Sprintf("ScriptVerification Multi Routine %v", siType)
+
+		b.ResetTimer()
+		b.Run(testNameMultiRoutine, func(b *testing.B) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("recovered from panic: %v", r)
+				}
+			}()
+
+			for i := 0; i < b.N; i++ {
+				benchVerificationMultiRoutines(b, scriptInterpreter, txsData)
+			}
+		})
+
+		b.Run(testNameSequential, func(b *testing.B) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("recovered from panic: %v", r)
+				}
+			}()
+
+			for i := 0; i < b.N; i++ {
+				benchVerificationSequential(b, scriptInterpreter, txsData)
+			}
+		})
 	}
 
-	return txsExtend, nil
 }
 
-func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
-	blockFilename := fmt.Sprintf("%s.extended.bin", testBlockID)
+// To run this test
+//
+//	go clean -testcache && go test -v -tags test_validator -run Test_ScriptVerificationBDKLargeTx -timeout 60m ./test/services/validator/...
+func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
+	// Test Large Tx with GoBDK only to test accuracy
+	csvDataFiles := []string{"mainnet_large_txs.csv", "mainnet_14207txs_b886413_WUH.csv"}
+	for _, csvDataFile := range csvDataFiles {
+		testName := fmt.Sprintf("File_%v", csvDataFile)
+		t.Run(testName, func(t *testing.T) {
+			txsData, err := getTxsData(csvDataFile)
+			require.NoError(t, err)
 
-	exists, err := os.Stat(blockFilename)
+			tLogger := &ulogger.TestLogger{}
+			tSettings := test.CreateBaseTestSettings()
+			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("mainnet")
+			require.NoError(t, err)
+
+			createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter("GoBDK")]
+			if !ok {
+				panic(fmt.Errorf("unable to find script interpreter %v", "GoBDK"))
+			}
+
+			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
+
+			for _, txData := range txsData {
+				// fmt.Printf("Verify for %v  %v\n", txData.BlockHeight, txData.Tx.TxID())
+				err := bdkScriptInterpreter.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func benchVerificationMultiRoutines(b *testing.B, verifier validator.TxScriptInterpreter, txsData []CsvDataRecord) {
+	g := errgroup.Group{}
+
+	// verify the scripts of all the transactions in parallel
+	for _, txData := range txsData {
+		g.Go(func() error {
+			return verifier.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+		})
+	}
+
+	err := g.Wait()
+	if err != nil {
+		fmt.Printf("\nError running multiple routine %v\n", err.Error())
+	}
+}
+
+func benchVerificationSequential(b *testing.B, verifier validator.TxScriptInterpreter, txsData []CsvDataRecord) {
+	nbError := 0
+	for _, txData := range txsData {
+		err := verifier.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+		if err != nil {
+			nbError += 1
+		}
+	}
+
+	if nbError > 0 {
+		fmt.Printf("\nError running sequential %v errors\n", nbError)
+	}
+}
+
+func getTxsData(csvDataFile string) ([]CsvDataRecord, error) {
+
+	exists, err := os.Stat(csvDataFile)
 
 	if err != nil {
 		if !errors.Is(err, syscall.Errno(2)) {
@@ -179,25 +166,71 @@ func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
 		}
 	}
 
-	if exists != nil {
-		// get the bytes from the file
-		return os.ReadFile(blockFilename)
+	if exists == nil {
+		if err := fetchCsvDataFromTestStore(csvDataFile); err != nil {
+			return nil, err
+		}
 	}
 
+	ret := []CsvDataRecord{}
+
+	file, err := os.OpenFile(csvDataFile, os.O_RDONLY, os.ModePerm)
+	if err != nil {
+		return ret, fmt.Errorf("error opening file : %v. error : %v", csvDataFile, err)
+	}
+	defer file.Close()
+
+	if err := gocsv.UnmarshalFile(file, &ret); err != nil {
+		return ret, fmt.Errorf("error parsing file : %v. error : %v", csvDataFile, err)
+	}
+
+	// Post process, trim all leading and trailing whitespace
+	for i := 0; i < len(ret); i++ {
+		ret[i].ChainNet = strings.TrimSpace(ret[i].ChainNet)
+		ret[i].TXID = strings.TrimSpace(ret[i].TXID)
+		ret[i].TxHexExtended = strings.TrimSpace(ret[i].TxHexExtended)
+		ret[i].UTXOHeights = strings.TrimSpace(ret[i].UTXOHeights)
+
+		// Preparse binary tx
+		tx, err := bt.NewTxFromString(ret[i].TxHexExtended)
+		if err != nil {
+			return ret, fmt.Errorf("failed to parse tx for line %v, TxID %v, error %v", i, ret[i].TXID, err)
+		}
+		ret[i].Tx = tx
+
+		// Parse utxo heights
+		if len(ret[i].UTXOHeights) > 0 {
+			parts := strings.Split(ret[i].UTXOHeights, "|")
+			ret[i].DataUTXOHeights = make([]uint32, len(parts))
+
+			for k, p := range parts {
+				h, err := strconv.ParseUint(p, 10, 32)
+				if err != nil {
+					return ret, fmt.Errorf("error parsing utxo height at line %v, error :%v", i, err)
+				}
+				ret[i].DataUTXOHeights[k] = uint32(h)
+			}
+		}
+	}
+
+	return ret, nil
+}
+
+func fetchCsvDataFromTestStore(csvDataFile string) error {
 	// get the block from the test store
-	URL := fmt.Sprintf("%s/%s.extended.bin", testStoreURL, testBlockID)
+	URL := fmt.Sprintf("%s/%s", testStoreURL, csvDataFile)
 
 	req, err := http.NewRequest("GET", URL, nil)
 
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	client := http.Client{}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	defer func() {
@@ -207,13 +240,13 @@ func fetchBlockFromTestStore(testBlockID string) ([]byte, error) {
 	// read the body
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// write the block to a local file
-	err = os.WriteFile(blockFilename, b, 0600)
+	err = os.WriteFile(csvDataFile, b, 0600)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return b, nil
+	return nil
 }

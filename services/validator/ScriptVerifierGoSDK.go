@@ -76,13 +76,9 @@ type scriptVerifierGoSDK struct {
 func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// TODO - remove this when script engine is fixed
 			if rErr, ok := r.(error); ok {
 				if strings.Contains(rErr.Error(), "negative shift amount") {
-					v.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
-
-					err = nil
-
+					err = errors.NewTxInvalidError("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
 					return
 				}
 			}
@@ -117,11 +113,6 @@ func (v *scriptVerifierGoSDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
 		if err = interpreter_sdk.NewEngine().Execute(opts...); err != nil {
-			if blockHeight < 850_000 {
-				v.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
-				return nil
-			}
-
 			return errors.NewTxInvalidError("script execution error", err)
 		}
 	}

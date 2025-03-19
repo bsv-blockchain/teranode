@@ -111,8 +111,9 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 		txScriptInterpreter = createTxScriptInterpreter(logger, tSettings.Policy, tSettings.ChainCfgParams)
 	}
 
+	// Make sure script interpreter is created
 	if txScriptInterpreter == nil {
-		logger.Warnf("No script interpreter registered for %s, available interpreters: %v", TxInterpreterGoBDK, TxScriptInterpreterFactory)
+		panic("unable to create script interpreter")
 	}
 
 	return &TxValidator{

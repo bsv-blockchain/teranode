@@ -67,13 +67,9 @@ type scriptVerifierGoBt struct {
 func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// TODO - remove this when script engine is fixed
 			if rErr, ok := r.(error); ok {
 				if strings.Contains(rErr.Error(), "negative shift amount") {
-					v.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
-
-					err = nil
-
+					err = errors.NewTxInvalidError("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
 					return
 				}
 			}
@@ -110,13 +106,6 @@ func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consens
 
 		// Execute script verification
 		if err = interpreter.NewEngine().Execute(opts...); err != nil {
-			// TODO - in the interests of completing the IBD, we should not fail the node on script errors
-			// and instead log them and continue. This is a temporary measure until we can fix the script engine
-			if blockHeight < 800_000 {
-				v.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
-				return nil
-			}
-
 			return errors.NewTxInvalidError("script execution error", err)
 		}
 	}
