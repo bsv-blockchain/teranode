@@ -1,6 +1,6 @@
-name: pullrequest-analysis
+name: old pullrequest-analysis
 on:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

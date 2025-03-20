@@ -1,0 +1,130 @@
+name: Teranode main tests
+on:
+  workflow_call
+
+env:
+  REPO: teranode
+  ECR_REGION: eu-north-1
+  GO_VERSION: '1.24.0'
+
+jobs:
+  go-buildtest:
+    name: build non-unit tests
+    runs-on: teranode-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+      - name: Build Go tests in test directory
+        run: make buildtest
+
+  go-longtests:
+    name: Go longtests
+    runs-on: teranode-runner
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Go tests
+        run: make longtests
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 1
+
+  smoketest:
+    name: smoketest
+    runs-on: teranode-runner
+    env:
+      GITHUB_ACTIONS: true
+    timeout-minutes: 15
+    steps:
+      # Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Smoke tests
+        run: make smoketests no-reset=1
+        continue-on-error: true
+
+  sonarqube:
+    name: Sonarqube
+    runs-on: teranode-runner
+    needs: go-longtests
+    timeout-minutes: 15
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-report
+
+    - name: Run filename check script
+      run: |
+        ./scripts/check_filenames.sh
+
+    # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+
+    - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
+      with:
+        service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
+
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@v5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarqube.prod.ubsv.dev

@@ -1,4 +1,4 @@
-name: Test pull requests
+name: Teranode main pull request tests
 
 on:
   workflow_call

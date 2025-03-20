@@ -1,12 +1,13 @@
-name: test-build-deploy
+name: old test-build-deploy
 on:
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - main
-      - staging
-      - release/*
+  workflow_dispatch:
+  # push:
+  #   tags:
+  #     - 'v*'
+  #   branches:
+  #     - main
+  #     - staging
+  #     - release/*
 
 env:
   # These variables aren't used for called reusable workflows, so we have to also define 'with' variables below

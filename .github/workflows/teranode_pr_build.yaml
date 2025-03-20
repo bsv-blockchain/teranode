@@ -1,8 +1,7 @@
-name: Remote build and push teranode images from pull requests
+name: Teranode main pull request test build
 
 on:
-  workflow_dispatch:
-#  pull_request:
+  pull_request:
 
 permissions:
   contents: read

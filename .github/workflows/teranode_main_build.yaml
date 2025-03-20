@@ -1,15 +1,13 @@
-name: Remote build and push teranode images from main branch
+name: Teranode main test build push
 
 on:
-  workflow_dispatch:
-
-#  push:
-#    tags:
-#      - 'v*'
-#    branches:
-#      - main
-#      - staging
-#      - release/*
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - staging
+      - release/*
 
 permissions:
   contents: read
@@ -18,7 +16,7 @@ permissions:
 jobs:
   # Tests and code lint
   test_and_lint:
-    uses: ./.github/workflows/gke_tests.yaml
+    uses: ./.github/workflows/teranode_main_tests.yaml
     secrets: inherit
 
   # Run remote build and deploy workflow
