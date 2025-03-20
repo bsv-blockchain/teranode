@@ -186,7 +186,7 @@ services:
       - postgres
       - kafka-shared
       - svnode1
-    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-blockpersister=1", "-rpc=1", "-localTestStartFromState=RUNNING"  ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test.legacy}
       logLevel: "DEBUG"
@@ -214,7 +214,7 @@ services:
       - postgres
       - kafka-shared
       - svnode1
-    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-blockpersister=1", "-rpc=1", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test.legacy}
       logLevel: "DEBUG"
@@ -242,7 +242,7 @@ services:
       - postgres
       - kafka-shared
       - svnode1
-    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-blockpersister=1", "-rpc=1", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test.legacy}
       logLevel: "DEBUG"

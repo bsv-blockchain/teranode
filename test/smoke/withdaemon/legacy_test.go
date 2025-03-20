@@ -79,3 +79,54 @@ func TestInitialSync(t *testing.T) {
 
 	require.Equal(t, 1, len(peersTo18333))
 }
+
+// Test CatchUpWithLegacy
+// Start all nodes in legacy mode
+// Generate 101 blocks on svnode
+// Verify blockheight on all nodes
+// Restart teranode-1
+// Note they will sync
+// Generate 100 block on svnode
+// Teranode-1 crashes
+func TestCatchUpWithLegacy(t *testing.T) {
+	err := os.RemoveAll("../../data")
+	require.NoError(t, err)
+
+	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
+		ComposeFile: "../../docker-compose-host-withLegacy.yml",
+	})
+	require.NoError(t, err)
+
+	tc.StopNode(t, "teranode-1")
+
+	_, err = helper.CallRPC(legacySyncURL, "generate", []interface{}{101})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(10 * time.Second)
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:        true,
+		EnableP2P:        true,
+		EnableValidator:  true,
+		KillTeranode:     true,
+		EnableLegacy:     true,
+		SettingsOverride: settings.NewSettings("docker.host.teranode1.legacy"),
+	})
+
+	t.Cleanup(func() {
+		td.Stop()
+	})
+
+	time.Sleep(10 * time.Second)
+
+	// verify blockheight on node1
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	require.NoError(t, err)
+
+	// generate 100 blocks on svnode
+	_, err = helper.CallRPC(legacySyncURL, "generate", []interface{}{100})
+	require.NoError(t, err)
+
+	// verify blockheight on node1
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 201)
+	require.NoError(t, err)
+}

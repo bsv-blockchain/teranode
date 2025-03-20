@@ -158,3 +158,11 @@ func TestTDRestart(t *testing.T) {
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
 }
+
+// Test Reset
+// 1. Start node2 and node3
+// 2. Generate 100 blocks on node2
+// 3. Start node1
+// 6. Verify blockheight on node2
+
+
