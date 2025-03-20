@@ -50,6 +50,23 @@ type SpendResponse struct {
 }
 ```
 
+### MinedBlockInfo
+
+Contains information about a block where a transaction appears.
+
+```go
+type MinedBlockInfo struct {
+    // BlockID is the unique identifier of the block
+    BlockID     uint32
+
+    // BlockHeight is the height of the block in the blockchain
+    BlockHeight uint32
+
+    // SubtreeIdx is the index of the subtree where the transaction appears
+    SubtreeIdx  int
+}
+```
+
 ### UnresolvedMetaData
 
 Holds metadata for unresolved transactions.
@@ -70,9 +87,11 @@ Options for creating a new UTXO entry.
 
 ```go
 type CreateOptions struct {
-    BlockIDs   []uint32
-    TxID       *chainhash.Hash
-    IsCoinbase *bool
+    MinedBlockInfos []MinedBlockInfo
+    TxID            *chainhash.Hash
+    IsCoinbase      *bool
+    Frozen          bool
+    Conflicting     bool
 }
 ```
 
@@ -90,7 +109,7 @@ type Store interface {
     GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
     Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error
     Unspend(ctx context.Context, spends []*Spend) error
-    SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
+    SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
     BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
     PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
     FreezeUTXOs(ctx context.Context, spends []*Spend) error
@@ -122,9 +141,11 @@ type Store interface {
 
 ## Create Options
 
-- `WithBlockIDs`: Sets the block IDs for a new UTXO entry.
+- `WithMinedBlockInfo`: Sets the block information (ID, height, and subtree index) for a new UTXO entry. This replaces the deprecated `WithBlockIDs` option and provides more detailed tracking of where UTXOs appear in the blockchain.
 - `WithTXID`: Sets the transaction ID for a new UTXO entry.
 - `WithSetCoinbase`: Sets the coinbase flag for a new UTXO entry.
+- `WithFrozen`: Sets the frozen status for a new UTXO entry.
+- `WithConflicting`: Sets the conflicting status for a new UTXO entry.
 
 ## Constants
 

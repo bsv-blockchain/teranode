@@ -1,4 +1,7 @@
-// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
+// Package utxopersister creates and maintains up-to-date Unspent Transaction Output (UTXO) file sets
+// for each block in the Teranode blockchain. Its primary function is to process the output of the
+// Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
+// The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
 package utxopersister
 
 import (
@@ -14,9 +17,12 @@ import (
 )
 
 // EOFMarker represents the end-of-file marker (32 zero bytes).
+// This marker is used to identify the end of a data stream when reading UTXOs from a file.
 var EOFMarker = make([]byte, 32) // 32 zero bytes
 
 // UTXOWrapper wraps transaction outputs with additional metadata.
+// It encapsulates a transaction ID, block height, coinbase flag, and a collection of UTXOs
+// that belong to a single transaction.
 type UTXOWrapper struct {
 	// TxID contains the transaction ID
 	TxID chainhash.Hash
@@ -32,6 +38,7 @@ type UTXOWrapper struct {
 }
 
 // UTXO represents an Unspent Transaction Output.
+// It contains the essential components of a Bitcoin transaction output: index, value, and script.
 type UTXO struct {
 	// Index represents the output index in the transaction
 	Index uint32
@@ -44,6 +51,9 @@ type UTXO struct {
 }
 
 // Bytes returns the byte representation of the UTXOWrapper.
+// The serialized format includes the transaction ID, encoded height/coinbase flag,
+// number of UTXOs, and the serialized UTXOs themselves.
+// This is used for persistent storage of UTXOs.
 func (uw *UTXOWrapper) Bytes() []byte {
 	size := 32 + 4 + 4 // TXID + encoded height / coinbase + len(UTXOs)
 	for _, u := range uw.UTXOs {
@@ -79,6 +89,8 @@ func (uw *UTXOWrapper) Bytes() []byte {
 }
 
 // DeletionBytes returns the byte representation for deletion of a specific output.
+// It creates a fixed-size array containing the transaction ID and the output index.
+// This is used when marking a UTXO as spent.
 func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 	var b [36]byte
 
@@ -92,6 +104,9 @@ func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 }
 
 // NewUTXOWrapperFromReader creates a new UTXOWrapper from the provided reader.
+// It deserializes the UTXOWrapper data from a byte stream, checking for EOF markers
+// and properly decoding the height, coinbase flag, and UTXOs.
+// Returns the UTXOWrapper and any error encountered during deserialization.
 func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error) {
 	uw := &UTXOWrapper{}
 
@@ -136,11 +151,16 @@ func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, e
 }
 
 // NewUTXOWrapperFromBytes creates a new UTXOWrapper from the provided bytes.
+// It's a convenience wrapper around NewUTXOWrapperFromReader that uses a bytes.Reader.
+// Returns the UTXOWrapper and any error encountered during deserialization.
 func NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error) {
 	return NewUTXOWrapperFromReader(context.Background(), bytes.NewReader(b))
 }
 
 // String returns a string representation of the UTXOWrapper.
+// The string includes the transaction ID, height, coinbase status, number of outputs,
+// and a formatted representation of each UTXO in the wrapper.
+// This is useful for debugging and logging purposes.
 func (uw *UTXOWrapper) String() string {
 	s := strings.Builder{}
 
@@ -158,6 +178,8 @@ func (uw *UTXOWrapper) String() string {
 }
 
 // NewUTXOFromReader creates a new UTXO from the provided reader.
+// It deserializes a UTXO by reading the index, value, script length, and script bytes.
+// Returns the UTXO and any error encountered during deserialization.
 func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	// Read all the fixed size fields
 	var b [16]byte // index + value + length of script
@@ -189,6 +211,9 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 // }
 
 // Bytes returns the byte representation of the UTXO.
+// The serialized format includes the index (4 bytes), value (8 bytes), script length (4 bytes),
+// and the script itself. All integers are serialized in little-endian format.
+// This is used for persistent storage of UTXOs.
 func (u *UTXO) Bytes() []byte {
 	b := make([]byte, 0, 4+8+4+len(u.Script)) // index + value + length of script + script
 
@@ -214,6 +239,8 @@ func (u *UTXO) Bytes() []byte {
 }
 
 // String returns a string representation of the UTXO.
+// It includes the output index, value in satoshis, and a hexadecimal representation of the script.
+// This is useful for debugging and logging purposes.
 func (u *UTXO) String() string {
 	return fmt.Sprintf("%d: %d - %x", u.Index, u.Value, u.Script)
 }

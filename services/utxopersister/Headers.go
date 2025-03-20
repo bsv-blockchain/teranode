@@ -1,4 +1,7 @@
-// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
+// Package utxopersister creates and maintains up-to-date Unspent Transaction Output (UTXO) file sets
+// for each block in the Teranode blockchain. Its primary function is to process the output of the
+// Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
+// The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
 package utxopersister
 
 import (
@@ -13,6 +16,8 @@ import (
 )
 
 // BlockIndex represents the index information for a block.
+// It encapsulates critical metadata about a block including its hash, height, transaction count,
+// and header information. This structure is used for efficient lookup and validation of blocks.
 type BlockIndex struct {
 	// Hash contains the block hash
 	Hash *chainhash.Hash
@@ -28,7 +33,9 @@ type BlockIndex struct {
 }
 
 // Serialise writes the BlockIndex data to the provided writer.
-// It returns an error if the write operation fails.
+// It serializes the block hash, height, transaction count, and block header in a defined format.
+// This method is used when persisting block index information to storage.
+// Returns an error if any write operation fails.
 func (bi *BlockIndex) Serialise(writer io.Writer) error {
 	if _, err := writer.Write(bi.Hash[:]); err != nil {
 		return err
@@ -54,7 +61,9 @@ func (bi *BlockIndex) Serialise(writer io.Writer) error {
 }
 
 // NewUTXOHeaderFromReader creates a new BlockIndex from the provided reader.
-// It returns the BlockIndex and any error encountered during reading.
+// It deserializes block index data by reading the hash, height, transaction count, and block header.
+// The function also checks for EOF markers to detect the end of a stream.
+// Returns the BlockIndex and any error encountered during reading.
 func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	hash := &chainhash.Hash{}
 	if n, err := io.ReadFull(reader, hash[:]); err != nil || n != 32 {
@@ -100,6 +109,8 @@ func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 }
 
 // String returns a string representation of the BlockIndex.
+// The string includes the block hash, height, transaction count, previous hash, and computed hash.
+// This is useful for debugging, logging, and producing human-readable representations of block data.
 func (bi *BlockIndex) String() string {
 	return fmt.Sprintf("Hash: %s, Height: %d, TxCount: %d, PreviousHash: %s, ComputedHash: %s", bi.Hash.String(), bi.Height, bi.TxCount, bi.BlockHeader.HashPrevBlock.String(), bi.BlockHeader.String())
 }

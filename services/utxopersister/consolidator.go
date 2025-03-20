@@ -1,4 +1,8 @@
-// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
+// Package utxopersister creates and maintains up-to-date Unspent Transaction Output (UTXO) file sets
+// for each block in the Teranode blockchain. Its primary function is to process the output of the
+// Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
+// The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
+
 package utxopersister
 
 import (
@@ -14,11 +18,16 @@ import (
 )
 
 // headerIfc defines the interface for retrieving block headers.
+// This interface abstracts access to blockchain data, allowing the consolidator to work
+// with different implementations of blockchain storage or client services.
 type headerIfc interface {
 	GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 }
 
 // consolidator manages the consolidation of UTXO additions and deletions.
+// It processes additions and deletions across a range of blocks to create an accurate UTXO set.
+// This type is responsible for resolving conflicts when outputs are both created and spent within
+// the consolidated range, ensuring the final UTXO set is correct.
 type consolidator struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -62,6 +71,9 @@ type consolidator struct {
 }
 
 // Addition represents a UTXO addition.
+// It contains information about a new unspent output, including its insertion order,
+// value, height, script, and whether it's from a coinbase transaction.
+// This structure is used during consolidation to track new outputs.
 type Addition struct {
 	// Order represents the insertion order
 	Order uint64
@@ -80,6 +92,9 @@ type Addition struct {
 }
 
 // NewConsolidator creates a new consolidator instance.
+// It initializes the consolidator with the provided dependencies and empty data structures.
+// The consolidator needs access to blockchain data and storage capabilities to perform its operations.
+// Returns a pointer to the initialized consolidator.
 func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
 	return &consolidator{
 		logger:                 logger,
@@ -94,6 +109,10 @@ func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockc
 }
 
 // ConsolidateBlockRange consolidates UTXOs for the specified block range.
+// It processes all blocks from startBlock to endBlock, retrieving their headers,
+// and then processes the UTXO additions and deletions from each block.
+// This builds up a comprehensive view of all UTXOs across the range.
+// Returns an error if consolidation fails.
 func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, endBlock uint32) error {
 	var (
 		headers []*model.BlockHeader
@@ -162,6 +181,10 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 }
 
 // processDeletionsFromReader processes UTXO deletions from a reader.
+// It reads serialized deletion records and updates the consolidator's internal state accordingly.
+// When a deletion is encountered, it either removes a previously added output or records the deletion
+// for future conflict resolution.
+// Returns an error if processing fails.
 func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Reader) error {
 	if err := checkMagic(r, "U-D-1.0"); err != nil {
 		return err
@@ -191,6 +214,9 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 }
 
 // processAdditionsFromReader processes UTXO additions from a reader.
+// It reads serialized UTXO addition records and updates the consolidator's internal state.
+// Each addition is tracked unless it has already been marked as spent in the deletions map.
+// Returns an error if processing fails.
 func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.ReadCloser) error {
 	if err := checkMagic(r, "U-A-1.0"); err != nil {
 		return err
@@ -244,6 +270,9 @@ type keyAndVal struct {
 }
 
 // getSortedUTXOWrappers returns a sorted slice of UTXO wrappers.
+// It converts the consolidator's internal map of additions into a sorted slice of UTXOWrappers.
+// The sorting is based on transaction ID, which ensures deterministic output order.
+// Returns the sorted slice of UTXOWrappers, ready to be written to the UTXO set.
 func (c *consolidator) getSortedUTXOWrappers() []*UTXOWrapper {
 	sortedAdditions := make([]*keyAndVal, 0, len(c.additions))
 

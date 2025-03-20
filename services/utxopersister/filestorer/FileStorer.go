@@ -1,4 +1,7 @@
-// Package filestorer provides functionality for storing and managing files in a blockchain context.
+// Package filestorer provides specialized file storage functionality for the UTXO Persister service.
+// It offers a high-level interface for efficiently persisting UTXO data to blob storage with buffering,
+// hashing, and asynchronous writing capabilities. This package is designed to support the storage
+// requirements for UTXO set files, additions, and deletions in the Teranode blockchain.
 package filestorer
 
 import (
@@ -22,6 +25,9 @@ import (
 )
 
 // FileStorer handles the storage and management of blockchain-related files.
+// It provides buffered writing with concurrent processing, automatic hashing,
+// and verification capabilities. FileStorer abstracts the complexity of
+// interacting with the underlying blob storage system.
 type FileStorer struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -52,6 +58,9 @@ type FileStorer struct {
 }
 
 // NewFileStorer creates a new FileStorer instance with the provided parameters.
+// It sets up an efficient pipeline for writing data with buffering and hashing.
+// The function initiates a background goroutine that reads from a pipe and writes to blob storage.
+// Returns a pointer to the initialized FileStorer ready for use.
 // It initializes the file storage system with buffering and hashing capabilities.
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
@@ -105,6 +114,9 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 }
 
 // Write writes the provided bytes to the file storage.
+// It ensures thread-safety with mutex locking and writes to both the buffered writer
+// and the hasher simultaneously through a MultiWriter.
+// Returns the number of bytes written and any error encountered.
 // It returns the number of bytes written and any error encountered.
 func (f *FileStorer) Write(b []byte) (n int, err error) {
 	f.mu.Lock()
@@ -114,6 +126,9 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 }
 
 // Close finalizes the file storage operation and ensures all data is written.
+// It flushes the buffer, closes the writer, waits for the background goroutine to complete,
+// sets the TTL for the file, and creates a SHA256 checksum file.
+// Returns any error encountered during the closing process.
 // It returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
 	f.mu.Lock()
@@ -166,6 +181,9 @@ func (f *FileStorer) Close(ctx context.Context) error {
 }
 
 // waitUntilFileIsAvailable waits for the file to become available in storage.
+// It polls the storage system to check if the file exists, retrying multiple times
+// with a fixed interval between attempts.
+// Returns an error if the file doesn't become available within the maximum number of retries.
 // It returns an error if the file doesn't become available within the timeout period.
 func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context, extension string) error {
 	maxRetries := 10

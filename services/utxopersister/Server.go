@@ -1,4 +1,6 @@
-// Package utxopersister provides functionality for managing UTXO (Unspent Transaction Output) persistence.
+// Package utxopersister creates and maintains up-to-date Unspent Transaction Output (UTXO) file sets
+// for each block in the Teranode blockchain. Its primary function is to process the output of the
+// Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
 package utxopersister
 
 import (
@@ -25,6 +27,8 @@ import (
 )
 
 // Server manages the UTXO persistence operations.
+// It coordinates the processing of blocks, extraction of UTXOs, and their persistent storage.
+// The server maintains the state of the UTXO set by handling additions and deletions as new blocks are processed.
 type Server struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -58,6 +62,7 @@ type Server struct {
 }
 
 // New creates a new Server instance with the provided parameters.
+// It initializes a new UTXO persister server with the given logger, settings, block store, and blockchain client.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -77,6 +82,8 @@ func New(
 }
 
 // NewDirect creates a new Server instance with direct blockchain store access.
+// Unlike New, this constructor provides direct access to the blockchain store without using the client interface.
+// This can be more efficient when the server is running in the same process as the blockchain store.
 func NewDirect(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -95,6 +102,10 @@ func NewDirect(
 }
 
 // Health checks the health status of the server and its dependencies.
+// It performs both liveness and readiness checks based on the checkLiveness parameter.
+// Liveness checks verify that the service is running, while readiness checks also verify that
+// dependencies like blockchain client, FSM, blockchain store, and block store are available.
+// Returns HTTP status code, status message, and any error encountered.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -125,6 +136,9 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 // Init initializes the server by reading the last processed height.
+// It retrieves the last block height that was successfully processed from persistent storage
+// and sets it as the starting point for future processing.
+// Returns an error if the height cannot be read.
 func (s *Server) Init(ctx context.Context) (err error) {
 	height, err := s.readLastHeight(ctx)
 	if err != nil {
@@ -137,6 +151,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 // Start begins the server's processing operations.
+// It sets up notification channels, subscribes to blockchain updates, and starts the main processing loop.
+// The loop processes blocks as they are received through the notification channel or on a timer.
+// The readyCh is closed when initialization is complete to signal readiness.
+// Returns an error if subscription or processing fails.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
@@ -197,11 +215,15 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // Stop stops the server's processing operations.
+// It performs cleanup and shutdown procedures for the UTXO persister server.
 func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
 
 // trigger initiates the processing of the next block.
+// It ensures only one processing operation runs at a time and handles various trigger sources.
+// The source parameter indicates what triggered the processing (blockchain, timer, etc.).
+// Returns an error if the processing encounters a problem.
 // It ensures only one processing operation runs at a time and handles various trigger sources.
 // The source parameter indicates what triggered the processing (blockchain, timer, etc.).
 func (s *Server) trigger(ctx context.Context, source string) error {
@@ -252,7 +274,9 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 }
 
 // processNextBlock processes the next block in the chain.
-// It returns a duration to wait before processing the next block and any error encountered.
+// It retrieves the next block based on the last processed height, extracts UTXOs,
+// and persists them to storage. It also updates the last processed height.
+// Returns a duration to wait before processing the next block and any error encountered.
 // The duration is used to implement confirmation waiting periods.
 func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	var (
@@ -349,6 +373,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 }
 
 // readLastHeight reads the last processed block height from storage.
+// It attempts to retrieve the height from a special file in the block store.
 // Returns the height as uint32 and any error encountered.
 // If the height file doesn't exist, it returns 0 and no error.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
@@ -381,6 +406,9 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 }
 
 // writeLastHeight writes the current block height to storage.
+// It persists the last processed height to a special file in the block store.
+// This allows the server to resume processing from the correct point after a restart.
+// Returns an error if the write operation fails.
 // It persists the last processed height for recovery purposes.
 func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	// Convert the height to a string
@@ -400,6 +428,8 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 
 // verifyLastSet verifies the integrity of the last UTXO set.
 // It checks if the UTXO set for the given hash exists and has valid header and footer.
+// This verification ensures that the UTXO set was completely written and is not corrupted.
+// Returns an error if verification fails.
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,

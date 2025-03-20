@@ -15,6 +15,8 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **conflictingChildren**  | `Array<chainhash.Hash>`              | List of transaction hashes that spend from this transaction and are also marked as conflicting.                    |
 | **spendingHeight**       | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
 | **blockIDs**             | `Array<Integer>`                     | List of block IDs that reference this UTXO.                                                                        |
+| **blockHeights**         | `Array<uint32>`                      | List of block heights where this transaction appears. Used by the validator to identify the height at which a UTXO was mined.                                                               |
+| **subtreeIdxs**          | `Array<int>`                         | List of subtree indexes where this transaction appears within blocks.                                        |
 | **external**             | `Boolean`                            | Flag indicating whether the transaction is stored externally (used for fetching external raw transaction data).    |
 | **totalExtraRecs**       | `Integer (Optional)`                 | The number of UTXO records associated with the transaction, used for pagination.                                   |
 | **reassignments**        | `Array<Map>`                         | Tracks UTXO reassignments. Contains maps with keys such as `offset`, `utxoHash`, `newUtxoHash`, and `blockHeight`. |
@@ -71,6 +73,8 @@ For convenience, the UTXO can be decorated using the `UTXO MetaData` format, wid
 | Size in Bytes       | The size of the transaction in bytes.                                                            | Integer                                  |
 | ParentTxHashes      | List of hashes representing the parent transactions.                                             | Array of Strings/Hexadecimals            |
 | BlockIDs            | List of IDs of the blocks that include this transaction.                                         | Array of Integers                        |
+| BlockHeights        | List of block heights where this transaction appears.                                              | Array of Integers                        |
+| SubtreeIdxs         | List of subtree indexes where this transaction appears within blocks.                              | Array of Integers                        |
 | LockTime            | The earliest time or block number that this transaction can be included in the blockchain.       | Integer/Timestamp or Block Number        |
 | IsCoinbase          | Indicates whether the transaction is a coinbase transaction.                                     | Boolean                                  |
 | Conflicting         | Indicates whether this transaction is a double spend.                                            | Boolean                                  |
@@ -89,3 +93,7 @@ Note:
 
 
 - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+
+- **Block Heights and Subtree Indexes**: These fields track the exact location of transactions within the blockchain.
+  - The block heights array is particularly important for validation, as it gives visibility on what height a UTXO was mined. While most UTXOs are mined at the same height across parallel chains or forks, this is not always the case. Storing this information enables the validator to efficiently determine the height of UTXOs being spent without performing expensive lookups. Block heights indicate how deep in the chain a transaction is, which is important for maturity checks.
+  - The subtree indexes are primarily informational, allowing for future features that might need to locate exactly where a transaction was placed within a block's structure, enabling potential parallel processing and efficient lookups.
