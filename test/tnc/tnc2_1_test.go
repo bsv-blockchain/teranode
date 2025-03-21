@@ -25,7 +25,6 @@ package tnc
 import (
 	"sync"
 	"testing"
-	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
@@ -109,13 +108,13 @@ func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 	candidateIds := make(chan []byte, numRequests)
 
 	var wg sync.WaitGroup
+	wg.Add(1)
 
-	// Request mining candidates concurrently
 	for i := 0; i < numRequests; i++ {
 		wg.Add(1)
-
 		go func() {
 			defer wg.Done()
+			wg.Wait() // Aspetta il segnale per partire
 
 			mc, err := helper.GetMiningCandidate(ctx, node.BlockassemblyClient, logger)
 			require.NoError(t, err, "Failed to get mining candidate in concurrent request")
@@ -125,8 +124,8 @@ func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 		}()
 	}
 
-	// Small delay to ensure we're not getting the same candidate
-	time.Sleep(100 * time.Millisecond)
+	// Rilascia tutte le goroutine contemporaneamente
+	wg.Done()
 
 	wg.Wait()
 	close(candidateIds)
