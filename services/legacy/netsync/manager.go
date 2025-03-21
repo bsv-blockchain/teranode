@@ -2107,14 +2107,14 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	if legacyInvConfigURL != nil {
 		sm.legacyKafkaInvCh = make(chan *kafka.Message, 10_000)
 
+		producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, sm.logger, legacyInvConfigURL)
+		if err != nil {
+			sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
+			return
+		}
+
 		// start a go routine to start the kafka producer
 		go func() {
-			producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, sm.logger, legacyInvConfigURL)
-			if err != nil {
-				sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
-				return
-			}
-
 			producer.Start(sm.ctx, sm.legacyKafkaInvCh)
 		}()
 
