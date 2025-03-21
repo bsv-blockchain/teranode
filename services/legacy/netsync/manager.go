@@ -907,6 +907,12 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 				continue
 			}
 
+			if errors.Is(err, errors.ErrTxConflicting) {
+				// remove the tx from the orphan pool, it is a double spend
+				sm.orphanTxs.Delete(*txHash)
+				continue
+			}
+
 			// if the transaction was rejected, we will not process any of the orphan transactions that were waiting for it
 			sm.logger.Errorf("Failed to process orphan transaction %v: %v", txHash, err)
 

@@ -33,7 +33,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		}
 
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
-		assert.Equal(t, echo.MIMEApplicationJSONCharsetUTF8, responseRecorder.Header().Get("Content-Type"))
+		assert.Equal(t, echo.MIMEApplicationJSON, responseRecorder.Header().Get("Content-Type"))
 
 		var response map[string]interface{}
 		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
@@ -151,7 +151,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
-		assert.Equal(t, echo.MIMEApplicationJSONCharsetUTF8, responseRecorder.Header().Get("Content-Type"))
+		assert.Equal(t, echo.MIMEApplicationJSON, responseRecorder.Header().Get("Content-Type"))
 
 		var response map[string]interface{}
 		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {

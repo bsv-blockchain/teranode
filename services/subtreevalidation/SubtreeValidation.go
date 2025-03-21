@@ -209,7 +209,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata if validation succeeds
 //   - error: Any error encountered during validation
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32, validationOptions ...validator.Option) (txMeta *meta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
@@ -226,7 +226,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
-	txMeta, err = u.validatorClient.Validate(ctx, tx, blockHeight, validationOptions...)
+	txMeta, err = u.validatorClient.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxConflicting) {
 			// conflicting transaction, which has been saved, but not spent
@@ -666,6 +666,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	u.logger.Debugf("[processMissingTransactions][%s] maxLevel: %d", subtreeHash.String(), maxLevel)
 
+	// pre-process the validation options into a struct
+	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
+
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
 		g.SetLimit(u.settings.SubtreeValidation.SpendBatcherSize * 2)
@@ -682,7 +685,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, validationOptions...)
+				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, processedValidatorOptions)
 				if err != nil {
 					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 				}

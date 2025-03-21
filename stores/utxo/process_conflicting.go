@@ -110,8 +110,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	}
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
-	err = s.Unspend(ctx, affectedParentSpends, true)
-	if err != nil {
+	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
 		return nil, errors.NewTxUnspendableError("error unspending affected parent spends", err)
 	}
 

@@ -25,6 +25,9 @@ type Options struct {
 	// this is done when validating transaction from a block that has been mined
 	CreateConflicting bool
 
+	// IgnoreUnspendable determines whether to ignore transactions marked as unspendable when spending
+	IgnoreUnspendable bool
+
 	// disableConsensus determine the consensus parameter to execute script interpreter
 	// By default it is false, meaning the consensus is true
 	disableConsensus bool
@@ -110,6 +113,18 @@ func WithSkipPolicyChecks(skip bool) Option {
 func WithCreateConflicting(create bool) Option {
 	return func(o *Options) {
 		o.CreateConflicting = create
+	}
+}
+
+// WithIgnoreUnspendable creates an option to control whether transactions marked as unspendable are spendable
+// Parameters:
+//   - ignoreUnspendable: When true, transactions marked as unspendable are spendable
+//
+// Returns:
+//   - Option: Function that sets the ignoreUnspendable option
+func WithIgnoreUnspendable(ignoreUnspendable bool) Option {
+	return func(o *Options) {
+		o.IgnoreUnspendable = ignoreUnspendable
 	}
 }
 

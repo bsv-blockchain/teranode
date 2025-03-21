@@ -246,31 +246,33 @@ type AdvertisingSettings struct {
 }
 
 type UtxoStoreSettings struct {
-	UtxoStore                      *url.URL
-	OutpointBatcherSize            int
-	OutpointBatcherDurationMillis  int
-	SpendBatcherConcurrency        int
-	SpendBatcherDurationMillis     int
-	SpendBatcherSize               int
-	StoreBatcherConcurrency        int
-	StoreBatcherDurationMillis     int
-	StoreBatcherSize               int
-	UtxoBatchSize                  int
-	IncrementBatcherSize           int
-	IncrementBatcherDurationMillis int
-	SetTTLBatcherSize              int
-	SetTTLBatcherDurationMillis    int
-	GetBatcherSize                 int
-	GetBatcherDurationMillis       int
-	DBTimeout                      time.Duration
-	UseExternalTxCache             bool
-	ExternalizeAllTransactions     bool
-	PostgresMaxIdleConns           int
-	PostgresMaxOpenConns           int
-	VerboseDebug                   bool
-	UpdateTxMinedStatus            bool
-	MaxMinedRoutines               int
-	MaxMinedBatchSize              int
+	UtxoStore                        *url.URL
+	OutpointBatcherSize              int
+	OutpointBatcherDurationMillis    int
+	SpendBatcherConcurrency          int
+	SpendBatcherDurationMillis       int
+	SpendBatcherSize                 int
+	StoreBatcherConcurrency          int
+	StoreBatcherDurationMillis       int
+	StoreBatcherSize                 int
+	UtxoBatchSize                    int
+	IncrementBatcherSize             int
+	IncrementBatcherDurationMillis   int
+	SetTTLBatcherSize                int
+	SetTTLBatcherDurationMillis      int
+	UnspendableBatcherSize           int
+	UnspendableBatcherDurationMillis int
+	GetBatcherSize                   int
+	GetBatcherDurationMillis         int
+	DBTimeout                        time.Duration
+	UseExternalTxCache               bool
+	ExternalizeAllTransactions       bool
+	PostgresMaxIdleConns             int
+	PostgresMaxOpenConns             int
+	VerboseDebug                     bool
+	UpdateTxMinedStatus              bool
+	MaxMinedRoutines                 int
+	MaxMinedBatchSize                int
 }
 
 type P2PSettings struct {

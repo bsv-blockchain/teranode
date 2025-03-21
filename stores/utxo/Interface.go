@@ -67,6 +67,9 @@ type Spend struct {
 	// ConflictingTxID is the transaction ID that conflicts with this UTXO
 	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
 
+	// BlockIDs is the list of blocks the transaction has been mined into
+	BlockIDs []uint32 `json:"blockIDs,omitempty"`
+
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
 }
@@ -107,6 +110,7 @@ type CreateOptions struct {
 	IsCoinbase      *bool
 	Frozen          bool
 	Conflicting     bool
+	Unspendable     bool
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -142,10 +146,17 @@ func WithFrozen(b bool) CreateOption {
 	}
 }
 
-// WithConflicting returns a CreateOption that marks a UTXO as conflicting with another transaction.
+// WithConflicting marks a transaction as conflicting with another transaction.
 func WithConflicting(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.Conflicting = b
+	}
+}
+
+// WithUnspendable sets the transactions as unspendable on creation
+func WithUnspendable(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Unspendable = b
 	}
 }
 

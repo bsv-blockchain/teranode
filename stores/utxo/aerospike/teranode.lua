@@ -308,6 +308,11 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, ttl)
     subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
     rec['subtreeIdxs'] = subtreeIdxs
 
+    -- set the record to be spendable again, if it was unspendable, since if was just mined into a block
+    if rec['unspendable'] then
+        rec['unspendable'] = false
+    end
+
     local signal = setTTL(rec, ttl)
 
     -- Update the record to save changes

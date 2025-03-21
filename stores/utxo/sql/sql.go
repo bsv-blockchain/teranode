@@ -220,6 +220,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txMeta.Conflicting = true
 	}
 
+	if options.Unspendable {
+		txMeta.Unspendable = true
+	}
+
 	// Insert the transaction row...
 	q := `
 		INSERT INTO transactions (
@@ -231,6 +235,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,coinbase
 		,frozen
 		,conflicting
+		,unspendable
 	  ) VALUES (
 		 $1
 		,$2
@@ -240,6 +245,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,$6
 		,$7
 		,$8
+		,$9
 		)
 		RETURNING id
 	`
@@ -268,7 +274,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *options.IsCoinbase
 	}
 
-	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting).Scan(&transactionID)
+	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting, options.Unspendable).Scan(&transactionID)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)

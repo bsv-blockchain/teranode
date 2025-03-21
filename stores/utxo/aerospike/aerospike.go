@@ -104,26 +104,27 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx              context.Context // store the global context for things that run in the background
-	url              *url.URL
-	client           *uaerospike.Client
-	namespace        string
-	setName          string
-	expiration       time.Duration
-	blockHeight      atomic.Uint32
-	medianBlockTime  atomic.Uint32
-	logger           ulogger.Logger
-	settings         *settings.Settings
-	batchID          atomic.Uint64
-	storeBatcher     batcherIfc[BatchStoreItem]
-	getBatcher       batcherIfc[batchGetItem]
-	spendBatcher     batcherIfc[batchSpend]
-	outpointBatcher  batcherIfc[batchOutpoint]
-	incrementBatcher batcherIfc[batchIncrement]
-	setTTLBatcher    batcherIfc[batchTTL]
-	externalStore    blob.Store
-	utxoBatchSize    int
-	externalTxCache  *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	ctx                context.Context // store the global context for things that run in the background
+	url                *url.URL
+	client             *uaerospike.Client
+	namespace          string
+	setName            string
+	expiration         time.Duration
+	blockHeight        atomic.Uint32
+	medianBlockTime    atomic.Uint32
+	logger             ulogger.Logger
+	settings           *settings.Settings
+	batchID            atomic.Uint64
+	storeBatcher       batcherIfc[BatchStoreItem]
+	getBatcher         batcherIfc[batchGetItem]
+	spendBatcher       batcherIfc[batchSpend]
+	outpointBatcher    batcherIfc[batchOutpoint]
+	incrementBatcher   batcherIfc[batchIncrement]
+	setTTLBatcher      batcherIfc[batchTTL]
+	unspendableBatcher batcherIfc[batchUnspendable]
+	externalStore      blob.Store
+	utxoBatchSize      int
+	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -255,6 +256,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setTTLBatchDurationStr := tSettings.UtxoStore.SetTTLBatcherDurationMillis
 	setTTLBatchDuration := time.Duration(setTTLBatchDurationStr) * time.Millisecond
 	s.setTTLBatcher = batcher.New(setTTLBatchSize, setTTLBatchDuration, s.sendSetTTLBatch, true)
+
+	unspendableBatchSize := tSettings.UtxoStore.UnspendableBatcherSize
+	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
+	unspendableBatchDuration := time.Duration(unspendableBatchDurationStr) * time.Millisecond
+	s.unspendableBatcher = batcher.New[batchUnspendable](unspendableBatchSize, unspendableBatchDuration, s.setUnspendableBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

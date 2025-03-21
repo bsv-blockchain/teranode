@@ -9,6 +9,7 @@ import (
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -69,8 +70,30 @@ func (m *NullStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*me
 	return nil
 }
 
-func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	return &meta.Data{}, nil
+func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	txMetaData, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if options.IsCoinbase != nil {
+		txMetaData.IsCoinbase = *options.IsCoinbase
+	}
+
+	if options.Conflicting {
+		txMetaData.Conflicting = true
+	}
+
+	if options.Unspendable {
+		txMetaData.Unspendable = true
+	}
+
+	return txMetaData, nil
 }
 
 func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {

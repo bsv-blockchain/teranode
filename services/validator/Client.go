@@ -119,7 +119,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			client.sendBatchToValidator(ctx, batch)
 		}
 		duration := time.Duration(sendBatchTimeout) * time.Millisecond
-		client.batcher = *batcher.New[batchItem](sendBatchSize, duration, sendBatch, true)
+		client.batcher = *batcher.New(sendBatchSize, duration, sendBatch, true)
 	}
 
 	return client, nil

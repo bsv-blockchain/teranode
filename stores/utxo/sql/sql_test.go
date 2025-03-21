@@ -279,26 +279,59 @@ func TestGetSpend(t *testing.T) {
 }
 
 func TestSetMinedMulti(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Run("single block", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	store, tx := setup(ctx, t)
+		store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
-	require.NoError(t, err)
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
 
-	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
-		BlockID:     1,
-		BlockHeight: 1,
-		SubtreeIdx:  0,
+		err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:     1,
+			BlockHeight: 1,
+			SubtreeIdx:  0,
+		})
+		require.NoError(t, err)
+
+		meta, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+
+		assert.Len(t, meta.BlockIDs, 1)
+		assert.Equal(t, uint32(1), meta.BlockIDs[0])
 	})
-	require.NoError(t, err)
 
-	meta, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
-	require.NoError(t, err)
+	t.Run("single block - with tx set to unspendable", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	assert.Len(t, meta.BlockIDs, 1)
-	assert.Equal(t, uint32(1), meta.BlockIDs[0])
+		store, tx := setup(ctx, t)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		require.NoError(t, err)
+
+		meta, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		assert.True(t, meta.Unspendable)
+
+		err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:     1,
+			BlockHeight: 1,
+			SubtreeIdx:  0,
+		})
+		require.NoError(t, err)
+
+		meta, err = store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+
+		assert.Len(t, meta.BlockIDs, 1)
+		assert.Equal(t, uint32(1), meta.BlockIDs[0])
+		assert.False(t, meta.Unspendable)
+	})
 }
 
 func TestBatchDecorate(t *testing.T) {

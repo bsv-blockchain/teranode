@@ -3,6 +3,7 @@
 package aerospike
 
 import (
+	"context"
 	"math"
 	"os"
 	"testing"
@@ -776,6 +777,20 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, txSpends, 1)
 		assert.Nil(t, txSpends[0].Err)
 		assert.Equal(t, tx2.TxIDChainHash().String(), txSpends[0].SpendingTxID.String())
+	})
+
+	t.Run("set mined with unspendable", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := store.Create(context.Background(), tx, 0, utxo.WithUnspendable(true))
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Unspendable)
+
+		txMeta, err = store.Get(context.Background(), tx.TxIDChainHash())
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Unspendable)
 	})
 }
 
@@ -1578,4 +1593,43 @@ func TestSpendSimple(t *testing.T) {
 	assert.Equal(t, 5, response.Bins[fields.TotalUtxos.String()])
 	assert.Equal(t, 1, response.Bins[fields.SpentUtxos.String()])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
+}
+
+func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	createOptions := []utxo.CreateOption{
+		utxo.WithUnspendable(true),
+	}
+
+	// Create the tx
+	_, err := store.Create(ctx, tx, 0, createOptions...)
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	// Check the tx was created with 2 utxos and 0 spent utxos and no expiration
+	response, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	assert.NotNil(t, response)
+	assert.True(t, response.Bins[fields.Unspendable.String()].(bool))
+
+	// Now try to spend it
+	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
+
+	spends, err := store.Spend(ctx, spendingTx1)
+	require.NoError(t, err)
+	assert.Len(t, spends, 1)
+	assert.NoError(t, spends[0].Err)
+
+	t.Logf("%v", spends)
 }
