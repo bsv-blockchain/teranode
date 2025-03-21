@@ -12,6 +12,7 @@ on:
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: '1.24.1'
 
 jobs:
   test-services:
@@ -30,7 +31,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.0'
+          go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Run Services Tests
@@ -57,7 +58,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.0'
+          go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Run Model Tests
@@ -84,7 +85,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.0'
+          go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Run Stores Tests
@@ -111,7 +112,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.0'
+          go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Run Util Tests
@@ -138,7 +139,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.0'
+          go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - name: Run Double Spend Tests
