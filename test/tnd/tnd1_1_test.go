@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -133,7 +134,7 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	// Set up notification channels for receiving nodes
 	var wg sync.WaitGroup
 
-	blockNotifications := make(map[int]chan *model.Notification)
+	blockNotifications := make(map[int]chan *blockchain_api.Notification)
 	receivedBlocks := make(map[int][]byte)
 
 	var mu sync.Mutex
@@ -141,26 +142,28 @@ func (suite *TND1_1TestSuite) TestBlockPropagationWithNotifications() {
 	// Subscribe to blockchain notifications on all nodes except node0
 	for i := 1; i < len(testEnv.Nodes); i++ {
 		node := testEnv.Nodes[i]
-		notifChan := make(chan *model.Notification, 10)
+		notifChan := make(chan *blockchain_api.Notification, 10)
 		blockNotifications[i] = notifChan
 
 		blockchainSubscription, err := node.BlockchainClient.Subscribe(ctx, "test-block-propagation")
 		require.NoError(t, err, "Failed to subscribe to blockchain notifications on Node%d", i)
 
 		wg.Add(1)
-		go func(nodeIndex int, notification chan *model.Notification) {
+		go func(nodeIndex int, notification chan *blockchain_api.Notification) {
 			defer wg.Done()
 
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case notification := <-blockchainSubscription:
-					if notification.Type == model.NotificationType_Block {
+				case n := <-blockchainSubscription:
+					if n.Type == model.NotificationType_Block {
 						mu.Lock()
-						receivedBlocks[nodeIndex] = notification.Hash
+						receivedBlocks[nodeIndex] = n.Hash
 						mu.Unlock()
-						t.Logf("Node%d received block notification: %x", nodeIndex, notification.Hash)
+						t.Logf("Node%d received block notification: %x", nodeIndex, n.Hash)
+
+						notification <- n
 					}
 				}
 			}
