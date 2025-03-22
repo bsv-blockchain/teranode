@@ -114,7 +114,7 @@ func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			wg.Wait() // Aspetta il segnale per partire
+			wg.Wait()
 
 			mc, err := helper.GetMiningCandidate(ctx, node.BlockassemblyClient, logger)
 			require.NoError(t, err, "Failed to get mining candidate in concurrent request")
@@ -124,7 +124,7 @@ func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 		}()
 	}
 
-	// Rilascia tutte le goroutine contemporaneamente
+	// Release all goroutine simultaneously
 	wg.Done()
 
 	wg.Wait()
