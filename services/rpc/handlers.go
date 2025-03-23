@@ -1206,6 +1206,11 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 		return err == nil
 	}
 
+	if strings.Contains(ipOrSubnet, ":") {
+		// remove port
+		ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
+	}
+
 	_, _, err := net.ParseCIDR(ipOrSubnet)
 
 	return err == nil
