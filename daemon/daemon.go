@@ -463,7 +463,12 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
-		rpcServer, err := rpc.NewServer(logger.New("RPC"), tSettings, blockchainClient)
+		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		if err != nil {
+			return err
+		}
+
+		rpcServer, err := rpc.NewServer(logger.New("RPC"), tSettings, blockchainClient, utxoStore)
 		if err != nil {
 			return err
 		}
@@ -796,7 +801,6 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 		// 	logger.Warnf("legacy service not supported in regtest mode. Skipping legacy service...")
 		// 	return nil
 		// }
-
 		subtreeStore, err := GetSubtreeStore(logger, tSettings)
 		if err != nil {
 			return err

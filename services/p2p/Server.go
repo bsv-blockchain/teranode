@@ -843,6 +843,10 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 }
 
+func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
+	return &p2p_api.IsBannedResponse{IsBanned: s.banList.IsBanned(peer.IpOrSubnet)}, nil
+}
+
 // contains checks if a slice of strings contains a specific string.
 func contains(slice []string, item string) bool {
 	for _, s := range slice {

@@ -684,6 +684,11 @@ type SetBanCmd struct {
 	Absolute   *bool
 }
 
+// IsBannedCmd defines the isbanned JSON-RPC command.
+type IsBannedCmd struct {
+	IPOrSubnet string
+}
+
 type FreezeCmd struct {
 	TxID     string
 	Vout     int

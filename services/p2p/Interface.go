@@ -14,4 +14,5 @@ type ClientI interface {
 	GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error)
 	BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
 	UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+	IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
 }
