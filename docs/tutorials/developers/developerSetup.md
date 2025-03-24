@@ -43,7 +43,7 @@ go version
 ```
 It should display `go1.24.0` or above.
 
----
+
 
 
 ## 2. Set Go Environment Variables
@@ -68,34 +68,7 @@ echo $GOBIN
 
 Both should display paths related to Go.
 
----
 
-
-## 3. Python and Dependencies
-
----
-
-Install python and the required packages.
-
-### 3.1. Install Python (via Homebrew)
-
-
-```bash
-brew install python
-```
-
-By default, Homebrew will install Python 3.x and create symlinks like python3 and pip3. You can optionally create a symlink for python and pip if you want shorter commands (but check if they already exist first):
-
-```bash
-ln -s /opt/homebrew/bin/python3 /opt/homebrew/bin/python  # might already exist
-ln -s /opt/homebrew/bin/pip3 /opt/homebrew/bin/pip        # might already exist
-```
-
-
-
-Below is an **updated** section for Python & dependencies that accounts for Homebrew’s newer **externally-managed environment** restrictions. Instead of installing PyYAML system-wide with `pip install`, the easiest approach is to use a **virtual environment** (or `pipx`, if you prefer).
-
-You can simply **replace** the old steps in your guide with the version below:
 
 ---
 
@@ -119,6 +92,7 @@ ln -s /opt/homebrew/bin/pip3 /opt/homebrew/bin/pip        # might already exist
 Because of [PEP 668](https://peps.python.org/pep-0668/) and Homebrew’s “externally-managed-environment” setup, you can’t do `pip install ...` directly into the system-wide Python.
 
 **Instead, create and activate a virtual environment**:
+
 ```bash
 python3 -m venv ~/my_python_env     # choose any path you like
 source ~/my_python_env/bin/activate
@@ -151,6 +125,8 @@ pipx install PyYAML
 However, most Teranode workflows will need PyYAML as a library for scripts, so a virtual environment is usually best.
 
 
+
+
 ## 4. Project Dependencies
 
 ---
@@ -174,8 +150,6 @@ Execute:
 ```bash
 protoc --version
 ```
-
----
 
 
 
@@ -225,10 +199,7 @@ make install
 > ```
 
 
----
 
-
-Below is an **updated** example of how to add your own user settings to the `settings_local.conf`, given the new or changed lines in the file. The key idea is the same: **find** the existing template lines (those that end with `.NEW_USER_TEMPLATE`) and **duplicate** them, replacing `NEW_USER_TEMPLATE` with your name (or a unique identifier) in both the **key** and the **value**.
 
 ---
 
