@@ -689,6 +689,13 @@ type IsBannedCmd struct {
 	IPOrSubnet string
 }
 
+// NewIsBannedCmd returns a new instance which can be used to issue an isbanned JSON-RPC command.
+func NewIsBannedCmd(ipOrSubnet string) *IsBannedCmd {
+	return &IsBannedCmd{
+		IPOrSubnet: ipOrSubnet,
+	}
+}
+
 type FreezeCmd struct {
 	TxID     string
 	Vout     int
@@ -899,6 +906,7 @@ func init() {
 	MustRegisterCmd("searchrawtransactions", (*SearchRawTransactionsCmd)(nil), flags)
 	MustRegisterCmd("sendrawtransaction", (*SendRawTransactionCmd)(nil), flags)
 	MustRegisterCmd("setban", (*SetBanCmd)(nil), flags)
+	MustRegisterCmd("isbanned", (*IsBannedCmd)(nil), flags)
 	MustRegisterCmd("setgenerate", (*SetGenerateCmd)(nil), flags)
 	MustRegisterCmd("stop", (*StopCmd)(nil), flags)
 	MustRegisterCmd("submitblock", (*SubmitBlockCmd)(nil), flags)
