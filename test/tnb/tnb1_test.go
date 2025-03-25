@@ -79,6 +79,8 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 
 	var subtreeReader io.ReadCloser
 
+	subtreeReady := make(chan []chainhash.Hash, 1)
+
 	txHashesFromSubtree := make([]chainhash.Hash, 0)
 
 	go func() {
@@ -92,15 +94,21 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
 
-					subtreeReader, err = testEnv.Nodes[0].ClientSubtreestore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
-					require.NoError(t, err)
-
-					defer func() {
-						_ = subtreeReader.Close()
-					}()
-
-					// wait for the subtree to be written to disk
-					time.Sleep(10 * time.Second)
+					// Retry loop until subtreeReader it's available
+					var reader io.ReadCloser
+					deadline := time.Now().Add(30 * time.Second)
+					for {
+						reader, err = testEnv.Nodes[0].ClientSubtreestore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+						if err == nil {
+							break
+						}
+						if time.Now().After(deadline) {
+							t.Errorf("Timeout getting subtree reader: %v", err)
+							return
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+					defer reader.Close()
 
 					subtree := util.Subtree{}
 
@@ -116,6 +124,8 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					for i := 0; i < len(subtree.Nodes); i++ {
 						txHashesFromSubtree = append(txHashesFromSubtree, subtree.Nodes[i].Hash)
 					}
+
+					subtreeReady <- txHashesFromSubtree
 
 					testEnv.Logger.Infof("txHashes from subtree: %v", txHashesFromSubtree)
 				}
@@ -136,7 +146,12 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 			t.Errorf("Failed to mine block: %v", err)
 		}
 
-		time.Sleep(120 * time.Second)
+		select {
+		case txHashesFromSubtree = <-subtreeReady:
+			// ok, ricevuto
+		case <-time.After(60 * time.Second):
+			t.Fatal("Timeout waiting for subtree notification")
+		}
 
 		testEnv.Logger.Infof("txHashesSent sent: %v", txHashesSent)
 
@@ -173,9 +188,6 @@ func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
 	// Generate blocks
 	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
 	require.NoError(t, err)
-
-	// Wait for block processing
-	time.Sleep(5 * time.Second)
 
 	// Verify transaction exists in block
 	block102, err := node.BlockchainClient.GetBlockByHeight(ctx, 102)
@@ -231,9 +243,6 @@ func (suite *TNB1TestSuite) TestNoReformattingRequired() {
 	// Generate a block
 	_, err := helper.GenerateBlocks(ctx, node, 1, logger)
 	require.NoError(t, err)
-
-	// Wait for block processing
-	time.Sleep(5 * time.Second)
 
 	// Get the block and verify transactions
 	block, err := helper.GetBestBlockV2(ctx, node)
