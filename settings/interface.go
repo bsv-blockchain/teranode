@@ -384,15 +384,12 @@ type LegacySettings struct {
 type PropagationSettings struct {
 	IPv6Addresses        string
 	IPv6Interface        string
-	QuicListenAddress    string
 	GRPCMaxConnectionAge time.Duration
 	HTTPListenAddress    string
 	SendBatchSize        int
 	SendBatchTimeout     int
 	GRPCAddresses        []string
-	QuicAddresses        []string
 	GRPCListenAddress    string
-	UseDumb              bool
 }
 
 type RPCSettings struct {

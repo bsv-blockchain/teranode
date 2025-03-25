@@ -2,8 +2,10 @@
 
 ## Index
 
-1. [Introduction](#1-introduction)
-2. [Core Services](#2-core-services)
+- [Teranode Microservices Overview](#teranode-microservices-overview)
+  - [Index](#index)
+  - [1. Introduction](#1-introduction)
+  - [2. Core Services](#2-core-services)
     - [2.1 Asset Server](#21-asset-server)
     - [2.2 Propagation Service](#22-propagation-service)
     - [2.3 Validator Service](#23-validator-service)
@@ -12,21 +14,21 @@
     - [2.6 Block Assembly Service](#26-block-assembly-service)
     - [2.7 Blockchain Service](#27-blockchain-service)
     - [2.8 Alert Service](#28-alert-service)
-3. [Overlay Services](#3-overlay-services)
+  - [3. Overlay Services](#3-overlay-services)
     - [3.1 Block Persister Service](#31-block-persister-service)
     - [3.2 UTXO Persister Service](#32-utxo-persister-service)
     - [3.3 P2P Service](#33-p2p-service)
     - [3.4 P2P Bootstrap Service](#34-p2p-bootstrap-service)
     - [3.5 P2P Legacy Service](#35-p2p-legacy-service)
     - [3.6 RPC Server](#36-rpc-server)
-4. [Stores](#4-stores)
+  - [4. Stores](#4-stores)
     - [4.1 TX and Subtree Store (Blob Server)](#41-tx-and-subtree-store-blob-server)
     - [4.2 UTXO Store](#42-utxo-store)
-5. [Other Components](#5-other-components)
+  - [5. Other Components](#5-other-components)
     - [5.1 Kafka Message Broker](#51-kafka-message-broker)
     - [5.2 Miners](#52-miners)
-6. [Interaction Patterns](#6-interaction-patterns)
-7. [Related Resources](#7-related-resources)
+  - [6. Interaction Patterns](#6-interaction-patterns)
+  - [7. Related Resources](#7-related-resources)
 
 ## 1. Introduction
 
@@ -82,7 +84,7 @@ The Propagation Service is responsible for receiving and forwarding transactions
 
 **Key Responsibilities:**
 
-- Receive transactions from the network through multiple communication channels (gRPC, UDP over IPv6, HTTP and QUIC)
+- Receive transactions from the network through multiple communication channels (gRPC, UDP over IPv6 and HTTP)
 - Perform initial sanity checks on transactions
 - Forward valid transactions to the TX Validator Service
 
@@ -90,7 +92,7 @@ The Propagation Service is responsible for receiving and forwarding transactions
 
 ![Propagation_Service_Container_Diagram.png](../services/img/Propagation_Service_Container_Diagram.png)
 
-- Receives transactions from other nodes via IPv6 multicast, gRPC, HTTP or Quic
+- Receives transactions from other nodes via IPv6 multicast, gRPC or HTTP
 - Forwards transactions to the TX Validator Service
 
 ![Propagation_Service_Component_Diagram.png](../services/img/Propagation_Service_Component_Diagram.png)

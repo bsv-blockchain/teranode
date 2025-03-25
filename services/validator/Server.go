@@ -8,10 +8,7 @@ different validation components.
 package validator
 
 import (
-	"bytes"
 	"context"
-	"io"
-	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -254,55 +251,6 @@ func (v *Server) Stop(_ context.Context) error {
 	}
 
 	return nil
-}
-
-// ValidateTransactionStream implements streaming transaction validation
-// Parameters:
-//   - stream: gRPC stream for transaction data
-//
-// Returns:
-//   - error: Any validation errors
-func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
-	_, _, deferFn := tracing.StartTracing(v.ctx, "ValidateTransactionStream",
-		tracing.WithParentStat(v.stats),
-		tracing.WithHistogram(prometheusValidateTransaction),
-	)
-	defer deferFn()
-
-	transactionData := bytes.Buffer{}
-
-	for {
-		log.Print("waiting to receive more data")
-
-		req, err := stream.Recv()
-		if err == io.EOF {
-			log.Print("no more data")
-			break
-		}
-
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err)
-		}
-
-		chunk := req.GetTransactionData()
-
-		_, err = transactionData.Write(chunk)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return status.Errorf(codes.Internal, "cannot write chunk data: %v", err)
-		}
-	}
-
-	var tx bt.Tx
-	if _, err := tx.ReadFrom(bytes.NewReader(transactionData.Bytes())); err != nil {
-		prometheusInvalidTransactions.Inc()
-		return status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
-	}
-
-	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
-		Valid: true,
-	})
 }
 
 func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {

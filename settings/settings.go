@@ -384,15 +384,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Propagation: PropagationSettings{
 			IPv6Addresses:        getString("ipv6_addresses", "", alternativeContext...),
 			IPv6Interface:        getString("ipv6_interface", "", alternativeContext...),
-			QuicListenAddress:    getString("propagation_quicListenAddress", "", alternativeContext...),
 			GRPCMaxConnectionAge: getDuration("propagation_grpcMaxConnectionAge", 90*time.Second),
 			HTTPListenAddress:    getString("propagation_httpListenAddress", "", alternativeContext...),
 			SendBatchSize:        getInt("propagation_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:     getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
 			GRPCAddresses:        getMultiString("propagation_grpcAddresses", "|", []string{}, alternativeContext...),
-			QuicAddresses:        getMultiString("propagation_quicAddresses", "|", []string{}, alternativeContext...),
 			GRPCListenAddress:    getString("propagation_grpcListenAddress", ""),
-			UseDumb:              getBool("propagation_use_dumb", false),
 		},
 		RPC: RPCSettings{
 			RPCUser:        getString("rpc_user", "", alternativeContext...),

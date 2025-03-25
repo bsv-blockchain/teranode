@@ -50,7 +50,6 @@ require (
 	github.com/ordishs/go-utils v1.0.51
 	github.com/ordishs/gocore v1.0.77
 	github.com/prometheus/client_golang v1.20.5
-	github.com/quic-go/quic-go v0.48.2
 	github.com/rs/zerolog v1.32.0
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v5 v5.1.1
@@ -119,6 +118,7 @@ require (
 	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/pion/turn/v2 v2.1.6 // indirect
 	github.com/pion/webrtc/v3 v3.3.5 // indirect
+	github.com/quic-go/quic-go v0.48.2 // indirect
 	github.com/r3labs/sse v0.0.0-20210224172625-26fe804710bc // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect

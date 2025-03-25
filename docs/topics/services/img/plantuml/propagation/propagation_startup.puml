@@ -25,7 +25,6 @@ skinparam participant {
 participant "Propagation Server" as Server
 participant "Configuration System" as Config
 participant "UDP6 Listeners" as UDP6
-participant "QUIC Server" as QUIC
 participant "gRPC Server" as gRPC
 participant "Kafka Producer" as Kafka
 participant "BlockchainClient" as BC
@@ -48,13 +47,6 @@ Server -> UDP6: StartUDP6Listeners(ctx, ipv6Addresses)
 activate UDP6
 UDP6 --> Server: Listeners started/failed
 deactivate UDP6
-
-Server -> Config: Get propagation_quicListenAddress
-Config --> Server: quicAddress
-Server -> QUIC: quicServer(ctx, quicAddress)
-activate QUIC
-QUIC --> Server: QUIC Server started/failed
-deactivate QUIC
 
 Server -> Config: Get kafka_validatortxsConfig
 Config --> Server: kafkaConfig

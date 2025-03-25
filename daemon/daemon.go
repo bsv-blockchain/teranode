@@ -757,41 +757,35 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// propagation
 	if startPropagation {
 		if tSettings.Propagation.GRPCListenAddress != "" {
-			if tSettings.Propagation.UseDumb {
-				if err := sm.AddService("PropagationServer", propagation.NewDumbPropagationServer(tSettings)); err != nil {
-					return err
-				}
-			} else {
-				txStore, err := GetTxStore(logger)
-				if err != nil {
-					return err
-				}
+			txStore, err := GetTxStore(logger)
+			if err != nil {
+				return err
+			}
 
-				validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
-				if err != nil {
-					return err
-				}
+			validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
+			if err != nil {
+				return err
+			}
 
-				blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "propagation")
-				if err != nil {
-					return err
-				}
+			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "propagation")
+			if err != nil {
+				return err
+			}
 
-				validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, logger)
-				if err != nil {
-					return err
-				}
+			validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, logger)
+			if err != nil {
+				return err
+			}
 
-				if err = sm.AddService("PropagationServer", propagation.New(
-					logger.New("prop"),
-					tSettings,
-					txStore,
-					validatorClient,
-					blockchainClient,
-					validatorKafkaProducerClient,
-				)); err != nil {
-					return err
-				}
+			if err = sm.AddService("PropagationServer", propagation.New(
+				logger.New("prop"),
+				tSettings,
+				txStore,
+				validatorClient,
+				blockchainClient,
+				validatorKafkaProducerClient,
+			)); err != nil {
+				return err
 			}
 		}
 	}

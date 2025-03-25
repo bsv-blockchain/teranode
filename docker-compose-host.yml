@@ -230,7 +230,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode1"
       BLASTER_ARGS: "-workers=2"
     entrypoint: ["./blaster.run"]
-    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100", "--quic=false"]
+    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data

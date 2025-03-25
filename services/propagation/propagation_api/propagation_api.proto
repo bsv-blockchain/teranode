@@ -28,20 +28,6 @@ service PropagationAPI {
   // This is more efficient than processing transactions individually when dealing
   // with large numbers of transactions.
   rpc ProcessTransactionBatch (ProcessTransactionBatchRequest) returns (ProcessTransactionBatchResponse) {}
-
-  // ProcessTransactionHex processes a transaction provided in hexadecimal format.
-  // This is a convenience method for clients that have transactions in hex format.
-  rpc ProcessTransactionHex (ProcessTransactionHexRequest) returns (EmptyMessage) {}
-
-  // ProcessTransactionStream establishes a bidirectional streaming connection for
-  // processing transactions. Useful for continuous transaction processing without
-  // establishing new connections for each transaction.
-  rpc ProcessTransactionStream (stream ProcessTransactionRequest) returns (stream EmptyMessage) {}
-
-  // ProcessTransactionDebug provides debug-level transaction processing.
-  // It performs basic validation and storage without full processing, useful
-  // for testing and debugging purposes.
-  rpc ProcessTransactionDebug (ProcessTransactionRequest) returns (EmptyMessage) {}
 }
 
 // EmptyMessage represents an empty request or response.
@@ -99,9 +85,3 @@ message ProcessTransactionBatchResponse {
   repeated errors.TError errors = 1;
 }
 
-// ProcessTransactionHexRequest represents a request to process a transaction in hex format.
-// swagger:model ProcessTransactionRequest
-message ProcessTransactionHexRequest {
-  // tx contains the transaction in hexadecimal string format
-  string tx = 1;
-}
