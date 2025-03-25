@@ -1409,3 +1409,37 @@ func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expected
 		}
 	}
 }
+
+func WaitForNodesToSync(ctx context.Context, nodes []blockchain.ClientI, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if time.Now().After(deadline) {
+			return errors.NewProcessingError("timeout waiting for nodes to sync")
+		}
+
+		allEqual := true
+
+		var referenceHash *chainhash.Hash
+
+		for i, node := range nodes {
+			header, _, err := node.GetBestBlockHeader(ctx)
+			if err != nil {
+				return err
+			}
+
+			if i == 0 {
+				referenceHash = header.Hash()
+			} else if *referenceHash != *header.Hash() {
+				allEqual = false
+				break
+			}
+		}
+
+		if allEqual {
+			return nil
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
