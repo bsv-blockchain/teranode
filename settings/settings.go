@@ -386,6 +386,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IPv6Interface:        getString("ipv6_interface", "", alternativeContext...),
 			GRPCMaxConnectionAge: getDuration("propagation_grpcMaxConnectionAge", 90*time.Second),
 			HTTPListenAddress:    getString("propagation_httpListenAddress", "", alternativeContext...),
+			HTTPRateLimit:        getInt("propagation_httpRateLimit", 1024, alternativeContext...),
 			SendBatchSize:        getInt("propagation_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:     getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
 			GRPCAddresses:        getMultiString("propagation_grpcAddresses", "|", []string{}, alternativeContext...),

@@ -71,7 +71,7 @@ require (
 	golang.org/x/sys v0.31.0
 	golang.org/x/term v0.30.0
 	golang.org/x/text v0.23.0 // indirect
-	golang.org/x/time v0.8.0 // indirect
+	golang.org/x/time v0.8.0
 	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.36.4
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0

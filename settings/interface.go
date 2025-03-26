@@ -386,6 +386,7 @@ type PropagationSettings struct {
 	IPv6Interface        string
 	GRPCMaxConnectionAge time.Duration
 	HTTPListenAddress    string
+	HTTPRateLimit        int
 	SendBatchSize        int
 	SendBatchTimeout     int
 	GRPCAddresses        []string

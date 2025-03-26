@@ -6,6 +6,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -26,9 +27,12 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -55,6 +59,7 @@ type PropagationServer struct {
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
+	httpServer                   *echo.Echo
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -192,7 +197,6 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
 		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -327,6 +331,103 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
+// handleSingleTx handles a single transaction request on the /tx endpoint
+func (ps *PropagationServer) handleSingleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return c.String(http.StatusBadRequest, "Invalid request body")
+		}
+
+		// Process the transaction and return appropriate response
+		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// handleMultipleTx handles multiple transactions on the /txs endpoint
+func (ps *PropagationServer) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Read transactions with the bt reader in a loop
+		for {
+			tx := &bt.Tx{}
+
+			// Read transaction from request body
+			_, err := tx.ReadFrom(c.Request().Body)
+			if err != nil {
+				// End of stream is expected and not an error
+				if err == io.EOF {
+					break
+				}
+
+				return c.String(http.StatusBadRequest, "Invalid request body: "+err.Error())
+			}
+
+			// Process the transaction
+			err = ps.processTransactionInternal(ctx, tx)
+			if err != nil {
+				return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+			}
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// startHTTPServer initializes and starts the HTTP server for transaction processing
+func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses string) error {
+	// Initialize Echo server with settings
+	ps.httpServer = echo.New()
+	ps.httpServer.Debug = false
+	ps.httpServer.HideBanner = true
+
+	// Configure middleware and timeouts
+	ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
+	ps.httpServer.Server.ReadTimeout = 5 * time.Second
+	ps.httpServer.Server.WriteTimeout = 10 * time.Second
+	ps.httpServer.Server.IdleTimeout = 120 * time.Second
+
+	// Register route handlers
+	ps.httpServer.POST("/tx", ps.handleSingleTx(ctx))
+	ps.httpServer.POST("/txs", ps.handleMultipleTx(ctx))
+
+	// add a health endpoint that simply returns "OK"
+	ps.httpServer.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+
+	// add a 404 handler with a message for unknown routes
+	ps.httpServer.Any("/*", func(c echo.Context) error {
+		return c.String(http.StatusNotFound, "Unknown route")
+	})
+
+	// Start server and handle shutdown
+	ps.startAndMonitorHTTPServer(ctx, httpAddresses)
+
+	return nil
+}
+
+// startAndMonitorHTTPServer starts the HTTP server and monitors for shutdown
+func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
+	// Start the server
+	go func() {
+		if err := ps.httpServer.Start(httpAddresses); err != nil {
+			ps.logger.Errorf("error starting HTTP server: %v", err)
+		}
+	}()
+
+	// Monitor for context cancellation
+	go func() {
+		<-ctx.Done()
+
+		_ = ps.httpServer.Shutdown(context.Background())
+	}()
+}
+
 // ProcessTransaction validates and stores a single transaction.
 // It performs the following steps:
 // 1. Validates transaction format
@@ -431,6 +532,17 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 	}
 
+	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
+		return err
+	}
+
+	prometheusTransactionSize.Observe(float64(len(req.Tx)))
+	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+
+	return nil
+}
+
+func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error {
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
@@ -446,7 +558,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	defer callerSpan.Finish()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
+	if err := ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
@@ -454,7 +566,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		validationOptions := validator.NewDefaultOptions()
 
 		msg := &kafkamessage.KafkaTxValidationTopicMessage{
-			Tx:     req.Tx,
+			Tx:     btTx.ExtendedBytes(),
 			Height: 0,
 			Options: &kafkamessage.KafkaTxValidationOptions{
 				SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
@@ -478,13 +590,10 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
-		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+		if _, err := ps.validator.Validate(ctx, btTx, 0); err != nil {
 			return errors.NewServiceError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
-
-	prometheusTransactionSize.Observe(float64(len(req.Tx)))
-	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
 }
