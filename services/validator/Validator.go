@@ -360,6 +360,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			if saveAsConflicting {
 				if txMetaData, utxoMapErr = v.CreateInUtxoStore(setSpan, tx, blockHeight, true, false); utxoMapErr != nil {
+					if errors.Is(utxoMapErr, errors.ErrTxExists) {
+						if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+							return nil, errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+						}
+					}
+
 					return txMetaData, utxoMapErr
 				}
 
@@ -373,6 +379,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// blessed. In this case we can just return early.
 			if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err == nil {
 				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
+
 				return txMetaData, nil
 			}
 		}
@@ -390,6 +397,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
 				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
+
+				if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+					return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
+				}
 
 				return txMetaData, nil
 			}
@@ -570,12 +581,12 @@ func (v *Validator) CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHe
 		createOptions = append(createOptions, utxo.WithUnspendable(true))
 	}
 
-	data, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
+	txMetaData, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
 	if err != nil {
 		return nil, err
 	}
 
-	return data, nil
+	return txMetaData, nil
 }
 
 func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) error {

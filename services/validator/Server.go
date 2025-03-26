@@ -254,6 +254,11 @@ func (v *Server) Stop(_ context.Context) error {
 }
 
 func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	response, err := v.validateTransaction(ctx, req)
+	return response, errors.WrapGRPC(err)
+}
+
+func (v *Server) validateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransaction",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusValidateTransaction),
@@ -269,7 +274,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
-		}, errors.WrapGRPC(errors.NewTxError("error reading transaction data", err))
+		}, errors.NewTxError("error reading transaction data", err)
 	}
 
 	// set the tx hash, so it doesn't have to be recalculated
@@ -299,7 +304,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 			Txid:  tx.TxIDChainHash().CloneBytes(),
-		}, errors.WrapGRPC(err)
+		}, err
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
@@ -322,23 +327,16 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
-	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 	metaData := make([][]byte, len(req.GetTransactions()))
+	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
 		idx, reqItem := idx, reqItem
 
 		g.Go(func() error {
-			validatorResponse, err := v.ValidateTransaction(gCtx, reqItem)
-			if err != nil {
-				errReasons[idx] = errors.Wrap(err)
-			} else {
-				errReasons[idx] = nil
-			}
-
-			if validatorResponse.Metadata != nil {
-				metaData[idx] = validatorResponse.Metadata
-			}
+			validatorResponse, err := v.validateTransaction(gCtx, reqItem)
+			metaData[idx] = validatorResponse.Metadata
+			errReasons[idx] = errors.Wrap(err)
 
 			return nil
 		})
