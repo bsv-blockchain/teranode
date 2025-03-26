@@ -250,7 +250,8 @@ jobs:
           cache: false
 
       - name: Start PostgreSQL service
-        run: docker-compose -f docker-compose.yml up -d postgres
+        run: docker compose -f docker-compose.yml up -d postgres
+
 
       - name: Wait for PostgreSQL
         run: |
