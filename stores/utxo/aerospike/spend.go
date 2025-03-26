@@ -241,9 +241,21 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		// }
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
+		if unspendErr != nil {
+			s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
+		}
+
+		var firstError error
+
+		for _, spend := range spends {
+			if spend.Err != nil {
+				firstError = spend.Err
+				break
+			}
+		}
 
 		// return the first error found
-		return spends, errors.NewTxInvalidError("error in aerospike unspend (batched mode)", unspendErr)
+		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode) - first error", firstError)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -334,7 +346,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			continue
 		}
 
-		newMapValue := aerospike.NewMapValue(map[interface{}]interface{}{
+		newMapValue := aerospike.NewMapValue(map[any]any{
 			"idx":          idx,
 			"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
 			"vOut":         bItem.spend.Vout,
@@ -357,6 +369,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+
 	for batchKey, batchItems := range batchesByKey {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
@@ -397,7 +410,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			// error occurred, we need to send the error to the done channel for each spend in this batch
 			for _, batchItem := range batchByKey {
 				idx := batchItem["idx"].(int)
-				batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
+				batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 			}
 		} else {
 			response := batchRecord.BatchRec().Record

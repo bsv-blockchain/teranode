@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -78,11 +79,11 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check the totalExtraRecs and spentExtraRecs
-		totalExtraRecs, ok := resp.Bins["totalExtraRecs"].(int)
+		totalExtraRecs, ok := resp.Bins[fields.TotalExtraRecs.String()].(int)
 		require.True(t, ok)
 		assert.Equal(t, 4, totalExtraRecs) // parent is one, and there are 4 extra records
 
-		_, ok = resp.Bins["spentExtraRecs"].(int)
+		_, ok = resp.Bins[fields.SpentExtraRecs.String()].(int)
 		assert.False(t, ok)
 
 		// mine the tx
@@ -104,13 +105,22 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 			resp, err := client.Get(nil, key)
 			require.NoError(t, err)
 
-			assert.Equal(t, 1, resp.Bins["totalUtxos"])
+			// We have a batch limit of 1 utxo per record.  Vout 0 is record 0 (the parent) and will have a totalUtxos of 5.
+			// All other records do not have a totalUtxos field.
+			if vOut == 0 {
+				assert.Equal(t, 5, resp.Bins[fields.TotalUtxos.String()])
+			} else {
+				_, ok := resp.Bins[fields.TotalUtxos.String()]
+				require.False(t, ok)
+			}
+
+			assert.Equal(t, 1, resp.Bins[fields.RecordUtxos.String()])
 
 			if vOut == 0 {
-				assert.Equal(t, true, resp.Bins["external"])
-				assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
+				assert.Equal(t, true, resp.Bins[fields.External.String()])
+				assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 			} else {
-				_, ok := resp.Bins["external"]
+				_, ok := resp.Bins[fields.External.String()]
 				require.False(t, ok)
 			}
 		}
@@ -142,8 +152,8 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 
 		// assert that the record is not yet marked for TTL
 		assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has not been set
-		assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
-		assert.Equal(t, 4, resp.Bins["spentExtraRecs"])
+		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// spend 0
 		_, err = store.Spend(ctx, spendTx)
@@ -151,8 +161,8 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 
 		// main record check
 		assert.Greater(t, resp.Expiration, uint32(0)) // expiration has been set
-		assert.Equal(t, 4, resp.Bins["totalExtraRecs"])
-		assert.Equal(t, 4, resp.Bins["spentExtraRecs"])
+		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// check the external file ttl has been set
 		ttl, err = store.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
@@ -203,8 +213,8 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		resp, err := client.Get(nil, key)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Equal(t, 2, resp.Bins["totalExtraRecs"])
-		assert.Equal(t, 1, resp.Bins["spentExtraRecs"])
+		assert.Equal(t, 2, resp.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 1, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// Decrement spentExtraRecs by 1
 		res, err = store.IncrementSpentRecords(txID, -1)
@@ -224,8 +234,8 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		resp, err = client.Get(nil, key)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Equal(t, 2, resp.Bins["totalExtraRecs"])
-		assert.Equal(t, 0, resp.Bins["spentExtraRecs"])
+		assert.Equal(t, 2, resp.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 0, resp.Bins[fields.SpentExtraRecs.String()])
 	})
 
 	t.Run("Increment spentExtraRecs - set TTL", func(t *testing.T) {
@@ -242,19 +252,19 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 
 		// force the values we expect to be set
 		err = client.Put(nil, key, aerospike.BinMap{
-			"spentUtxos":     2,
-			"blockIDs":       []int{101},
-			"totalExtraRecs": 2,
+			fields.SpentUtxos.String():     2,
+			fields.BlockIDs.String():       []int{101},
+			fields.TotalExtraRecs.String(): 2,
 		})
 		require.NoError(t, err)
 
 		rec, aErr := client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
-		assert.Equal(t, 2, rec.Bins["totalUtxos"])
-		assert.Equal(t, 2, rec.Bins["spentUtxos"])
-		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
+		assert.Equal(t, 5, rec.Bins[fields.TotalUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
 
 		// Increment spentExtraRecs by 1
 		res, err := store.IncrementSpentRecords(txID, 1)
@@ -272,11 +282,11 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		rec, aErr = client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
-		assert.Equal(t, 2, rec.Bins["totalUtxos"])
-		assert.Equal(t, 2, rec.Bins["spentUtxos"])
-		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
-		assert.Equal(t, 1, rec.Bins["spentExtraRecs"])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
+		assert.Equal(t, 5, rec.Bins[fields.TotalUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 1, rec.Bins[fields.SpentExtraRecs.String()])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
 
 		res, err = store.IncrementSpentRecords(txID, 1)
 		require.NoError(t, err)
@@ -285,11 +295,11 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		rec, aErr = client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
-		assert.Equal(t, 2, rec.Bins["totalUtxos"])
-		assert.Equal(t, 2, rec.Bins["spentUtxos"])
-		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
-		assert.Equal(t, 2, rec.Bins["spentExtraRecs"])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins["blockIDs"])
+		assert.Equal(t, 5, rec.Bins[fields.TotalUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
+		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 2, rec.Bins[fields.SpentExtraRecs.String()])
+		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
 
 		r, ok = res.(string)
 		require.True(t, ok)
@@ -323,8 +333,8 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		rec, aErr := client.Get(nil, key)
 		require.NoError(t, aErr)
 		require.NotNil(t, rec)
-		assert.Equal(t, 2, rec.Bins["totalExtraRecs"])
-		assert.Equal(t, 2, rec.Bins["spentExtraRecs"])
+		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
+		assert.Equal(t, 2, rec.Bins[fields.SpentExtraRecs.String()])
 	})
 }
 

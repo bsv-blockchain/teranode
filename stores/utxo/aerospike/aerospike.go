@@ -260,7 +260,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	unspendableBatchSize := tSettings.UtxoStore.UnspendableBatcherSize
 	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
 	unspendableBatchDuration := time.Duration(unspendableBatchDurationStr) * time.Millisecond
-	s.unspendableBatcher = batcher.New[batchUnspendable](unspendableBatchSize, unspendableBatchDuration, s.setUnspendableBatch, true)
+	s.unspendableBatcher = batcher.New(unspendableBatchSize, unspendableBatchDuration, s.setUnspendableBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

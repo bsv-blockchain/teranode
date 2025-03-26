@@ -315,7 +315,7 @@ func TestAerospike(t *testing.T) {
 			aerospike.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
+		assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
 
 		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
 		_, err = store.Spend(ctx, spendTx)
@@ -359,7 +359,7 @@ func TestAerospike(t *testing.T) {
 				aerospike.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
+			assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
 		}
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -489,7 +489,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(expiration.Seconds()), value.Expiration) // Now TTL should be set to aerospikeExpiration
 
 		// try to spend with different txid
-		_, err = store.Spend(ctx, spendTx3)
+		spends, err = store.Spend(ctx, spendTx3)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -512,9 +512,8 @@ func TestAerospike(t *testing.T) {
 		}
 
 		// try to spend with different txid
-		_, err = store.Spend(ctx, spendTx3)
+		spends, err = store.Spend(ctx, spendTx3)
 		require.Error(t, err)
-		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
@@ -1605,12 +1604,8 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 		deferFn()
 	})
 
-	createOptions := []utxo.CreateOption{
-		utxo.WithUnspendable(true),
-	}
-
 	// Create the tx
-	_, err := store.Create(ctx, tx, 0, createOptions...)
+	_, err := store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
 	require.NoError(t, err)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
@@ -1627,9 +1622,7 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
 
 	spends, err := store.Spend(ctx, spendingTx1)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Len(t, spends, 1)
-	assert.NoError(t, spends[0].Err)
-
-	t.Logf("%v", spends)
+	assert.ErrorIs(t, err, errors.ErrTxUnspendable)
 }

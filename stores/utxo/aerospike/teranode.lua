@@ -191,11 +191,26 @@ function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
         return ERR_UTXOS_NOT_FOUND
     end
 
+    local blockIDString = ""
+    if rec['blockIDs'] then
+        blockIDString = table.concat(rec['blockIDs'], ",")
+    end
+
     -- loop through the spends
     for spend in list.iterator(spends) do
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
         local spendingTxID = spend['spendingTxID']
+        
+        -- Get and validate specific UTXO
+        local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+        if err then return err end
+
+        if rec['utxoSpendableIn'] then
+            if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
+                return MSG_FROZEN_UNTIL .. rec['utxoSpendableIn'][offset]
+            end
+        end
 
         -- Get and validate specific UTXO
         local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
@@ -233,7 +248,7 @@ function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
 
     aerospike:update(rec)
 
-    return MSG_OK .. signal
+    return MSG_OK .. ':[' .. blockIDString .. ']' .. signal
 end
 
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on

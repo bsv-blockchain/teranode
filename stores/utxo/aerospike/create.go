@@ -689,13 +689,10 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	}
 
 	// add the conflicting bin to all the records
-	if isConflicting {
-		commonBins = append(commonBins, aerospike.NewBin(fields.Conflicting.String(), true))
-	}
+	commonBins = append(commonBins, aerospike.NewBin(fields.Conflicting.String(), isConflicting))
 
-	if isUnspendable {
-		commonBins = append(commonBins, aerospike.NewBin(fields.Unspendable.String(), true))
-	}
+	// add the unspendable bin to all the records
+	commonBins = append(commonBins, aerospike.NewBin(fields.Unspendable.String(), isUnspendable))
 
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)

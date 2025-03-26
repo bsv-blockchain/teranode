@@ -139,7 +139,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 		// check the bins
 		require.Equal(t, 1, len(bins))
-		require.Equal(t, 18, len(bins[0]))
+		require.Equal(t, 19, len(bins[0]))
 
 		hasCoinbase := false
 		hasConflicting := false

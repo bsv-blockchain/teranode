@@ -71,7 +71,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v26" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v27" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]
@@ -105,6 +105,8 @@ type LuaReturnMessage struct {
 	SpendingTxID *chainhash.Hash
 
 	ChildCount int
+
+	BlockIDs []int
 }
 
 func (l *LuaReturnMessage) String() string {
@@ -115,6 +117,20 @@ func (l *LuaReturnMessage) String() string {
 	sb := strings.Builder{}
 
 	sb.WriteString(string(l.ReturnValue))
+
+	if len(l.BlockIDs) > 0 {
+		sb.WriteString(":[")
+
+		for i, blockID := range l.BlockIDs {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+
+			sb.WriteString(strconv.Itoa(blockID))
+		}
+
+		sb.WriteString("]")
+	}
 
 	if len(l.Signal) > 0 {
 		sb.WriteString(":")
@@ -224,9 +240,10 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 //
 // Example responses:
 //
-//	"OK:ALLSPENT"
-//	"OK:TTLSET:n"
-//	"OK:TTLUNSET:n"
+//	"OK:[]:ALLSPENT"
+//	"OK:[1,2,3]:ALLSPENT"
+//	"OK:[]:TTLSET:n"
+//	"OK:[3,4]:TTLUNSET:n"
 //	"SPENT:1234...5678" (where 1234...5678 is a 64-char tx hash)
 //	"ERROR:TX not found"
 //
@@ -245,6 +262,27 @@ func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error
 
 	if len(r) > 0 {
 		rets.ReturnValue = LuaReturnValue(r[0])
+
+		if rets.ReturnValue == LuaOk && len(r) > 1 && r[1][0] == '[' && r[1][len(r[1])-1] == ']' {
+			// Assuming blockIDs are comma-separated in r[1]
+			blockIDs := strings.Split(r[1][1:len(r[1])-1], ",")
+
+			// Check if blockIDs is empty and skip the loop if it is
+			if len(blockIDs) > 0 && blockIDs[0] != "" {
+				// Process blockIDs as needed
+				for _, blockID := range blockIDs {
+					id, err := strconv.Atoi(blockID)
+					if err != nil {
+						return rets, errors.NewProcessingError("error parsing blockID %s", blockID, err)
+					}
+
+					rets.BlockIDs = append(rets.BlockIDs, id)
+				}
+			}
+
+			// Remove r[1] from the slice
+			r = append(r[:1], r[2:]...)
+		}
 	}
 
 	if len(r) > 1 {
