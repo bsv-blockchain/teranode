@@ -50,7 +50,11 @@ func TestServer_Performance(t *testing.T) {
 	prevTxCount := uint64(0)
 	prevSubtreeCount := 0
 
-	t.Run("1 million txs - 1 by 1", func(t *testing.T) {
+	t.Run("1_million_txs_-_1_by_1", func(t *testing.T) {
+
+		startingTxCount := ba.TxCount()
+		assert.Equal(t, uint64(1), startingTxCount)
+
 		var wg sync.WaitGroup
 		for n := uint64(0); n < 1_024; n++ {
 			bytesN := make([]byte, 8)
@@ -84,7 +88,7 @@ func TestServer_Performance(t *testing.T) {
 		wg.Wait()
 
 		for {
-			if ba.TxCount() >= 1_048_576 {
+			if ba.TxCount() >= 1_048_576+startingTxCount {
 				break
 			}
 
@@ -94,12 +98,12 @@ func TestServer_Performance(t *testing.T) {
 		prevTxCount = ba.TxCount()
 		prevSubtreeCount = ba.SubtreeCount()
 
-		assert.Equal(t, uint64(1_048_576), prevTxCount)
+		assert.Equal(t, uint64(1_048_576+startingTxCount), prevTxCount)
 		assert.Equal(t, 33, prevSubtreeCount)
 		prevSubtreeCount -= 1 // Decrement 1 so the next test accumulate with it has already decrease 1
 	})
 
-	t.Run("1 million txs - in batches", func(t *testing.T) {
+	t.Run("1_million_txs_-_in_batches", func(t *testing.T) {
 		var wg sync.WaitGroup
 
 		for n := uint64(0); n < 1_024; n++ {

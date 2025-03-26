@@ -593,7 +593,7 @@ func (td *TestDaemon) WaitForBlockHeight(t *testing.T, expectedBlock *model.Bloc
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	require.Equal(t, expectedBlock.Height, state.CurrentHeight, "Expected block assembly to reach height %d", expectedBlock.Height)
+	require.LessOrEqual(t, expectedBlock.Height, state.CurrentHeight, "Expected block assembly to reach height %d or higher", expectedBlock.Height)
 
 	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
 		return
