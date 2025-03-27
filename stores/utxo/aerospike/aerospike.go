@@ -58,7 +58,6 @@ package aerospike
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -314,7 +313,7 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 		writePolicy.TotalTimeout = timeout
 	}
 
-	details := fmt.Sprintf("url: %s, namespace: %s", s.url.String(), s.namespace)
+	details := "Aerospike store" // don't include sensitive info like url, password, etc
 
 	// Trying to put and get a record to test the connection
 	key, err := aerospike.NewKey(s.namespace, s.setName, "key")
