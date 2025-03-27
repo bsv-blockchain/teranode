@@ -271,6 +271,7 @@ jobs:
             -tags ${{ matrix.test_config.test_tags }} \
             ./${{ matrix.test_config.test_dir }}/${{ matrix.test_config.test_filename }}
         env:
+          TEST_ENV: container
           SETTINGS_CONTEXT: docker.teranode1.test.nightly
           test_dir: ${{ matrix.test_config.test_dir }}
           test_tags: ${{ matrix.test_config.test_tags }}
