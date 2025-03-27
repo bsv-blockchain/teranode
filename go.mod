@@ -2,7 +2,7 @@ module github.com/bitcoin-sv/teranode
 
 go 1.24.0
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.16
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.18
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
