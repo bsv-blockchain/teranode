@@ -84,6 +84,7 @@ The Propagation Service is responsible for receiving and forwarding transactions
 
 **Key Responsibilities:**
 
+
 - Receive transactions from the network through multiple communication channels (gRPC, UDP over IPv6 and HTTP)
 - Perform initial sanity checks on transactions
 - Forward valid transactions to the TX Validator Service

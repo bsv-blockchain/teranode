@@ -25,6 +25,7 @@ skinparam participant {
 participant "Propagation Server" as Server
 participant "Configuration System" as Config
 participant "UDP6 Listeners" as UDP6
+
 participant "gRPC Server" as gRPC
 participant "Kafka Producer" as Kafka
 participant "BlockchainClient" as BC

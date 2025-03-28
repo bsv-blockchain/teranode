@@ -136,6 +136,10 @@ Errors are wrapped using a custom error package, providing additional context an
 
 The server uses goroutines and error groups for handling concurrent operations, such as processing batches of transactions. It also uses contexts for cancellation and timeout management.
 
+## Security
+
+The server supports various security levels for HTTP/HTTPS configurations.
+
 ## Metrics
 
 The server initializes Prometheus metrics for monitoring various aspects of its operation, including:
