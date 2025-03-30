@@ -10,7 +10,7 @@ x-teranode-commands-base: &teranode-commands-base
   network_mode: "host"
 
 x-teranode-coinbase-base: &teranode-coinbase-base
-  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest 
+  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:1aeefb8ff089771d979d112ae550a6d29ed71b12 
   network_mode: "host"
   depends_on:
     - postgres
@@ -124,6 +124,7 @@ services:
       - ./data/teranode1/blockstore:/app/data/teranode1/blockstore
       - ./data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
       - ./data/teranode1/external:/app/data/teranode1/external
+      - ./wait.sh:/app/wait.sh
 
   teranode-2:
     <<: *teranode-base
@@ -148,6 +149,7 @@ services:
       - ./data/teranode2/blockstore:/app/data/teranode2/blockstore
       - ./data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
       - ./data/teranode2/external:/app/data/teranode2/external
+      - ./wait.sh:/app/wait.sh
 
   teranode-3:
     <<: *teranode-base
@@ -172,9 +174,11 @@ services:
       - ./data/teranode3/blockstore:/app/data/teranode3/blockstore
       - ./data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
       - ./data/teranode3/external:/app/data/teranode3/external
-
+      - ./wait.sh:/app/wait.sh
   miner-1:
     <<: *teranode-commands-base
+    # profiles:
+    #   - skip
     container_name: miner-1
     depends_on:
       - teranode-1
@@ -188,6 +192,8 @@ services:
 
   miner-2:
     <<: *teranode-commands-base
+    # profiles:
+    #   - skip
     container_name: miner-2
     depends_on:
       - teranode-2
@@ -201,6 +207,8 @@ services:
 
   miner-3:
     <<: *teranode-commands-base
+    # profiles:
+    #   - skip
     container_name: miner-3
     depends_on:
       - teranode-3
@@ -214,18 +222,27 @@ services:
 
   coinbase-1:
     <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
     container_name: coinbase-1
     depends_on:
       - teranode-1
+    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
+      profilerAddr: "localhost:17092"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/coinbase1:/app/data
 
   tx-blaster-1:
     <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
     container_name: tx-blaster-1
+    depends_on:
+      - coinbase-1
+      - teranode-1
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1"
       BLASTER_ARGS: "-workers=2"
