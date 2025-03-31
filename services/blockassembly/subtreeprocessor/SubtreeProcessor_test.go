@@ -1237,23 +1237,25 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 }
 
 // BenchmarkAddNode tests node addition performance.
-func BenchmarkAddNode(t *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(t)
+func BenchmarkAddNode(b *testing.B) {
+	g, stp, txHashes := initTestAddNodeBenchmark(b)
 
 	startTime := time.Now()
+
+	b.ResetTimer()
 
 	for i, txHash := range txHashes {
 		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}) // nolint:gosec
 	}
 
 	err := g.Wait()
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
 
-func BenchmarkAddNodeWithMap(t *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(t)
+func BenchmarkAddNodeWithMap(b *testing.B) {
+	g, stp, txHashes := initTestAddNodeBenchmark(b)
 
 	_ = stp.Remove(txHashes[1000])
 	_ = stp.Remove(txHashes[2000])
@@ -1262,19 +1264,21 @@ func BenchmarkAddNodeWithMap(t *testing.B) {
 
 	for i := 0; i < 4; i++ {
 		txHash, err := generateTxHash()
-		require.NoError(t, err)
+		require.NoError(b, err)
 
 		txHashes = append(txHashes, txHash)
 	}
 
 	startTime := time.Now()
 
+	b.ResetTimer()
+
 	for i, txHash := range txHashes {
 		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
 	}
 
 	err := g.Wait()
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
@@ -1288,7 +1292,7 @@ func BenchmarkAddNodeWithMap(t *testing.B) {
 //   - *errgroup.Group: Error group for concurrent operations
 //   - *SubtreeProcessor: Processor instance for testing
 //   - []chainhash.Hash: Test transaction hashes
-func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}
 	nrSubtreesExpected := 10
@@ -1317,9 +1321,7 @@ func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor,
 
 	for i := 0; i < (10*nrTxs)-1; i++ {
 		txHash, err := generateTxHash()
-		if err != nil {
-			fmt.Println(err)
-		}
+		require.NoError(b, err)
 
 		txHashes[i] = txHash
 	}

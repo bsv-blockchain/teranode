@@ -160,6 +160,15 @@ type TxValidatorOptions struct {
 	skipPolicyChecks bool
 }
 
+func NewTxValidatorOptions(opts ...TxValidatorOption) *TxValidatorOptions {
+	options := &TxValidatorOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	return options
+}
+
 // TxValidatorOption defines a function type for setting transaction validator options
 // This follows the functional options pattern for flexible configuration
 type TxValidatorOption func(*TxValidatorOptions)

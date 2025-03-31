@@ -7,8 +7,6 @@ Bitcoin transaction validation rules and policies.
 package validator
 
 import (
-	"encoding/hex"
-
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -59,6 +57,7 @@ type TxValidator struct {
 	logger      ulogger.Logger
 	settings    *settings.Settings
 	interpreter TxScriptInterpreter
+	options     *TxValidatorOptions
 }
 
 // TxScriptInterpreter defines the interface for script verification operations
@@ -99,10 +98,7 @@ var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreat
 // Returns:
 //   - TxValidatorI: The created transaction validator
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) TxValidatorI {
-	options := &TxValidatorOptions{}
-	for _, opt := range opts {
-		opt(options)
-	}
+	options := NewTxValidatorOptions(opts...)
 
 	var txScriptInterpreter TxScriptInterpreter
 
@@ -120,6 +116,7 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 		logger:      logger,
 		settings:    tSettings,
 		interpreter: txScriptInterpreter,
+		options:     options,
 	}
 }
 
@@ -258,7 +255,7 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	_ = blockHeight
 
 	for index, input := range tx.Inputs {
-		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
+		if input.PreviousTxIDStr() == coinbaseTxID {
 			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
 		}
 		/* lots of our valid test transactions have this sequence number, is this not allowed?
