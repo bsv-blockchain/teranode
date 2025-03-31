@@ -212,6 +212,13 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 		ps.validatorKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
+	// start the http listener for incoming transactions
+	if ps.settings.Propagation.HTTPListenAddress != "" {
+		if err = ps.startHTTPServer(ctx, ps.settings.Propagation.HTTPListenAddress); err != nil {
+			return err
+		}
+	}
+
 	// this will block
 	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
