@@ -29,6 +29,7 @@ var (
 
 // TestDoubleSpendScenarios tests various double-spend scenarios in a blockchain.
 // NOTE: these tests cannot be run in parallel as they rely on the same blockchain instance. They have to be run sequentially.
+// All Double spend testcases are covering TNA-5: Teranode must only accept the block if all transactions in it are valid and not already spent 
 
 func TestDoubleSpendSQLite(t *testing.T) {
 	utxoStore := "sqlite:///test"

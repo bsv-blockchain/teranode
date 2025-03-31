@@ -52,7 +52,7 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 
-	var hashes []*chainhash.Hash
+	var receivedSubtreeHashes []*chainhash.Hash
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
 	if err != nil {
@@ -72,9 +72,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
 
-					hashes = append(hashes, hash)
+					receivedSubtreeHashes = append(receivedSubtreeHashes, hash)
 
-					t.Logf("Length of hashes: %d", len(hashes))
+					t.Logf("Length of hashes: %d", len(receivedSubtreeHashes))
 				} else {
 					t.Logf("other notifications than subtrees")
 					t.Logf("notification type: %v", notification.Type)
@@ -83,38 +83,38 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		}
 	}()
 
-	time.Sleep(10 * time.Second)
-
 	parenTx := block1.CoinbaseTx
-	_, hashesTx, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 35)
+	_, sentTxHashes, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 10)
 
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
-	t.Logf("Hashes in created block: %v", hashesTx)
+	t.Logf("Hashes in created block: %v", sentTxHashes)
 
-	if len(hashes) > 0 {
-		t.Logf("First element of hashes: %v", hashes[0])
+	time.Sleep(10 * time.Second)
+
+	if len(receivedSubtreeHashes) > 0 {
+		t.Logf("First element of hashes: %v", receivedSubtreeHashes[0])
 	} else {
 		t.Log("hashes is empty!")
 	}
 
-	t.Logf("num of subtrees: %d", len(hashes))
+	t.Logf("num of subtrees: %d", len(receivedSubtreeHashes))
 
 	//check if at least 1 tx it's included inside the subtree receveid by notification
-	txHashes, err := helper.GetSubtreeTxHashes(ctx, logger, hashes[0], url, testEnv.Nodes[0].Settings)
+	txHashesInFirstSubtree, err := helper.GetSubtreeTxHashes(ctx, logger, receivedSubtreeHashes[0], url, testEnv.Nodes[0].Settings)
 	require.NoError(t, err, "Failed to get subtree tx hashes: %v", err)
-	t.Logf("Subtree tx hashes: %v", txHashes)
+	t.Logf("Subtree tx hashes: %v", txHashesInFirstSubtree)
 
 	hashSet := make(map[string]bool)
 
-	for _, hash := range hashesTx {
+	for _, hash := range sentTxHashes {
 		hashSet[hash.String()] = true
 	}
 
-	for _, txSubtrees := range txHashes {
-		if hashSet[txSubtrees.String()] {
+	for _, eachTxInTheSubtree := range txHashesInFirstSubtree {
+		if hashSet[eachTxInTheSubtree.String()] {
 			found += 1
 		}
 	}
@@ -124,4 +124,6 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	} else {
 		t.Fatalf("Test failed, no txs in common")
 	}
+
+	//TOD): We are not checking if all 35 TXs are included inside the subtrees received, so we should have a check for that
 }

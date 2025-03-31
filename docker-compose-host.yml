@@ -192,14 +192,14 @@ services:
 
   miner-2:
     <<: *teranode-commands-base
-    # profiles:
-    #   - skip
+    profiles:
+      - skip
     container_name: miner-2
     depends_on:
       - teranode-2
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode2"
-    command: [ "miner", "-coinbase-addr", "mkzvRZ2D8CBVYPb3DTB7fu8RC62NukBkpe", "-coinbase-sig", "/teranode2/", "-rpcport", "29292" ]
+    command: [ "miner", "-coinbase-addr", "1Hh6nxmJrk4jyiJRxodAK32A9EXM8dx6F3", "-coinbase-sig", "/teranode2/", "-rpcport", "29292" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/miner2:/app/data
@@ -207,14 +207,14 @@ services:
 
   miner-3:
     <<: *teranode-commands-base
-    # profiles:
-    #   - skip
+    profiles:
+      - skip
     container_name: miner-3
     depends_on:
       - teranode-3
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode3"
-    command: [ "miner", "-coinbase-addr", "mxD461rHfmVzkpn3gNbY8xEV1E8482ijyV", "-coinbase-sig", "/teranode3/", "-rpcport", "39292" ]
+    command: [ "miner", "-coinbase-addr", "16Uy8VwEKAkEmH7RVtCjqyv6L6RfyvkJM2", "-coinbase-sig", "/teranode3/", "-rpcport", "39292" ]
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/miner3:/app/data
@@ -244,8 +244,9 @@ services:
       - coinbase-1
       - teranode-1
     environment:
-      SETTINGS_CONTEXT: "docker.host.teranode1"
+      SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
       BLASTER_ARGS: "-workers=2"
+      profilerAddr: "localhost:17093"
     entrypoint: ["./blaster.run"]
     command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:

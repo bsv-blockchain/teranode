@@ -136,3 +136,8 @@ func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
 		}
 	})
 }
+
+// TODO: We did not check in this test, if all 10 txs in a block when it is mined
+// OR
+// TODO: We did not check in this test, if all 10 txs in a mining candidate
+

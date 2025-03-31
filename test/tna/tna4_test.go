@@ -134,3 +134,5 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 	}
 	mu.Unlock()
 }
+
+// TODO: Also add the helper function to see that all the transactions are in the block
