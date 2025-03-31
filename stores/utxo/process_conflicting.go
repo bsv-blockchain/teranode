@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
+	"github.com/bitcoin-sv/teranode/test/txregistry"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -46,6 +47,16 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessConflicting")
 
 	defer deferFn()
+
+	// TODO - Remove this before release
+	if txregistry.GetTagByHash(&conflictingTxHashes[0]) == "txA" {
+		_ = ""
+	}
+
+	// TODO - Remove this before release
+	if txregistry.GetTagByHash(&conflictingTxHashes[0]) == "txB" {
+		_ = ""
+	}
 
 	// 0. Get the transactions, check they are conflicting
 	winningTxs := make([]*bt.Tx, len(conflictingTxHashes))
@@ -129,7 +140,10 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	var tErr *errors.Error
 
 	for _, tx := range winningTxs {
-		spends, err := s.Spend(ctx, tx, true)
+		spends, err := s.Spend(ctx, tx, IgnoreFlags{
+			IgnoreConflicting: true,
+			IgnoreUnspendable: true,
+		})
 		if err != nil {
 			if errors.As(err, &tErr) {
 				// add all the spend errors to the error chain

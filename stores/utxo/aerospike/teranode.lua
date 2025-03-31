@@ -148,7 +148,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingTxID, ignoreUnspendable, currentBlockHeight, ttl)
+function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
     -- Create a single spend item for spendMulti
     local spend = map()
     spend['offset'] = offset
@@ -158,7 +158,7 @@ function spend(rec, offset, utxoHash, spendingTxID, ignoreUnspendable, currentBl
     local spends = list()
     list.append(spends, spend)
 
-    return spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
+    return spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
 end
 
 --                           _ __  __       _ _   _ 
@@ -168,14 +168,16 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|_|  |_|\__,_|_|\__|_|
 --     |_|                                          
 --
-function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
+function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
     
-    if not ignoreUnspendable then
+    if not ignoreConflicting then
         if rec['conflicting'] then
             return MSG_CONFLICTING
         end
-
+    end
+    
+    if not ignoreUnspendable then
         if rec['unspendable'] then
             return MSG_UNSPENDABLE
         end

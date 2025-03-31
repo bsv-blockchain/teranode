@@ -161,8 +161,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxostore.Spend, error) {
-	spends, err := s.store.Spend(ctx, tx)
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxostore.Spend, error) {
+	spends, err := s.store.Spend(ctx, tx, ignoreFlags...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {

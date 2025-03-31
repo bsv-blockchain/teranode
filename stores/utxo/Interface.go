@@ -74,6 +74,11 @@ type Spend struct {
 	Err error `json:"err,omitempty"`
 }
 
+type IgnoreFlags struct {
+	IgnoreConflicting bool
+	IgnoreUnspendable bool
+}
+
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
 	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
@@ -193,7 +198,7 @@ type Store interface {
 	// Blockchain specific functions
 
 	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error)
+	Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.

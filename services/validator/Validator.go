@@ -246,7 +246,9 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	txID := tx.TxID()
+
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
+
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
 		tracing.WithTag("txid", txID),
@@ -633,7 +635,10 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreUnspenda
 		err error
 	)
 
-	spends, err := v.utxoStore.Spend(ctx, tx, ignoreUnspendable)
+	spends, err := v.utxoStore.Spend(ctx, tx, utxo.IgnoreFlags{
+		IgnoreConflicting: false,
+		IgnoreUnspendable: ignoreUnspendable,
+	})
 	if err != nil {
 		traceSpan.RecordError(err)
 

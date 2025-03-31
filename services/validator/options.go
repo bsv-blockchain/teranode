@@ -25,6 +25,9 @@ type Options struct {
 	// this is done when validating transaction from a block that has been mined
 	CreateConflicting bool
 
+	// IgnoreConflicting determines whether to ignore transactions marked as conflicting when spending
+	IgnoreConflicting bool
+
 	// IgnoreUnspendable determines whether to ignore transactions marked as unspendable when spending
 	IgnoreUnspendable bool
 
@@ -113,6 +116,18 @@ func WithSkipPolicyChecks(skip bool) Option {
 func WithCreateConflicting(create bool) Option {
 	return func(o *Options) {
 		o.CreateConflicting = create
+	}
+}
+
+// WithIgnoreConflicting creates an option to control whether a conflicting transaction is ignored
+// Parameters:
+//   - ignore: When true, a conflicting transaction will be ignored
+//
+// Returns:
+//   - Option: Function that sets the ignoreConflicting option
+func WithIgnoreConflicting(ignore bool) Option {
+	return func(o *Options) {
+		o.IgnoreConflicting = ignore
 	}
 }
 

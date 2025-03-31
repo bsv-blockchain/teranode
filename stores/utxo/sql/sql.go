@@ -701,7 +701,7 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 //
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -759,14 +759,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		AND idx = $3
 	`
 
-	var (
-		errorFound           bool
-		useIgnoreUnspendable bool
-	)
+	var errorFound bool
 
-	if len(ignoreUnspendable) > 0 {
-		useIgnoreUnspendable = ignoreUnspendable[0]
-	}
+	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
+	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
 
 	for _, spend := range spends {
 		select {
@@ -811,7 +807,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			}
 
 			// If the tx is marked as conflicting, it cannot be spent
-			if conflicting && !useIgnoreUnspendable {
+			if conflicting && !useIgnoreConflicting {
 				errorFound = true
 				spend.Err = errors.NewTxConflictingError("[Spend] tx is conflicting for %s:%d", spend.TxID, spend.Vout)
 

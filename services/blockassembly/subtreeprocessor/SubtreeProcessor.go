@@ -1250,17 +1250,6 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		return errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 	}
 
-	// if there are no transactions in the subtree processor, we do not have to do anything
-	// we will always have at least 1 single coinbase placeholder transaction
-	if stp.txCount.Load() == 1 && stp.SubtreeCount() == 1 && stp.queue.length() == 0 && stp.currentSubtree.Nodes[0].Hash.Equal(*util.CoinbasePlaceholderHash) {
-		stp.logger.Debugf("[moveForwardBlock][%s] no transactions in subtree processor, skipping cleanup", block.String())
-
-		// set the current block header
-		stp.currentBlockHeader = block.Header
-
-		return nil
-	}
-
 	// create a reverse lookup map of all the subtrees in the block
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {

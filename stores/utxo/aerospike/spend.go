@@ -93,6 +93,7 @@ import (
 type batchSpend struct {
 	spend             *utxo.Spend // UTXO to spend
 	errCh             chan error  // Channel for completion notification
+	ignoreConflicting bool
 	ignoreUnspendable bool
 }
 
@@ -142,7 +143,7 @@ type batchTTL struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -150,7 +151,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		}
 	}()
 
-	useIgnoreUnspendable := len(ignoreUnspendable) > 0 && ignoreUnspendable[0]
+	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
+	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
 
 	spends, err := utxo.GetSpends(tx)
 	if err != nil {
@@ -179,6 +181,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
 				errCh:             errCh,
+				ignoreConflicting: useIgnoreConflicting,
 				ignoreUnspendable: useIgnoreUnspendable,
 			})
 
@@ -265,6 +268,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 
 type keyIgnoreUnspendable struct {
 	key               *aerospike.Key
+	ignoreConflicting bool
 	ignoreUnspendable bool
 }
 
@@ -357,6 +361,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		// we need to group the spends by key and ignoreUnspendable flag
 		useKey := keyIgnoreUnspendable{
 			key:               key,
+			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreUnspendable: bItem.ignoreUnspendable,
 		}
 
@@ -373,6 +378,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	for batchKey, batchItems := range batchesByKey {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
+			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreUnspendable),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl

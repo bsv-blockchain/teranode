@@ -271,7 +271,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 //   - UTXO is not frozen
 //   - UTXO is spendable (maturity/timelock)
 //   - UTXO is not already spent by different tx
-func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
+func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

@@ -369,7 +369,7 @@ func (td *TestDaemon) VerifyBlockByHash(t *testing.T, expectedBlock *model.Block
 		"Block hash mismatch at hash %s", hash)
 }
 
-func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts []chainhash.Hash) {
+func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts ...*bt.Tx) {
 	latestSubtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension("subtree"))
 	require.NoError(t, err, "Failed to get subtree")
 
@@ -381,19 +381,19 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 
 	for _, conflict := range expectedConflicts {
 		// conflicting txs are not in order
-		assert.True(t, slices.Contains(latestSubtree.ConflictingNodes, conflict), "Expected conflicting node %s not found in subtree", conflict.String())
+		assert.True(t, slices.Contains(latestSubtree.ConflictingNodes, *conflict.TxIDChainHash()), "Expected conflicting node %s not found in subtree", conflict.String())
 	}
 }
 
-func (td *TestDaemon) VerifyConflictingInUtxoStore(t *testing.T, expectedConflicts []chainhash.Hash, conflictValue bool) {
+func (td *TestDaemon) VerifyConflictingInUtxoStore(t *testing.T, conflictValue bool, expectedConflicts ...*bt.Tx) {
 	for _, conflict := range expectedConflicts {
-		readTx, err := td.UtxoStore.Get(td.Ctx, &conflict)
+		readTx, err := td.UtxoStore.Get(td.Ctx, conflict.TxIDChainHash())
 		require.NoError(t, err, "Failed to get transaction %s", conflict.String())
 		assert.Equal(t, conflictValue, readTx.Conflicting, "Expected transaction %s to be marked as conflicting", conflict.String())
 	}
 }
 
-func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txHash []chainhash.Hash) {
+func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	// get a mining candidate and check the subtree does not contain the given transactions
 	candidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, true)
 	require.NoError(t, err)
@@ -405,14 +405,15 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txHash []chainhash.
 		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
 		require.NoError(t, err, "Failed to parse subtree bytes")
 
-		for _, hash := range txHash {
+		for _, tx := range txs {
+			hash := *tx.TxIDChainHash()
 			found := subtree.HasNode(hash)
 			assert.False(t, found, "Expected subtree to not contain transaction %s", hash.String())
 		}
 	}
 }
 
-func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txHash []chainhash.Hash) {
+func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	// get a mining candidate and check the subtree does not contain the given transactions
 	candidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, true)
 	require.NoError(t, err)
@@ -421,7 +422,9 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txHash []chainhash.Has
 	require.GreaterOrEqual(t, candidate.SubtreeHashes, 1, "Expected at least one subtree hash in the candidate")
 
 	txFoundMap := make(map[chainhash.Hash]int)
-	for _, hash := range txHash {
+
+	for _, tx := range txs {
+		hash := *tx.TxIDChainHash()
 		txFoundMap[hash] = 0
 	}
 
@@ -432,7 +435,8 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txHash []chainhash.Has
 		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
 		require.NoError(t, err, "Failed to parse subtree bytes")
 
-		for _, hash := range txHash {
+		for _, tx := range txs {
+			hash := *tx.TxIDChainHash()
 			found := subtree.HasNode(hash)
 			if found {
 				txFoundMap[hash]++
@@ -524,7 +528,7 @@ func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTx
 	return tx
 }
 
-func (td *TestDaemon) CreateTestBlock(t *testing.T, txs []*bt.Tx, previousBlock *model.Block, nonce uint32) (*util.Subtree, *model.Block) {
+func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*util.Subtree, *model.Block) {
 	// Create and save the subtree with the double spend tx
 	subtree, err := createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)
 	require.NoError(t, err)
