@@ -161,3 +161,7 @@ func goBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 
 	return sdkTx
 }
+
+func (v *scriptVerifierGoSDK) Interpreter() TxInterpreter {
+	return TxInterpreterGoSDK
+}

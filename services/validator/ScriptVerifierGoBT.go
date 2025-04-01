@@ -112,3 +112,7 @@ func (v *scriptVerifierGoBt) VerifyScript(tx *bt.Tx, blockHeight uint32, consens
 
 	return nil
 }
+
+func (v *scriptVerifierGoBt) Interpreter() TxInterpreter {
+	return TxInterpreterGoBT
+}

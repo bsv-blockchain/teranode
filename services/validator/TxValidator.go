@@ -72,6 +72,9 @@ type TxScriptInterpreter interface {
 
 	// VerifyScript implement the method to verify a script for a transaction
 	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
+
+	// Interpreter returns the interpreter being used
+	Interpreter() TxInterpreter
 }
 
 // TxScriptInterpreterCreator defines a function type for creating script interpreters
@@ -174,15 +177,16 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 	//    => This is a BCH only check, not applicable to BSV
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
-		return err
-	}
+	// --------- TURN OFF -> unlimited ---------------------
+	// if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
+	// 	return err
+	// }
 
 	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
 	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
 	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
 	//       and therefore let's not enforce this check until then.
-	if blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
+	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
 		// 9) The unlocking script (scriptSig) can only push numbers on the stack
 		if err := tv.pushDataCheck(tx); err != nil {
 			return err
