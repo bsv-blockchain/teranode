@@ -1,4 +1,4 @@
-//go:build test_all || test_tna
+//go:build test_all || test_tna || debug
 
 // Package tna implements acceptance tests for Teranode's transaction and block handling.
 //
@@ -10,15 +10,22 @@
 // 3. Concurrent transaction propagation under load
 //
 // How to run this test manually:
-// $ go test -v -run "^TestTNA2TestSuite$/TestTxsReceivedAllNodes$" -tags test_tna ./test/tna/tna2_test.go
+// $ go test -v -run "^TestTNA2TestSuite$/TestSingleTransactionPropagation$" -tags test_tna ./test/tna/tna2_test.go
+// $ go test -v -run "^TestTNA2TestSuite$/TestMultipleTransactionsPropagation$" -tags test_tna ./test/tna/tna2_test.go
+// $ go test -v -run "^TestTNA2TestSuite$/TestConcurrentTransactionsPropagation$" -tags test_tna ./test/tna/tna2_test.go
+//
+// To run all TNA tests:
+// $ go test -v -tags test_tna ./...
 
 package tna
 
 import (
 	"testing"
+	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -43,101 +50,137 @@ func TestTNA2TestSuite(t *testing.T) {
 	)
 }
 
-func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
+func (suite *TNA2TestSuite) TestSingleTransactionPropagation() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
 
-	t.Run("Single transaction propagation", func(t *testing.T) {
-		// Create and send a single transaction
-		txHash, err := helper.CreateAndSendTxToSliceOfNodes(ctx, testEnv.Nodes)
-		if err != nil {
-			t.Fatalf("Failed to create and send transaction: %v", err)
-		}
+	node1 := testEnv.Nodes[0]
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	parenTx := block1.CoinbaseTx
+	sentTx, err := node1.CreateAndSendTx(t, ctx, parenTx)
 
-		// Check if the tx is into the UTXOStore
-		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHash)
+	// Check if the tx is into the UTXOStore
+	txRes, errTxRes := node1.UtxoStore.Get(ctx, sentTx.TxIDChainHash())
+	if txRes == nil {
+		t.Fatalf("Tx not found: %v", txRes)
+	}
+	if errTxRes != nil {
+		t.Fatalf("Failed to create and send transaction: %v", errTxRes)
+	}
 
-		if txRes == nil {
-			t.Fatalf("Tx not found: %v", txRes)
-		}
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-		if errTxRes != nil {
-			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
-		}
-
-		// Verify transaction exists in block assembly on all nodes
-		for i, node := range testEnv.Nodes {
-			err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
-			if err != nil {
-				t.Errorf("Transaction not found in block assembly on node %d: %v", i, err)
-			}
-		}
-	})
-
-	t.Run("Multiple transactions propagation", func(t *testing.T) {
-		// Send multiple transactions
-		numTxs := 5
-		txHashes, err := helper.CreateAndSendTxsToASliceOfNodes(ctx, testEnv.Nodes, numTxs)
-
-		if err != nil {
-			t.Fatalf("Failed to create and send multiple transactions: %v", err)
-		}
-
-		// Check if 1 tx is into the UTXOStore
-		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHashes[0])
-
-		if txRes == nil {
-			t.Fatalf("Tx not found: %v", txRes)
-		}
-
-		if errTxRes != nil {
-			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
-		}
-
-		// Verify all transactions exist in block assembly on all nodes
-		for _, txHash := range txHashes {
-			for i, node := range testEnv.Nodes {
-				err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
-				if err != nil {
-					t.Errorf("Transaction %s not found in block assembly on node %d: %v", txHash, i, err)
+	for _, node := range testEnv.Nodes {
+		success := false
+		for !success {
+			select {
+			case <-timeout:
+				t.Fatalf("Timeout waiting for transaction to appear in block assembly")
+			case <-ticker.C:
+				// If we can remove the tx, it means it's in block assembly
+				err = node.BlockassemblyClient.RemoveTx(ctx, sentTx.TxIDChainHash())
+				if err == nil {
+					success = true
 				}
 			}
 		}
-	})
+	}
+}
 
-	t.Run("Concurrent transactions propagation", func(t *testing.T) {
-		// Send transactions concurrently
-		numTxs := 10
-		txHashes, err := helper.CreateAndSendTxsConcurrently(ctx, testEnv.Nodes[0], numTxs)
-		if err != nil {
-			t.Fatalf("Failed to create and send concurrent transactions: %v", err)
-		}
+func (suite *TNA2TestSuite) TestMultipleTransactionsPropagation() {
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
+	t := suite.T()
 
-		// Check if 1 tx is into the UTXOStore
-		txRes, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, &txHashes[0])
+	// Send multiple transactions
+	node1 := testEnv.Nodes[0]
+	numTxs := 5
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	parenTx := block1.CoinbaseTx
+	_, sentTxHashes, err := node1.CreateAndSendTxs(t, ctx, parenTx, numTxs)
+	if err != nil {
+		t.Fatalf("Failed to create and send multiple transactions: %v", err)
+	}
 
-		if txRes == nil {
-			t.Fatalf("Tx not found: %v", txRes)
-		}
+	// Check if 1 tx is into the UTXOStore
+	txRes, errTxRes := node1.UtxoStore.Get(ctx, sentTxHashes[0])
+	if txRes == nil {
+		t.Fatalf("Tx not found: %v", txRes)
+	}
+	if errTxRes != nil {
+		t.Fatalf("Failed to create and send transaction: %v", errTxRes)
+	}
 
-		if errTxRes != nil {
-			t.Fatalf("Failed to create and send transaction: %v", errTxRes)
-		}
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-		// Verify all transactions exist in block assembly on all nodes
-		for _, txHash := range txHashes {
-			for i, node := range testEnv.Nodes {
-				err := node.BlockassemblyClient.RemoveTx(ctx, &txHash)
-				if err != nil {
-					t.Errorf("Transaction %s not found in block assembly on node %d: %v", txHash, i, err)
+	// Verify all transactions exist in block assembly on all nodes
+	for _, txHash := range sentTxHashes {
+		for _, node := range testEnv.Nodes {
+			success := false
+			for !success {
+				select {
+				case <-timeout:
+					t.Fatalf("Timeout waiting for transaction to appear in block assembly")
+				case <-ticker.C:
+					err := node.BlockassemblyClient.RemoveTx(ctx, txHash)
+					if err == nil {
+						success = true
+					}
 				}
 			}
 		}
-	})
+	}
+}
+
+func (suite *TNA2TestSuite) TestConcurrentTransactionsPropagation() {
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
+	t := suite.T()
+
+	// Send transactions concurrently
+	node1 := testEnv.Nodes[0]
+	numTxs := 10
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	parenTx := block1.CoinbaseTx
+	_, sentTxHashes, err := node1.CreateAndSendTxsConcurrently(t, ctx, parenTx, numTxs)
+	if err != nil {
+		t.Fatalf("Failed to create and send concurrent transactions: %v", err)
+	}
+
+	// Check if 1 tx is into the UTXOStore
+	_, errTxRes := testEnv.Nodes[0].UtxoStore.Get(ctx, sentTxHashes[0])
+	require.NoError(t, errTxRes)
+
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for _, txHash := range sentTxHashes {
+		for _, node := range testEnv.Nodes {
+			success := false
+			for !success {
+				select {
+				case <-timeout:
+					t.Fatalf("Timeout waiting for transaction to appear in block assembly")
+				case <-ticker.C:
+					err := node.BlockassemblyClient.RemoveTx(ctx, txHash)
+					if err == nil {
+						success = true
+					}
+				}
+			}
+		}
+	}
 }
 
 // TODO: We did not check in this test, if all 10 txs in a block when it is mined
 // OR
 // TODO: We did not check in this test, if all 10 txs in a mining candidate
-

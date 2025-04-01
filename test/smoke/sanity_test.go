@@ -35,7 +35,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 
-	tx, err := testEnv.Nodes[0].CreateAndSendTx(ctx, block1.CoinbaseTx)
+	tx, err := testEnv.Nodes[0].CreateAndSendTx(t, ctx, block1.CoinbaseTx)
 	require.NoError(t, err)
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	require.NoError(t, err)
