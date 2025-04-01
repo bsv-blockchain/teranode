@@ -827,7 +827,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	sm.requestedTxns.Delete(*txHash)
 
 	if err != nil {
-		if errors.Is(err, errors.ErrTxMissingParent) {
+		if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxUnspendable) {
 			// this is an orphan transaction, we will accept it when the parent comes in
 			// first check if the transaction already exists in the orphan pool, otherwise add it
 			if _, orphanTxExists := sm.orphanTxs.Get(*txHash); !orphanTxExists {
@@ -902,8 +902,9 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// passing in block height 0, which will default to utxo store block height in validator
 		_, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
 		if err != nil {
-			if errors.Is(err, errors.ErrTxMissingParent) {
+			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxUnspendable) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in
+				// or when the transaction is spendable again
 				continue
 			}
 

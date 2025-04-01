@@ -86,8 +86,6 @@ local function createUTXOWithSpendingTxID(utxoHash, spendingTxID)
         newUtxo[UTXO_HASH_SIZE + i] = spendingTxID[i]
     end
     
-    info("newUtxo: " .. bytes_to_hex(newUtxo))
-
     return newUtxo
 end
 
