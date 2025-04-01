@@ -9,7 +9,6 @@ package smoke
 
 import (
 	"testing"
-	"time"
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/stretchr/testify/require"
@@ -44,8 +43,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 	// Generate blocks
 	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{110})
-	// wait for the blocks to be generated
-	time.Sleep(5 * time.Second)
 	require.NoError(t, err, "Failed to generate blocks: %v", err)
 
 	blockStore := testEnv.Nodes[0].ClientBlockstore

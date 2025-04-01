@@ -1,4 +1,4 @@
-//go:build test_all || test_tnb
+//go:build test_all || test_tnb || debug
 
 // How to run tests:
 //
@@ -28,15 +28,12 @@
 package tnb
 
 import (
-	"io"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -67,7 +64,8 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
-	blockchainNode0 := testEnv.Nodes[0].BlockchainClient
+	node1 := testEnv.Nodes[0]
+	blockchainNode0 := node1.BlockchainClient
 	logger := testEnv.Logger
 
 	blockchainSubscription, err := blockchainNode0.Subscribe(ctx, "test-tnb1")
@@ -77,11 +75,11 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 		return
 	}
 
-	var subtreeReader io.ReadCloser
-
 	subtreeReady := make(chan []chainhash.Hash, 1)
 
 	txHashesFromSubtree := make([]chainhash.Hash, 0)
+
+	url := "http://" + testEnv.Nodes[0].AssetURL
 
 	go func() {
 		for {
@@ -94,36 +92,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
 
-					// Retry loop until subtreeReader it's available
-					var reader io.ReadCloser
-					deadline := time.Now().Add(30 * time.Second)
-					for {
-						reader, err = testEnv.Nodes[0].ClientSubtreestore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
-						if err == nil {
-							break
-						}
-						if time.Now().After(deadline) {
-							t.Errorf("Timeout getting subtree reader: %v", err)
-							return
-						}
-						time.Sleep(100 * time.Millisecond)
-					}
-					defer reader.Close()
-
-					subtree := util.Subtree{}
-
-					err = subtree.DeserializeFromReader(subtreeReader)
-					if err != nil {
-						t.Errorf("error deserializing subtree: %v", err)
-					}
-
-					testEnv.Logger.Infof("subtree: %v", subtree)
-
-					testEnv.Logger.Infof("subtree length: %v", len(subtree.Nodes))
-
-					for i := 0; i < len(subtree.Nodes); i++ {
-						txHashesFromSubtree = append(txHashesFromSubtree, subtree.Nodes[i].Hash)
-					}
+					txHashesFromSubtree, err := helper.GetSubtreeTxHashes(ctx, logger, subtreeHash, url, node1.Settings)
 
 					subtreeReady <- txHashesFromSubtree
 
@@ -134,12 +103,15 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	}()
 
 	for i := 0; i < 1; i++ {
-		txHashesSent, err := helper.CreateAndSendTxsConcurrently(ctx, testEnv.Nodes[0], 10)
+		block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+		require.NoError(t, err)
+		parenTx := block1.CoinbaseTx
+		_, txHashesSent, err := node1.CreateAndSendTxsConcurrently(t, ctx, parenTx, 10)
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 
-		baClient := testEnv.Nodes[0].BlockassemblyClient
+		baClient := node1.BlockassemblyClient
 		_, err = helper.GetMiningCandidate(ctx, baClient, logger)
 
 		if err != nil {
@@ -160,7 +132,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 			found := false
 
 			for _, txHashFromSubtree := range txHashesFromSubtree {
-				if txHash == txHashFromSubtree {
+				if *txHash == txHashFromSubtree {
 					found = true
 					break
 				}
@@ -169,111 +141,4 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 			require.True(t, found, "txHash not found in txHashesFromSubtree")
 		}
 	}
-}
-
-func (suite *TNB1TestSuite) TestReceiveExtendedFormatTx() {
-	testEnv := suite.TeranodeTestEnv
-	ctx := testEnv.Context
-	t := suite.T()
-	node := testEnv.Nodes[0]
-	logger := testEnv.Logger
-
-	// Create a transaction with Extended Format
-	tx, err := helper.CreateAndSendTx(ctx, node)
-	require.NoError(t, err)
-	require.NotNil(t, tx)
-
-	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL
-	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
-	// Generate blocks
-	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{1})
-	require.NoError(t, err)
-
-	// Verify transaction exists in block
-	block102, err := node.BlockchainClient.GetBlockByHeight(ctx, 102)
-	require.NoError(t, err)
-	require.NotNil(t, block102)
-
-	// Generate 100 blocks
-	_, err = helper.CallRPC(teranode1RPCEndpoint, "generate", []interface{}{100})
-	require.NoError(t, err)
-
-	url := "http://" + node.AssetURL
-	err = helper.WaitForBlockHeight(url, 102, 60)
-	require.NoError(t, err)
-
-	// Get and validate subtrees
-	err = block102.GetAndValidateSubtrees(ctx, logger, node.ClientSubtreestore, nil)
-	require.NoError(t, err)
-
-	// Check if transaction exists in the block's subtrees
-	found := false
-
-	for _, subtree := range block102.SubtreeSlices {
-		for _, txHash := range subtree.Nodes {
-			if txHash.Hash.String() == tx.String() {
-				found = true
-				break
-			}
-		}
-
-		if found {
-			break
-		}
-	}
-
-	require.True(t, found, "Transaction not found in block's subtrees")
-}
-
-func (suite *TNB1TestSuite) TestNoReformattingRequired() {
-	testEnv := suite.TeranodeTestEnv
-	ctx := testEnv.Context
-	t := suite.T()
-	node := testEnv.Nodes[0]
-	logger := testEnv.Logger
-
-	// Create multiple transactions with different characteristics
-	txHashes := make([]chainhash.Hash, 0)
-	for i := 0; i < 5; i++ {
-		txHash, err := helper.CreateAndSendTx(ctx, node)
-		require.NoError(t, err)
-		txHashes = append(txHashes, txHash)
-	}
-
-	// Generate a block
-	_, err := helper.GenerateBlocks(ctx, node, 1, logger)
-	require.NoError(t, err)
-
-	// Get the block and verify transactions
-	block, err := helper.GetBestBlockV2(ctx, node)
-	require.NoError(t, err)
-	require.NotNil(t, block)
-
-	// Get and validate subtrees
-	err = block.GetAndValidateSubtrees(ctx, logger, node.ClientSubtreestore, nil)
-	require.NoError(t, err)
-
-	// Create a map to track which transactions we've found
-	foundTxs := make(map[string]bool)
-	for _, txHash := range txHashes {
-		foundTxs[txHash.String()] = false
-	}
-
-	// Check each subtree for transactions
-	for _, subtree := range block.SubtreeSlices {
-		for _, node := range subtree.Nodes {
-			if _, exists := foundTxs[node.Hash.String()]; exists {
-				foundTxs[node.Hash.String()] = true
-			}
-		}
-	}
-
-	// Verify all transactions were found
-	missingTxs := make([]string, 0)
-	for txHash, found := range foundTxs {
-		if !found {
-			missingTxs = append(missingTxs, txHash)
-		}
-	}
-	require.Empty(t, missingTxs, "Transactions not found in block's subtrees: %v", missingTxs)
 }

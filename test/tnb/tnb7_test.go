@@ -67,12 +67,12 @@ import (
 
 // TNB6TestSuite contains tests for TNB-6: UTXO Set Management
 // These tests verify that all outputs of validated transactions are correctly added to the UTXO set
-type TNB6TestSuite struct {
+type TNB7TestSuite struct {
 	helper.TeranodeTestSuite
 }
 
-func TestTNB6TestSuite(t *testing.T) {
-	suite.Run(t, &TNB6TestSuite{
+func TestTNB7TestSuite(t *testing.T) {
+	suite.Run(t, &TNB7TestSuite{
 		TeranodeTestSuite: helper.TeranodeTestSuite{
 			TConfig: tconfig.LoadTConfig(
 				map[string]any{
@@ -95,9 +95,9 @@ func TestTNB6TestSuite(t *testing.T) {
 // 3. Multiple outputs in a single transaction are handled correctly
 //
 // To run the test:
-// $ go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb ./test/tnb/tnb6_test.go
+// $ go test -v -run "^TestTNB7TestSuite$/TestValidatedTxShouldSpendInputs$" -tags test_tnb ./test/tnb/tnb7_test.go
 
-func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
+func (suite *TNB7TestSuite) TestValidatedTxShouldSpendInputs() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
@@ -154,7 +154,7 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 	go func() {
 		defer close(utxoReady)
 		for {
-			utxos, err := node1.UtxoStore.Get(ctx, tx.TxIDChainHash())
+			utxos, err := node1.UtxoStore.Get(ctx, coinbaseTx.TxIDChainHash())
 			if err == nil && utxos != nil {
 				utxoReady <- utxos
 				return
@@ -173,20 +173,19 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 		t.Logf("UTXO meta data: %+v\n", utxos)
 
 		if utxos.Tx != nil {
-			for i, out := range utxos.Tx.Outputs {
-				t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", i, out.Satoshis, *out.LockingScript)
-				utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), out, uint32(i))
-				spend := &utxo.Spend{
-					TxID:     tx.TxIDChainHash(),
-					Vout:     uint32(i),
-					UTXOHash: utxoHash,
-				}
-				spendStatus, err := node1.UtxoStore.GetSpend(ctx, spend)
-				require.NoError(t, err)
-				t.Logf("UTXO #%d spend status: %+v\n", i, spendStatus)
-				require.Equal(t, spendStatus.Status, 0)
-				require.Nil(t, spendStatus.SpendingTxID)
+			spentCoinbaseOutput := utxos.Tx.Outputs[0]
+			t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", 0, spentCoinbaseOutput.Satoshis, *spentCoinbaseOutput.LockingScript)
+			utxoHash, _ := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), spentCoinbaseOutput, uint32(0))
+			spend := &utxo.Spend{
+				TxID:     coinbaseTx.TxIDChainHash(),
+				Vout:     uint32(0),
+				UTXOHash: utxoHash,
 			}
+			spendStatus, err := node1.UtxoStore.GetSpend(ctx, spend)
+			t.Logf("UTXO #%d spend status: %+v\n", 0, spendStatus)
+			require.Equal(t, spendStatus.Status, 1)
+			require.Equal(t, spendStatus.SpendingTxID, tx.TxIDChainHash())
+			require.NoError(t, err)
 		} else {
 			t.Logf("No tx found into meta.Data")
 		}
