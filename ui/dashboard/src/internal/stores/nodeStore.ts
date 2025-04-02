@@ -1,26 +1,16 @@
 import { writable } from 'svelte/store'
+import { getBaseUrl } from '../utils/apiUtils'
 
-// Get this from the server configuration
+// API path prefix for regular API calls
 const apiPathname = '/api/v1'
 
 export const assetHTTPAddress = writable('', (set: any) => {
   if (!import.meta.env.SSR && window && window.location) {
-    const url = new URL(window.location.href)
+    // Use the common utility function to get the base URL
+    const baseUrl = getBaseUrl(apiPathname)
+    set(baseUrl)
     
-    // let dev and preview mode connect to server
-    if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
-      url.protocol = 'http:'
-      url.host = 'localhost'
-      url.port = '8090'
-    }
-
-    if (url.port === '') {
-      set(`${url.protocol}//${url.hostname}${apiPathname}`)
-    } else {
-      set(`${url.protocol}//${url.hostname}:${url.port}${apiPathname}`)
-    }
-
-    // console.log('Using API URL:', `${url.protocol}//${url.hostname}:${url.port}${apiPathname}`)
+    // console.log('Using API URL:', baseUrl)
   }
 
   return set
