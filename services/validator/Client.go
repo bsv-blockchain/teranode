@@ -188,9 +188,17 @@ type validateBatchResponse struct {
 }
 
 func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	// serialize transaction to bytes
+	var txBytes []byte
+	if tx.IsExtended() {
+		txBytes = tx.ExtendedBytes()
+	} else {
+		txBytes = tx.Bytes()
+	}
+
 	if c.batchSize == 0 {
 		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-			TransactionData:      tx.ExtendedBytes(),
+			TransactionData:      txBytes,
 			BlockHeight:          blockHeight,
 			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
@@ -212,7 +220,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		/* batch mode */
 		c.batcher.Put(&batchItem{
 			req: &validator_api.ValidateTransactionRequest{
-				TransactionData:      tx.ExtendedBytes(),
+				TransactionData:      txBytes,
 				BlockHeight:          blockHeight,
 				SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
 				AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,

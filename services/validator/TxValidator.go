@@ -306,7 +306,14 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 
 func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 
-	actualFeePaid := tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
+	inputSats := tx.TotalInputSatoshis()
+	outputSats := tx.TotalOutputSatoshis()
+
+	if inputSats < outputSats {
+		return errors.NewTxInvalidError("transaction input satoshis is less than output satoshis: %d < %d", inputSats, outputSats)
+	}
+
+	actualFeePaid := inputSats - outputSats
 
 	minRequiredFee := tv.settings.Policy.GetMinMiningTxFee() * 1e8
 
