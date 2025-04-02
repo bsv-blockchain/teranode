@@ -737,9 +737,15 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 		return nil, errors.NewStorageError("[File] [%s] failed to open file", fileName, err)
 	}
 
-	bytes := make([]byte, nrOfBytes)
-	nRead, err := file.Read(bytes)
+	if len(merged.Header) > 0 {
+		if _, err = file.Seek(int64(len(merged.Header)), 0); err != nil {
+			return nil, err // nolint:gosec
+		}
+	}
 
+	bytes := make([]byte, nrOfBytes)
+
+	nRead, err := file.Read(bytes)
 	if err != nil {
 		return nil, errors.NewStorageError("[File][GetHead] [%s] failed to read data from file", fileName, err)
 	}

@@ -494,6 +494,38 @@ func TestFileGetHead(t *testing.T) {
 	})
 }
 
+func TestFileGetHeadWithHeader(t *testing.T) {
+	t.Run("get head of content", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u, options.WithHeader([]byte("This is header")))
+		require.NoError(t, err)
+
+		key := []byte("key")
+		content := "This is test head content"
+		reader := strings.NewReader(content)
+
+		// Wrap the reader to satisfy the io.ReadCloser interface
+		readCloser := readCloser{Reader: reader}
+
+		// First, set the content
+		err = f.SetFromReader(context.Background(), key, readCloser)
+		require.NoError(t, err)
+
+		// Get metadata using GetHead
+		head, err := f.GetHead(context.Background(), key, 1)
+		require.NoError(t, err)
+		require.NotNil(t, head)
+		require.Equal(t, content[:1], string(head), "head content doesn't match")
+	})
+}
+
 func TestFileExists(t *testing.T) {
 	t.Run("check if content exists", func(t *testing.T) {
 		// Get a temporary directory
