@@ -49,7 +49,7 @@ services:
     network_mode: "host"
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     volumes:
       - ../deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
@@ -74,8 +74,8 @@ services:
 
   teranode-1:
     <<: *teranode-base
-    # profiles:
-    #   - skip-teranode
+    profiles:
+      - skip-teranode
     container_name: teranode-1
     depends_on:
       postgres:

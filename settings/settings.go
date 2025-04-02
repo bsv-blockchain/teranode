@@ -250,6 +250,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockValidationMaxRetries: getInt("validator_blockvalidation_maxRetries", 5, alternativeContext...),
 			BlockValidationRetrySleep: getString("validator_blockvalidation_retrySleep", "2s", alternativeContext...),
 			VerboseDebug:              getBool("validator_verbose_debug", false, alternativeContext...),
+			UseLocalValidator:         getBool("useLocalValidator", false, alternativeContext...),
 		},
 		Region: RegionSettings{
 			Name: getString("regionName", "defaultRegionName", alternativeContext...),

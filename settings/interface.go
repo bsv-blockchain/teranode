@@ -234,6 +234,7 @@ type ValidatorSettings struct {
 	BlockValidationMaxRetries int
 	BlockValidationRetrySleep string
 	VerboseDebug              bool
+	UseLocalValidator         bool
 }
 
 type RegionSettings struct {
