@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc
+//go:build test_all || test_tnc || debug
 
 // TNC-1.1 Test Suite
 // Requirement: Teranode must calculate the Merkle root of all the transactions included in the candidate block.

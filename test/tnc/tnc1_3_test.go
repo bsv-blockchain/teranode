@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc
+//go:build test_all || test_tnc || debug
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc ./test/tnc/tnc1_3_test.go
@@ -9,21 +9,13 @@
 package tnc
 
 import (
-	"encoding/hex"
-	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -50,19 +42,26 @@ func TestTNC1TestSuite(t *testing.T) {
 	)
 }
 
-// TNC-1.1
+// TNC-1.3
 func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
-	node0 := testEnv.Nodes[0]
-	blockchainClientNode0 := node0.BlockchainClient
+	node1 := testEnv.Nodes[0]
+	blockchainClientNode1 := node1.BlockchainClient
 
-	var hashes []*chainhash.Hash
+	var receivedSubtreeHashes1 []*chainhash.Hash
+	var receivedSubtreeHashes2 []*chainhash.Hash
 
 	logger := testEnv.Logger
 
-	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-tnc1")
+	blockchainSubscription1, err := blockchainClientNode1.Subscribe(ctx, "test-tnc1")
+	if err != nil {
+		t.Errorf("error subscribing to blockchain service: %v", err)
+		return
+	}
+
+	blockchainSubscription2, err := blockchainClientNode1.Subscribe(ctx, "test-tnc1")
 	if err != nil {
 		t.Errorf("error subscribing to blockchain service: %v", err)
 		return
@@ -73,105 +72,63 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 			select {
 			case <-ctx.Done():
 				return
-			case notification := <-blockchainSubscription:
+			case notification := <-blockchainSubscription1:
 				if notification.Type == model.NotificationType_Subtree {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
 
-					hashes = append(hashes, hash)
+					receivedSubtreeHashes1 = append(receivedSubtreeHashes1, hash)
 
-					fmt.Println("Length of hashes:", len(hashes))
+					t.Logf("Length of hashes 1: %d", len(receivedSubtreeHashes1))
 				} else {
-					fmt.Println("other notifications than subtrees")
-					fmt.Println(notification.Type)
+					t.Logf("other notifications than subtrees")
+					t.Logf("notification type: %v", notification.Type)
+				}
+			case notification := <-blockchainSubscription2:
+				if notification.Type == model.NotificationType_Subtree {
+					hash, err := chainhash.NewHash(notification.Hash)
+					require.NoError(t, err)
+
+					receivedSubtreeHashes2 = append(receivedSubtreeHashes2, hash)
+
+					t.Logf("Length of hashes 2: %d", len(receivedSubtreeHashes2))
+				} else {
+					t.Logf("other notifications than subtrees")
+					t.Logf("notification type: %v", notification.Type)
 				}
 			}
 		}
 	}()
 
 	//Create tx
-	block1, err := node0.BlockchainClient.GetBlockByHeight(ctx, 1)
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 	t.Logf(("Block 1: %v"), block1.Header.Hash().String())
 
 	coinbaseTx := block1.CoinbaseTx
 
-	coinbasePrivKey1 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey1, err := wif.DecodeWIF(coinbasePrivKey1)
-	require.NoError(t, err)
-	address, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey1.PrivKey.PubKey(), true)
-	require.NoError(t, err)
-	t.Log("Address 0:", address.AddressString)
+	
 
-	coinbasePrivKey2 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[1]
-	coinbasePrivateKey2, err := wif.DecodeWIF(coinbasePrivKey2)
-	require.NoError(t, err)
-	address, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey2.PrivKey.PubKey(), true)
-	require.NoError(t, err)
-	t.Log("Address 1:", address.AddressString)
+	node1.CreateAndSendTxs(t, ctx, coinbaseTx, 100)
 
-	coinbasePrivKey3 := node0.Settings.BlockAssembly.MinerWalletPrivateKeys[2]
-	coinbasePrivateKey3, err := wif.DecodeWIF(coinbasePrivKey3)
-	require.NoError(t, err)
-	address, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey3.PrivKey.PubKey(), true)
-	require.NoError(t, err)
-	t.Log("Address 2:", address.AddressString)
-
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err)
-
-	address, err = bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	output := coinbaseTx.Outputs[0]
-
-	utxoHash, _ := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), output, uint32(0))
-	//check the tx is in the utxostore
-	testSpend0 := &utxo.Spend{
-		TxID:     coinbaseTx.TxIDChainHash(),
-		Vout:     uint32(0),
-		UTXOHash: utxoHash,
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	timeout := time.After(10 * time.Second)
+	
+	success := false
+	for !success {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for transaction to appear in block assembly")
+		case <-ticker.C:
+			if len(receivedSubtreeHashes1) > 0 && len(receivedSubtreeHashes2) > 0 {
+				t.Logf("First element of hashes: %v", receivedSubtreeHashes1[0])
+				success = true
+			} else {
+				t.Log("hashes is empty!")
+			}
+		}
 	}
-	resp, err := node0.UtxoStore.GetSpend(ctx, testSpend0)
-	require.NoError(t, err)
-	t.Logf("UTXO: %v", resp)
-
-	addrs, err := output.LockingScript.Addresses()
-	require.NoError(t, err)
-	t.Logf("Output script: %v", addrs)
-	t.Logf(("Output Satoshis: %d"), output.Satoshis)
-
-	utxo := &bt.UTXO{
-		TxIDHash:      coinbaseTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: output.LockingScript,
-		Satoshis:      output.Satoshis,
-	}
-
-	splits := uint64(100)
-
-	// Split the utxo into 100 outputs satoshis
-	sats := utxo.Satoshis / splits
-	remainder := utxo.Satoshis % splits
-
-	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err)
-
-	// err = newTx.AddP2PKHOutputFromAddress("1Jp7AZdMQ3hyfMfk3kJe31TDj8oppZLYdK", coinbaseTx.TotalInputSatoshis())
-	// require.NoError(t, err)
-
-	err = newTx.PayToAddress(address.AddressString, sats+remainder)
-	require.NoError(t, err)
-
-	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey1.PrivKey})
-	require.NoError(t, err)
-
-	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
-	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
-
-	_, err = helper.CallRPC("http://"+node0.RPCURL, "sendrawtransaction", []interface{}{txBytes})
-	require.NoError(t, err)
 
 	mc0, err0 := helper.GetMiningCandidate(ctx, testEnv.Nodes[0].BlockassemblyClient, logger)
 	mc1, err1 := helper.GetMiningCandidate(ctx, testEnv.Nodes[1].BlockassemblyClient, logger)
@@ -184,13 +141,14 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	t.Log("Merkleproof 1:", mp1)
 	t.Log("Merkleproof 2:", mp2)
 
-	if len(hashes) > 0 {
-		fmt.Println("First element of hashes:", hashes[0])
+	if len(receivedSubtreeHashes1) > 0 && len(receivedSubtreeHashes2) > 0 {
+		t.Log("First element of hashes 1:", receivedSubtreeHashes1[0])
+		t.Log("First element of hashes 2:", receivedSubtreeHashes2[0])
 	} else {
 		t.Errorf("No subtrees detected: cannot calculate Merkleproofs")
 	}
-
-	t.Log("num of subtrees:", len(hashes))
+	t.Log("num of subtrees 1:", len(receivedSubtreeHashes1))
+	t.Log("num of subtrees 2:", len(receivedSubtreeHashes2))
 
 	if mp0 != mp1 || mp1 != mp2 {
 		t.Errorf("Merkle proofs are different")
@@ -219,9 +177,13 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	ba := testEnv.Nodes[0].BlockassemblyClient
 	bc := testEnv.Nodes[0].BlockchainClient
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 10000)
-	if errTXs != nil {
-		t.Errorf("Failed to send txs with distributor: %v", errTXs)
+	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	coinbaseTx := block1.CoinbaseTx
+
+	_, _, err = testEnv.Nodes[0].CreateAndSendTxs(t, ctx, coinbaseTx, 100)
+	if err != nil {
+		t.Errorf("Failed to create and send txs: %v", err)
 	}
 
 	_, errMine0 := helper.MineBlockWithRPC(ctx, testEnv.Nodes[0], logger)
@@ -299,9 +261,14 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 
 	logger := testEnv.Logger
 
-	_, errTXs := helper.SendTXsWithDistributorV2(ctx, testEnv.Nodes[0], logger, testEnv.Nodes[0].Settings, 9000)
-	if errTXs != nil {
-		t.Errorf("Failed to send txs with distributor: %v", errTXs)
+	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
+	if err != nil {
+		t.Errorf("Failed to get block by height: %v", err)
+	}
+
+	_, _, err = testEnv.Nodes[0].CreateAndSendTxs(t, ctx, block1.CoinbaseTx, 35)
+	if err != nil {
+		t.Errorf("Failed to create and send txs: %v", err)
 	}
 
 	mc0, errmc0 := ba.GetMiningCandidate(ctx)

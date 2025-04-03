@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc
+//go:build test_all || test_tnc || debug
 
 package tnc
 

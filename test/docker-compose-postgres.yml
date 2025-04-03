@@ -1,0 +1,25 @@
+services:
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    # networks:
+    #   - teranode-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - "15432:5432"
+    expose:
+      - "5432"
+    volumes:
+      # - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
+      - ../scripts/postgres/init_dev.sh:/docker-entrypoint-initdb.d/init_dev.sh
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
