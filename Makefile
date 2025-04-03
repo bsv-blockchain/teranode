@@ -1,7 +1,6 @@
 SHELL=/bin/bash
 
 DEBUG_FLAGS=
-RACE_FLAGS=
 TXMETA_TAG=
 SETTINGS_CONTEXT_DEFAULT := docker.ci
 LOCAL_TEST_START_FROM_STATE ?=
@@ -10,12 +9,6 @@ LOCAL_TEST_START_FROM_STATE ?=
 set_debug_flags:
 ifeq ($(DEBUG),true)
 	$(eval DEBUG_FLAGS = -N -l)
-endif
-
-.PHONY: set_race_flag
-set_race_flag:
-ifeq ($(RACE),true)
-	$(eval RACE_FLAG = -race)
 endif
 
 .PHONY: set_txmetacache_flag
@@ -82,28 +75,28 @@ clean_backup:
 
 
 .PHONY: build-teranode-with-dashboard
-build-teranode-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
+	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode
-build-teranode: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+build-teranode: set_debug_flags set_txmetacache_flag
+	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode-no-debug
 build-teranode-no-debug: set_txmetacache_flag
 	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
 .PHONY: build-teranode-ci
-build-teranode-ci: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+build-teranode-ci: set_debug_flags set_txmetacache_flag
+	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
-build-chainintegrity: set_debug_flags set_race_flag
+build-chainintegrity: set_debug_flags
 	go build -tags aerospike --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
-build-tx-blaster: set_debug_flags set_race_flag
-	go build $(RACE_FLAG) --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+build-tx-blaster: set_debug_flags
+	go build -race --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 .PHONY: build-teranode-cli
 build-teranode-cli:
@@ -142,52 +135,23 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 
 .PHONY: test
-test: set_race_flag
+test:
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
 	# pipefail is needed so proper exit code is passed on in CI
-	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 ./... | go-ctrf-json-reporter -output ctrf-report.json'
+	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" -race -count=1 ./... | go-ctrf-json-reporter -output ctrf-report.json'
 else
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags "testtxmetacache" -count=1 ./...
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 ./...
 endif
 
 .PHONY: buildtest
 buildtest:
 	mkdir -p test/build && go test -tags test_all -c -o test/build ./test/...
 
-.PHONY: longtests
-longtests: set_race_flag
-ifeq ($(USE_JSON_REPORTER),true)
-	$(MAKE) install-tools
-	# pipefail is needed so proper exit code is passed on in CI
-	bash -o pipefail -c 'SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 -coverprofile=coverage.out ./... | go-ctrf-json-reporter -output ctrf-report.json'
-else
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags "testtxmetacache" $(RACE_FLAG) -count=1 -coverprofile=coverage.out ./...
-endif
-
-.PHONY: verylongtests
-verylongtests: set_race_flag
-ifeq ($(USE_JSON_REPORTER),true)
-	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 -coverprofile=coverage.out ./... | go-ctrf-json-reporter -output ctrf-report.json
-else
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags "testtxmetacache" $(RACE_FLAG) -count=1 -coverprofile=coverage.out ./...
-endif
-
 .PHONY: sequentialtests
 sequentialtests:
 	logLevel=INFO test/scripts/run_tests_sequentially.sh
 	
-.PHONY: racetest
-racetest: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor
-
-.PHONY: testall
-testall:
-	# call makefile lint command
-	$(MAKE) lint
-	$(MAKE) longtests
-
 .PHONY: nightly-tests
 
 nightly-tests:

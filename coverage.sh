@@ -1,29 +1,18 @@
-SETTINGS_CONTEXT=test go test -tags "testtxmetacache,test_all,test_stores,test_model,test_services,test_util,test_smoke_rpc" -count=1 -coverprofile=1.out ./...
+TAGS="testtxmetacache,test_all,test_stores,test_model,test_services,test_util,test_smoke_rpc"
 
-# go test -v -count 1 -tags test_smoke_rpc -coverprofile=3.out ./...
+SETTINGS_CONTEXT=test \
+  go test -race -count=1 -coverprofile=coverage.out -tags "${TAGS}" \
+  $(go list -tags "${TAGS}" ./... | grep -v 'github.com/bitcoin-sv/teranode/cmd')
 
-# cd test/services
-# go test -v -count 1 -tags test_services -coverprofile=../../4.out ./... 
-# cd ../..
-
-# cd test/model
-# go test -v -count 1 -tags test_model -coverprofile=../../5.out ./...
-# cd ../..
-
-# cd test/stores && \
-# go test -v -count 1 -tags test_stores,testtxmetacache -coverprofile=../../6.out ./...
-# cd ../..
-
-# cd test/util && \
-# go test -v -count 1 -tags test_util -coverprofile=../../7.out ./...
-# cd ../..
 
 # go install github.com/wadey/gocovmerge@latest
 # gocovmerge 1.out 4.out 5.out 6.out 7.out > total.out
 
-grep -v '.pb.go' 1.out > total2.out
+grep -v --no-filename -e "\.pb\.go" \
+        -e "github\.com/bitcoin-sv/teranode/cmd/" \
+        -e "github\.com/bitcoin-sv/teranode/test/" \
+        -e "github\.com/bitcoin-sv/teranode/tracing/" coverage.out > filtered.out
 
-go tool cover -func=total2.out
-go tool cover -html=total2.out
 
-# rm 1.out
+go tool cover -func=filtered.out | tail -1
+go tool cover -html=filtered.out

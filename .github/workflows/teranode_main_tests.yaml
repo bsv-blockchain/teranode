@@ -20,8 +20,8 @@ jobs:
       - name: Build Go tests in test directory
         run: make buildtest
 
-  go-longtests:
-    name: Go longtests
+  go-test:
+    name: Go test
     runs-on: teranode-runner
     timeout-minutes: 15
     steps:
@@ -34,7 +34,7 @@ jobs:
           cache: "false"
 
       - name: Run Go tests
-        run: make longtests
+        run: make test
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -83,7 +83,7 @@ jobs:
   sonarqube:
     name: Sonarqube
     runs-on: teranode-runner
-    needs: go-longtests
+    needs: go-test
     timeout-minutes: 15
     steps:
     - name: Checkout
