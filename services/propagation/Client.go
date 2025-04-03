@@ -3,7 +3,11 @@
 package propagation
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -14,6 +18,8 @@ import (
 	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/libsv/go-bt/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // batchItem represents a single transaction in a batch along with its completion channel.
@@ -26,11 +32,14 @@ type batchItem struct {
 // It supports both individual transaction processing and efficient batch processing
 // with configurable batch sizes and timeouts.
 type Client struct {
-	client    propagation_api.PropagationAPIClient
-	conn      *grpc.ClientConn
-	batchSize int
-	batchCh   chan []*batchItem
-	batcher   batcher.Batcher2[batchItem]
+	client              propagation_api.PropagationAPIClient
+	conn                *grpc.ClientConn
+	batchSize           int
+	batchCh             chan []*batchItem
+	batcher             batcher.Batcher2[batchItem]
+	logger              ulogger.Logger
+	settings            *settings.Settings
+	propagationHTTPAddr *url.URL
 }
 
 // NewClient creates a new propagation client with optional connection configuration.
@@ -41,6 +50,7 @@ type Client struct {
 // Parameters:
 //   - ctx: Context for client operations
 //   - logger: Logger instance for client operations
+//   - tSettings: Settings instance for client operations
 //   - conn: Optional pre-configured gRPC connection
 //
 // Returns:
@@ -70,11 +80,27 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	duration := time.Duration(sendBatchTimeout) * time.Millisecond
 
+	// Determine validator HTTP address from settings
+	httpAddresses := tSettings.Propagation.HTTPAddresses
+	if len(httpAddresses) == 0 {
+		return nil, errors.NewServiceError("no propagation HTTP address configured")
+	}
+
+	propagationHTTPAddr, err := url.Parse(httpAddresses[0])
+	if err != nil {
+		return nil, errors.NewServiceError("invalid propagation HTTP address configured")
+	}
+
+	logger.Infof("Using propagation HTTP address: %s", propagationHTTPAddr)
+
 	c := &Client{
-		client:    client,
-		conn:      useConn,
-		batchSize: batchSize,
-		batchCh:   make(chan []*batchItem),
+		client:              client,
+		conn:                useConn,
+		batchSize:           batchSize,
+		batchCh:             make(chan []*batchItem),
+		logger:              logger,
+		settings:            tSettings,
+		propagationHTTPAddr: propagationHTTPAddr,
 	}
 
 	sendBatch := func(batch []*batchItem) {
@@ -115,14 +141,56 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		return err
 	}
 
+	// Try gRPC first
 	_, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 		Tx: tx.ExtendedBytes(),
 	})
-	if err != nil {
-		return errors.UnwrapGRPC(err)
+
+	// If successful, return nil
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	// Check if the error is related to message size (ResourceExhausted)
+	st, ok := status.FromError(err)
+	if ok && st.Code() == codes.ResourceExhausted {
+		// Log the fallback
+		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
+			tx.TxID(), st.Message())
+
+		// Create an HTTP client with a timeout
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+
+		// Prepare request to validator /tx endpoint
+		req, err := http.NewRequestWithContext(ctx, "POST", c.propagationHTTPAddr.String()+"/tx", bytes.NewBuffer(tx.ExtendedBytes()))
+		if err != nil {
+			return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", tx.TxID(), err)
+		}
+
+		// Send the request
+		resp, err := client.Do(req)
+		if err != nil {
+			return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", tx.TxID(), err)
+		}
+		defer resp.Body.Close()
+
+		// Check response status
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			httpErr := errors.NewServiceError("HTTP status %d: %s", resp.StatusCode, string(body))
+
+			return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status", tx.TxID(), httpErr)
+		}
+
+		c.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", tx.TxID())
+
+		return nil
+	}
+
+	// For any other types of errors, return the unwrapped gRPC error
+	return errors.UnwrapGRPC(err)
 }
 
 // TriggerBatcher forces the current batch to be processed immediately,
@@ -131,35 +199,20 @@ func (c *Client) TriggerBatcher() {
 	c.batcher.Trigger()
 }
 
-// ProcessTransactionBatch processes a batch of transactions in a single request.
-// It converts the transactions to their extended byte format and handles error
-// responses for each transaction in the batch.
-//
-// Parameters:
-//   - ctx: Context for batch processing
-//   - batch: Slice of batch items containing transactions
-//
-// Returns:
-//   - error: Error if batch processing fails
-func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
-	txs := make([][]byte, 0, len(batch))
+// handleBatchError sends the given error to all transactions in the batch
+func (c *Client) handleBatchError(batch []*batchItem, err error, format string, args ...interface{}) error {
+	wrappedErr := errors.NewServiceError(format, append(args, err)...)
+	c.logger.Errorf(wrappedErr.Error())
+
 	for _, tx := range batch {
-		txs = append(txs, tx.tx.ExtendedBytes())
+		tx.done <- wrappedErr
 	}
 
-	response, err := c.client.ProcessTransactionBatch(ctx, &propagation_api.ProcessTransactionBatchRequest{
-		Tx: txs,
-	})
-	if err != nil {
-		err = errors.UnwrapGRPC(err)
+	return wrappedErr
+}
 
-		for _, tx := range batch {
-			tx.done <- err
-		}
-
-		return err
-	}
-
+// handleBatchResponse processes the gRPC response for a batch and notifies each transaction
+func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
 	for i, err := range response.Errors {
 		if !err.IsNil() { // don't do err != nil, proto can't return nil TError
 			batch[i].done <- err
@@ -167,8 +220,93 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 			batch[i].done <- nil
 		}
 	}
+}
+
+// processBatchViaHTTP sends transaction batch via HTTP fallback when gRPC fails
+func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, txs [][]byte) error {
+	// Create HTTP client for large batch
+	client := &http.Client{
+		Timeout: 60 * time.Second, // Longer timeout for batch
+	}
+
+	// Combine all transactions into a single payload for the /txs endpoint
+	var combinedTxs bytes.Buffer
+	for _, txBytes := range txs {
+		combinedTxs.Write(txBytes)
+	}
+
+	// Send batch to validator /txs endpoint
+	endpoint, err := url.Parse("/txs")
+	if err != nil {
+		return c.handleBatchError(batch, err, "[processBatchViaHTTP] Failed to parse endpoint /txs")
+	}
+
+	fullURL := c.propagationHTTPAddr.ResolveReference(endpoint)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), &combinedTxs)
+	if err != nil {
+		return c.handleBatchError(batch, err, "[processBatchViaHTTP] Failed to create HTTP request for batch")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return c.handleBatchError(batch, err, "[processBatchViaHTTP] Failed to send HTTP request for batch")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		httpErr := errors.NewServiceError("HTTP status %d: %s", resp.StatusCode, string(body))
+
+		return c.handleBatchError(batch, httpErr, "[processBatchViaHTTP] Propagation HTTP endpoint returned error")
+	}
+
+	// Success - notify all transactions
+	c.logger.Debugf("[processBatchViaHTTP] Successfully processed %d transactions via HTTP fallback", len(batch))
+
+	for _, tx := range batch {
+		tx.done <- nil
+	}
 
 	return nil
+}
+
+// ProcessTransactionBatch sends multiple transactions to the validator for processing.
+// It attempts to process them via gRPC first, falling back to HTTP if the message size is too large.
+func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
+	// Create a slice of raw transaction bytes for the gRPC request
+	txs := make([][]byte, len(batch))
+	for i, item := range batch {
+		txs[i] = item.tx.ExtendedBytes()
+	}
+
+	// First, try to process the batch using gRPC
+	response, err := c.client.ProcessTransactionBatch(ctx, &propagation_api.ProcessTransactionBatchRequest{
+		Tx: txs,
+	})
+
+	// If successful, handle the response and return
+	if err == nil {
+		c.handleBatchResponse(batch, response)
+		return nil
+	}
+
+	// Check if the error is related to message size (ResourceExhausted)
+	st, ok := status.FromError(err)
+	if ok && st.Code() == codes.ResourceExhausted {
+		// Log the fallback
+		c.logger.Warnf("[ProcessTransactionBatch] Batch exceeds gRPC message limit, falling back to validator /txs endpoint: %s",
+			st.Message())
+
+		// Process the batch via HTTP
+		return c.processBatchViaHTTP(ctx, batch, txs)
+	}
+
+	// Any other gRPC error - unwrap it according to our error handling rule
+	// and propagate to all transactions in batch
+	unwrappedErr := errors.UnwrapGRPC(err)
+
+	return c.handleBatchError(batch, unwrappedErr, "[ProcessTransactionBatch] Failed to process transaction batch")
 }
 
 // getClientConn establishes a gRPC connection to the propagation service.

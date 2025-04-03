@@ -234,6 +234,10 @@ type ValidatorSettings struct {
 	BlockValidationMaxRetries int
 	BlockValidationRetrySleep string
 	VerboseDebug              bool
+	HTTPListenAddress         string
+	HTTPAddress               *url.URL
+	HTTPRateLimit             int
+	KafkaMaxMessageBytes      int // Maximum Kafka message size in bytes for transaction validation
 	UseLocalValidator         bool
 }
 
@@ -387,6 +391,7 @@ type PropagationSettings struct {
 	IPv6Interface        string
 	GRPCMaxConnectionAge time.Duration
 	HTTPListenAddress    string
+	HTTPAddresses        []string
 	HTTPRateLimit        int
 	SendBatchSize        int
 	SendBatchTimeout     int

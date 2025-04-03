@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,6 @@ import (
 )
 
 var (
-
 	// maxDatagramSize defines the maximum size of UDP datagrams for IPv6 multicast
 	maxDatagramSize = 512 // 100 * 1024 * 1024
 	// ipv6Port defines the default port used for IPv6 multicast listeners
@@ -60,6 +60,7 @@ type PropagationServer struct {
 	blockchainClient             blockchain.ClientI
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 	httpServer                   *echo.Echo
+	validatorHTTPAddr            *url.URL
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -67,6 +68,7 @@ type PropagationServer struct {
 //
 // Parameters:
 //   - logger: logging interface for server operations
+//   - tSettings: settings for the server
 //   - txStore: storage interface for persisting transactions
 //   - validatorClient: service for transaction validation
 //   - blockchainClient: interface to blockchain operations
@@ -85,6 +87,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		validator:                    validatorClient,
 		blockchainClient:             blockchainClient,
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
+		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 	}
 }
 
@@ -570,28 +573,16 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
-		validationOptions := validator.NewDefaultOptions()
+		// Check transaction size first - if it's too large, use HTTP endpoint instead
+		txSize := len(btTx.ExtendedBytes())
+		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
 
-		msg := &kafkamessage.KafkaTxValidationTopicMessage{
-			Tx:     btTx.ExtendedBytes(),
-			Height: 0,
-			Options: &kafkamessage.KafkaTxValidationOptions{
-				SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
-				AddTXToBlockAssembly: validationOptions.AddTXToBlockAssembly,
-				SkipPolicyChecks:     validationOptions.SkipPolicyChecks,
-				CreateConflicting:    validationOptions.CreateConflicting,
-			},
+		if txSize > maxKafkaMessageSize {
+			return ps.validateTransactionViaHTTP(ctx, btTx, txSize, maxKafkaMessageSize)
 		}
 
-		value, err := proto.Marshal(msg)
-		if err != nil {
-			return errors.NewProcessingError("[ProcessTransaction][%s] error marshaling KafkaTxValidationTopicMessage", btTx.TxID(), err, err)
-		}
-
-		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaProducerClient.Publish(&kafka.Message{
-			Value: value,
-		})
+		// For normal-sized transactions, continue with Kafka
+		return ps.validateTransactionViaKafka(btTx)
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
@@ -601,6 +592,82 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 			return errors.NewServiceError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
+
+	return nil
+}
+
+// validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
+// This is used as a fallback when Kafka message size limits are exceeded
+func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error {
+	if ps.validatorHTTPAddr == nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), but no HTTP endpoint configured for validator",
+			btTx.TxID(), txSize, maxKafkaMessageSize)
+	}
+
+	ps.logger.Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
+		btTx.TxID(), txSize, maxKafkaMessageSize)
+
+	// Create an HTTP client with a timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Prepare request to validator /tx endpoint
+	endpoint, err := url.Parse("/tx")
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error parsing endpoint /tx", btTx.TxID(), err)
+	}
+
+	fullURL := ps.validatorHTTPAddr.ResolveReference(endpoint)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.ExtendedBytes()))
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", btTx.TxID(), err)
+	}
+
+	// Send the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", btTx.TxID(), err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+			btTx.TxID(), resp.StatusCode, string(body))
+	}
+
+	ps.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
+
+	return nil
+}
+
+// validateTransactionViaKafka sends a transaction to the validator through Kafka
+func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
+	validationOptions := validator.NewDefaultOptions()
+
+	msg := &kafkamessage.KafkaTxValidationTopicMessage{
+		Tx:     btTx.ExtendedBytes(),
+		Height: 0,
+		Options: &kafkamessage.KafkaTxValidationOptions{
+			SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
+			AddTXToBlockAssembly: validationOptions.AddTXToBlockAssembly,
+			SkipPolicyChecks:     validationOptions.SkipPolicyChecks,
+			CreateConflicting:    validationOptions.CreateConflicting,
+		},
+	}
+
+	value, err := proto.Marshal(msg)
+	if err != nil {
+		return errors.NewProcessingError("[ProcessTransaction][%s] error marshaling KafkaTxValidationTopicMessage", btTx.TxID(), err, err)
+	}
+
+	ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
+	ps.validatorKafkaProducerClient.Publish(&kafka.Message{
+		Value: value,
+	})
 
 	return nil
 }

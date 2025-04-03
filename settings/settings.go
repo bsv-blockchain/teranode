@@ -250,6 +250,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockValidationMaxRetries: getInt("validator_blockvalidation_maxRetries", 5, alternativeContext...),
 			BlockValidationRetrySleep: getString("validator_blockvalidation_retrySleep", "2s", alternativeContext...),
 			VerboseDebug:              getBool("validator_verbose_debug", false, alternativeContext...),
+			HTTPListenAddress:         getString("validator_httpListenAddress", "", alternativeContext...),
+			HTTPAddress:               getURL("validator_httpAddress", "", alternativeContext...),
+			HTTPRateLimit:             getInt("validator_httpRateLimit", 1024, alternativeContext...),
+			KafkaMaxMessageBytes:      getInt("validator_kafka_maxMessageBytes", 1024*1024, alternativeContext...), // Default 1MB
 			UseLocalValidator:         getBool("useLocalValidator", false, alternativeContext...),
 		},
 		Region: RegionSettings{
@@ -387,6 +391,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IPv6Interface:        getString("ipv6_interface", "", alternativeContext...),
 			GRPCMaxConnectionAge: getDuration("propagation_grpcMaxConnectionAge", 90*time.Second),
 			HTTPListenAddress:    getString("propagation_httpListenAddress", "", alternativeContext...),
+			HTTPAddresses:        getMultiString("propagation_httpAddresses", "|", []string{}, alternativeContext...),
 			HTTPRateLimit:        getInt("propagation_httpRateLimit", 1024, alternativeContext...),
 			SendBatchSize:        getInt("propagation_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:     getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
