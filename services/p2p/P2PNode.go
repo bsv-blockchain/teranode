@@ -627,24 +627,32 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error
 
 func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.IpfsDHT, error) {
 	bootstrapAddresses := s.settings.P2P.BootstrapAddresses
+	s.logger.Infof("[P2PNode] bootstrapAddresses: %v", bootstrapAddresses)
+
 	if len(bootstrapAddresses) == 0 {
 		return nil, errors.NewServiceError("[P2PNode] bootstrapAddresses not set in config")
 	}
 
+	// Track if we successfully connected to at least one bootstrap address
+	connectedToBootstrap := false
+
 	for _, ba := range bootstrapAddresses {
 		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
-			return nil, errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s", ba, err)
+			s.logger.Warnf("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err)
+			continue // Try the next bootstrap address
 		}
 
 		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
 		if err != nil {
-			return nil, errors.NewServiceError("[P2PNode] failed to get peerInfo from  %s", ba, err)
+			s.logger.Warnf("[P2PNode] failed to get peerInfo from %s: %v", ba, err)
+			continue // Try the next bootstrap address
 		}
+
 		// get the IP from the multiaddress
 		ip, err := getIPFromMultiaddr(peerInfo.Addrs[0])
 		if err != nil {
-			s.logger.Warnf("[P2PNode] failed to get IP from multiaddress %s", ba, err)
+			s.logger.Warnf("[P2PNode] failed to get IP from multiaddress %s: %v", ba, err)
 			s.logger.Warnf("peerInfo: %+v\n", peerInfo)
 		}
 
@@ -652,9 +660,19 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
-			s.logger.Infof(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
-			return nil, nil
+			s.logger.Warnf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err)
+			continue // Try the next bootstrap address
 		}
+
+		// Successfully connected to this bootstrap address
+		connectedToBootstrap = true
+
+		s.logger.Infof("[P2PNode] successfully connected to bootstrap address %s", ba)
+	}
+
+	// Only return an error if we couldn't connect to any bootstrap addresses
+	if !connectedToBootstrap {
+		return nil, errors.NewServiceError("[P2PNode] failed to connect to any bootstrap addresses")
 	}
 
 	dhtProtocolIDStr := s.settings.P2P.DHTProtocolID
@@ -767,10 +785,14 @@ type PeerInfo struct {
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
-	peerCount := s.host.Network().Peerstore().Peers().Len()
-	peers := make([]PeerInfo, peerCount)
+	// Get all peers from the peerstore
+	peerIDs := s.host.Network().Peerstore().Peers()
 
-	for _, peerID := range s.host.Network().Peerstore().Peers() {
+	// Create a slice with zero initial length but with capacity for all peers
+	peers := make([]PeerInfo, 0, len(peerIDs))
+
+	// Add each peer to the slice
+	for _, peerID := range peerIDs {
 		peers = append(peers, PeerInfo{
 			ID:    peerID,
 			Addrs: s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
