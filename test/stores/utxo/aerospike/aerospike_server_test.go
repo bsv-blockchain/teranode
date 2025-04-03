@@ -1626,3 +1626,66 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	assert.Len(t, spends, 1)
 	assert.ErrorIs(t, err, errors.ErrTxUnspendable)
 }
+
+func TestStore_AerospikeSplitTx(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// Create the tx
+	txBytes, err := os.ReadFile("testdata/79a2d893527750d622eff3ef728c304c6e0e75516244ade05a5d9d99804d4b2a.bin")
+	require.NoError(t, err)
+
+	tx, err := bt.NewTxFromBytes(txBytes)
+	require.NoError(t, err)
+
+	// Create the tx
+	_, err = store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	res, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	assert.NotNil(t, res)
+	assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record should be true")
+
+	extraRecords := res.Bins[fields.TotalExtraRecs.String()].(int)
+	assert.Equal(t, 3, extraRecords)
+
+	for i := 1; i <= extraRecords; i++ {
+		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(i))
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+		require.NoError(t, err)
+
+		res, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		assert.NotNil(t, res)
+		assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be true", i)
+	}
+
+	err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
+	require.NoError(t, err)
+
+	for i := 0; i <= extraRecords; i++ {
+		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(i))
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+		require.NoError(t, err)
+
+		res, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		assert.NotNil(t, res)
+		assert.False(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be false", i)
+	}
+}

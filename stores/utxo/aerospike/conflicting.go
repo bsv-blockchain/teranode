@@ -14,14 +14,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// batchUnspendable represents a batch operation to set the unspendable flag on a transaction
-type batchUnspendable struct {
-	txHash   chainhash.Hash
-	key      *aerospike.Key
-	setValue bool
-	errCh    chan error // Channel for completion notification
-}
-
 func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
 	ctx, _, _ = tracing.StartTracing(ctx, "GetCounterConflicting",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetCounterConflicting),
@@ -145,67 +137,6 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	}
 
 	return affectedParentSpends, spendingTxHashes, nil
-}
-
-func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	g, _ := errgroup.WithContext(ctx)
-
-	for _, txHash := range txHashes {
-		txHash := txHash
-
-		g.Go(func() error {
-			errCh := make(chan error, 1)
-
-			key, err := aerospike.NewKey(s.namespace, s.setName, txHash.CloneBytes())
-			if err != nil {
-				return errors.NewProcessingError("could not create aerospike key", err)
-			}
-
-			s.unspendableBatcher.Put(&batchUnspendable{
-				txHash:   txHash,
-				key:      key,
-				setValue: setValue,
-				errCh:    errCh,
-			})
-
-			return <-errCh
-		})
-	}
-
-	return g.Wait()
-}
-
-// SetUnsUnspendable sets the unspendable flag on the given transactions in a batch
-func (s *Store) setUnspendableBatch(batch []*batchUnspendable) {
-	var (
-		batchWritePolicy = aerospike.NewBatchWritePolicy()
-		batchRecords     = make([]aerospike.BatchRecordIfc, len(batch))
-	)
-
-	for idx, batchItem := range batch {
-		batchRecords[idx] = aerospike.NewBatchWrite(
-			batchWritePolicy,
-			batchItem.key,
-			aerospike.PutOp(
-				aerospike.NewBin(
-					fields.Unspendable.String(),
-					batchItem.setValue,
-				),
-			),
-		)
-	}
-
-	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
-		for _, batchItem := range batch {
-			batchItem.errCh <- errors.NewProcessingError("could not batch write unspendable flag", err)
-		}
-
-		return
-	}
-
-	for idx, batchRecord := range batchRecords {
-		batch[idx].errCh <- batchRecord.BatchRec().Err
-	}
 }
 
 func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {

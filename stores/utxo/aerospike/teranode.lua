@@ -590,6 +590,50 @@ function setConflicting(rec, setValue, ttl)
     return MSG_OK .. signal
 end
 
+-- Function to set the 'conflicting' field of a record
+-- Parameters:
+--   rec: table - The record to update
+--   setValue: boolean - The value to set for the 'conflicting' field
+--   ttl: number - The TTL value to set (in seconds)
+-- Returns:
+--   string - A signal indicating the action taken
+--           _   _   _                                _       _     _
+--  ___  ___| |_| | | |_ __  ___ _ __   ___ _ __   __| | __ _| |__ | | ___ 
+-- / __|/ _ \ __| | | | '_ \/ __| '_ \ / _ \ '_ \ / _` |/ _` | '_ \| |/ _ \
+-- \__ \  __/ |_| |_| | | | \__ \ |_) |  __/ | | | (_| | (_| | |_) | |  __/
+-- |___/\___|\__|\___/|_| |_|___/ .__/ \___|_| |_|\__,_|\__,_|_.__/|_|\___|
+--                              |_|                                        
+--
+function setUnspendable(rec, setValue)
+    if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
+
+    local oldUnspendable = rec['unspendable']
+    local oldTtl = record.ttl(rec)
+    local totalExtraRecs = rec['totalExtraRecs']
+
+    if totalExtraRecs == nil then
+        totalExtraRecs = 0
+    end
+
+    if oldUnspendable == setValue then
+        return "OK:" .. totalExtraRecs
+    end
+
+    rec['unspendable'] = setValue
+
+    if rec['unspendable'] then
+        -- Remove any existing TTL by setting it to -1 (never expire)
+        if oldTtl > 0 then
+            record.set_ttl(rec, -1)
+        end
+    end
+
+    aerospike:update(rec)
+
+    return "OK:" .. totalExtraRecs
+end
+
+
 -- Increment the number of records and set TTL if necessary
 --  _                                          _   
 -- (_)_ __   ___ _ __ ___ _ __ ___   ___ _ __ | |_ 
