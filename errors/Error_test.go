@@ -727,3 +727,25 @@ func TestIsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
 	require.True(t, Is(grpcErr, ErrServiceError))
 	require.True(t, Is(grpcErr, ErrProcessing))
 }
+
+func TestErrorLogging(t *testing.T) {
+	errRoot := NewServiceError("service error")
+	errChild := NewStorageError("storage error", errRoot)
+	err := NewProcessingError("processing error", errChild)
+
+	sError := fmt.Sprintf("%v", err)
+	require.Contains(t, sError, "service error")
+	require.Contains(t, sError, "storage error")
+	require.Contains(t, sError, "processing error")
+
+	terror := Wrap(err)
+	sTError := fmt.Sprintf("%v", terror)
+	require.Contains(t, sTError, "service error")
+	require.Contains(t, sTError, "storage error")
+	require.Contains(t, sTError, "processing error")
+
+	// fmt.Println("Error        : ", err)
+	// fmt.Println("Wrapped Error: ", terror)
+
+	require.Equal(t, sError, sTError)
+}
