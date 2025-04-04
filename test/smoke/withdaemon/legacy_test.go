@@ -99,9 +99,8 @@ func TestCatchUpWithLegacy(t *testing.T) {
 
 	tc.StopNode(t, "teranode-1")
 
-	_, err = helper.CallRPC(legacySyncURL, "generate", []interface{}{101})
+	_, err = helper.CallRPC(legacySyncURL, "generate", []any{101})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(10 * time.Second)
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:        true,
@@ -116,17 +115,17 @@ func TestCatchUpWithLegacy(t *testing.T) {
 		td.Stop()
 	})
 
-	time.Sleep(10 * time.Second)
-
 	// verify blockheight on node1
-	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	err = helper.WaitForNodeBlockHeight(td.Ctx, td.BlockchainClient, 101, 10*time.Second)
+	// _, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
 	require.NoError(t, err)
 
+	const extraBlocks = 100
 	// generate 100 blocks on svnode
-	_, err = helper.CallRPC(legacySyncURL, "generate", []interface{}{100})
+	_, err = helper.CallRPC(legacySyncURL, "generate", []any{extraBlocks})
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 201)
+	err = helper.WaitForNodeBlockHeight(td.Ctx, td.BlockchainClient, 101+extraBlocks, 10*time.Second)
 	require.NoError(t, err)
 }

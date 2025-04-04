@@ -70,8 +70,8 @@ services:
     image: teranode:latest
     network_mode: "host"
     build:
-      context: .
-      dockerfile: local.Dockerfile
+      context: ..
+      dockerfile: ./local.Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae

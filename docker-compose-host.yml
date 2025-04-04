@@ -227,7 +227,7 @@ services:
     container_name: coinbase-1
     depends_on:
       - teranode-1
-    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
       profilerAddr: "localhost:17092"

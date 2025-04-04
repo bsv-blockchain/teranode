@@ -1076,6 +1076,33 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
+		} else if errors.Is(err, errors.ErrBlockNotFound) {
+			// We don't have the parent of this block/header, so we'll request it.
+			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
+				bmsg.blockHash, bmsg.block.Header.PrevBlock)
+
+			bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+			if err != nil {
+				sm.logger.Errorf("Failed to get best block header: %v", err)
+				return nil
+			}
+			// Create a block locator starting from the parent hash
+			locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
+			if err != nil {
+				sm.logger.Errorf("Failed to get block locator for the block hash %s: %v",
+					bmsg.blockHash, err)
+				return nil
+			}
+
+			// Send a getblocks message to request missing blocks
+			zeroHash := chainhash.Hash{}
+			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+				sm.logger.Errorf("Failed to send getblocks message: %v", err)
+
+				return nil
+			}
+
+			return nil
 		} else {
 			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 			if !legacySyncMode && !catchingBlocks && !serviceError {

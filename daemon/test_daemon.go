@@ -118,9 +118,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		if err := compose.Up(ctx); err != nil {
 			t.Fatalf("Failed to start docker network: %v", err)
 		}
-
-		// Add small delay to allow services to start
-		time.Sleep(20 * time.Second)
 	}
 
 	persistentStore, err := url.Parse("sqlite:///test")
@@ -691,4 +688,27 @@ func isKafkaRunning() bool {
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	err := td.d.ServiceManager.ResetContext()
 	require.NoError(t, err)
+}
+
+func WaitForHealthLiveness(port int, timeout time.Duration) error {
+	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+	timeoutElapsed := time.After(timeout)
+
+	var err error
+
+	for {
+		select {
+		case <-timeoutElapsed:
+			return errors.NewError("health check failed for port %d after timeout: %v", port, err)
+		default:
+			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
+			if err != nil {
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+
+			return nil
+		}
+	}
 }

@@ -22,6 +22,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -53,8 +55,33 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 
 	require.NoError(t, compose.Up(ctx))
 
-	// Add small delay to allow services to start
-	time.Sleep(20 * time.Second)
+	services := []string{"teranode-1", "teranode-2", "teranode-3"}
+	ports := []string{"18000", "28000", "38000"}
+
+	for i, serviceName := range services {
+		port := ports[i]
+		t1, err := compose.ServiceContainer(ctx, serviceName)
+		require.NoError(t, err)
+
+		for i := 0; i < 3; i++ {
+			var t1Port nat.Port
+
+			t1Port, err = t1.MappedPort(ctx, nat.Port(port))
+			if err != nil {
+				t.Fatalf("Failed to get mapped port for %s: %v", serviceName, err)
+			}
+
+			err = WaitForHealthLiveness(t1Port.Int(), 3*time.Second)
+
+			if err == nil {
+				break
+			}
+
+			t.Logf("Waiting for %s to start...", serviceName)
+		}
+
+		require.NoError(t, err)
+	}
 
 	return container, nil
 }
@@ -203,4 +230,27 @@ func (tc *TestContainer) StopNode(t *testing.T, nodeName string) {
 	require.NoError(t, err)
 
 	require.NoError(t, node.Stop(tc.Ctx, nil))
+}
+
+func WaitForHealthLiveness(port int, timeout time.Duration) error {
+	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+	timeoutElapsed := time.After(timeout)
+
+	var err error
+
+	for {
+		select {
+		case <-timeoutElapsed:
+			return errors.NewError("health check failed for port %d after timeout: %v", port, err)
+		default:
+			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
+			if err != nil {
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+
+			return nil
+		}
+	}
 }
