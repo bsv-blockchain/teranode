@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/labstack/echo/v4"
@@ -20,7 +19,7 @@ import (
 // MockBlockchainClient is already defined in block_handler_test.go, so we don't need to redefine it here
 
 // setupFSMHandlerTest creates a test environment for FSM handler tests
-func setupFSMHandlerTest(t *testing.T, requestBody string) (*FSMHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
+func setupFSMHandlerTest(t *testing.T, requestBody string) (*FSMHandler, *MockBlockchainClient, echo.Context, *httptest.ResponseRecorder) {
 	// Create a new Echo instance
 	e := echo.New()
 
@@ -40,7 +39,7 @@ func setupFSMHandlerTest(t *testing.T, requestBody string) (*FSMHandler, *blockc
 	c := e.NewContext(req, rec)
 
 	// Create a mock blockchain client
-	mockClient := &blockchain.Mock{}
+	mockClient := new(MockBlockchainClient)
 
 	// Create a test logger
 	logger := ulogger.TestLogger{}
@@ -54,7 +53,7 @@ func setupFSMHandlerTest(t *testing.T, requestBody string) (*FSMHandler, *blockc
 // TestNewFSMHandler tests the NewFSMHandler function
 func TestNewFSMHandler(t *testing.T) {
 	// Create a mock blockchain client
-	mockClient := &blockchain.Mock{}
+	mockClient := new(MockBlockchainClient)
 
 	// Create a test logger
 	logger := ulogger.TestLogger{}
@@ -78,7 +77,7 @@ func TestGetFSMState(t *testing.T) {
 		state := blockchain_api.FSMStateType_IDLE
 
 		// Mock the blockchain client response
-		mockClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+		mockClient.On("GetFSMCurrentState", mock.Anything).Return(state, nil)
 
 		// Call the function to be tested
 		err := handler.GetFSMState(c)
@@ -204,7 +203,7 @@ func TestSendFSMEvent(t *testing.T) {
 
 		// Mock the blockchain client responses
 		mockClient.On("SendFSMEvent", mock.Anything, blockchain_api.FSMEventType_RUN).Return(nil)
-		mockClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+		mockClient.On("GetFSMCurrentState", mock.Anything).Return(state, nil)
 
 		// Call the function to be tested
 		err := handler.SendFSMEvent(c)

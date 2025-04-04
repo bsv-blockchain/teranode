@@ -381,6 +381,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
 
+// This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block  
 func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -513,6 +514,8 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 		"Block assembler should follow Chain A (more chainwork) despite Chain B being longer (3 blocks)")
 }
 
+// This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block
+// This testcase tests TNA-6: Teranode must express its acceptance of the block by working on creating the next block in the chain, using the hash of the accepted block as previous hash. 
 func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Block.StoreCacheEnabled = false

@@ -19,12 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PropagationAPI_HealthGRPC_FullMethodName               = "/propagation_api.PropagationAPI/HealthGRPC"
-	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
-	PropagationAPI_ProcessTransactionBatch_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionBatch"
-	PropagationAPI_ProcessTransactionHex_FullMethodName    = "/propagation_api.PropagationAPI/ProcessTransactionHex"
-	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
-	PropagationAPI_ProcessTransactionDebug_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionDebug"
+	PropagationAPI_HealthGRPC_FullMethodName              = "/propagation_api.PropagationAPI/HealthGRPC"
+	PropagationAPI_ProcessTransaction_FullMethodName      = "/propagation_api.PropagationAPI/ProcessTransaction"
+	PropagationAPI_ProcessTransactionBatch_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionBatch"
 )
 
 // PropagationAPIClient is the client API for PropagationAPI service.
@@ -46,17 +43,6 @@ type PropagationAPIClient interface {
 	// This is more efficient than processing transactions individually when dealing
 	// with large numbers of transactions.
 	ProcessTransactionBatch(ctx context.Context, in *ProcessTransactionBatchRequest, opts ...grpc.CallOption) (*ProcessTransactionBatchResponse, error)
-	// ProcessTransactionHex processes a transaction provided in hexadecimal format.
-	// This is a convenience method for clients that have transactions in hex format.
-	ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
-	// ProcessTransactionStream establishes a bidirectional streaming connection for
-	// processing transactions. Useful for continuous transaction processing without
-	// establishing new connections for each transaction.
-	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProcessTransactionRequest, EmptyMessage], error)
-	// ProcessTransactionDebug provides debug-level transaction processing.
-	// It performs basic validation and storage without full processing, useful
-	// for testing and debugging purposes.
-	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type propagationAPIClient struct {
@@ -97,39 +83,6 @@ func (c *propagationAPIClient) ProcessTransactionBatch(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *propagationAPIClient) ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EmptyMessage)
-	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransactionHex_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *propagationAPIClient) ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProcessTransactionRequest, EmptyMessage], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &PropagationAPI_ServiceDesc.Streams[0], PropagationAPI_ProcessTransactionStream_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[ProcessTransactionRequest, EmptyMessage]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PropagationAPI_ProcessTransactionStreamClient = grpc.BidiStreamingClient[ProcessTransactionRequest, EmptyMessage]
-
-func (c *propagationAPIClient) ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EmptyMessage)
-	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransactionDebug_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // PropagationAPIServer is the server API for PropagationAPI service.
 // All implementations must embed UnimplementedPropagationAPIServer
 // for forward compatibility.
@@ -149,17 +102,6 @@ type PropagationAPIServer interface {
 	// This is more efficient than processing transactions individually when dealing
 	// with large numbers of transactions.
 	ProcessTransactionBatch(context.Context, *ProcessTransactionBatchRequest) (*ProcessTransactionBatchResponse, error)
-	// ProcessTransactionHex processes a transaction provided in hexadecimal format.
-	// This is a convenience method for clients that have transactions in hex format.
-	ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error)
-	// ProcessTransactionStream establishes a bidirectional streaming connection for
-	// processing transactions. Useful for continuous transaction processing without
-	// establishing new connections for each transaction.
-	ProcessTransactionStream(grpc.BidiStreamingServer[ProcessTransactionRequest, EmptyMessage]) error
-	// ProcessTransactionDebug provides debug-level transaction processing.
-	// It performs basic validation and storage without full processing, useful
-	// for testing and debugging purposes.
-	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedPropagationAPIServer()
 }
 
@@ -178,15 +120,6 @@ func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *Pr
 }
 func (UnimplementedPropagationAPIServer) ProcessTransactionBatch(context.Context, *ProcessTransactionBatchRequest) (*ProcessTransactionBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionBatch not implemented")
-}
-func (UnimplementedPropagationAPIServer) ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionHex not implemented")
-}
-func (UnimplementedPropagationAPIServer) ProcessTransactionStream(grpc.BidiStreamingServer[ProcessTransactionRequest, EmptyMessage]) error {
-	return status.Errorf(codes.Unimplemented, "method ProcessTransactionStream not implemented")
-}
-func (UnimplementedPropagationAPIServer) ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionDebug not implemented")
 }
 func (UnimplementedPropagationAPIServer) mustEmbedUnimplementedPropagationAPIServer() {}
 func (UnimplementedPropagationAPIServer) testEmbeddedByValue()                        {}
@@ -263,49 +196,6 @@ func _PropagationAPI_ProcessTransactionBatch_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PropagationAPI_ProcessTransactionHex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ProcessTransactionHexRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PropagationAPIServer).ProcessTransactionHex(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PropagationAPI_ProcessTransactionHex_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PropagationAPIServer).ProcessTransactionHex(ctx, req.(*ProcessTransactionHexRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PropagationAPI_ProcessTransactionStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(PropagationAPIServer).ProcessTransactionStream(&grpc.GenericServerStream[ProcessTransactionRequest, EmptyMessage]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PropagationAPI_ProcessTransactionStreamServer = grpc.BidiStreamingServer[ProcessTransactionRequest, EmptyMessage]
-
-func _PropagationAPI_ProcessTransactionDebug_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ProcessTransactionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PropagationAPIServer).ProcessTransactionDebug(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PropagationAPI_ProcessTransactionDebug_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PropagationAPIServer).ProcessTransactionDebug(ctx, req.(*ProcessTransactionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // PropagationAPI_ServiceDesc is the grpc.ServiceDesc for PropagationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -325,22 +215,7 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ProcessTransactionBatch",
 			Handler:    _PropagationAPI_ProcessTransactionBatch_Handler,
 		},
-		{
-			MethodName: "ProcessTransactionHex",
-			Handler:    _PropagationAPI_ProcessTransactionHex_Handler,
-		},
-		{
-			MethodName: "ProcessTransactionDebug",
-			Handler:    _PropagationAPI_ProcessTransactionDebug_Handler,
-		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "ProcessTransactionStream",
-			Handler:       _PropagationAPI_ProcessTransactionStream_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "services/propagation/propagation_api/propagation_api.proto",
 }

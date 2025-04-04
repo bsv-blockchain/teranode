@@ -8,9 +8,9 @@ import "github.com/bitcoin-sv/teranode/ulogger"
 These const values are suitable for a production machine that needs to manage 1m TPS
 */
 const BucketsCount = 8
-const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
+const chunkSize = maxValueSizeKB * 2 * 1024
 
 func LogCacheSize() {
 	logger := ulogger.NewZeroLogger("improved_cache")
-	logger.Debugf("Using improved_cache_test_const.go")
+	logger.Debugf("Using improved_cache_const_test.go")
 }

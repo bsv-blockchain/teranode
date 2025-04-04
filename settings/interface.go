@@ -234,6 +234,11 @@ type ValidatorSettings struct {
 	BlockValidationMaxRetries int
 	BlockValidationRetrySleep string
 	VerboseDebug              bool
+	HTTPListenAddress         string
+	HTTPAddress               *url.URL
+	HTTPRateLimit             int
+	KafkaMaxMessageBytes      int // Maximum Kafka message size in bytes for transaction validation
+	UseLocalValidator         bool
 }
 
 type RegionSettings struct {
@@ -246,31 +251,33 @@ type AdvertisingSettings struct {
 }
 
 type UtxoStoreSettings struct {
-	UtxoStore                      *url.URL
-	OutpointBatcherSize            int
-	OutpointBatcherDurationMillis  int
-	SpendBatcherConcurrency        int
-	SpendBatcherDurationMillis     int
-	SpendBatcherSize               int
-	StoreBatcherConcurrency        int
-	StoreBatcherDurationMillis     int
-	StoreBatcherSize               int
-	UtxoBatchSize                  int
-	IncrementBatcherSize           int
-	IncrementBatcherDurationMillis int
-	SetTTLBatcherSize              int
-	SetTTLBatcherDurationMillis    int
-	GetBatcherSize                 int
-	GetBatcherDurationMillis       int
-	DBTimeout                      time.Duration
-	UseExternalTxCache             bool
-	ExternalizeAllTransactions     bool
-	PostgresMaxIdleConns           int
-	PostgresMaxOpenConns           int
-	VerboseDebug                   bool
-	UpdateTxMinedStatus            bool
-	MaxMinedRoutines               int
-	MaxMinedBatchSize              int
+	UtxoStore                        *url.URL
+	OutpointBatcherSize              int
+	OutpointBatcherDurationMillis    int
+	SpendBatcherConcurrency          int
+	SpendBatcherDurationMillis       int
+	SpendBatcherSize                 int
+	StoreBatcherConcurrency          int
+	StoreBatcherDurationMillis       int
+	StoreBatcherSize                 int
+	UtxoBatchSize                    int
+	IncrementBatcherSize             int
+	IncrementBatcherDurationMillis   int
+	SetTTLBatcherSize                int
+	SetTTLBatcherDurationMillis      int
+	UnspendableBatcherSize           int
+	UnspendableBatcherDurationMillis int
+	GetBatcherSize                   int
+	GetBatcherDurationMillis         int
+	DBTimeout                        time.Duration
+	UseExternalTxCache               bool
+	ExternalizeAllTransactions       bool
+	PostgresMaxIdleConns             int
+	PostgresMaxOpenConns             int
+	VerboseDebug                     bool
+	UpdateTxMinedStatus              bool
+	MaxMinedRoutines                 int
+	MaxMinedBatchSize                int
 }
 
 type P2PSettings struct {
@@ -382,15 +389,14 @@ type LegacySettings struct {
 type PropagationSettings struct {
 	IPv6Addresses        string
 	IPv6Interface        string
-	QuicListenAddress    string
 	GRPCMaxConnectionAge time.Duration
 	HTTPListenAddress    string
+	HTTPAddresses        []string
+	HTTPRateLimit        int
 	SendBatchSize        int
 	SendBatchTimeout     int
 	GRPCAddresses        []string
-	QuicAddresses        []string
 	GRPCListenAddress    string
-	UseDumb              bool
 }
 
 type RPCSettings struct {

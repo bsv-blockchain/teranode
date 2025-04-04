@@ -25,6 +25,12 @@ type Options struct {
 	// this is done when validating transaction from a block that has been mined
 	CreateConflicting bool
 
+	// IgnoreConflicting determines whether to ignore transactions marked as conflicting when spending
+	IgnoreConflicting bool
+
+	// IgnoreUnspendable determines whether to ignore transactions marked as unspendable when spending
+	IgnoreUnspendable bool
+
 	// disableConsensus determine the consensus parameter to execute script interpreter
 	// By default it is false, meaning the consensus is true
 	disableConsensus bool
@@ -113,6 +119,30 @@ func WithCreateConflicting(create bool) Option {
 	}
 }
 
+// WithIgnoreConflicting creates an option to control whether a conflicting transaction is ignored
+// Parameters:
+//   - ignore: When true, a conflicting transaction will be ignored
+//
+// Returns:
+//   - Option: Function that sets the ignoreConflicting option
+func WithIgnoreConflicting(ignore bool) Option {
+	return func(o *Options) {
+		o.IgnoreConflicting = ignore
+	}
+}
+
+// WithIgnoreUnspendable creates an option to control whether transactions marked as unspendable are spendable
+// Parameters:
+//   - ignoreUnspendable: When true, transactions marked as unspendable are spendable
+//
+// Returns:
+//   - Option: Function that sets the ignoreUnspendable option
+func WithIgnoreUnspendable(ignoreUnspendable bool) Option {
+	return func(o *Options) {
+		o.IgnoreUnspendable = ignoreUnspendable
+	}
+}
+
 // WithDisableConsensus creates an option to control consensus
 // Parameters:
 //   - disable: When true, consensus will be disabled
@@ -128,6 +158,15 @@ func WithDisableConsensus(disable bool) Option {
 // TxValidatorOptions defines configuration options specific to transaction validation
 type TxValidatorOptions struct {
 	skipPolicyChecks bool
+}
+
+func NewTxValidatorOptions(opts ...TxValidatorOption) *TxValidatorOptions {
+	options := &TxValidatorOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	return options
 }
 
 // TxValidatorOption defines a function type for setting transaction validator options

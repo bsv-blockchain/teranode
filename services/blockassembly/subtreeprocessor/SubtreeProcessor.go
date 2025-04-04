@@ -93,6 +93,18 @@ type SubtreeProcessor struct {
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile int
 
+	// blockStartTime tracks when the current block started
+	blockStartTime time.Time
+
+	// subtreesInBlock tracks number of subtrees created in current block
+	subtreesInBlock int
+
+	// blockIntervals tracks recent intervals per subtree in previous blocks
+	blockIntervals []time.Duration
+
+	// maxBlockSamples is the number of block samples to keep for averaging
+	maxBlockSamples int
+
 	// txChan receives transaction batches for processing
 	txChan chan *[]TxIDAndFee
 
@@ -208,6 +220,10 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	stp := &SubtreeProcessor{
 		settings:                  tSettings,
 		currentItemsPerFile:       initialItemsPerFile,
+		blockStartTime:            time.Time{},
+		subtreesInBlock:           0,
+		blockIntervals:            make([]time.Duration, 0, 10),
+		maxBlockSamples:           10,
 		txChan:                    make(chan *[]TxIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
 		getSubtreesChan:           make(chan chan []*util.Subtree),
 		moveForwardBlockChan:      make(chan moveBlockRequest),
@@ -566,15 +582,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	return nil
 }
 
-// SetCurrentBlockHeader updates the current block header.
-//
-// Parameters:
-//   - blockHeader: New block header to set
-func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
-	// TODO should this also be in the channel select ?
-	stp.currentBlockHeader = blockHeader
-}
-
 // GetCurrentBlockHeader returns the current block header being processed.
 //
 // Returns:
@@ -643,6 +650,105 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 	return int(stp.chainedSubtreeCount.Load()) + 01
 }
 
+// adjustSubtreeSize calculates and sets a new subtree size based on recent block statistics
+// to maintain approximately one subtree per second. The size will always be a power of 2
+// and not smaller than 1024.
+func (stp *SubtreeProcessor) adjustSubtreeSize() {
+	if !stp.settings.BlockAssembly.UseDynamicSubtreeSize {
+		return
+	}
+
+	// Calculate average interval between subtrees in this block
+	if len(stp.blockIntervals) == 0 {
+		return
+	}
+
+	// Filter out any intervals that are too small (likely spurious) or negative
+	validIntervals := make([]time.Duration, 0)
+
+	for _, interval := range stp.blockIntervals {
+		if interval > time.Millisecond && interval < time.Hour {
+			validIntervals = append(validIntervals, interval)
+		}
+	}
+
+	if len(validIntervals) == 0 {
+		return
+	}
+
+	// Calculate average interval
+	var sum time.Duration
+	for _, interval := range validIntervals {
+		sum += interval
+	}
+
+	avgInterval := sum / time.Duration(len(validIntervals))
+
+	stp.logger.Debugf("avgInterval=%v, validIntervals=%v\n", avgInterval, validIntervals)
+
+	// Calculate ratio of target to actual interval
+	// If we're creating subtrees faster than target, ratio > 1 and size should increase
+	targetInterval := time.Second
+	ratio := float64(targetInterval) / float64(avgInterval)
+	currentSize := stp.currentItemsPerFile
+
+	stp.logger.Debugf("ratio=%v, currentSize=%d, newSize before rounding=%d\n",
+		ratio, currentSize, int(float64(currentSize)*ratio))
+
+	// Calculate new size based on ratio
+	newSize := int(float64(currentSize) * ratio)
+
+	// Round to next power of 2
+	newSize = int(math.Pow(2, math.Ceil(math.Log2(float64(newSize)))))
+	stp.logger.Debugf("newSize after rounding=%d\n", newSize)
+
+	// Cap the increase to 2x per block to avoid wild swings
+	if newSize > currentSize*2 {
+		newSize = currentSize * 2
+		stp.logger.Debugf("newSize capped at 2x=%d\n", newSize)
+	}
+
+	// Never go below minimum size
+	minSubtreeSize := 1024
+	if newSize < minSubtreeSize {
+		newSize = minSubtreeSize
+	}
+
+	if newSize != currentSize {
+		stp.logger.Debugf("setting new size from %d to %d\n", currentSize, newSize)
+		stp.currentItemsPerFile = newSize
+	}
+
+	// Reset intervals for next block
+	stp.blockIntervals = make([]time.Duration, 0)
+}
+
+// SetCurrentBlockHeader updates the current block header.
+func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
+	stp.Lock()
+	defer stp.Unlock()
+
+	// When starting a new block, calculate the average interval per subtree
+	// from the previous block and adjust the subtree size
+	if stp.currentBlockHeader != nil && stp.blockStartTime != (time.Time{}) {
+		blockDuration := time.Since(stp.blockStartTime)
+		if stp.subtreesInBlock > 0 {
+			avgIntervalPerSubtree := blockDuration / time.Duration(stp.subtreesInBlock)
+
+			stp.blockIntervals = append(stp.blockIntervals, avgIntervalPerSubtree)
+			if len(stp.blockIntervals) > stp.maxBlockSamples {
+				stp.blockIntervals = stp.blockIntervals[1:]
+			}
+
+			stp.adjustSubtreeSize()
+		}
+	}
+
+	stp.currentBlockHeader = blockHeader
+	stp.blockStartTime = time.Now()
+	stp.subtreesInBlock = 0
+}
+
 // addNode adds a new transaction node to the current subtree.
 //
 // Parameters:
@@ -652,7 +758,20 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 // Returns:
 //   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification bool) (err error) {
-	prometheusSubtreeProcessorAddTx.Inc()
+	stp.Lock()
+	defer stp.Unlock()
+
+	if stp.currentSubtree == nil {
+		stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
+		if err != nil {
+			return err
+		}
+
+		err = stp.currentSubtree.AddCoinbaseNode()
+		if err != nil {
+			return err
+		}
+	}
 
 	err = stp.currentSubtree.AddSubtreeNode(node)
 	if err != nil {
@@ -665,9 +784,10 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		}
 
 		// Add the subtree to the chain
-		// this needs to happen here, so we can wait for the append action to complete
 		stp.chainedSubtrees = append(stp.chainedSubtrees, stp.currentSubtree)
 		stp.chainedSubtreeCount.Add(1)
+
+		stp.subtreesInBlock++ // Track number of subtrees in current block
 
 		oldSubtree := stp.currentSubtree
 		oldSubtreeHash := oldSubtree.RootHash()
@@ -971,8 +1091,6 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
 
-	// TODO add check for the correct parent block
-
 	// reset the subtree processor
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
@@ -986,6 +1104,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
+
 	g.SetLimit(stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// get all the subtrees in parallel
@@ -1020,7 +1139,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("[moveBackBlock][%s] error getting subtrees", block.String(), err)
 	}
 
@@ -1250,17 +1369,6 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		return errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 	}
 
-	// if there are no transactions in the subtree processor, we do not have to do anything
-	// we will always have at least 1 single coinbase placeholder transaction
-	if stp.txCount.Load() == 1 && stp.SubtreeCount() == 1 && stp.queue.length() == 0 && stp.currentSubtree.Nodes[0].Hash.Equal(*util.CoinbasePlaceholderHash) {
-		stp.logger.Debugf("[moveForwardBlock][%s] no transactions in subtree processor, skipping cleanup", block.String())
-
-		// set the current block header
-		stp.currentBlockHeader = block.Header
-
-		return nil
-	}
-
 	// create a reverse lookup map of all the subtrees in the block
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {
@@ -1385,14 +1493,12 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 			for _, node := range subtree.Nodes {
 				// TODO is all this needed? This adds a lot to the processing time
 				if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-					if !coinbaseID.Equal(node.Hash) {
-						if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
-							if err = stp.removeMap.Delete(node.Hash); err != nil {
-								stp.logger.Errorf("[moveForwardBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
-							}
-						} else {
-							_ = stp.addNode(node, skipNotification)
+					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
+						if err = stp.removeMap.Delete(node.Hash); err != nil {
+							stp.logger.Errorf("[moveForwardBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
 						}
+					} else {
+						_ = stp.addNode(node, skipNotification)
 					}
 				}
 			}
@@ -1549,8 +1655,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 				stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
 			}
 		} else {
-			//nolint:gosec
-			if err = deDuplicationMap.Put(node.Hash, uint64(nodeIdx)); err != nil {
+			if err = deDuplicationMap.Put(node.Hash, uint64(nodeIdx)); err != nil { //nolint:gosec
 				stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
 			} else {
 				_ = stp.addNode(node, false)
@@ -1778,7 +1883,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		}
 	}
 
-	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
+	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE")
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 

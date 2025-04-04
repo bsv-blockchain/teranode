@@ -36,10 +36,15 @@
     - [getinfo](#getinfo)
     - [getpeerinfo](#getpeerinfo)
     - [invalidateblock](#invalidateblock)
+    - [isbanned](#isbanned)
     - [reconsiderblock](#reconsiderblock)
     - [setban](#setban)
+    - [freeze](#freeze)
+    - [unfreeze](#unfreeze)
+    - [reassign](#reassign)
     - [stop](#stop)
     - [version](#version)
+- [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
 - [Version Compatibility](#version-compatibility)
@@ -195,6 +200,8 @@ Request format:
 ```
 
 ## Supported RPC Commands
+
+The following RPC commands are fully implemented and supported in the current version of the node.
 
 ### createrawtransaction
 
@@ -356,7 +363,7 @@ Returns information about a block.
 
 ### getblockbyheight
 
-Returns information about a block at the specified height.
+Returns information about a block at the specified height in the blockchain. This is similar to `getblock` but uses a height parameter instead of a hash.
 
 **Parameters:**
 1. `height` (numeric, required) - The height of the block
@@ -390,7 +397,10 @@ Returns information about a block at the specified height.
        "nonce": 2083236893,
        "bits": "1d00ffff",
        "difficulty": 1,
-       "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+       "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+       "tx": ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"],
+       "size": 285,
+       "confirmations": 750000
     },
    "error": null,
    "id": "curltest"
@@ -995,8 +1005,148 @@ Returns the server version information.
 }
 ```
 
+### isbanned
 
+Checks if a network address is currently banned.
 
+**Parameters:**
+1. `address` (string, required) - The network address to check, e.g. "192.168.0.1/24"
+
+**Returns:**
+- `boolean` - True if the address is banned, false otherwise
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "isbanned",
+    "params": ["192.168.0.6"]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": false,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### freeze
+
+Freezes a specific UTXO, preventing it from being spent.
+
+**Parameters:**
+1. `txid` (string, required) - Transaction ID of the output to freeze
+2. `vout` (numeric, required) - Output index to freeze
+
+**Returns:**
+- `boolean` - True if the UTXO was successfully frozen
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "freeze",
+    "params": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        1
+    ]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": true,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### unfreeze
+
+Unfreezes a previously frozen UTXO, allowing it to be spent.
+
+**Parameters:**
+1. `txid` (string, required) - Transaction ID of the frozen output
+2. `vout` (numeric, required) - Output index to unfreeze
+
+**Returns:**
+- `boolean` - True if the UTXO was successfully unfrozen
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "unfreeze",
+    "params": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        1
+    ]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": true,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### reassign
+
+Reassigns ownership of a specific UTXO to a new Bitcoin address.
+
+**Parameters:**
+1. `txid` (string, required) - Transaction ID of the output to reassign
+2. `vout` (numeric, required) - Output index to reassign
+3. `destination` (string, required) - Bitcoin address to reassign the UTXO to
+
+**Returns:**
+- `boolean` - True if the UTXO was successfully reassigned
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "reassign",
+    "params": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        1,
+        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+    ]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": true,
+    "error": null,
+    "id": "curltest"
+}
+```
+
+## Unimplemented RPC Commands
+
+The following commands are recognized by the RPC server but are not currently implemented:
+
+- `addnode` - Not yet implemented
+- `decoderawtransaction` - Not yet implemented
+- `decodescript` - Not yet implemented
+- `estimatefee` - Not yet implemented
+- `getblocktemplate` - Not yet implemented
+- `getmempoolinfo` - Not yet implemented
+- `getrawmempool` - Not yet implemented
+- `gettxout` - Not yet implemented
 
 ## Error Handling
 

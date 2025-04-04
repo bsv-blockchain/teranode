@@ -275,7 +275,11 @@ func (x *TError) Error() string {
 		return "<nil>"
 	}
 
-	return fmt.Sprintf("%s: %s", x.Code.String(), x.Message)
+	if x.WrappedError == nil {
+		return fmt.Sprintf("%s (%d): %s", x.Code.String(), x.Code, x.Message)
+	}
+
+	return fmt.Sprintf("%s (%d): %s -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
 }
 
 func (x *TError) IsNil() bool {

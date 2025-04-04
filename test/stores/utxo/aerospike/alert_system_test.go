@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -48,7 +49,7 @@ func TestAlertSystem(t *testing.T) {
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
-			"utxos": []interface{}{utxoHash0[:]},
+			fields.Utxos.String(): []interface{}{utxoHash0[:]},
 		}
 		aErr = client.Put(nil, key, bins)
 		require.NoError(t, aErr)
@@ -64,7 +65,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 
-		utxos, ok := rec.Bins["utxos"].([]interface{})
+		utxos, ok := rec.Bins[fields.Utxos.String()].([]interface{})
 		require.True(t, ok)
 		require.Len(t, utxos, 1)
 
@@ -105,9 +106,10 @@ func TestAlertSystem(t *testing.T) {
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
-			"utxos":      []interface{}{utxoBytes},
-			"nrOfUTXOs":  1,
-			"spentUtxos": 0,
+			fields.Utxos.String():       []interface{}{utxoBytes},
+			fields.TotalUtxos.String():  1,
+			fields.SpentUtxos.String():  0,
+			fields.RecordUtxos.String(): 1,
 		}
 		err = client.Put(nil, key, bins)
 		require.NoError(t, err)
@@ -131,7 +133,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 
-		utxos, ok := rec.Bins["utxos"].([]interface{})
+		utxos, ok := rec.Bins[fields.Utxos.String()].([]interface{})
 		require.True(t, ok)
 		require.Len(t, utxos, 1)
 
@@ -194,9 +196,10 @@ func TestAlertSystem(t *testing.T) {
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
-			"utxos":      []interface{}{utxoHash0[:]},
-			"totalUtxos": 1,
-			"spentUtxos": 0,
+			fields.Utxos.String():       []interface{}{utxoHash0[:]},
+			fields.TotalUtxos.String():  1,
+			fields.SpentUtxos.String():  0,
+			fields.RecordUtxos.String(): 1,
 		}
 		err = client.Put(nil, key, bins)
 		require.NoError(t, err)
@@ -206,7 +209,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 
-		utxos, ok := rec.Bins["utxos"].([]interface{})
+		utxos, ok := rec.Bins[fields.Utxos.String()].([]interface{})
 		require.True(t, ok)
 		require.Len(t, utxos, 1)
 
@@ -234,7 +237,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 
-		utxos, ok = rec.Bins["utxos"].([]interface{})
+		utxos, ok = rec.Bins[fields.Utxos.String()].([]interface{})
 		require.True(t, ok)
 		require.Len(t, utxos, 1)
 
@@ -245,7 +248,7 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, newUtxoRec.UTXOHash[:], utxoBytes)
 
 		// check the reassignment list
-		reassignment, ok := rec.Bins["reassignments"].([]interface{})
+		reassignment, ok := rec.Bins[fields.Reassignments.String()].([]interface{})
 		require.True(t, ok)
 		require.Len(t, reassignment, 1)
 
@@ -259,16 +262,16 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, newUtxoRec.UTXOHash[:], reassignmentMap["newUtxoHash"])
 		assert.Equal(t, 101, reassignmentMap["blockHeight"])
 
-		utxoSpendableIn, ok := rec.Bins["utxoSpendableIn"].(map[interface{}]interface{})
+		utxoSpendableIn, ok := rec.Bins[fields.UtxoSpendableIn.String()].(map[interface{}]interface{})
 		require.True(t, ok)
 
 		// check the utxoSpendableIn record
 		assert.Equal(t, 1101, utxoSpendableIn[0])
 
 		// check the totalUtxos has been incremented
-		totalUtxos, ok := rec.Bins["totalUtxos"].(int)
+		recordUtxos, ok := rec.Bins[fields.RecordUtxos.String()].(int)
 		require.True(t, ok)
-		assert.Equal(t, 2, totalUtxos)
+		assert.Equal(t, 2, recordUtxos)
 
 		// try to spend the UTXO with the original hash - should fail
 		_, err = store.Spend(ctx, utxoRecTx)

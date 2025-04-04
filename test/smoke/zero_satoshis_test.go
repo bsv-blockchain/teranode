@@ -136,5 +136,4 @@ loop:
 	require.Contains(t, err.Error(), "transaction fee is too low")
 
 	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
-
 }

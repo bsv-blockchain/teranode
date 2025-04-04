@@ -1,4 +1,4 @@
-//go:build test_all || test_tna
+//go:build test_all || test_tna || debug
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNA4TestSuite$/TestBlockBroadcast$" -tags test_tna ./test/tna/tna4_test.go
@@ -26,6 +26,7 @@ package tna
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -104,15 +105,42 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 		}(i, notifChan)
 	}
 
+	node0 := testEnv.Nodes[0]
+	block1, err := node0.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+	parenTx := block1.CoinbaseTx
+	
 	// Create and send transactions to be included in the block
-	hashes, err := helper.CreateAndSendTxs(ctx, testEnv.Nodes[0], 10)
+	hashes, _, err := node0.CreateAndSendTxs(t, ctx, parenTx, 10)
 	require.NoError(t, err, "Failed to create and send transactions")
 	t.Logf("Created transactions with hashes: %v", hashes)
 
 	// Mine a block containing the transactions on Node0
 	var minedBlockBytes []byte
-	minedBlockBytes, err = helper.MineBlock(ctx, testEnv.Nodes[0].Settings, testEnv.Nodes[0].BlockassemblyClient, logger)
+	minedBlockBytes, err = helper.MineBlock(ctx, node0.Settings, node0.BlockassemblyClient, logger)
 	require.NoError(t, err, "Failed to mine block")
+
+	// Wait for all nodes to receive the block notification with timeout
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	expectedNodes := len(testEnv.Nodes) - 1 // excluding node0 (mining node)
+waitLoop:
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for block notifications. Expected %d nodes, got notifications from %d nodes", 
+				expectedNodes, len(receivedBlocks))
+		case <-ticker.C:
+			mu.Lock()
+			if len(receivedBlocks) == expectedNodes {
+				mu.Unlock()
+				break waitLoop
+			}
+			mu.Unlock()
+		}
+	}
 
 	// Verify that all receiving nodes got the block notification
 	mu.Lock()
@@ -134,3 +162,5 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 	}
 	mu.Unlock()
 }
+
+// TODO: Also add the helper function to see that all the transactions are in the block

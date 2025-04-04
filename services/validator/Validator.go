@@ -210,26 +210,27 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 // Returns error if validation fails.
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
-		v.logger.Errorf("[ValidateWithOptions] failed to validate transaction: %v", err)
-
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			startKafka := time.Now()
+			// TODO which errors should we be sending here?
+			if !errors.Is(err, errors.ErrStorageError) && !errors.Is(err, errors.ErrServiceError) {
+				startKafka := time.Now()
 
-			m := &kafkamessage.KafkaRejectedTxTopicMessage{
-				TxHash: tx.TxIDChainHash().CloneBytes(),
-				Reason: err.Error(),
+				m := &kafkamessage.KafkaRejectedTxTopicMessage{
+					TxHash: tx.TxIDChainHash().CloneBytes(),
+					Reason: err.Error(),
+				}
+
+				value, err := proto.Marshal(m)
+				if err != nil {
+					return nil, err
+				}
+
+				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+					Value: value,
+				})
+
+				prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 			}
-
-			value, err := proto.Marshal(m)
-			if err != nil {
-				return nil, err
-			}
-
-			v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
-				Value: value,
-			})
-
-			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
 	}
 
@@ -243,7 +244,9 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	txID := tx.TxID()
+
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
+
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
 		tracing.WithTag("txid", txID),
@@ -252,6 +255,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	defer func() {
 		deferFn(err)
 	}()
+
+	// this cached the tx hash in the object for the duration of all operations. It's immutable, so not a problem
+	tx.SetTxHash(tx.TxIDChainHash())
 
 	if v.settings.Validator.VerboseDebug {
 		v.logger.Debugf("[Validator:Validate] called for %s", txID)
@@ -323,7 +329,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
+	if spentUtxos, err = v.spendUtxos(setSpan, tx, validationOptions.IgnoreUnspendable); err != nil {
 		if errors.Is(err, errors.ErrTxInvalid) {
 			saveAsConflicting := false
 
@@ -353,7 +359,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 
 			if saveAsConflicting {
-				if txMetaData, utxoMapErr = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, true); utxoMapErr != nil {
+				if txMetaData, utxoMapErr = v.CreateInUtxoStore(setSpan, tx, blockHeight, true, false); utxoMapErr != nil {
+					if errors.Is(utxoMapErr, errors.ErrTxExists) {
+						if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+							return nil, errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+						}
+					}
+
 					return txMetaData, utxoMapErr
 				}
 
@@ -367,6 +379,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// blessed. In this case we can just return early.
 			if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err == nil {
 				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
+
 				return txMetaData, nil
 			}
 		}
@@ -374,13 +387,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 	}
 
+	// the option blockAssemblyDisabled is false by default
+	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
+	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
+
 	if !validationOptions.SkipUtxoCreation {
-		// TODO do we need to make this a 2 phase commit?
-		//      if the block assembly addition fails, the utxo should not be spendable yet
-		txMetaData, err = v.StoreTxInUtxoMap(setSpan, tx, blockHeight, false)
+		// store the transaction in the UTXO store, marking it as unspendable if we are going to add it to the block assembly
+		txMetaData, err = v.CreateInUtxoStore(setSpan, tx, blockHeight, false, addToBlockAssembly)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
 				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
+
+				if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+					return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
+				}
 
 				return txMetaData, nil
 			}
@@ -388,23 +408,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txID, err)
 
 			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
+				err = errors.NewProcessingError("[Validate][%s] error reversing utxo spends: %v", txID, reverseErr, err)
 			}
 
-			return nil, errors.NewProcessingError("error registering tx in metaStore", err)
+			return nil, errors.NewProcessingError("[Validate][%s] error registering tx in metaStore", txID, err)
 		}
 	} else {
 		// create the tx meta needed for the block assembly
 		txMetaData, err = util.TxMetaDataFromTx(tx)
 		if err != nil {
-			return nil, errors.NewProcessingError("failed to get tx meta data", err)
+			return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data", txID, err)
 		}
 	}
 
-	// the option blockAssemblyDisabled is false by default
-	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
-
-	if blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly {
+	if addToBlockAssembly {
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
 		for i, input := range tx.Inputs {
 			parentTxHashes[i] = *input.PreviousTxIDChainHash()
@@ -416,22 +433,40 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()),
 		}, spentUtxos); err != nil {
-			err = errors.NewProcessingError("error sending tx to block assembler", err)
+			err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
 
-			if reverseErr := v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
-				// add reverseErr to the message, wrap the err
-				err = errors.NewProcessingError("error reversing tx meta utxoStore: %v", reverseErr, err)
+			if reverseErr := v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); reverseErr != nil {
+				// add reverseErr to the message, wrap the error
+				err = errors.NewProcessingError("[Validate][%s] error reversing tx meta utxoStore: %v", txID, reverseErr, err)
 			}
 
 			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 				// add reverseErr to the message, wrap the err
-				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
+				err = errors.NewProcessingError("[Validate][%s] error reversing utxo spends: %v", txID, reverseErr, err)
 			}
 
 			setSpan.RecordError(err)
 
 			return nil, err
 		}
+	}
+
+	// send the txMetaData over to the subtree validation kafka topic
+	if v.txmetaKafkaProducerClient != nil {
+		if err = v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); err != nil {
+			return nil, err
+		}
+	}
+
+	if txMetaData.Unspendable {
+		// the tx was marked as unspendable on creation, we have added it successfully to block assembly
+		// so we can now mark it as spendable again
+		if err = v.utxoStore.SetUnspendable(setSpan.Ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
+			// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
+			return nil, errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
+		}
+
+		txMetaData.Unspendable = false
 	}
 
 	return txMetaData, nil
@@ -529,53 +564,61 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 	return err
 }
 
-// StoreTxInUtxoMap stores transaction metadata in the UTXO store.
+// CreateInUtxoStore stores transaction metadata in the UTXO store.
 // Returns transaction metadata and error if storage fails.
-func (v *Validator) StoreTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool) (*meta.Data, error) {
+func (v *Validator) CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool,
+	markAsUnspendable bool) (*meta.Data, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "storeTxInUtxoMap",
 		tracing.WithHistogram(prometheusValidatorSetTxMeta),
 	)
 	defer deferFn()
 
-	// TODO add this txID to a canflictingChildren slice to the input txs of this transaction, if marked as conflicting
-	data, err := v.utxoStore.Create(ctx, tx, blockHeight, utxo.WithConflicting(markAsConflicting))
+	createOptions := []utxo.CreateOption{
+		utxo.WithConflicting(markAsConflicting),
+	}
+
+	if markAsUnspendable {
+		createOptions = append(createOptions, utxo.WithUnspendable(true))
+	}
+
+	txMetaData, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
 	if err != nil {
 		return nil, err
 	}
 
-	if v.txmetaKafkaProducerClient != nil && !markAsConflicting { // tests may not set this
-		startKafka := time.Now()
+	return txMetaData, nil
+}
 
-		metaBytes := data.MetaBytes()
+func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) error {
+	startKafka := time.Now()
 
-		m := &kafkamessage.KafkaTxMetaTopicMessage{
-			TxHash:  tx.TxIDChainHash().CloneBytes(),
-			Action:  kafkamessage.KafkaTxMetaActionType_ADD,
-			Content: metaBytes,
-		}
+	metaBytes := data.MetaBytes()
 
-		if len(metaBytes) > 2048 {
-			v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.ParentTxHashes))
-		}
-
-		value, err := proto.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-
-		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Value: value,
-		})
-
-		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+	if len(metaBytes) > 2048 {
+		v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.ParentTxHashes))
 	}
 
-	return data, nil
+	value, err := proto.Marshal(&kafkamessage.KafkaTxMetaTopicMessage{
+		TxHash:  txHash[:],
+		Action:  kafkamessage.KafkaTxMetaActionType_ADD,
+		Content: metaBytes,
+	})
+	if err != nil {
+		return err
+	}
+
+	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+		Value: value,
+	})
+
+	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+
+	return nil
 }
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
 // Returns the spent UTXOs and error if spending fails.
-func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreUnspendable bool) ([]*utxo.Spend, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -590,7 +633,10 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 		err error
 	)
 
-	spends, err := v.utxoStore.Spend(ctx, tx)
+	spends, err := v.utxoStore.Spend(ctx, tx, utxo.IgnoreFlags{
+		IgnoreConflicting: false,
+		IgnoreUnspendable: ignoreUnspendable,
+	})
 	if err != nil {
 		traceSpan.RecordError(err)
 
@@ -618,7 +664,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	}
 
 	if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
-		e := errors.NewStorageError("error calling blockAssembler Store()", err)
+		e := errors.NewServiceError("error calling blockAssembler Store()", err)
 		traceSpan.RecordError(e)
 
 		return e

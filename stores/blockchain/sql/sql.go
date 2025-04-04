@@ -334,7 +334,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 		}
 	} else if !bytes.Equal(hash, s.chainParams.GenesisHash[:]) {
 		// Check the chainParams genesis block hash is the same as the one in the database
-		return errors.NewConfigurationError("genesis block hash mismatch")
+		return errors.NewConfigurationError("genesis block hash mismatch: bytes is %x, expected %x", hash, s.chainParams.GenesisHash[:])
 	}
 
 	return nil

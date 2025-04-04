@@ -220,6 +220,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txMeta.Conflicting = true
 	}
 
+	if options.Unspendable {
+		txMeta.Unspendable = true
+	}
+
 	// Insert the transaction row...
 	q := `
 		INSERT INTO transactions (
@@ -231,6 +235,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,coinbase
 		,frozen
 		,conflicting
+		,unspendable
 	  ) VALUES (
 		 $1
 		,$2
@@ -240,6 +245,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,$6
 		,$7
 		,$8
+		,$9
 		)
 		RETURNING id
 	`
@@ -268,7 +274,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *options.IsCoinbase
 	}
 
-	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting).Scan(&transactionID)
+	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting, options.Unspendable).Scan(&transactionID)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -695,7 +701,7 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 //
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -753,14 +759,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 		AND idx = $3
 	`
 
-	var (
-		errorFound           bool
-		useIgnoreUnspendable bool
-	)
+	var errorFound bool
 
-	if len(ignoreUnspendable) > 0 {
-		useIgnoreUnspendable = ignoreUnspendable[0]
-	}
+	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
+	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
 
 	for _, spend := range spends {
 		select {
@@ -805,7 +807,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool)
 			}
 
 			// If the tx is marked as conflicting, it cannot be spent
-			if conflicting && !useIgnoreUnspendable {
+			if conflicting && !useIgnoreConflicting {
 				errorFound = true
 				spend.Err = errors.NewTxConflictingError("[Spend] tx is conflicting for %s:%d", spend.TxID, spend.Vout)
 

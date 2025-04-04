@@ -58,7 +58,7 @@ func TestNew(t *testing.T) {
 
 		// Create a mock repository
 		mockRepo := new(MockRepository)
-		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient := new(MockBlockchainClient)
 		mockRepo.On("BlockchainClient").Return(mockBlockchainClient)
 		mockRepo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
 
@@ -101,7 +101,7 @@ func TestNew(t *testing.T) {
 
 		// Create a mock repository
 		mockRepo := new(MockRepository)
-		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient := new(MockBlockchainClient)
 		mockRepo.On("BlockchainClient").Return(mockBlockchainClient)
 		mockRepo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
 
@@ -170,7 +170,7 @@ func TestNewWithSigningEnabled(t *testing.T) {
 
 	// Create a mock repository
 	mockRepo := new(MockRepository)
-	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient := new(MockBlockchainClient)
 	mockRepo.On("BlockchainClient").Return(mockBlockchainClient)
 	mockRepo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
 

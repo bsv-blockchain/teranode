@@ -33,10 +33,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	utxoStore "github.com/bitcoin-sv/teranode/stores/utxo"
+	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -45,15 +46,18 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -127,23 +131,45 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+
+	blockAssembler := &MockBlockAssemblyStore{}
+
 	v := &Validator{
 		logger:                        ulogger.TestLogger{},
 		settings:                      tSettings,
 		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
 		utxoStore:                     utxoStore,
-		blockAssembler:                BlockAssemblyStore{},
+		blockAssembler:                blockAssembler,
 		saveInParallel:                true,
 		stats:                         gocore.NewStat("validator"),
 		txmetaKafkaProducerClient:     txmetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	_, err = v.Validate(context.Background(), tx, 257727)
+	txMeta, err := v.Validate(t.Context(), tx, 257727)
 	require.NoError(t, err)
 
+	// check the kafka channels
 	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should have 1 message")
 	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should be empty")
+
+	msg := <-txmetaKafkaProducerClient.PublishChannel()
+	assert.NotNil(t, msg)
+
+	// unmarshal the kafka message
+	var kafkaMsg kafkamessage.KafkaTxMetaTopicMessage
+	err = proto.Unmarshal(msg.Value, &kafkaMsg)
+	require.NoError(t, err)
+
+	assert.Equal(t, tx.TxID(), utils.ReverseAndHexEncodeSlice(kafkaMsg.TxHash))
+
+	// check the block assembly store
+	assert.Len(t, blockAssembler.storedTxs, 1)
+	assert.Len(t, blockAssembler.removedTxs, 0)
+
+	assert.Equal(t, tx.TxID(), blockAssembler.storedTxs[0].txHash.String())
+	assert.Equal(t, txMeta.Fee, blockAssembler.storedTxs[0].fee)
+	assert.Equal(t, txMeta.SizeInBytes, blockAssembler.storedTxs[0].size)
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -189,6 +215,75 @@ func TestValidate_TxMetaStoreError(t *testing.T) {
 }
 
 func TestValidate_BlockAssemblyError(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parenTxHex := "0100000001154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parentTx, err := bt.NewTxFromString(parenTxHex)
+	require.NoError(t, err)
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	_ = utxoStore.SetBlockHeight(257727)
+	//nolint:gosec
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
+
+	_, err = utxoStore.Create(context.Background(), parentTx, 257726)
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+
+	blockAssembler := &MockBlockAssemblyStore{}
+	blockAssembler.returnError = errors.NewServiceError("block assembly error")
+
+	v := &Validator{
+		logger:                        ulogger.TestLogger{},
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                blockAssembler,
+		saveInParallel:                true,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     txmetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
+	}
+
+	txMetaData, err := v.Validate(t.Context(), tx, 257727)
+	require.Error(t, err)
+	require.Nil(t, txMetaData)
+
+	// check that nothing has been stored in the utxo store
+	_, err = utxoStore.Get(t.Context(), tx.TxIDChainHash())
+	require.Error(t, err)
+
+	var tErr *errors.Error
+
+	require.True(t, errors.As(err, &tErr))
+	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
+
+	// check the kafka channels
+	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
+	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
+
+	// should have a delete message
+	msg := <-txmetaKafkaProducerClient.PublishChannel()
+	assert.NotNil(t, msg)
+	assert.Equal(t, []byte(nil), msg.Key)
+
+	var m kafkamessage.KafkaTxMetaTopicMessage
+	err = proto.Unmarshal(msg.Value, &m)
+	require.NoError(t, err)
+
+	assert.Equal(t, kafkamessage.KafkaTxMetaActionType_DELETE, m.Action)
+	assert.Equal(t, tx.TxIDChainHash().CloneBytes(), m.TxHash)
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
@@ -463,14 +558,47 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 	require.NoError(t, err)
 }
 
-type BlockAssemblyStore struct {
+type txFeeSize struct {
+	txHash *chainhash.Hash
+	fee    uint64
+	size   uint64
 }
 
-func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+type MockBlockAssemblyStore struct {
+	returnError error
+	storedTxs   []txFeeSize
+	removedTxs  []chainhash.Hash
+}
+
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+	if s.returnError != nil {
+		return false, s.returnError
+	}
+
+	if s.storedTxs == nil {
+		s.storedTxs = make([]txFeeSize, 0)
+	}
+
+	s.storedTxs = append(s.storedTxs, txFeeSize{
+		txHash: hash,
+		fee:    fee,
+		size:   size,
+	})
+
 	return true, nil
 }
 
-func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+func (s *MockBlockAssemblyStore) RemoveTx(_ context.Context, hash *chainhash.Hash) error {
+	if s.returnError != nil {
+		return s.returnError
+	}
+
+	if s.removedTxs == nil {
+		s.removedTxs = make([]chainhash.Hash, 0)
+	}
+
+	s.removedTxs = append(s.removedTxs, *hash)
+
 	return nil
 }
 
@@ -569,7 +697,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 	tSettings := settings.NewSettings()
 
 	t.Run("not mined parent txs", func(t *testing.T) {
-		mockUtxoStore := utxoStore.MockUtxostore{}
+		mockUtxoStore := utxostore.MockUtxostore{}
 
 		v := &Validator{
 			settings:  tSettings,
@@ -593,7 +721,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 	})
 
 	t.Run("mined parent txs", func(t *testing.T) {
-		mockUtxoStore := utxoStore.MockUtxostore{}
+		mockUtxoStore := utxostore.MockUtxostore{}
 
 		v := &Validator{
 			settings:  tSettings,

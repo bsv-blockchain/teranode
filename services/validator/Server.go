@@ -8,12 +8,11 @@ different validation components.
 package validator
 
 import (
-	"bytes"
 	"context"
 	"io"
-	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -29,9 +28,12 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,6 +54,7 @@ type Server struct {
 	consumerClient                kafka.KafkaConsumerGroupI
 	txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+	httpServer                    *echo.Echo
 }
 
 // NewServer creates and initializes a new validator server instance
@@ -224,6 +227,10 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
+	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
+		return err
+	}
+
 	//  Start gRPC server - this will block
 	if err := util.StartGRPCServer(ctx, v.logger, v.settings, "validator", v.settings.Validator.GRPCListenAddress, func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
@@ -256,56 +263,12 @@ func (v *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-// ValidateTransactionStream implements streaming transaction validation
-// Parameters:
-//   - stream: gRPC stream for transaction data
-//
-// Returns:
-//   - error: Any validation errors
-func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
-	_, _, deferFn := tracing.StartTracing(v.ctx, "ValidateTransactionStream",
-		tracing.WithParentStat(v.stats),
-		tracing.WithHistogram(prometheusValidateTransaction),
-	)
-	defer deferFn()
-
-	transactionData := bytes.Buffer{}
-
-	for {
-		log.Print("waiting to receive more data")
-
-		req, err := stream.Recv()
-		if err == io.EOF {
-			log.Print("no more data")
-			break
-		}
-
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err)
-		}
-
-		chunk := req.GetTransactionData()
-
-		_, err = transactionData.Write(chunk)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			return status.Errorf(codes.Internal, "cannot write chunk data: %v", err)
-		}
-	}
-
-	var tx bt.Tx
-	if _, err := tx.ReadFrom(bytes.NewReader(transactionData.Bytes())); err != nil {
-		prometheusInvalidTransactions.Inc()
-		return status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
-	}
-
-	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
-		Valid: true,
-	})
+func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	response, err := v.validateTransaction(ctx, req)
+	return response, errors.WrapGRPC(err)
 }
 
-func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+func (v *Server) validateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransaction",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusValidateTransaction),
@@ -321,7 +284,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
-		}, errors.WrapGRPC(errors.NewTxError("error reading transaction data", err))
+		}, errors.NewTxError("error reading transaction data", err)
 	}
 
 	// set the tx hash, so it doesn't have to be recalculated
@@ -351,7 +314,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 			Txid:  tx.TxIDChainHash().CloneBytes(),
-		}, errors.WrapGRPC(err)
+		}, err
 	}
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
@@ -374,23 +337,16 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
-	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 	metaData := make([][]byte, len(req.GetTransactions()))
+	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
 		idx, reqItem := idx, reqItem
 
 		g.Go(func() error {
-			validatorResponse, err := v.ValidateTransaction(gCtx, reqItem)
-			if err != nil {
-				errReasons[idx] = errors.Wrap(err)
-			} else {
-				errReasons[idx] = nil
-			}
-
-			if validatorResponse.Metadata != nil {
-				metaData[idx] = validatorResponse.Metadata
-			}
+			validatorResponse, err := v.validateTransaction(gCtx, reqItem)
+			metaData[idx] = validatorResponse.Metadata
+			errReasons[idx] = errors.Wrap(err)
 
 			return nil
 		})
@@ -438,4 +394,176 @@ func (v *Server) GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyM
 	return &validator_api.GetMedianBlockTimeResponse{
 		MedianTime: medianTime,
 	}, nil
+}
+
+// extractValidationParams extracts validation parameters from HTTP query string
+func extractValidationParams(c echo.Context) (uint32, *Options) {
+	const trueString = "true"
+
+	var (
+		blockHeight uint32
+	)
+
+	options := NewDefaultOptions()
+
+	// Extract block height
+	if blockHeightStr := c.QueryParam("blockHeight"); blockHeightStr != "" {
+		height, err := strconv.ParseUint(blockHeightStr, 10, 32)
+		if err == nil {
+			blockHeight = uint32(height)
+		}
+	}
+
+	// Extract boolean parameters
+	if skipUtxoCreationStr := c.QueryParam("skipUtxoCreation"); skipUtxoCreationStr != "" {
+		boolVal := skipUtxoCreationStr == trueString || skipUtxoCreationStr == "1"
+		options.SkipUtxoCreation = boolVal
+	}
+
+	if addTxToBlockAssemblyStr := c.QueryParam("addTxToBlockAssembly"); addTxToBlockAssemblyStr != "" {
+		boolVal := addTxToBlockAssemblyStr == trueString || addTxToBlockAssemblyStr == "1"
+		options.AddTXToBlockAssembly = boolVal
+	}
+
+	if skipPolicyChecksStr := c.QueryParam("skipPolicyChecks"); skipPolicyChecksStr != "" {
+		boolVal := skipPolicyChecksStr == trueString || skipPolicyChecksStr == "1"
+		options.SkipPolicyChecks = boolVal
+	}
+
+	if createConflictingStr := c.QueryParam("createConflicting"); createConflictingStr != "" {
+		boolVal := createConflictingStr == trueString || createConflictingStr == "1"
+		options.CreateConflicting = boolVal
+	}
+
+	return blockHeight, options
+}
+
+// handleSingleTx handles a single transaction request on the /tx endpoint
+func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return c.String(http.StatusBadRequest, "[handleSingleTx] Invalid request body")
+		}
+
+		// Extract validation parameters from query string
+		blockHeight, options := extractValidationParams(c)
+
+		// Create the request with transaction data and parameters
+		req := &validator_api.ValidateTransactionRequest{
+			TransactionData:      body,
+			BlockHeight:          blockHeight,
+			SkipUtxoCreation:     &options.SkipUtxoCreation,
+			AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
+			SkipPolicyChecks:     &options.SkipPolicyChecks,
+			CreateConflicting:    &options.CreateConflicting,
+		}
+
+		// Process the transaction and return appropriate response
+		response, err := v.validateTransaction(ctx, req)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
+		}
+
+		if !response.Valid {
+			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+response.Reason)
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// handleMultipleTx handles multiple transactions on the /txs endpoint
+func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Extract validation parameters from query string
+		blockHeight, options := extractValidationParams(c)
+
+		// Read transactions with the bt reader in a loop
+		for {
+			tx := &bt.Tx{}
+
+			// Read transaction from request body
+			_, err := tx.ReadFrom(c.Request().Body)
+			if err != nil {
+				// End of stream is expected and not an error
+				if err == io.EOF {
+					break
+				}
+
+				return c.String(http.StatusBadRequest, "[handleMultipleTx] Invalid request body: "+err.Error())
+			}
+
+			// Process the transaction
+			req := &validator_api.ValidateTransactionRequest{
+				TransactionData:      tx.ExtendedBytes(),
+				BlockHeight:          blockHeight,
+				SkipUtxoCreation:     &options.SkipUtxoCreation,
+				AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
+				SkipPolicyChecks:     &options.SkipPolicyChecks,
+				CreateConflicting:    &options.CreateConflicting,
+			}
+
+			response, err := v.validateTransaction(ctx, req)
+			if err != nil {
+				return c.String(http.StatusInternalServerError, "[handleMultipleTx] Failed to process transaction: "+err.Error())
+			}
+
+			if !response.Valid {
+				return c.String(http.StatusInternalServerError, "[handleMultipleTx] Failed to process transaction: "+response.Reason)
+			}
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// startHTTPServer initializes and starts the HTTP server for transaction processing
+func (v *Server) startHTTPServer(ctx context.Context, httpAddresses string) error {
+	// Initialize Echo server with settings
+	v.httpServer = echo.New()
+	v.httpServer.Debug = false
+	v.httpServer.HideBanner = true
+
+	// Configure middleware and timeouts
+	v.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(v.settings.Validator.HTTPRateLimit))))
+	v.httpServer.Server.ReadTimeout = 5 * time.Second
+	v.httpServer.Server.WriteTimeout = 10 * time.Second
+	v.httpServer.Server.IdleTimeout = 120 * time.Second
+
+	// Register route handlers
+	v.httpServer.POST("/tx", v.handleSingleTx(ctx))
+	v.httpServer.POST("/txs", v.handleMultipleTx(ctx))
+
+	// add a health endpoint that simply returns "OK"
+	v.httpServer.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+
+	// add a 404 handler with a message for unknown routes
+	v.httpServer.Any("/*", func(c echo.Context) error {
+		return c.String(http.StatusNotFound, "Unknown route")
+	})
+
+	// Start server and handle shutdown
+	v.startAndMonitorHTTPServer(ctx, httpAddresses)
+
+	return nil
+}
+
+// startAndMonitorHTTPServer starts the HTTP server and monitors for shutdown
+func (v *Server) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
+	// Start the server
+	go func() {
+		if err := v.httpServer.Start(httpAddresses); err != nil {
+			v.logger.Errorf("error starting HTTP server: %v", err)
+		}
+	}()
+
+	// Monitor for context cancellation
+	go func() {
+		<-ctx.Done()
+
+		_ = v.httpServer.Shutdown(context.Background())
+	}()
 }

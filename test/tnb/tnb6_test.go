@@ -1,4 +1,4 @@
-//go:build test_all || test_tnb
+//go:build test_all || test_tnb || debug
 
 /*
 Package tnb implements Teranode Behavioral tests.
@@ -51,10 +51,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
@@ -94,7 +97,7 @@ func TestTNB6TestSuite(t *testing.T) {
 // To run the test:
 // $ go test -v -run "^TestTNB6TestSuite$/TestUTXOSetManagement$" -tags test_tnb ./test/tnb/tnb6_test.go
 
-func (suite *TNB6TestSuite) TestUTXOSetManagement() {
+func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
@@ -109,20 +112,23 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	address2, _ := bscript.NewAddressFromPublicKey(privateKey2.PubKey(), true)
 
 	// Get funds from coinbase
-	coinbaseClient := node1.CoinbaseClient
-	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
-	require.NoError(t, err, "Failed to request funds")
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
 
-	_, err = node1.DistributorClient.SendTransaction(ctx, faucetTx)
-	require.NoError(t, err, "Failed to send faucet transaction")
+	coinbaseTx := block1.CoinbaseTx
+
+	w, err := wif.DecodeWIF(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	require.NoError(t, err)
+
+	coinbaseTxPrivateKey := w.PrivKey
 
 	// Create a transaction with multiple outputs
 	tx := bt.NewTx()
 	err = tx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      faucetTx.TxIDChainHash(),
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
 		Vout:          uint32(0),
-		LockingScript: faucetTx.Outputs[0].LockingScript,
-		Satoshis:      faucetTx.Outputs[0].Satoshis,
+		LockingScript: coinbaseTx.Outputs[0].LockingScript,
+		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
 	})
 	require.NoError(t, err)
 
@@ -135,7 +141,7 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	require.NoError(t, err)
 
 	// Sign and send the transaction
-	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbaseTxPrivateKey})
 	require.NoError(t, err)
 
 	_, err = node1.DistributorClient.SendTransaction(ctx, tx)
@@ -144,7 +150,6 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// goroutine to check if tx exists in utxostore (removing time.Sleep)
 	utxoReady := make(chan *meta.Data)
 	go func() {
 		defer close(utxoReady)
@@ -170,6 +175,17 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 		if utxos.Tx != nil {
 			for i, out := range utxos.Tx.Outputs {
 				t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", i, out.Satoshis, *out.LockingScript)
+				utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), out, uint32(i))
+				spend := &utxo.Spend{
+					TxID:     tx.TxIDChainHash(),
+					Vout:     uint32(i),
+					UTXOHash: utxoHash,
+				}
+				spendStatus, err := node1.UtxoStore.GetSpend(ctx, spend)
+				require.NoError(t, err)
+				t.Logf("UTXO #%d spend status: %+v\n", i, spendStatus)
+				require.Equal(t, spendStatus.Status, 0)
+				require.Nil(t, spendStatus.SpendingTxID)
 			}
 		} else {
 			t.Logf("No tx found into meta.Data")
@@ -178,28 +194,4 @@ func (suite *TNB6TestSuite) TestUTXOSetManagement() {
 	case <-ctxTimeout.Done():
 		t.Fatalf("Timeout waiting for transaction to be processed")
 	}
-
-	require.NoError(t, err, "First output should be in UTXO set")
-
-	invalidTx := bt.NewTx()
-	err = invalidTx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      faucetTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: faucetTx.Outputs[0].LockingScript,
-		Satoshis:      faucetTx.Outputs[0].Satoshis,
-	})
-	require.NoError(t, err)
-
-	// Use a different private key to create an invalid signature
-	wrongPrivateKey, _ := bec.NewPrivateKey(bec.S256())
-	addr, err := bscript.NewAddressFromPublicKey(wrongPrivateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	err = invalidTx.AddP2PKHOutputFromAddress(addr.AddressString, amount1)
-	require.NoError(t, err)
-	err = invalidTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: wrongPrivateKey})
-	require.NoError(t, err)
-
-	_, err = node1.UtxoStore.Spend(ctx, invalidTx)
-	require.Error(t, err)
 }

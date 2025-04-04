@@ -3,6 +3,7 @@
 package aerospike
 
 import (
+	"context"
 	"math"
 	"os"
 	"testing"
@@ -314,7 +315,7 @@ func TestAerospike(t *testing.T) {
 			aerospike.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
+		assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
 
 		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
 		_, err = store.Spend(ctx, spendTx)
@@ -358,7 +359,7 @@ func TestAerospike(t *testing.T) {
 				aerospike.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, teranode_aerospike.LuaOk, teranode_aerospike.LuaReturnValue(ret.(string)))
+			assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
 		}
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -488,7 +489,7 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(expiration.Seconds()), value.Expiration) // Now TTL should be set to aerospikeExpiration
 
 		// try to spend with different txid
-		_, err = store.Spend(ctx, spendTx3)
+		spends, err = store.Spend(ctx, spendTx3)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -511,9 +512,8 @@ func TestAerospike(t *testing.T) {
 		}
 
 		// try to spend with different txid
-		_, err = store.Spend(ctx, spendTx3)
+		spends, err = store.Spend(ctx, spendTx3)
 		require.Error(t, err)
-		// require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
@@ -776,6 +776,20 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, txSpends, 1)
 		assert.Nil(t, txSpends[0].Err)
 		assert.Equal(t, tx2.TxIDChainHash().String(), txSpends[0].SpendingTxID.String())
+	})
+
+	t.Run("set mined with unspendable", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := store.Create(context.Background(), tx, 0, utxo.WithUnspendable(true))
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Unspendable)
+
+		txMeta, err = store.Get(context.Background(), tx.TxIDChainHash())
+		require.NoError(t, err)
+
+		assert.True(t, txMeta.Unspendable)
 	})
 }
 
@@ -1578,4 +1592,100 @@ func TestSpendSimple(t *testing.T) {
 	assert.Equal(t, 5, response.Bins[fields.TotalUtxos.String()])
 	assert.Equal(t, 1, response.Bins[fields.SpentUtxos.String()])
 	assert.Equal(t, uint32(aerospike.TTLDontExpire), response.Expiration)
+}
+
+func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// Create the tx
+	_, err := store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	// Check the tx was created with 2 utxos and 0 spent utxos and no expiration
+	response, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	assert.NotNil(t, response)
+	assert.True(t, response.Bins[fields.Unspendable.String()].(bool))
+
+	// Now try to spend it
+	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
+
+	spends, err := store.Spend(ctx, spendingTx1)
+	require.Error(t, err)
+	assert.Len(t, spends, 1)
+	assert.ErrorIs(t, err, errors.ErrTxUnspendable)
+}
+
+func TestStore_AerospikeSplitTx(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, nil)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// Create the tx
+	txBytes, err := os.ReadFile("testdata/79a2d893527750d622eff3ef728c304c6e0e75516244ade05a5d9d99804d4b2a.bin")
+	require.NoError(t, err)
+
+	tx, err := bt.NewTxFromBytes(txBytes)
+	require.NoError(t, err)
+
+	// Create the tx
+	_, err = store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
+	require.NoError(t, err)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	res, err := client.Get(nil, key)
+	require.NoError(t, err)
+
+	assert.NotNil(t, res)
+	assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record should be true")
+
+	extraRecords := res.Bins[fields.TotalExtraRecs.String()].(int)
+	assert.Equal(t, 3, extraRecords)
+
+	for i := 1; i <= extraRecords; i++ {
+		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(i))
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+		require.NoError(t, err)
+
+		res, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		assert.NotNil(t, res)
+		assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be true", i)
+	}
+
+	err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
+	require.NoError(t, err)
+
+	for i := 0; i <= extraRecords; i++ {
+		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(i))
+
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+		require.NoError(t, err)
+
+		res, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		assert.NotNil(t, res)
+		assert.False(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be false", i)
+	}
 }

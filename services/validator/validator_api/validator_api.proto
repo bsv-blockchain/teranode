@@ -28,10 +28,6 @@ service ValidatorAPI {
   // Provides efficient batch processing of transactions
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
 
-  // ValidateTransactionStream validates transactions received through a stream
-  // Allows for continuous streaming of transactions for validation
-  rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
-
   // GetBlockHeight retrieves the current block height
   // Used for validation context and protocol upgrade determination
   rpc GetBlockHeight(EmptyMessage) returns (GetBlockHeightResponse) {}

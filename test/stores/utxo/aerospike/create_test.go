@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher"
@@ -26,10 +28,11 @@ import (
 func TestStore_GetBinsToStore(t *testing.T) {
 	s := teranode_aerospike.Store{}
 	s.SetUtxoBatchSize(100)
+	s.SetSettings(test.CreateBaseTestSettings())
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
 		require.Error(t, err)
 		require.Nil(t, bins)
 		require.False(t, hasUtxos)
@@ -45,7 +48,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)
@@ -60,30 +63,33 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		var subtreeIdxs []int
 
 		expectedBinValues := map[string]aerospike.Value{
-			"version":        aerospike.NewIntegerValue(int(tx.Version)),
-			"locktime":       aerospike.NewIntegerValue(int(tx.LockTime)),
-			"fee":            aerospike.NewIntegerValue(187),
-			"sizeInBytes":    aerospike.NewIntegerValue(tx.Size()),
-			"extendedSize":   aerospike.NewIntegerValue(len(tx.ExtendedBytes())),
-			"spentUtxos":     aerospike.NewIntegerValue(0),
-			"totalUtxos":     aerospike.NewIntegerValue(2),
-			"totalExtraRecs": aerospike.NewIntegerValue(0),
-			"isCoinbase":     aerospike.BoolValue(false),
-			"utxos": aerospike.NewListValue([]interface{}{
+			fields.Version.String():        aerospike.NewIntegerValue(int(tx.Version)),
+			fields.LockTime.String():       aerospike.NewIntegerValue(int(tx.LockTime)),
+			fields.Fee.String():            aerospike.NewIntegerValue(187),
+			fields.SizeInBytes.String():    aerospike.NewIntegerValue(tx.Size()),
+			fields.ExtendedSize.String():   aerospike.NewIntegerValue(len(tx.ExtendedBytes())),
+			fields.SpentUtxos.String():     aerospike.NewIntegerValue(0),
+			fields.TotalUtxos.String():     aerospike.NewIntegerValue(2),
+			fields.RecordUtxos.String():    aerospike.NewIntegerValue(2),
+			fields.TotalExtraRecs.String(): aerospike.NewIntegerValue(0),
+			fields.IsCoinbase.String():     aerospike.BoolValue(false),
+			fields.Utxos.String(): aerospike.NewListValue([]interface{}{
 				aerospike.BytesValue(utxos[0].CloneBytes()),
 				aerospike.BytesValue(utxos[1].CloneBytes()),
 			}),
-			"inputs": aerospike.NewListValue([]interface{}{
+			fields.Inputs.String(): aerospike.NewListValue([]interface{}{
 				tx.Inputs[0].ExtendedBytes(false),
 				tx.Inputs[1].ExtendedBytes(false),
 			}),
-			"outputs": aerospike.NewListValue([]interface{}{
+			fields.Outputs.String(): aerospike.NewListValue([]interface{}{
 				tx.Outputs[0].Bytes(),
 				tx.Outputs[1].Bytes(),
 			}),
-			"blockIDs":     aerospike.NewValue(blockIDs),
-			"blockHeights": aerospike.NewValue(blockHeights),
-			"subtreeIdxs":  aerospike.NewValue(subtreeIdxs),
+			fields.BlockIDs.String():     aerospike.NewValue(blockIDs),
+			fields.BlockHeights.String(): aerospike.NewValue(blockHeights),
+			fields.SubtreeIdxs.String():  aerospike.NewValue(subtreeIdxs),
+			fields.Conflicting.String():  aerospike.BoolValue(false),
+			fields.Unspendable.String():  aerospike.BoolValue(false),
 		}
 
 		// check the bin values
@@ -110,10 +116,56 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false)
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 		require.True(t, hasUtxos)
+	})
+
+	t.Run("coinbase tx with conflicting and unspendable", func(t *testing.T) {
+		teranode_aerospike.InitPrometheusMetrics()
+
+		// read hex file from os
+		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		require.NoError(t, err)
+
+		tx, err := bt.NewTxFromString(string(txHex))
+		require.NoError(t, err)
+
+		// external should be set by the aerospike create function for huge txs
+		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
+
+		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true)
+		require.NoError(t, err)
+		require.NotNil(t, bins)
+		require.True(t, hasUtxos)
+
+		// check the bins
+		require.Equal(t, 1, len(bins))
+		require.Equal(t, 19, len(bins[0]))
+
+		hasCoinbase := false
+		hasConflicting := false
+		hasUnspendable := false
+
+		for _, bin := range bins[0] {
+			if bin.Name == fields.IsCoinbase.String() {
+				hasCoinbase = true
+				assert.Equal(t, aerospike.BoolValue(true), bin.Value)
+			}
+			if bin.Name == fields.Conflicting.String() {
+				hasConflicting = true
+				assert.Equal(t, aerospike.BoolValue(true), bin.Value)
+			}
+			if bin.Name == fields.Unspendable.String() {
+				hasUnspendable = true
+				assert.Equal(t, aerospike.BoolValue(true), bin.Value)
+			}
+		}
+
+		assert.True(t, hasCoinbase)
+		assert.True(t, hasConflicting)
+		assert.True(t, hasUnspendable)
 	})
 }
 
@@ -150,9 +202,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
-		assert.Equal(t, true, value.Bins["external"])
-		assert.Nil(t, value.Bins["inputs"])
-		assert.Nil(t, value.Bins["outputs"])
+		assert.Equal(t, true, value.Bins[fields.External.String()])
+		assert.Nil(t, value.Bins[fields.Inputs.String()])
+		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
 		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
@@ -189,9 +241,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
-		assert.Equal(t, true, value.Bins["external"])
-		assert.Nil(t, value.Bins["inputs"])
-		assert.Nil(t, value.Bins["outputs"])
+		assert.Equal(t, true, value.Bins[fields.External.String()])
+		assert.Nil(t, value.Bins[fields.Inputs.String()])
+		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
 		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
@@ -237,9 +289,9 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), key)
 		require.NoError(t, err)
 
-		assert.Equal(t, true, value.Bins["external"])
-		assert.Nil(t, value.Bins["inputs"])
-		assert.Nil(t, value.Bins["outputs"])
+		assert.Equal(t, true, value.Bins[fields.External.String()])
+		assert.Nil(t, value.Bins[fields.Inputs.String()])
+		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
 		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("outputs"))
 		require.NoError(t, err)
@@ -274,4 +326,46 @@ func BenchmarkStore_Create(b *testing.B) {
 		_, err = s.Create(context.Background(), tx, 0)
 		require.NoError(b, err)
 	}
+}
+
+func TestStore_TwoPhaseCommit(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:               true,
+		SettingsContextOverride: "dev.simon",
+	})
+
+	t.Cleanup(func() {
+		td.Stop()
+	})
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks
+	_, err = td.CallRPC("generate", []interface{}{11})
+	require.NoError(t, err)
+
+	block11, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 11)
+	require.NoError(t, err)
+
+	// Wait for block assembly to get to block 11
+	td.WaitForBlockHeight(t, block11, 10*time.Second)
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(1), block1.Height)
+
+	tx := td.CreateTransaction(t, block1.CoinbaseTx)
+
+	txMeta, err := td.UtxoStore.Create(td.Ctx, tx, 0)
+	require.NoError(t, err)
+
+	// err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)
+	// require.NoError(t, err)
+
+	// data, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash())
+	// require.NoError(t, err)
+
+	t.Logf("%v", txMeta)
 }

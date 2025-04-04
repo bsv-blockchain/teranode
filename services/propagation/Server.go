@@ -1,23 +1,16 @@
 // Package propagation implements Bitcoin SV transaction propagation and validation services.
 // It provides functionality for processing, validating, and distributing BSV transactions
-// across the network using multiple protocols including GRPC, UDP6 multicast, and QUIC.
+// across the network using multiple protocols including GRPC and UDP6 multicast.
 package propagation
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/pem"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -35,18 +28,18 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
-
 	// maxDatagramSize defines the maximum size of UDP datagrams for IPv6 multicast
 	maxDatagramSize = 512 // 100 * 1024 * 1024
 	// ipv6Port defines the default port used for IPv6 multicast listeners
@@ -66,6 +59,8 @@ type PropagationServer struct {
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
+	httpServer                   *echo.Echo
+	validatorHTTPAddr            *url.URL
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -73,6 +68,7 @@ type PropagationServer struct {
 //
 // Parameters:
 //   - logger: logging interface for server operations
+//   - tSettings: settings for the server
 //   - txStore: storage interface for persisting transactions
 //   - validatorClient: service for transaction validation
 //   - blockchainClient: interface to blockchain operations
@@ -91,6 +87,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		validator:                    validatorClient,
 		blockchainClient:             blockchainClient,
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
+		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 	}
 }
 
@@ -185,7 +182,6 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 // Start initializes and starts the PropagationServer services including:
 // - FSM state restoration if configured
 // - UDP6 multicast listeners
-// - QUIC server for high-throughput transaction processing
 // - Kafka producer initialization
 // - GRPC server setup
 //
@@ -204,7 +200,6 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	err = ps.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
 		ps.logger.Errorf("[Propagation Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
 		return err
 	}
 
@@ -216,34 +211,15 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 		}
 	}
 
-	// Experimental QUIC server - to test throughput at scale
-	quicAddress := ps.settings.Propagation.QuicListenAddress
-	if quicAddress != "" {
-		// Create an error channel
-		errChan := make(chan error, 1) // Buffered channel
-
-		// Context for the QUIC server
-		quicCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		// Run the QUIC server in a goroutine
-		go func() {
-			if err := ps.quicServer(quicCtx, quicAddress); err != nil {
-				errChan <- err // Send any errors to the error channel
-			}
-
-			close(errChan) // Close the channel when done
-		}()
-
-		go func() {
-			if err := <-errChan; err != nil {
-				ps.logger.Errorf("failed to start QUIC server: %v", err)
-			}
-		}()
-	}
-
 	if ps.validatorKafkaProducerClient != nil {
 		ps.validatorKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	// start the http listener for incoming transactions
+	if ps.settings.Propagation.HTTPListenAddress != "" {
+		if err = ps.startHTTPServer(ctx, ps.settings.Propagation.HTTPListenAddress); err != nil {
+			return err
+		}
 	}
 
 	// this will block
@@ -353,102 +329,6 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 	return nil
 }
 
-// quicServer starts a QUIC protocol server for high-throughput transaction processing.
-// It sets up TLS configuration and handles incoming transaction streams.
-//
-// Parameters:
-//   - ctx: context for the QUIC server operation
-//   - quicAddresses: address string to listen on
-//
-// Returns:
-//   - error: error if server fails to start or encounters runtime errors
-func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
-	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
-
-	tlsConfig, err := ps.generateTLSConfig()
-	if err != nil {
-		return errors.NewInvalidArgumentError("error generating TLS config", err)
-	}
-
-	mux := http.NewServeMux()
-	mux.Handle("/tx", http.HandlerFunc(ps.handleStream))
-
-	server := http3.Server{
-		Addr:      quicAddresses,
-		TLSConfig: tlsConfig, // Assume generateTLSConfig() sets up your TLS
-		Handler:   mux,
-	}
-
-	go func() {
-		<-ctx.Done()
-
-		_ = server.Close()
-	}()
-
-	err = server.ListenAndServe() // Empty because certs are in TLSConfig
-	if err != nil {
-		ps.logger.Errorf("error starting HTTP server: %v", err)
-		return err
-	}
-
-	return nil
-}
-
-// handleStream processes incoming transaction streams over HTTP.
-// It reads transaction length and data from the request body and processes
-// each transaction asynchronously.
-//
-// Parameters:
-//   - w: HTTP response writer
-//   - r: HTTP request containing transaction data
-func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var (
-		txLength uint32
-		err      error
-		txData   []byte
-	)
-
-	for {
-		// Read the size of the incoming transaction first
-		err = binary.Read(r.Body, binary.BigEndian, &txLength)
-		if err != nil {
-			if err != io.EOF {
-				ps.logger.Errorf("Error reading transaction length: %v\n", err)
-			}
-
-			break
-		}
-
-		if txLength == 0 {
-			return
-		}
-
-		// Read the transaction data
-		txData = make([]byte, txLength)
-
-		_, err := io.ReadFull(r.Body, txData)
-		if err != nil {
-			ps.logger.Errorf("Error reading transaction data: %v\n", err)
-			break
-		}
-
-		// Process the received bytes
-		ctx := context.Background()
-		go func(txb []byte) {
-			if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-				Tx: txb,
-			}); err != nil {
-				ps.logger.Errorf("error processing transaction: %v", err)
-			}
-		}(txData)
-	}
-}
-
 // Stop gracefully stops the PropagationServer.
 // Currently a no-op, reserved for future cleanup operations.
 //
@@ -461,30 +341,101 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-// ProcessTransactionHex processes a transaction provided in hexadecimal format.
-// It converts the hex string to bytes and forwards to the main transaction processor.
-//
-// Parameters:
-//   - ctx: context for the transaction processing
-//   - req: request containing transaction in hex format
-//
-// Returns:
-//   - *propagation_api.EmptyMessage: empty response on success
-//   - error: error if processing fails
-func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
-	start, stat, _ := tracing.NewStatFromContext(ctx, "ProcessTransactionHex", ps.stats)
-	defer func() {
-		stat.AddTime(start)
+// handleSingleTx handles a single transaction request on the /tx endpoint
+func (ps *PropagationServer) handleSingleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		body, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return c.String(http.StatusBadRequest, "Invalid request body")
+		}
+
+		// Process the transaction and return appropriate response
+		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// handleMultipleTx handles multiple transactions on the /txs endpoint
+func (ps *PropagationServer) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Read transactions with the bt reader in a loop
+		for {
+			tx := &bt.Tx{}
+
+			// Read transaction from request body
+			_, err := tx.ReadFrom(c.Request().Body)
+			if err != nil {
+				// End of stream is expected and not an error
+				if err == io.EOF {
+					break
+				}
+
+				return c.String(http.StatusBadRequest, "Invalid request body: "+err.Error())
+			}
+
+			// Process the transaction
+			err = ps.processTransactionInternal(ctx, tx)
+			if err != nil {
+				return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+			}
+		}
+
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+// startHTTPServer initializes and starts the HTTP server for transaction processing
+func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses string) error {
+	// Initialize Echo server with settings
+	ps.httpServer = echo.New()
+	ps.httpServer.Debug = false
+	ps.httpServer.HideBanner = true
+
+	// Configure middleware and timeouts
+	ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
+	ps.httpServer.Server.ReadTimeout = 5 * time.Second
+	ps.httpServer.Server.WriteTimeout = 10 * time.Second
+	ps.httpServer.Server.IdleTimeout = 120 * time.Second
+
+	// Register route handlers
+	ps.httpServer.POST("/tx", ps.handleSingleTx(ctx))
+	ps.httpServer.POST("/txs", ps.handleMultipleTx(ctx))
+
+	// add a health endpoint that simply returns "OK"
+	ps.httpServer.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+
+	// add a 404 handler with a message for unknown routes
+	ps.httpServer.Any("/*", func(c echo.Context) error {
+		return c.String(http.StatusNotFound, "Unknown route")
+	})
+
+	// Start server and handle shutdown
+	ps.startAndMonitorHTTPServer(ctx, httpAddresses)
+
+	return nil
+}
+
+// startAndMonitorHTTPServer starts the HTTP server and monitors for shutdown
+func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
+	// Start the server
+	go func() {
+		if err := ps.httpServer.Start(httpAddresses); err != nil {
+			ps.logger.Errorf("error starting HTTP server: %v", err)
+		}
 	}()
 
-	txBytes, err := hex.DecodeString(req.Tx)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
+	// Monitor for context cancellation
+	go func() {
+		<-ctx.Done()
 
-	return ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: txBytes,
-	})
+		_ = ps.httpServer.Shutdown(context.Background())
+	}()
 }
 
 // ProcessTransaction validates and stores a single transaction.
@@ -591,6 +542,17 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 	}
 
+	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
+		return err
+	}
+
+	prometheusTransactionSize.Observe(float64(len(req.Tx)))
+	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+
+	return nil
+}
+
+func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error {
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
@@ -606,107 +568,108 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	defer callerSpan.Finish()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
+	if err := ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
-		validationOptions := validator.NewDefaultOptions()
+		// Check transaction size first - if it's too large, use HTTP endpoint instead
+		txSize := len(btTx.ExtendedBytes())
+		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
 
-		msg := &kafkamessage.KafkaTxValidationTopicMessage{
-			Tx:     req.Tx,
-			Height: 0,
-			Options: &kafkamessage.KafkaTxValidationOptions{
-				SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
-				AddTXToBlockAssembly: validationOptions.AddTXToBlockAssembly,
-				SkipPolicyChecks:     validationOptions.SkipPolicyChecks,
-				CreateConflicting:    validationOptions.CreateConflicting,
-			},
+		if txSize > maxKafkaMessageSize {
+			return ps.validateTransactionViaHTTP(ctx, btTx, txSize, maxKafkaMessageSize)
 		}
 
-		value, err := proto.Marshal(msg)
-		if err != nil {
-			return errors.NewProcessingError("[ProcessTransaction][%s] error marshaling KafkaTxValidationTopicMessage", btTx.TxID(), err, err)
-		}
-
-		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaProducerClient.Publish(&kafka.Message{
-			Value: value,
-		})
+		// For normal-sized transactions, continue with Kafka
+		return ps.validateTransactionViaKafka(btTx)
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
-		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+		if _, err := ps.validator.Validate(ctx, btTx, 0); err != nil {
 			return errors.NewServiceError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
 
-	prometheusTransactionSize.Observe(float64(len(req.Tx)))
-	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+	return nil
+}
+
+// validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
+// This is used as a fallback when Kafka message size limits are exceeded
+func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error {
+	if ps.validatorHTTPAddr == nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), but no HTTP endpoint configured for validator",
+			btTx.TxID(), txSize, maxKafkaMessageSize)
+	}
+
+	ps.logger.Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
+		btTx.TxID(), txSize, maxKafkaMessageSize)
+
+	// Create an HTTP client with a timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Prepare request to validator /tx endpoint
+	endpoint, err := url.Parse("/tx")
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error parsing endpoint /tx", btTx.TxID(), err)
+	}
+
+	fullURL := ps.validatorHTTPAddr.ResolveReference(endpoint)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.ExtendedBytes()))
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", btTx.TxID(), err)
+	}
+
+	// Send the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", btTx.TxID(), err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+			btTx.TxID(), resp.StatusCode, string(body))
+	}
+
+	ps.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
 
 	return nil
 }
 
-// ProcessTransactionStream handles a bidirectional stream of transactions.
-// It continuously receives transactions from the stream, processes them,
-// and sends back results.
-//
-// Parameters:
-//   - stream: bidirectional gRPC stream for transaction processing
-//
-// Returns:
-//   - error: error if stream processing fails
-func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		ps.stats.NewStat("ProcessTransactionStream", true).AddTime(start)
-	}()
+// validateTransactionViaKafka sends a transaction to the validator through Kafka
+func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
+	validationOptions := validator.NewDefaultOptions()
 
-	for {
-		req, err := stream.Recv()
-		if err != nil {
-			return errors.WrapGRPC(err)
-		}
-
-		resp, err := ps.ProcessTransaction(stream.Context(), req)
-		if err != nil {
-			return errors.WrapGRPC(err)
-		}
-
-		if err = stream.Send(resp); err != nil {
-			return errors.WrapGRPC(err)
-		}
+	msg := &kafkamessage.KafkaTxValidationTopicMessage{
+		Tx:     btTx.ExtendedBytes(),
+		Height: 0,
+		Options: &kafkamessage.KafkaTxValidationOptions{
+			SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
+			AddTXToBlockAssembly: validationOptions.AddTXToBlockAssembly,
+			SkipPolicyChecks:     validationOptions.SkipPolicyChecks,
+			CreateConflicting:    validationOptions.CreateConflicting,
+		},
 	}
-}
 
-// ProcessTransactionDebug provides a debug endpoint for transaction processing.
-// It only performs basic transaction parsing and storage, skipping validation.
-//
-// Parameters:
-//   - ctx: context for debug processing
-//   - req: transaction processing request
-//
-// Returns:
-//   - *propagation_api.EmptyMessage: empty response on success
-//   - error: error if processing fails
-func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		ps.stats.NewStat("ProcessTransactionDebug", true).AddTime(start)
-	}()
-
-	btTx, err := bt.NewTxFromBytes(req.Tx)
+	value, err := proto.Marshal(msg)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to parse transaction from bytes", err))
+		return errors.NewProcessingError("[ProcessTransaction][%s] error marshaling KafkaTxValidationTopicMessage", btTx.TxID(), err, err)
 	}
 
-	if err = ps.storeTransaction(ctx, btTx); err != nil {
-		return nil, errors.WrapGRPC(errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err))
-	}
+	ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
+	ps.validatorKafkaProducerClient.Publish(&kafka.Message{
+		Value: value,
+	})
 
-	return &propagation_api.EmptyMessage{}, nil
+	return nil
 }
 
 // storeTransaction persists a transaction to the configured storage backend.
@@ -731,45 +694,4 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	}
 
 	return nil
-}
-
-// generateTLSConfig creates a TLS configuration for the QUIC server.
-// It generates a self-signed certificate using the server's public IP address.
-//
-// Returns:
-//   - *tls.Config: TLS configuration for QUIC server
-//   - error: error if TLS configuration generation fails
-func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, errors.NewError("error generating rsa key", err)
-	}
-
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
-
-	remoteAddress, err := utils.GetPublicIPAddress()
-	if err != nil {
-		return nil, errors.NewServiceError("failed to get public IP address", err)
-	}
-	// Add IP SANs
-	template.IPAddresses = []net.IP{net.ParseIP(remoteAddress)}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		return nil, errors.NewError("error creating x509 certificate", err)
-	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, errors.NewError("error generating x509 key pair", err)
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		NextProtos:   []string{"txblaster2"},
-		MinVersion:   tls.VersionTLS12,
-	}, nil
 }

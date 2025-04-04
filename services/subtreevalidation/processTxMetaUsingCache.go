@@ -48,7 +48,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 
 	cache, ok := u.utxoStore.(*txmetacache.TxMetaCache)
 	if !ok {
-		u.logger.Errorf("[processTxMetaUsingCache] txMetaStore is not a cached implementation")
+		u.logger.Warnf("[processTxMetaUsingCache] txMetaStore is not a cached implementation")
 		return len(txHashes), nil // As there was no cache, we "missed" all the txHashes
 	}
 

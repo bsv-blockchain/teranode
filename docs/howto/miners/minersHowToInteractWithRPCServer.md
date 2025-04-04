@@ -1,6 +1,6 @@
 # How to Interact with the RPC Server
 
-Last Modified: 13-December-2024
+Last Modified: 26-March-2025
 
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods.
 
@@ -29,11 +29,15 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 ### Transaction-related Methods
 1. `createrawtransaction`: Creates a raw transaction
 2. `sendrawtransaction`: Submits a raw transaction to the network
+3. `freeze`: Freezes a specific UTXO, preventing it from being spent
+4. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
+5. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
 
 ### Network-related Methods
 1. `getinfo`: Returns information about the node
 2. `getpeerinfo`: Returns information about connected peers
 3. `setban`: Manages banned IP addresses/subnets
+4. `isbanned`: Checks if a network address is currently banned
 
 ### Server Control Methods
 1. `stop`: Stops the Teranode server

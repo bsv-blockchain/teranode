@@ -2,14 +2,16 @@
 
 ## Index
 
-1. [Introduction](#1-introduction)
-2. [Architecture](#2-architecture)
-3. [Functionality](#3-functionality)
-    - [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
-    - [3.2. Worker Logic](#32-worker-logic)
-4. [Technology](#4-technology)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
+- [🔊 TX Blaster](#-tx-blaster)
+  - [Index](#index)
+  - [1. Introduction](#1-introduction)
+  - [2. Architecture](#2-architecture)
+  - [3. Functionality](#3-functionality)
+  - [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
+  - [3.2. Worker Logic](#32-worker-logic)
+  - [4. Technology](#4-technology)
+  - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+  - [6. How to run](#6-how-to-run)
 
 
 ## 1. Introduction
@@ -82,7 +84,7 @@ Additionally, although not illustrated in the diagram above, the worker will lis
 
 The entire codebase is written in Go.
 
-The application uses gRPC or Quic for communication with the propagation service, depending on the configuration.
+The application uses gRPC for communication with the propagation service.
 
 
 ## 5. Directory Structure and Main Files
@@ -105,5 +107,5 @@ To run the TX Blaster service locally, you can execute the following command:
 
 ```shell
 cd cmd/txblaster
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1 -workers=10 -print=0 -profile=:9092 -log=0 -limit=1000 --quic=false
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1 -workers=10 -print=0 -profile=:9092 -log=0 -limit=1000
 ```

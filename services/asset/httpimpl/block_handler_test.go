@@ -1,6 +1,7 @@
 package httpimpl
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -20,10 +22,433 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// MockBlockchainClient is a mock implementation of the blockchain.ClientI interface
+type MockBlockchainClient struct {
+	mock.Mock
+}
+
+// GetBlockExists mocks the GetBlockExists method
+func (m *MockBlockchainClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
+// InvalidateBlock mocks the InvalidateBlock method
+func (m *MockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// RevalidateBlock mocks the RevalidateBlock method
+func (m *MockBlockchainClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// GetLastNInvalidBlocks mocks the GetLastNInvalidBlocks method
+func (m *MockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	args := m.Called(ctx, n)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockInfo), args.Error(1)
+}
+
+// The following methods implement the rest of the blockchain.ClientI interface
+// but are not used in the block handler tests
+
+func (m *MockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	args := m.Called(ctx, checkLiveness)
+	return args.Int(0), args.String(1), args.Error(2)
+}
+
+func (m *MockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+	args := m.Called(ctx, block, peerID)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	args := m.Called(ctx, notification)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
+	args := m.Called(ctx, blockHash, numberOfBlocks)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	args := m.Called(ctx, height)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.BlockStats), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	args := m.Called(ctx, periodMillis)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.BlockDataPoints), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
+	args := m.Called(ctx, n, includeOrphans, fromHeight)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockInfo), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.SuitableBlock), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	args := m.Called(ctx, hash, depth)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*chainhash.Hash), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
+	args := m.Called(ctx, hash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*model.NBit), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx)
+
+	var (
+		header *model.BlockHeader
+		meta   *model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		header = args.Get(0).(*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		meta = args.Get(1).(*model.BlockHeaderMeta)
+	}
+
+	return header, meta, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash)
+
+	var (
+		header *model.BlockHeader
+		meta   *model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		header = args.Get(0).(*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		meta = args.Get(1).(*model.BlockHeaderMeta)
+	}
+
+	return header, meta, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, hashTarget, blockLocatorHashes)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHashFrom, blockHashTill)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, height, limit)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, startHeight, endHeight)
+
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	if args.Get(0) != nil {
+		headers = args.Get(0).([]*model.BlockHeader)
+	}
+
+	if args.Get(1) != nil {
+		metas = args.Get(1).([]*model.BlockHeaderMeta)
+	}
+
+	return headers, metas, args.Error(2)
+}
+
+func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]uint32), args.Error(1)
+}
+
+func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
+	args := m.Called(ctx, source)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(chan *blockchain_api.Notification), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	args := m.Called(ctx, key)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]byte), args.Error(1)
+}
+
+func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
+	args := m.Called(ctx, key, data)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(uint32), args.Get(1).(uint32), args.Error(2)
+}
+
+func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	state := args.Get(0).(blockchain_api.FSMStateType)
+
+	return &state, args.Error(1)
+}
+
+func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
+	args := m.Called(ctx, state)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBlockchainClient) WaitForFSMtoTransitionToGivenState(ctx context.Context, state blockchain.FSMStateType) error {
+	args := m.Called(ctx, state)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
+	args := m.Called()
+	return args.Get(0).(blockchain.FSMStateType)
+}
+
+func (m *MockBlockchainClient) Run(ctx context.Context, source string) error {
+	args := m.Called(ctx, source)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) LegacySync(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) Idle(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
+	args := m.Called(ctx, event)
+	return args.Error(0)
+}
+
+func (m *MockBlockchainClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	args := m.Called(ctx, blockHeaderHash, blockHeaderHeight)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*chainhash.Hash), args.Error(1)
+}
+
+func (m *MockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
+	args := m.Called(ctx, locator, hashStop, maxHashes)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Error(1)
+}
+
 // TestNewBlockHandler tests the NewBlockHandler function
 func TestNewBlockHandler(t *testing.T) {
 	// Create mock blockchain client
-	mockClient := &blockchain.Mock{}
+	mockClient := new(MockBlockchainClient)
 	logger := ulogger.TestLogger{}
 
 	// Call the function to be tested
@@ -36,8 +461,8 @@ func TestNewBlockHandler(t *testing.T) {
 }
 
 // setupBlockHandlerTest creates a test environment for block handler tests
-func setupBlockHandlerTest(t *testing.T, requestBody string) (*BlockHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
-	mockClient := &blockchain.Mock{}
+func setupBlockHandlerTest(t *testing.T, requestBody string) (*BlockHandler, *MockBlockchainClient, echo.Context, *httptest.ResponseRecorder) {
+	mockClient := new(MockBlockchainClient)
 	logger := ulogger.TestLogger{}
 	handler := NewBlockHandler(mockClient, logger)
 

@@ -3,19 +3,21 @@
 ## Index
 
 
-1. [Introduction](#1-introduction)
-2. [Architecture](#2-architecture)
-3. [Functionality](#3-functionality)
+- [🔊 Propagation Blaster](#-propagation-blaster)
+  - [Index](#index)
+  - [1. Introduction](#1-introduction)
+  - [2. Architecture](#2-architecture)
+  - [3. Functionality](#3-functionality)
     - [3.1. Propagation Blaster Initialization and Configuration](#31-propagation-blaster-initialization-and-configuration)
     - [3.2. Worker Operation](#32-worker-operation)
-4. [Technology](#4-technology)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
+  - [4. Technology](#4-technology)
+  - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+  - [6. How to run](#6-how-to-run)
 
 
 ## 1. Introduction
 
-The `PropagationBlaster` service is designed to stress-test Teranode propagation service by generating, signing, and broadcasting transactions. This service aims to evaluate the performance and reliability of different propagation methods (HTTP, gRPC, streaming) under load.
+The `PropagationBlaster` service is designed to stress-test Teranode propagation service by generating, signing, and broadcasting transactions. This service aims to evaluate the performance and reliability of different propagation methods (HTTP, gRPC) under load.
 
 
 ## 2. Architecture
@@ -60,7 +62,7 @@ The service includes a Go's built-in profiler accessible via an HTTP endpoint, a
     - Each worker starts a loop to continuously generate and process transactions. First, it generates a new, incomplete transaction. Then, it uses a transaction signer to sign the transaction, making it ready for broadcast.
 
 - **Decision on Broadcast Protocol**:
-    - The worker checks the configured broadcast protocol. Depending on the protocol setting (`http`, `grpc`, or `stream`), it follows different paths for processing the transaction.
+    - The worker checks the configured broadcast protocol. Depending on the protocol setting (`http` or `grpc`), it follows different paths for processing the transaction.
 
 - **HTTP Broadcast**:
     - If the broadcast protocol is set to HTTP, the worker uses an HTTP client to send the transaction to a specified endpoint. Upon receiving the HTTP response, it increments the Prometheus counter for processed transactions.
@@ -112,4 +114,3 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -broadcast=grpc -workers=10 -buffer_
 where broadcast is a value in:
 * grpc
 * http
-* stream

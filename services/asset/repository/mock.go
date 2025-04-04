@@ -116,7 +116,7 @@ func (m *Mock) GetLastNBlocks(_ context.Context, n int64, includeOrphans bool, f
 }
 
 func (m *Mock) GetBlocks(_ context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error) {
-	args := m.Called(hash)
+	args := m.Called(hash, n)
 
 	if args.Error(1) != nil {
 		return nil, args.Error(1)
@@ -126,7 +126,7 @@ func (m *Mock) GetBlocks(_ context.Context, hash *chainhash.Hash, n uint32) ([]*
 }
 
 func (m *Mock) GetBlockHeaders(_ context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(hash)
+	args := m.Called(hash, numberOfHeaders)
 
 	if args.Error(2) != nil {
 		// return nil if there is an error, as code expects

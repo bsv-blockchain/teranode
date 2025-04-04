@@ -86,8 +86,6 @@ local function createUTXOWithSpendingTxID(utxoHash, spendingTxID)
         newUtxo[UTXO_HASH_SIZE + i] = spendingTxID[i]
     end
     
-    info("newUtxo: " .. bytes_to_hex(newUtxo))
-
     return newUtxo
 end
 
@@ -148,7 +146,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingTxID, ignoreUnspendable, currentBlockHeight, ttl)
+function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
     -- Create a single spend item for spendMulti
     local spend = map()
     spend['offset'] = offset
@@ -158,7 +156,7 @@ function spend(rec, offset, utxoHash, spendingTxID, ignoreUnspendable, currentBl
     local spends = list()
     list.append(spends, spend)
 
-    return spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
+    return spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
 end
 
 --                           _ __  __       _ _   _ 
@@ -168,14 +166,16 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|_|  |_|\__,_|_|\__|_|
 --     |_|                                          
 --
-function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
+function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
     
-    if not ignoreUnspendable then
+    if not ignoreConflicting then
         if rec['conflicting'] then
             return MSG_CONFLICTING
         end
-
+    end
+    
+    if not ignoreUnspendable then
         if rec['unspendable'] then
             return MSG_UNSPENDABLE
         end
@@ -191,11 +191,26 @@ function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
         return ERR_UTXOS_NOT_FOUND
     end
 
+    local blockIDString = ""
+    if rec['blockIDs'] then
+        blockIDString = table.concat(rec['blockIDs'], ",")
+    end
+
     -- loop through the spends
     for spend in list.iterator(spends) do
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
         local spendingTxID = spend['spendingTxID']
+        
+        -- Get and validate specific UTXO
+        local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+        if err then return err end
+
+        if rec['utxoSpendableIn'] then
+            if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
+                return MSG_FROZEN_UNTIL .. rec['utxoSpendableIn'][offset]
+            end
+        end
 
         -- Get and validate specific UTXO
         local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
@@ -233,7 +248,7 @@ function spendMulti(rec, spends, ignoreUnspendable, currentBlockHeight, ttl)
 
     aerospike:update(rec)
 
-    return MSG_OK .. signal
+    return MSG_OK .. ':[' .. blockIDString .. ']' .. signal
 end
 
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
@@ -307,6 +322,11 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, ttl)
     local subtreeIdxs = rec['subtreeIdxs']
     subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
     rec['subtreeIdxs'] = subtreeIdxs
+
+    -- set the record to be spendable again, if it was unspendable, since if was just mined into a block
+    if rec['unspendable'] then
+        rec['unspendable'] = false
+    end
 
     local signal = setTTL(rec, ttl)
 
@@ -569,6 +589,50 @@ function setConflicting(rec, setValue, ttl)
 
     return MSG_OK .. signal
 end
+
+-- Function to set the 'conflicting' field of a record
+-- Parameters:
+--   rec: table - The record to update
+--   setValue: boolean - The value to set for the 'conflicting' field
+--   ttl: number - The TTL value to set (in seconds)
+-- Returns:
+--   string - A signal indicating the action taken
+--           _   _   _                                _       _     _
+--  ___  ___| |_| | | |_ __  ___ _ __   ___ _ __   __| | __ _| |__ | | ___ 
+-- / __|/ _ \ __| | | | '_ \/ __| '_ \ / _ \ '_ \ / _` |/ _` | '_ \| |/ _ \
+-- \__ \  __/ |_| |_| | | | \__ \ |_) |  __/ | | | (_| | (_| | |_) | |  __/
+-- |___/\___|\__|\___/|_| |_|___/ .__/ \___|_| |_|\__,_|\__,_|_.__/|_|\___|
+--                              |_|                                        
+--
+function setUnspendable(rec, setValue)
+    if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
+
+    local oldUnspendable = rec['unspendable']
+    local oldTtl = record.ttl(rec)
+    local totalExtraRecs = rec['totalExtraRecs']
+
+    if totalExtraRecs == nil then
+        totalExtraRecs = 0
+    end
+
+    if oldUnspendable == setValue then
+        return "OK:" .. totalExtraRecs
+    end
+
+    rec['unspendable'] = setValue
+
+    if rec['unspendable'] then
+        -- Remove any existing TTL by setting it to -1 (never expire)
+        if oldTtl > 0 then
+            record.set_ttl(rec, -1)
+        end
+    end
+
+    aerospike:update(rec)
+
+    return "OK:" .. totalExtraRecs
+end
+
 
 -- Increment the number of records and set TTL if necessary
 --  _                                          _   

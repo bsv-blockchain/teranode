@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -1237,45 +1238,48 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 }
 
 // BenchmarkAddNode tests node addition performance.
-func BenchmarkAddNode(t *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(t)
+func BenchmarkAddNode(b *testing.B) {
+	g, stp, txHashes := initTestAddNodeBenchmark(b)
 
 	startTime := time.Now()
+
+	b.ResetTimer()
 
 	for i, txHash := range txHashes {
 		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}) // nolint:gosec
 	}
 
 	err := g.Wait()
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
 
-func BenchmarkAddNodeWithMap(t *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(t)
+func BenchmarkAddNodeWithMap(b *testing.B) {
+	g, stp, txHashes := initTestAddNodeBenchmark(b)
 
 	_ = stp.Remove(txHashes[1000])
 	_ = stp.Remove(txHashes[2000])
-	_ = stp.Remove(txHashes[3000])
+	_ = stp.Remove(txHashes[3000]) //nolint:gosec
 	_ = stp.Remove(txHashes[4000])
 
 	for i := 0; i < 4; i++ {
 		txHash, err := generateTxHash()
-		require.NoError(t, err)
+		require.NoError(b, err)
 
 		txHashes = append(txHashes, txHash)
 	}
 
 	startTime := time.Now()
 
+	b.ResetTimer()
+
 	for i, txHash := range txHashes {
-		//nolint:gosec
-		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)})
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}) //nolint:gosec
 	}
 
 	err := g.Wait()
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	fmt.Printf("Time taken: %s\n", time.Since(startTime))
 }
@@ -1289,7 +1293,7 @@ func BenchmarkAddNodeWithMap(t *testing.B) {
 //   - *errgroup.Group: Error group for concurrent operations
 //   - *SubtreeProcessor: Processor instance for testing
 //   - []chainhash.Hash: Test transaction hashes
-func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}
 	nrSubtreesExpected := 10
@@ -1318,12 +1322,185 @@ func initTestAddNodeBenchmark(t *testing.B) (*errgroup.Group, *SubtreeProcessor,
 
 	for i := 0; i < (10*nrTxs)-1; i++ {
 		txHash, err := generateTxHash()
-		if err != nil {
-			fmt.Println(err)
-		}
+		require.NoError(b, err)
 
 		txHashes[i] = txHash
 	}
 
 	return &g, stp, txHashes
+}
+
+func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
+	t.Run("size adjusts based on block timing", func(t *testing.T) {
+		// Setup
+		settings := test.CreateBaseTestSettings()
+		settings.BlockAssembly.UseDynamicSubtreeSize = true
+		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
+
+		newSubtreeChan := make(chan NewSubtreeRequest)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+		mockBlockchainClient := &blockchain.MockBlockchain{}
+
+		stp, err := NewSubtreeProcessor(
+			context.Background(),
+			ulogger.TestLogger{},
+			settings,
+			subtreeStore,
+			mockBlockchainClient,
+			utxosStore,
+			newSubtreeChan,
+		)
+		require.NoError(t, err)
+
+		// Set initial block header to start timing
+		fmt.Printf("DEBUG: Setting initial block header\n")
+		stp.SetCurrentBlockHeader(blockHeader)
+		initialSize := stp.currentItemsPerFile
+		fmt.Printf("DEBUG: Initial size: %d\n", initialSize)
+
+		// Create multiple blocks to establish a pattern of fast subtree creation
+		startTime := time.Now()
+
+		for i := 0; i < 3; i++ {
+			// Reset block intervals at start of each block
+			if i == 0 {
+				stp.blockIntervals = make([]time.Duration, 0)
+			}
+
+			// Set block start time
+			blockStartTime := startTime.Add(time.Duration(i) * 2 * time.Second)
+			fmt.Printf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
+			stp.blockStartTime = blockStartTime
+
+			// Create subtrees in this block
+			for j := 0; j < 5; j++ {
+				txHash, err := generateTxHash()
+				require.NoError(t, err)
+
+				node := util.SubtreeNode{
+					Hash: txHash,
+				}
+
+				err = stp.addNode(node, true)
+				require.NoError(t, err)
+			}
+
+			// Record that we created 5 subtrees in 2 seconds = 400ms per subtree
+			stp.subtreesInBlock = 5
+			interval := time.Duration(2) * time.Second / time.Duration(5) // 2s/5 subtrees = 400ms per subtree
+			stp.blockIntervals = append(stp.blockIntervals, interval)
+			fmt.Printf("DEBUG: Block %d end, subtrees=%d, duration=%v, interval=%v, intervals=%v\n",
+				i, stp.subtreesInBlock, time.Duration(2)*time.Second, interval, stp.blockIntervals)
+
+			// Move to next block with simulated time passage
+			// Each block takes 2 seconds and has 5 subtrees = 2.5 subtrees/sec
+			newHeader := &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  blockHeader.Hash(),
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      blockHeader.Timestamp + uint32(i+1)*2, //nolint:gosec
+				Bits:           model.NBit{},
+				Nonce:          1234,
+			}
+
+			// Set the new header after recording intervals
+			stp.SetCurrentBlockHeader(newHeader)
+			blockHeader = newHeader
+		}
+
+		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
+		// expect size to increase
+		newSize := stp.currentItemsPerFile
+		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
+		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
+		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
+		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
+	})
+}
+
+func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
+	t.Run("size increases when creating subtrees too quickly", func(t *testing.T) {
+		// Setup
+		settings := test.CreateBaseTestSettings()
+		settings.BlockAssembly.UseDynamicSubtreeSize = true
+		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
+
+		newSubtreeChan := make(chan NewSubtreeRequest)
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+		mockBlockchainClient := &blockchain.MockBlockchain{}
+
+		stp, err := NewSubtreeProcessor(
+			context.Background(),
+			ulogger.TestLogger{},
+			settings,
+			subtreeStore,
+			mockBlockchainClient,
+			utxosStore,
+			newSubtreeChan,
+		)
+		require.NoError(t, err)
+
+		// Set initial block header to start timing
+		fmt.Printf("DEBUG: Setting initial block header\n")
+		stp.SetCurrentBlockHeader(blockHeader)
+		initialSize := stp.currentItemsPerFile
+		fmt.Printf("DEBUG: Initial size: %d\n", initialSize)
+
+		// Create multiple blocks to establish a pattern of fast subtree creation
+		startTime := time.Now()
+
+		for i := 0; i < 3; i++ {
+			// Reset block intervals at start of each block
+			if i == 0 {
+				stp.blockIntervals = make([]time.Duration, 0)
+			}
+
+			// Set block start time
+			blockStartTime := startTime.Add(time.Duration(i) * 2 * time.Second)
+			fmt.Printf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
+			stp.blockStartTime = blockStartTime
+
+			// Create subtrees in this block
+			for j := 0; j < 5; j++ {
+				txHash, err := generateTxHash()
+				require.NoError(t, err)
+
+				node := util.SubtreeNode{
+					Hash: txHash,
+				}
+
+				err = stp.addNode(node, true)
+				require.NoError(t, err)
+			}
+
+			// Move to next block with simulated time passage
+			// Each block takes 2 seconds and has 5 subtrees = 2.5 subtrees/sec
+			newHeader := &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  blockHeader.Hash(),
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      blockHeader.Timestamp + uint32(i+1)*2, //nolint:gosec
+				Bits:           model.NBit{},
+				Nonce:          1234,
+			}
+
+			fmt.Printf("DEBUG: Block %d end, subtrees=%d, duration=%v\n", i, stp.subtreesInBlock, time.Duration(2)*time.Second)
+			stp.subtreesInBlock = 5                                                                        // We created 5 subtrees in this block
+			stp.blockIntervals = append(stp.blockIntervals, time.Duration(2)*time.Second/time.Duration(5)) // 2s/5 subtrees = 400ms per subtree
+			fmt.Printf("DEBUG: Block intervals after block %d: %v\n", i, stp.blockIntervals)
+			stp.SetCurrentBlockHeader(newHeader)
+			blockHeader = newHeader
+		}
+
+		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
+		// expect size to increase
+		newSize := stp.currentItemsPerFile
+		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
+		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
+		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
+		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
+		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
+	})
 }

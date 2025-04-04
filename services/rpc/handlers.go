@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -968,7 +969,47 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 
 	return help, nil
 }
+func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleIsBanned",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleIsBanned),
+		tracing.WithLogMessage(s.logger, "[handleIsBanned] called"),
+	)
+	defer deferFn()
 
+	c := cmd.(*bsvjson.IsBannedCmd)
+
+	s.logger.Debugf("in handleIsBanned: c: %+v", *c)
+
+	if c.IPOrSubnet == "" {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "IPOrSubnet is required",
+		}
+	}
+
+	// validate ip or subnet
+	if !isIPOrSubnet(c.IPOrSubnet) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Invalid IP or subnet",
+		}
+	}
+
+	// is banned teranode
+	isBanned, err := s.p2pClient.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+	if err != nil {
+		return nil, err
+	}
+
+	// is banned legacy
+	isBannedLegacy, err := s.peerClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+	if err != nil {
+		return nil, err
+	}
+
+	return isBanned.IsBanned || isBannedLegacy.IsBanned, nil
+}
 func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleSetBan",
 		tracing.WithParentStat(RPCStat),
@@ -1158,6 +1199,19 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	)
 	defer deferFn()
 
+	c := cmd.(*bsvjson.FreezeCmd)
+
+	var err error
+
+	h, err := chainhash.NewHashFromStr(c.TxID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{&utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+		return nil, err
+	}
+
 	return nil, nil
 }
 
@@ -1169,6 +1223,19 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	)
 	defer deferFn()
 
+	c := cmd.(*bsvjson.UnfreezeCmd)
+
+	var err error
+
+	h, err := chainhash.NewHashFromStr(c.TxID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{&utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+		return nil, err
+	}
+
 	return nil, nil
 }
 
@@ -1179,6 +1246,31 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		tracing.WithLogMessage(s.logger, "[handleReassign] called"),
 	)
 	defer deferFn()
+
+	c := cmd.(*bsvjson.ReassignCmd)
+
+	var err error
+
+	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
+	if err != nil {
+		return nil, err
+	}
+
+	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
+	if err != nil {
+		return nil, err
+	}
+
+	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.ReAssignUTXO(ctx,
+		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
+		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
+		return nil, err
+	}
 
 	return nil, nil
 }
@@ -1204,6 +1296,11 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 	if !strings.Contains(ipOrSubnet, "/") {
 		_, err := net.ResolveIPAddr("ip", ipOrSubnet)
 		return err == nil
+	}
+
+	if strings.Contains(ipOrSubnet, ":") {
+		// remove port
+		ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
 	}
 
 	_, _, err := net.ParseCIDR(ipOrSubnet)

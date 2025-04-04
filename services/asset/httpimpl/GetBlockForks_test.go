@@ -58,7 +58,7 @@ func TestGetBlockForks(t *testing.T) {
 		}
 
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
-		assert.Equal(t, echo.MIMEApplicationJSON+"; charset=UTF-8", responseRecorder.Header().Get("Content-Type"))
+		assert.Equal(t, echo.MIMEApplicationJSON, responseRecorder.Header().Get("Content-Type"))
 
 		var response map[string]interface{}
 		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {

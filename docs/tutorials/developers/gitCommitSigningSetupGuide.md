@@ -141,7 +141,13 @@ This will enable commit signing by default for all repositories on your system.
 
 ## Add secondary email address ID to GPG key
 
-To enable use of commit signing with GitHub email addresses (which shield your real address from the public), use the following procedure to add an additional user ID:
+To enable use of commit signing with GitHub email addresses (which shield your real address from the public),
+
+use the following procedure to add an additional user ID.
+
+
+
+First, go to https://github.com/settings/emails and enable “Keep my email addresses private”. This will then show you the email address you can use for your git config. Then, perform the following steps:
 
 ```bash
 $ gpg --list-secret-keys --keyid-format=long
