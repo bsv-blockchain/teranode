@@ -50,6 +50,7 @@ Creates a new `Server` instance with the provided dependencies.
 - `Init(ctx context.Context) error`: Initializes the server, setting up the validator and Kafka consumer.
 - `Start(ctx context.Context) error`: Starts the server, including Kafka consumer and gRPC server.
 - `Stop(_ context.Context) error`: Stops the server.
+- `ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error`: Validates a transaction received as a stream.
 - `ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error)`: Validates a single transaction.
 - `ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error)`: Validates a batch of transactions.
 - `GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error)`: Returns the current block height.

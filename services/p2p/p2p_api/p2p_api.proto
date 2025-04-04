@@ -58,19 +58,11 @@ message UnbanPeerResponse {
     bool ok = 1;
 }
 
-message IsBannedRequest {
-    string ipOrSubnet = 1;
-}
-
-message IsBannedResponse {
-    bool isBanned = 1;
-}
   
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
     rpc BanPeer(BanPeerRequest) returns (BanPeerResponse) {}
     rpc UnbanPeer(UnbanPeerRequest) returns (UnbanPeerResponse) {}
-    rpc IsBanned(IsBannedRequest) returns (IsBannedResponse) {}
   }
   

@@ -3,6 +3,7 @@ package p2p
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"sync"
 	"testing"
@@ -62,7 +63,6 @@ func TestHandleSetBanAdd(t *testing.T) {
 		name     string
 		args     *bsvjson.SetBanCmd
 		isSubnet bool
-		expected string
 	}{
 		{
 			name: "test IP add ban",
@@ -84,19 +84,8 @@ func TestHandleSetBanAdd(t *testing.T) {
 			},
 			isSubnet: true,
 		},
-		{
-			name: "test ip and port add ban",
-			args: &bsvjson.SetBanCmd{
-				Command:    "add",
-				IPOrSubnet: "127.0.0.0:1234",
-				BanTime:    &banTime,
-				Absolute:   &absolute,
-			},
-			isSubnet: false,
-			expected: "127.0.0.0/32",
-		},
 	}
-	banList, eventChan, err := setupBanList(t)
+	banList, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	for _, tt := range tests {
@@ -107,26 +96,19 @@ func TestHandleSetBanAdd(t *testing.T) {
 			err := banList.Add(ctx, tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
 
-			t.Logf("IP or Subnet: %s\n", tt.args.IPOrSubnet)
-
 			banInfo, exists := banList.bannedPeers[tt.args.IPOrSubnet]
 			require.True(t, exists)
 
 			expectedExpiration := time.Now().Add(time.Duration(*tt.args.BanTime) * time.Second)
 			require.WithinDuration(t, expectedExpiration, banInfo.ExpirationTime, time.Second)
 
-			switch {
-			case tt.expected != "":
-				require.Equal(t, tt.expected, banInfo.Subnet.String())
-			case tt.isSubnet:
+			if tt.isSubnet {
 				require.Equal(t, tt.args.IPOrSubnet, banInfo.Subnet.String())
-			default:
+			} else {
 				require.Equal(t, tt.args.IPOrSubnet+"/32", banInfo.Subnet.String())
 			}
 		})
 	}
-
-	close(eventChan)
 }
 
 func TestIsBanned(t *testing.T) {
@@ -219,75 +201,72 @@ func TestBanListChannel(t *testing.T) {
 
 	// Start a goroutine to listen for events
 	go func() {
-		expectedEvents := []struct {
-			action     string
-			ip         string
-			subnetCIDR string
-		}{
-			{
-				action:     "add",
-				ip:         "192.168.1.1",
-				subnetCIDR: "192.168.1.1/32",
+		expectedEvents := map[string]BanEvent{
+			"add_ip": {
+				Action: "add",
+				IP:     "192.168.1.1",
+				Subnet: &net.IPNet{IP: net.ParseIP("192.168.1.1").To4(), Mask: net.CIDRMask(32, 32)},
 			},
-			{
-				action:     "add",
-				ip:         "10.0.0.0/24",
-				subnetCIDR: "10.0.0.0/24",
+			"add_subnet": {
+				Action: "add",
+				IP:     "10.0.0.0/24",
+				Subnet: &net.IPNet{IP: net.ParseIP("10.0.0.0").To4(), Mask: net.CIDRMask(24, 32)},
 			},
-			{
-				action:     "remove",
-				ip:         "192.168.1.1",
-				subnetCIDR: "192.168.1.1/32",
+			"remove_ip": {
+				Action: "remove",
+				IP:     "192.168.1.1",
+				Subnet: &net.IPNet{IP: net.ParseIP("192.168.1.1").To4(), Mask: net.CIDRMask(32, 32)},
 			},
 		}
 
-		receivedCount := 0
+		receivedEvents := 0
+
 		for event := range eventChan {
-			if receivedCount >= len(expectedEvents) {
-				t.Errorf("Received more events than expected")
-				done <- true
+			var expectedEvent BanEvent
 
-				return
+			var eventKey string
+
+			switch {
+			case event.Action == "add" && event.IP == "192.168.1.1":
+				eventKey = "add_ip"
+			case event.Action == "add" && event.IP == "10.0.0.0/24":
+				eventKey = "add_subnet"
+			case event.Action == "remove" && event.IP == "192.168.1.1":
+				eventKey = "remove_ip"
+			default:
+				t.Errorf("Unexpected event received: %+v", event)
+				continue
 			}
 
-			expected := expectedEvents[receivedCount]
+			expectedEvent = expectedEvents[eventKey]
+			require.Equal(t, expectedEvent.Action, event.Action)
+			require.Equal(t, expectedEvent.IP, event.IP)
+			require.Equal(t, expectedEvent.Subnet.String(), event.Subnet.String())
 
-			if event.Action != expected.action {
-				t.Errorf("Expected action %s, got %s", expected.action, event.Action)
-			}
-
-			if event.IP != expected.ip {
-				t.Errorf("Expected IP %s, got %s", expected.ip, event.IP)
-			}
-
-			if event.Subnet.String() != expected.subnetCIDR {
-				t.Errorf("Expected subnet %s, got %s", expected.subnetCIDR, event.Subnet.String())
-			}
-
-			receivedCount++
-			if receivedCount == len(expectedEvents) {
-				done <- true
+			receivedEvents++
+			if receivedEvents == len(expectedEvents) {
+				close(done)
 				return
 			}
 		}
 	}()
 
-	// Add an IP address ban
+	// Add an IP
 	err = banList.Add(ctx, "192.168.1.1", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
-	// Add a subnet ban
+	// Add a subnet
 	err = banList.Add(ctx, "10.0.0.0/24", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
-	// Remove the IP address ban
+	// Remove an IP
 	err = banList.Remove(ctx, "192.168.1.1")
 	require.NoError(t, err)
 
-	// Wait for all events or timeout
+	// Wait for all events to be processed or timeout
 	select {
 	case <-done:
-		// Test completed successfully
+		// All expected events were received
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timed out waiting for events")
 	}

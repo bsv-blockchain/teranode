@@ -93,7 +93,6 @@ import (
 type batchSpend struct {
 	spend             *utxo.Spend // UTXO to spend
 	errCh             chan error  // Channel for completion notification
-	ignoreConflicting bool
 	ignoreUnspendable bool
 }
 
@@ -143,7 +142,7 @@ type batchTTL struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -151,8 +150,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		}
 	}()
 
-	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
-	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
+	useIgnoreUnspendable := len(ignoreUnspendable) > 0 && ignoreUnspendable[0]
 
 	spends, err := utxo.GetSpends(tx)
 	if err != nil {
@@ -181,7 +179,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
 				errCh:             errCh,
-				ignoreConflicting: useIgnoreConflicting,
 				ignoreUnspendable: useIgnoreUnspendable,
 			})
 
@@ -244,21 +241,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		// }
 		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
-		if unspendErr != nil {
-			s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
-		}
-
-		var firstError error
-
-		for _, spend := range spends {
-			if spend.Err != nil {
-				firstError = spend.Err
-				break
-			}
-		}
 
 		// return the first error found
-		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode) - first error", firstError)
+		return spends, errors.NewTxInvalidError("error in aerospike unspend (batched mode)", unspendErr)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -268,7 +253,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 
 type keyIgnoreUnspendable struct {
 	key               *aerospike.Key
-	ignoreConflicting bool
 	ignoreUnspendable bool
 }
 
@@ -350,7 +334,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			continue
 		}
 
-		newMapValue := aerospike.NewMapValue(map[any]any{
+		newMapValue := aerospike.NewMapValue(map[interface{}]interface{}{
 			"idx":          idx,
 			"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
 			"vOut":         bItem.spend.Vout,
@@ -361,7 +345,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		// we need to group the spends by key and ignoreUnspendable flag
 		useKey := keyIgnoreUnspendable{
 			key:               key,
-			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreUnspendable: bItem.ignoreUnspendable,
 		}
 
@@ -374,11 +357,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-
 	for batchKey, batchItems := range batchesByKey {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
-			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreUnspendable),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
@@ -416,7 +397,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			// error occurred, we need to send the error to the done channel for each spend in this batch
 			for _, batchItem := range batchByKey {
 				idx := batchItem["idx"].(int)
-				batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
+				batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 			}
 		} else {
 			response := batchRecord.BatchRec().Record

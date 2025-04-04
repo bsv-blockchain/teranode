@@ -1,7 +1,11 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/binary"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/quic-go/quic-go/http3"
 )
 
 type Distributor struct {
@@ -22,6 +27,8 @@ type Distributor struct {
 	attempts           int32
 	backoff            time.Duration
 	failureTolerance   int
+	useQuic            bool
+	quicAddresses      []string
 	httpClient         *http.Client
 	waitMsBetweenTxs   int
 }
@@ -133,6 +140,46 @@ func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger,
 	return propagationServer, nil
 }
 
+func NewQuicDistributor(logger ulogger.Logger, tSettings *settings.Settings, opts ...Option) (*Distributor, error) {
+	var quicAddresses = tSettings.Propagation.QuicAddresses
+	if len(quicAddresses) == 0 {
+		return nil, errors.NewConfigurationError("propagation_quicAddresses not set in config")
+	}
+
+	waitMsBetweenTxs := tSettings.Coinbase.DistributerWaitTime
+	logger.Infof("wait time between txs: %d ms\n", waitMsBetweenTxs)
+
+	tlsConf := &tls.Config{
+		//nolint:gosec // G402 (CWE-295): TLS InsecureSkipVerify set true
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"txblaster2"},
+	}
+
+	client := &http.Client{
+		Transport: &http3.Transport{
+			TLSClientConfig: tlsConf,
+		},
+	}
+	defer client.CloseIdleConnections()
+
+	d := &Distributor{
+		logger:             logger,
+		propagationServers: nil,
+		attempts:           1,
+		failureTolerance:   50,
+		useQuic:            true,
+		quicAddresses:      quicAddresses,
+		waitMsBetweenTxs:   waitMsBetweenTxs,
+		httpClient:         client,
+	}
+
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	return d, nil
+}
+
 type ResponseWrapper struct {
 	Addr     string        `json:"addr"`
 	Duration time.Duration `json:"duration"`
@@ -153,6 +200,8 @@ func (d *Distributor) Clone() (*Distributor, error) {
 		attempts:           d.attempts,
 		backoff:            d.backoff,
 		failureTolerance:   d.failureTolerance,
+		useQuic:            d.useQuic,
+		quicAddresses:      d.quicAddresses,
 		waitMsBetweenTxs:   d.waitMsBetweenTxs,
 		httpClient:         d.httpClient,
 	}
@@ -175,114 +224,154 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 	defer deferFn()
 
-	var wg sync.WaitGroup
+	if d.useQuic {
+		var err error
 
-	responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
+		// Write the length of the transaction to buffer
+		var buf bytes.Buffer
 
-	timeout := d.settings.Coinbase.DistributorTimeout
+		txSizeUint32, err := util.SafeIntToUint32(tx.Size())
+		if err != nil {
+			d.logger.Errorf("Error converting transaction size to int32: %v", err)
+			return nil, err
+		}
 
-	for addr, propagationServer := range d.propagationServers {
-		address := addr // Create a local copy
-		propagationServerClient := propagationServer
+		err = binary.Write(&buf, binary.BigEndian, txSizeUint32)
+		if err != nil {
+			d.logger.Errorf("Error writing transaction length: %v", err)
+			return nil, err
+		}
 
-		wg.Add(1)
+		// Write raw transaction to buffer
+		_, err = buf.Write(tx.ExtendedBytes())
+		if err != nil {
+			d.logger.Errorf("Failed to write transaction data: %v", err)
+			return nil, err
+		}
 
-		// addr := addr
-		go func(address string, propagationServerClient *propagation.Client) {
-			start1, stat1, ctx1 := tracing.NewStatFromContext(ctx, addr, stat)
-			defer func() {
-				wg.Done()
-				stat1.AddTime(start1)
-			}()
+		for _, qa := range d.quicAddresses {
+			qa = fmt.Sprintf("%s/tx", qa)
+			// send data
+			_, err := d.httpClient.Post(qa, "application/octet-stream", bytes.NewReader(buf.Bytes()))
+			if err != nil {
+				d.logger.Errorf("Failed to post data: %v", err)
+				return nil, err
+			}
+		}
 
-			var err error
+		time.Sleep(time.Duration(d.waitMsBetweenTxs) * time.Millisecond) //
 
-			var retries int32
+		return nil, nil
+	} else { // use grpc
+		var wg sync.WaitGroup
 
-			backoff := d.backoff
+		responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
 
-			for {
-				ctx1, cancel := context.WithTimeout(ctx1, timeout)
-				err = propagationServerClient.ProcessTransaction(ctx1, tx)
+		timeout := d.settings.Coinbase.DistributorTimeout
 
-				cancel()
+		for addr, propagationServer := range d.propagationServers {
+			address := addr // Create a local copy
+			propagationServerClient := propagationServer
 
-				if err == nil {
-					responseWrapperCh <- &ResponseWrapper{
-						Addr:     address,
-						Retries:  retries,
-						Duration: time.Since(start),
-					}
+			wg.Add(1)
 
-					break
-				} else {
-					if errors.Is(err, errors.ErrTxInvalid) {
-						// There is no point retrying a bad transaction
-						responseWrapperCh <- &ResponseWrapper{
-							Addr:     address,
-							Retries:  0,
-							Duration: time.Since(start),
-							Error:    err,
-						}
+			// addr := addr
+			go func(address string, propagationServerClient *propagation.Client) {
+				start1, stat1, ctx1 := tracing.NewStatFromContext(ctx, addr, stat)
+				defer func() {
+					wg.Done()
+					stat1.AddTime(start1)
+				}()
 
-						break
-					}
+				var err error
 
-					deadline, _ := ctx1.Deadline()
-					d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), address, time.Until(deadline), time.Since(start), err)
+				var retries int32
 
-					if retries < d.attempts {
-						retries++
+				backoff := d.backoff
 
-						time.Sleep(backoff)
+				for {
+					ctx1, cancel := context.WithTimeout(ctx1, timeout)
+					err = propagationServerClient.ProcessTransaction(ctx1, tx)
 
-						backoff *= 2
-					} else {
+					cancel()
+
+					if err == nil {
 						responseWrapperCh <- &ResponseWrapper{
 							Addr:     address,
 							Retries:  retries,
 							Duration: time.Since(start),
-							Error:    err,
 						}
 
 						break
+					} else {
+						if errors.Is(err, errors.ErrTxInvalid) {
+							// There is no point retrying a bad transaction
+							responseWrapperCh <- &ResponseWrapper{
+								Addr:     address,
+								Retries:  0,
+								Duration: time.Since(start),
+								Error:    err,
+							}
+
+							break
+						}
+
+						deadline, _ := ctx1.Deadline()
+						d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), address, time.Until(deadline), time.Since(start), err)
+
+						if retries < d.attempts {
+							retries++
+
+							time.Sleep(backoff)
+
+							backoff *= 2
+						} else {
+							responseWrapperCh <- &ResponseWrapper{
+								Addr:     address,
+								Retries:  retries,
+								Duration: time.Since(start),
+								Error:    err,
+							}
+
+							break
+						}
 					}
 				}
-			}
-		}(address, propagationServerClient)
-	}
-
-	wg.Wait()
-
-	close(responseWrapperCh)
-
-	// Read any errors from the channel
-	responses := make([]*ResponseWrapper, len(d.propagationServers))
-
-	var i int
-
-	errorCount := 0
-
-	var errs []error
-
-	for rw := range responseWrapperCh {
-		responses[i] = rw
-		i++
-
-		if rw.Error != nil {
-			errs = append(errs, errors.NewServiceError("address %s", rw.Addr, rw.Error))
-			errorCount++
+			}(address, propagationServerClient)
 		}
-	}
 
-	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
-	if failurePercentage > float32(d.failureTolerance) || errorCount == len(d.propagationServers) {
-		return responses, errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
-	} else if errorCount > 0 {
-		d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
-	}
+		wg.Wait()
 
-	return responses, nil
+		close(responseWrapperCh)
+
+		// Read any errors from the channel
+		responses := make([]*ResponseWrapper, len(d.propagationServers))
+
+		var i int
+
+		errorCount := 0
+
+		var errs []error
+
+		for rw := range responseWrapperCh {
+			responses[i] = rw
+			i++
+
+			if rw.Error != nil {
+				errs = append(errs, errors.NewServiceError("address %s", rw.Addr, rw.Error))
+				errorCount++
+			}
+		}
+
+		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
+		if failurePercentage > float32(d.failureTolerance) || errorCount == len(d.propagationServers) {
+			return responses, errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
+		} else if errorCount > 0 {
+			d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
+		}
+
+		return responses, nil
+	}
 }
 
 func (d *Distributor) TriggerBatcher() {

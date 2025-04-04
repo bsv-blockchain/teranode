@@ -58,6 +58,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -103,27 +104,26 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                context.Context // store the global context for things that run in the background
-	url                *url.URL
-	client             *uaerospike.Client
-	namespace          string
-	setName            string
-	expiration         time.Duration
-	blockHeight        atomic.Uint32
-	medianBlockTime    atomic.Uint32
-	logger             ulogger.Logger
-	settings           *settings.Settings
-	batchID            atomic.Uint64
-	storeBatcher       batcherIfc[BatchStoreItem]
-	getBatcher         batcherIfc[batchGetItem]
-	spendBatcher       batcherIfc[batchSpend]
-	outpointBatcher    batcherIfc[batchOutpoint]
-	incrementBatcher   batcherIfc[batchIncrement]
-	setTTLBatcher      batcherIfc[batchTTL]
-	unspendableBatcher batcherIfc[batchUnspendable]
-	externalStore      blob.Store
-	utxoBatchSize      int
-	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	ctx              context.Context // store the global context for things that run in the background
+	url              *url.URL
+	client           *uaerospike.Client
+	namespace        string
+	setName          string
+	expiration       time.Duration
+	blockHeight      atomic.Uint32
+	medianBlockTime  atomic.Uint32
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	batchID          atomic.Uint64
+	storeBatcher     batcherIfc[BatchStoreItem]
+	getBatcher       batcherIfc[batchGetItem]
+	spendBatcher     batcherIfc[batchSpend]
+	outpointBatcher  batcherIfc[batchOutpoint]
+	incrementBatcher batcherIfc[batchIncrement]
+	setTTLBatcher    batcherIfc[batchTTL]
+	externalStore    blob.Store
+	utxoBatchSize    int
+	externalTxCache  *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -256,11 +256,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setTTLBatchDuration := time.Duration(setTTLBatchDurationStr) * time.Millisecond
 	s.setTTLBatcher = batcher.New(setTTLBatchSize, setTTLBatchDuration, s.sendSetTTLBatch, true)
 
-	unspendableBatchSize := tSettings.UtxoStore.UnspendableBatcherSize
-	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
-	unspendableBatchDuration := time.Duration(unspendableBatchDurationStr) * time.Millisecond
-	s.unspendableBatcher = batcher.New(unspendableBatchSize, unspendableBatchDuration, s.setUnspendableBatch, true)
-
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
 	return s, nil
@@ -313,7 +308,7 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 		writePolicy.TotalTimeout = timeout
 	}
 
-	details := "Aerospike store" // don't include sensitive info like url, password, etc
+	details := fmt.Sprintf("url: %s, namespace: %s", s.url.String(), s.namespace)
 
 	// Trying to put and get a record to test the connection
 	key, err := aerospike.NewKey(s.namespace, s.setName, "key")

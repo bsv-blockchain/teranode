@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc || debug
+//go:build test_all || test_tnc
 
 // TNC-1.2 Test Suite
 // Requirement: Teranode must refer to the hash of the previous block upon which the candidate block is being built.
@@ -64,14 +64,12 @@ func (suite *TNC1_2TestSuite) TestCheckPrevBlockHash() {
 	logger := testEnv.Logger
 	node := testEnv.Nodes[0]
 
-	block1, err := node.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err)
-	parenTx := block1.CoinbaseTx
-	_, err = node.CreateAndSendTx(t, ctx, parenTx)
+	// Send some transactions and mine a block to have a known state
+	_, err := helper.SendTXsWithDistributorV2(ctx, node, logger, node.Settings, 10000)
 	require.NoError(t, err, "Failed to send transactions")
 
 	// Mine the block with our transactions
-	_, err = helper.GenerateBlocks(ctx, node, 1, logger)
+	_, err = helper.MineBlockWithRPC(ctx, node, logger)
 	require.NoError(t, err, "Failed to mine block")
 
 	// Get the current best block header
@@ -93,32 +91,44 @@ func (suite *TNC1_2TestSuite) TestCheckPrevBlockHash() {
 
 // TestPrevBlockHashAfterReorg verifies that the mining candidate correctly updates
 // its previous block reference after a chain reorganization
+// Todo: Add proper wait mechanism for reorg completion
 func (suite *TNC1_2TestSuite) TestPrevBlockHashAfterReorg() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
 	logger := testEnv.Logger
-	node1 := testEnv.Nodes[0]
-	node2 := testEnv.Nodes[1]
+	node0 := testEnv.Nodes[0]
+	node1 := testEnv.Nodes[1]
 
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err)
-	parenTx := block1.CoinbaseTx
-	_, err = node1.CreateAndSendTx(t, ctx, parenTx)
-	require.NoError(t, err, "Failed to send transactions")
+	// Create and mine a block on node0
+	_, err := helper.SendTXsWithDistributorV2(ctx, node0, logger, node0.Settings, 10000)
+	require.NoError(t, err, "Failed to send transactions to node0")
 
-	_, err = helper.GenerateBlocks(ctx, node1, 1, logger)
+	_, err = helper.MineBlockWithRPC(ctx, node0, logger)
 	require.NoError(t, err, "Failed to mine block on node0")
 
-	_, err = helper.GenerateBlocks(ctx, node2, 5, logger)
-	require.NoError(t, err, "Failed to mine block on node2")
+	// Create a longer chain on node1 (two blocks)
+	_, err = helper.SendTXsWithDistributorV2(ctx, node1, logger, node1.Settings, 10000)
+	require.NoError(t, err, "Failed to send transactions to node1")
 
-	// Get the current best block header from node1 after reorg
-	bestBlockHeader, _, err := node2.BlockchainClient.GetBestBlockHeader(ctx)
+	_, err = helper.MineBlockWithRPC(ctx, node1, logger)
+	require.NoError(t, err, "Failed to mine first block on node1")
+
+	_, err = helper.SendTXsWithDistributorV2(ctx, node1, logger, node1.Settings, 10000)
+	require.NoError(t, err, "Failed to send more transactions to node1")
+
+	_, err = helper.MineBlockWithRPC(ctx, node1, logger)
+	require.NoError(t, err, "Failed to mine second block on node1")
+
+	// Wait for node0 to reorganize to the longer chain
+	// TODO: Add proper wait mechanism for reorg completion
+
+	// Get the current best block header from node0 after reorg
+	bestBlockHeader, _, err := node0.BlockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err, "Failed to get best block header after reorg")
 
-	// Get a new mining candidate from node1
-	mc, err := node1.BlockassemblyClient.GetMiningCandidate(ctx)
+	// Get a new mining candidate from node0
+	mc, err := node0.BlockassemblyClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate after reorg")
 
 	// Convert the previous hash from the mining candidate to a chainhash.Hash

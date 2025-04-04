@@ -436,11 +436,10 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
 
-NEXT_BATCH_RECORD:
 	for idx, batchRecord := range batchRecords {
-		if err := batchRecord.BatchRec().Err; err != nil {
+		err = batchRecord.BatchRec().Err
+		if err != nil {
 			items[idx].Data = nil
-
 			if !util.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
 					items[idx].Err = errors.NewTxNotFoundError("%v not found", items[idx].Hash)
@@ -448,156 +447,168 @@ NEXT_BATCH_RECORD:
 					items[idx].Err = err
 				}
 			}
+		} else {
+			bins := batchRecord.BatchRec().Record.Bins
 
-			continue // because there was an error for this batch item.
-		}
+			items[idx].Data = &meta.Data{}
 
-		bins := batchRecord.BatchRec().Record.Bins
+			var externalTx *bt.Tx
 
-		items[idx].Data = &meta.Data{}
+			external, ok := bins[fields.External.String()].(bool)
+			if ok && external {
+				if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
+					items[idx].Err = err
 
-		// If the tx is external, we need to fetch it from the external store...
-		var externalTx *bt.Tx
-
-		external, ok := bins[fields.External.String()].(bool)
-		if ok && external {
-			if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
-				items[idx].Err = err
-
-				continue // because there was an error reading the transaction from the external store.
+					continue
+				}
 			}
-		}
 
-		for _, key := range items[idx].Fields {
-			switch key {
-			case fields.Tx:
-				// If the tx is external, we already have it, otherwise we need to build it from the bins.
-				if external {
-					items[idx].Data.Tx = externalTx
-				} else {
-					tx, txErr := s.getTxFromBins(bins)
-					if txErr != nil {
-						items[idx].Err = errors.NewTxInvalidError("invalid tx", txErr)
+			for _, key := range items[idx].Fields {
+				value := bins[key.String()]
 
-						continue NEXT_BATCH_RECORD // because there was an error building the transaction from the store.
+				switch key {
+				case fields.Tx:
+					if external {
+						items[idx].Data.Tx = externalTx
+					} else {
+						tx, txErr := s.getTxFromBins(bins)
+						if txErr != nil {
+							return errors.NewTxInvalidError("invalid tx", txErr)
+						}
+
+						items[idx].Data.Tx = tx
 					}
 
-					items[idx].Data.Tx = tx
-				}
-
-			case fields.Fee:
-				fee, ok := bins[key.String()].(int)
-				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing fee")
-
-					continue NEXT_BATCH_RECORD // because there was an error reading the fee from the store.
-				}
-
-				items[idx].Data.Fee = uint64(fee) // nolint: gosec
-
-			case fields.SizeInBytes:
-				sizeInBytes, ok := bins[key.String()].(int)
-				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing size in bytes")
-
-					continue NEXT_BATCH_RECORD // because there was an error reading the size in bytes from the store.
-				}
-
-				items[idx].Data.SizeInBytes = uint64(sizeInBytes) // nolint:gosec
-
-			case fields.ParentTxHashes:
-				if external {
-					items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
-
-					for i, input := range externalTx.Inputs {
-						items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
-					}
-				} else {
-					res, err := processInputs(bins)
-					if err != nil {
-						items[idx].Err = errors.NewTxInvalidError("could not process input interfaces", err)
-
-						continue NEXT_BATCH_RECORD // because there was an error processing the input interfaces.
+				case fields.Fee:
+					fee, ok := value.(int)
+					if ok {
+						items[idx].Data.Fee = uint64(fee) // nolint: gosec
 					}
 
-					items[idx].Data.ParentTxHashes = res
+				case fields.SizeInBytes:
+					sizeInBytes, ok := value.(int)
+					if ok {
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes) // nolint:gosec
+					}
+
+				case fields.ParentTxHashes:
+					if external {
+						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
+						for i, input := range externalTx.Inputs {
+							items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
+						}
+					} else {
+						inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
+						if ok {
+							items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
+
+							for i, inputInterface := range inputInterfaces {
+								input := inputInterface.([]byte)
+								items[idx].Data.ParentTxHashes[i] = chainhash.Hash(input[:32])
+							}
+						}
+					}
+
+				case fields.BlockIDs:
+					temp := value.([]interface{})
+
+					var blockIDs []uint32
+
+					for _, val := range temp {
+						valUint32, err := util.SafeIntToUint32(val.(int))
+						if err != nil {
+							return err
+						}
+
+						blockIDs = append(blockIDs, valUint32)
+					}
+
+					items[idx].Data.BlockIDs = blockIDs
+
+				case fields.BlockHeights:
+					if value != nil {
+						temp := value.([]interface{})
+
+						var blockHeights []uint32
+
+						for _, val := range temp {
+							// nolint: gosec
+							blockHeights = append(blockHeights, uint32(val.(int)))
+						}
+
+						items[idx].Data.BlockHeights = blockHeights
+					} else {
+						items[idx].Data.BlockHeights = []uint32{}
+					}
+
+				case fields.SubtreeIdxs:
+					if value != nil {
+						temp := value.([]interface{})
+
+						var subtreeIdxs []int
+
+						for _, val := range temp {
+							// nolint: gosec
+							subtreeIdxs = append(subtreeIdxs, val.(int))
+						}
+
+						items[idx].Data.SubtreeIdxs = subtreeIdxs
+					} else {
+						items[idx].Data.SubtreeIdxs = []int{}
+					}
+
+				case fields.IsCoinbase:
+					coinbaseBool, ok := value.(bool)
+					if ok {
+						items[idx].Data.IsCoinbase = coinbaseBool
+					}
+
+				case fields.Utxos:
+					totalUtxos, ok := bins[fields.TotalUtxos.String()].(int)
+					if !ok {
+						return errors.NewStorageError("failed to get totalUtxos", nil)
+					}
+
+					utxos, ok := value.([]interface{})
+					if ok {
+						items[idx].Data.SpendingTxIDs = make([]*chainhash.Hash, totalUtxos)
+
+						for i, ui := range utxos {
+							u, ok := ui.([]uint8)
+							if ok && len(u) == 64 {
+								items[idx].Data.SpendingTxIDs[i], _ = chainhash.NewHash(u[32:])
+							} else {
+								items[idx].Data.SpendingTxIDs[i] = nil
+							}
+						}
+
+						// Add any extra UTXOs from child records...
+						totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
+						if ok {
+							txID := items[idx].Hash
+
+							if err := s.getAllExtraUTXOs(ctx, &txID, totalExtraRecs, items[idx].Data.SpendingTxIDs); err != nil {
+								return err
+							}
+						}
+					}
+
+				case fields.Conflicting:
+					conflictingBool, ok := value.(bool)
+					if ok {
+						items[idx].Data.Conflicting = conflictingBool
+					}
+
+				case fields.ConflictingChildren:
+					conflictingChildren, ok := value.([]interface{})
+					if ok {
+						items[idx].Data.ConflictingChildren = make([]chainhash.Hash, len(conflictingChildren))
+
+						for i, child := range conflictingChildren {
+							items[idx].Data.ConflictingChildren[i] = chainhash.Hash(child.([]uint8))
+						}
+					}
 				}
-
-			case fields.BlockIDs:
-				res, err := processBlockIDs(bins)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process block IDs", err)
-
-					continue NEXT_BATCH_RECORD // because there was an error processing the block IDs.
-				}
-
-				items[idx].Data.BlockIDs = res
-
-			case fields.BlockHeights:
-				res, err := processBlockHeights(bins)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process block heights", err)
-
-					continue NEXT_BATCH_RECORD // because there was an error processing the block heights.
-				}
-
-				items[idx].Data.BlockHeights = res
-
-			case fields.SubtreeIdxs:
-				res, err := processSubtreeIdxs(bins)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process subtree idxs", err)
-
-					continue NEXT_BATCH_RECORD // because there was an error processing the subtree idxs.
-				}
-
-				items[idx].Data.SubtreeIdxs = res
-
-			case fields.IsCoinbase:
-				coinbaseBool, ok := bins[key.String()].(bool)
-				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing is coinbase")
-
-					continue NEXT_BATCH_RECORD // because there was an error reading the is coinbase from the store.
-				}
-
-				items[idx].Data.IsCoinbase = coinbaseBool
-
-			case fields.Utxos:
-				res, err := s.processUTXOs(ctx, &items[idx].Hash, bins)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process utxos", err)
-
-					continue NEXT_BATCH_RECORD // because there was an error processing the utxos.
-				}
-
-				items[idx].Data.SpendingTxIDs = res
-
-			case fields.Unspendable:
-				unspendableBool, ok := bins[key.String()].(bool)
-				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing unspendable")
-
-					continue NEXT_BATCH_RECORD // because there was an error reading the unspendable from the store.
-				}
-
-				items[idx].Data.Unspendable = unspendableBool
-
-			case fields.Conflicting:
-				conflictingBool, ok := bins[key.String()].(bool)
-				if ok {
-					items[idx].Data.Conflicting = conflictingBool
-				}
-
-			case fields.ConflictingChildren:
-				res, err := processConflictingChildren(bins)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not process conflicting children", err)
-
-					continue NEXT_BATCH_RECORD // because there was an error processing the conflicting children.
-				}
-
-				items[idx].Data.ConflictingChildren = res
 			}
 		}
 	}
@@ -606,159 +617,6 @@ NEXT_BATCH_RECORD:
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
 
 	return nil
-}
-
-func processInputs(bins aerospike.BinMap) ([]chainhash.Hash, error) {
-	inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
-	if !ok {
-		return nil, errors.NewStorageError("failed to get inputs")
-	}
-
-	res := make([]chainhash.Hash, len(inputInterfaces))
-
-	for i, inputInterface := range inputInterfaces {
-		input, ok := inputInterface.([]byte)
-		if !ok {
-			return nil, errors.NewStorageError("failed to get input")
-		}
-
-		res[i] = chainhash.Hash(input[:32])
-	}
-
-	return res, nil
-}
-
-func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
-	blockIDs, ok := bins[fields.BlockIDs.String()].([]interface{})
-	if !ok {
-		return nil, errors.NewTxInvalidError("missing block IDs")
-	}
-
-	if len(blockIDs) == 0 {
-		return nil, nil
-	}
-
-	res := make([]uint32, len(blockIDs))
-
-	for i, blockID := range blockIDs {
-		blockIDInt, ok := blockID.(int)
-		if !ok {
-			return nil, errors.NewStorageError("failed to get block ID")
-		}
-
-		blockIDUint32, err := util.SafeIntToUint32(blockIDInt)
-		if err != nil {
-			return nil, errors.NewTxInvalidError("invalid block ID")
-		}
-
-		res[i] = blockIDUint32
-	}
-
-	return res, nil
-}
-
-func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
-	blockHeights, ok := bins[fields.BlockHeights.String()].([]interface{})
-	if !ok {
-		return nil, errors.NewTxInvalidError("missing block heights")
-	}
-
-	if len(blockHeights) == 0 {
-		return nil, nil
-	}
-
-	res := make([]uint32, len(blockHeights))
-
-	for i, blockHeight := range blockHeights {
-		blockHeightInt, ok := blockHeight.(int)
-		if !ok {
-			return nil, errors.NewStorageError("failed to get block height")
-		}
-
-		blockHeightUint32, err := util.SafeIntToUint32(blockHeightInt)
-		if err != nil {
-			return nil, errors.NewTxInvalidError("invalid block height")
-		}
-
-		res[i] = blockHeightUint32
-	}
-
-	return res, nil
-}
-
-func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
-	subtreeIdxs, ok := bins[fields.SubtreeIdxs.String()].([]interface{})
-	if !ok {
-		return nil, errors.NewTxInvalidError("missing subtree idxs")
-	}
-
-	if len(subtreeIdxs) == 0 {
-		return nil, nil
-	}
-
-	res := make([]int, len(subtreeIdxs))
-
-	for i, subtreeIdx := range subtreeIdxs {
-		subtreeIdxInt, ok := subtreeIdx.(int)
-		if !ok {
-			return nil, errors.NewStorageError("failed to get subtree idx")
-		}
-
-		res[i] = subtreeIdxInt
-	}
-
-	return res, nil
-}
-
-func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aerospike.BinMap) ([]*chainhash.Hash, error) {
-	totalUtxos, ok := bins[fields.TotalUtxos.String()].(int)
-	if !ok {
-		return nil, errors.NewStorageError("failed to get totalUtxos")
-	}
-
-	utxos, ok := bins[fields.Utxos.String()].([]interface{})
-	if !ok {
-		return nil, errors.NewTxInvalidError("missing utxos")
-	}
-
-	spendingTxIDs := make([]*chainhash.Hash, totalUtxos)
-
-	for i, ui := range utxos {
-		u, ok := ui.([]uint8)
-		if ok && len(u) == 64 {
-			spendingTxIDs[i], _ = chainhash.NewHash(u[32:])
-		} else {
-			spendingTxIDs[i] = nil
-		}
-	}
-
-	// Add any extra UTXOs from child records...
-	totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
-	if ok {
-		if err := s.getAllExtraUTXOs(ctx, txid, totalExtraRecs, spendingTxIDs); err != nil {
-			return nil, err
-		}
-	}
-
-	return spendingTxIDs, nil
-}
-
-func processConflictingChildren(bins aerospike.BinMap) (conflictingChildren []chainhash.Hash, err error) {
-	conflictingChildrenIfc, ok := bins[fields.ConflictingChildren.String()].([]interface{})
-	if ok {
-		conflictingChildren = make([]chainhash.Hash, len(conflictingChildrenIfc))
-
-		for i, child := range conflictingChildrenIfc {
-			childHash, ok := child.([]uint8)
-			if !ok {
-				return nil, errors.NewStorageError("failed to get conflicting child")
-			}
-
-			conflictingChildren[i] = chainhash.Hash(childHash)
-		}
-	}
-
-	return conflictingChildren, nil
 }
 
 // getAllExtraUTXOs retrieves all UTXOs from child records recursively

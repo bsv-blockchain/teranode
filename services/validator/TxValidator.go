@@ -7,6 +7,8 @@ Bitcoin transaction validation rules and policies.
 package validator
 
 import (
+	"encoding/hex"
+
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -57,7 +59,6 @@ type TxValidator struct {
 	logger      ulogger.Logger
 	settings    *settings.Settings
 	interpreter TxScriptInterpreter
-	options     *TxValidatorOptions
 }
 
 // TxScriptInterpreter defines the interface for script verification operations
@@ -72,9 +73,6 @@ type TxScriptInterpreter interface {
 
 	// VerifyScript implement the method to verify a script for a transaction
 	VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error
-
-	// Interpreter returns the interpreter being used
-	Interpreter() TxInterpreter
 }
 
 // TxScriptInterpreterCreator defines a function type for creating script interpreters
@@ -101,7 +99,10 @@ var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreat
 // Returns:
 //   - TxValidatorI: The created transaction validator
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) TxValidatorI {
-	options := NewTxValidatorOptions(opts...)
+	options := &TxValidatorOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 
 	var txScriptInterpreter TxScriptInterpreter
 
@@ -119,7 +120,6 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 		logger:      logger,
 		settings:    tSettings,
 		interpreter: txScriptInterpreter,
-		options:     options,
 	}
 }
 
@@ -177,16 +177,15 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 	//    => This is a BCH only check, not applicable to BSV
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	// --------- TURN OFF -> unlimited ---------------------
-	// if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
-	// 	return err
-	// }
+	if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
+		return err
+	}
 
 	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
 	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
 	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
 	//       and therefore let's not enforce this check until then.
-	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
+	if blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
 		// 9) The unlocking script (scriptSig) can only push numbers on the stack
 		if err := tv.pushDataCheck(tx); err != nil {
 			return err
@@ -259,7 +258,7 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	_ = blockHeight
 
 	for index, input := range tx.Inputs {
-		if input.PreviousTxIDStr() == coinbaseTxID {
+		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
 			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
 		}
 		/* lots of our valid test transactions have this sequence number, is this not allowed?
@@ -306,14 +305,7 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 
 func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 
-	inputSats := tx.TotalInputSatoshis()
-	outputSats := tx.TotalOutputSatoshis()
-
-	if inputSats < outputSats {
-		return errors.NewTxInvalidError("transaction input satoshis is less than output satoshis: %d < %d", inputSats, outputSats)
-	}
-
-	actualFeePaid := inputSats - outputSats
+	actualFeePaid := tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
 
 	minRequiredFee := tv.settings.Policy.GetMinMiningTxFee() * 1e8
 

@@ -46,8 +46,8 @@ func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*met
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
+func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error) {
+	args := m.Called(ctx, tx, ignoreUnspendable)
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 

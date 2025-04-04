@@ -3,19 +3,19 @@
 
 ## Table of Contents
 
-- [GRPC Documentation - ValidatorAPI](#grpc-documentation---validatorapi)
-  - [Table of Contents](#table-of-contents)
-  - [validator\_api.proto](#validator_apiproto)
-    - [EmptyMessage](#emptymessage)
-    - [GetBlockHeightResponse](#getblockheightresponse)
-    - [GetMedianBlockTimeResponse](#getmedianblocktimeresponse)
-    - [HealthResponse](#healthresponse)
-    - [ValidateTransactionBatchRequest](#validatetransactionbatchrequest)
-    - [ValidateTransactionBatchResponse](#validatetransactionbatchresponse)
-    - [ValidateTransactionRequest](#validatetransactionrequest)
-    - [ValidateTransactionResponse](#validatetransactionresponse)
-    - [ValidatorAPI](#validatorapi)
-  - [Scalar Value Types](#scalar-value-types)
+- [validator_api.proto](#validator_api.proto)
+    - [EmptyMessage](#EmptyMessage)
+    - [GetBlockHeightResponse](#GetBlockHeightResponse)
+    - [GetMedianBlockTimeResponse](#GetMedianBlockTimeResponse)
+    - [HealthResponse](#HealthResponse)
+    - [ValidateTransactionBatchRequest](#ValidateTransactionBatchRequest)
+    - [ValidateTransactionBatchResponse](#ValidateTransactionBatchResponse)
+    - [ValidateTransactionRequest](#ValidateTransactionRequest)
+    - [ValidateTransactionResponse](#ValidateTransactionResponse)
+
+    - [ValidatorAPI](#ValidatorAPI)
+
+- [Scalar Value Types](#scalar-value-types)
 
 
 
@@ -163,6 +163,7 @@ swagger:model ValidateTransactionResponse
 | HealthGRPC | [EmptyMessage](#validator_api-EmptyMessage) | [HealthResponse](#validator_api-HealthResponse) | Health returns the health of the API. |
 | ValidateTransaction | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) |  |
 | ValidateTransactionBatch | [ValidateTransactionBatchRequest](#validator_api-ValidateTransactionBatchRequest) | [ValidateTransactionBatchResponse](#validator_api-ValidateTransactionBatchResponse) |  |
+| ValidateTransactionStream | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) stream | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) |  |
 | GetBlockHeight | [EmptyMessage](#validator_api-EmptyMessage) | [GetBlockHeightResponse](#validator_api-GetBlockHeightResponse) |  |
 | GetMedianBlockTime | [EmptyMessage](#validator_api-EmptyMessage) | [GetMedianBlockTimeResponse](#validator_api-GetMedianBlockTimeResponse) |  |
 

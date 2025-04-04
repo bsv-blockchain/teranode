@@ -43,7 +43,7 @@ func init() {
 //   - testnet3 -> test
 //   - regtest  -> regtest
 //   - stn      -> stn
-func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
+func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 	// teranode : mainnet  testnet   regtest  stn
 	// bdk  :    main      test  regtest  stn
 	chainNameMap := map[string]string{
@@ -53,10 +53,6 @@ func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 		"teratestnet": "test",
 		"testnet":     "test",
 		"regtest":     "regtest",
-	}
-
-	if pa.Name == "tstn" || pa.Name == "teratestnet" {
-		l.Warnf("Network %v doesn't exist in C++ BSV Node, it will be mapped to testnet", pa.Name)
 	}
 
 	return chainNameMap[pa.Name]
@@ -75,7 +71,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 
 	// Configure BDK script verification settings
 	bdkScriptConfig := bdkconfig.ScriptConfig{
-		ChainNetwork:                 getBDKChainNameFromParams(l, pa),
+		ChainNetwork:                 getBDKChainNameFromParams(pa),
 		MaxOpsPerScriptPolicy:        uint64(po.MaxOpsPerScriptPolicy),
 		MaxScriptNumLengthPolicy:     uint64(po.MaxScriptNumLengthPolicy),
 		MaxScriptSizePolicy:          uint64(po.MaxScriptSizePolicy),
@@ -151,8 +147,4 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 	}
 
 	return nil
-}
-
-func (v *scriptVerifierGoBDK) Interpreter() TxInterpreter {
-	return TxInterpreterGoBDK
 }

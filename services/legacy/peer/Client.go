@@ -56,7 +56,3 @@ func (c *Client) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*p
 func (c *Client) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
 	return c.client.UnbanPeer(ctx, peer)
 }
-
-func (c *Client) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
-	return c.client.IsBanned(ctx, peer)
-}

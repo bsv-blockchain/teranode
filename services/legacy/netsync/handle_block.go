@@ -625,7 +625,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 				timeStart = time.Now()
 
-				_, _ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithDisableConsensus(false))
+				_, _ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithDisableConsensus(true))
 
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
@@ -651,7 +651,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 					}
 
 					// send to validation, but only if the parent is not in the same block
-					_, _ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithDisableConsensus(false))
+					_, _ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithDisableConsensus(true))
 
 					return nil
 				})

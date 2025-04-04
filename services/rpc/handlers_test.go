@@ -37,5 +37,5 @@ func TestIPOrSubnetValidation(t *testing.T) {
 
 	// test subnet with port
 	invalidSubnet = "172.19.0.0/24:8080"
-	assert.True(t, isIPOrSubnet(invalidSubnet))
+	assert.False(t, isIPOrSubnet(invalidSubnet))
 }

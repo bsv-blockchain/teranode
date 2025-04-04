@@ -91,7 +91,7 @@ func GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 	var err error
 
-	localValidator := tSettings.Validator.UseLocalValidator
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 
 	if localValidator {
 		logger.Infof("[Validator] Using local validator")

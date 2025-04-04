@@ -35,6 +35,14 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
+/*
+See improve_cache_const_large.go for large cache settings
+See improve_cache_const_small.go for small cache settings
+
+const BucketsCount = 8 * 1024
+const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
+*/
+
 const bucketSizeBits = 40
 
 const genSizeBits = 64 - bucketSizeBits
@@ -44,21 +52,6 @@ const maxGen = 1<<genSizeBits - 1
 const maxBucketSize uint64 = 1 << bucketSizeBits
 
 const chunksPerAlloc = 1024
-
-// -------------------------------------------------------------------
-// Depending on the tags set, the cache will use one of these bucket counts and chunkSizes...
-//
-// See improved_cache_const_large.go for large cache settings
-// See improved_cache_const_small.go for small cache settings
-// Set improved_cache_const_test.go to use test settings
-// -------------------------------------------------------------------
-const bucketCountLarge = 8 * 1024                //nolint:unused
-const bucketCountSmall = 32                      //nolint:unused
-const bucketCountTest = 8                        //nolint:unused
-const chunkSizeLarge = maxValueSizeKB * 2 * 1024 //nolint:unused
-const chunkSizeSmall = maxValueSizeKB * 512      //nolint:unused
-const chunkSizeTest = maxValueSizeKB * 2 * 1024  //nolint:unused
-// -------------------------------------------------------------------
 
 // Stats represents cache stats.
 //

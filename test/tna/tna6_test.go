@@ -1,4 +1,4 @@
-//go:build test_all || test_tna || debug
+//go:build test_all || test_tna
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNA6TestSuite$/TestAcceptanceNextBlock$" -tags test_tna ./test/tna/tna6_test.go

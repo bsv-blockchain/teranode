@@ -1,18 +1,33 @@
 import { writable } from 'svelte/store';
-import { getBaseUrl } from '../utils/apiUtils';
 
 // Authentication store to manage login state
 export const isAuthenticated = writable(false);
 export const authError = writable('');
 
-// Authentication API path prefix
-const authPathname = '/api/auth';
+// Get the base API URL - use the same origin to avoid CORS issues when possible
+function getApiBaseUrl() {
+  // Always use relative URLs when possible to avoid CORS issues
+  // This works for any port (8090, 18090, 28090, 38090, etc.)
+  if (window.location.pathname.startsWith('/dashboard')) {
+    return '';
+  }
+  
+  // Development mode - when running with 'make dev-dashboard'
+  // Force port 8090 for API calls when we're on port 5173 (Vite dev server)
+  if (window.location.port === '5173') {
+    return window.location.protocol + '//' + window.location.hostname + ':8090';
+  }
+  
+  // Otherwise use the absolute URL with the current port
+  const currentPort = window.location.port || '80';
+  return window.location.protocol + '//' + window.location.hostname + ':' + currentPort;
+}
 
 // Check if the user is authenticated by making a request to the server
 export async function checkAuthentication() {
   try {
-    // Use the common utility function to get the base URL
-    const apiUrl = getBaseUrl(authPathname) + '/check';
+    // Use the API base URL
+    const apiUrl = getApiBaseUrl() + '/api/auth/check';
     
     const response = await fetch(apiUrl, {
       method: 'GET',
@@ -45,8 +60,8 @@ export async function login(username: string, password: string, csrfToken: strin
     params.append('password', password);
     params.append('csrfToken', csrfToken); // Include CSRF token in the body
     
-    // Use the common utility function to get the base URL
-    const apiUrl = getBaseUrl(authPathname) + '/login';
+    // Use the API base URL
+    const apiUrl = getApiBaseUrl() + '/api/auth/login';
     
     // Log the API URL in development mode to help with debugging
     if (import.meta.env.DEV) {
@@ -123,8 +138,8 @@ export async function login(username: string, password: string, csrfToken: strin
 // Logout function - just handle the API call and state update
 // Let the calling component handle any navigation
 export function logout() {
-  // Use the common utility function to get the base URL
-  const apiUrl = getBaseUrl(authPathname) + '/logout';
+  // Use the API base URL
+  const apiUrl = getApiBaseUrl() + '/api/auth/logout';
   
   return fetch(apiUrl, { 
     method: 'POST',

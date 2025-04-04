@@ -7,8 +7,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
-	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
@@ -29,7 +27,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -710,11 +707,13 @@ func makeHostAddressFromPort(port string) string {
 	return fmt.Sprintf("localhost:%s", port)
 }
 
-func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
+func (t *TeranodeTestClient) CreateAndSendTx(ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
-	require.NoError(t, err)
+	w, err := wif.DecodeWIF(t.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	if err != nil {
+		return nil, errors.NewProcessingError("error decoding private key", err)
+	}
 
 	privateKey := w.PrivKey
 	publicKey := privateKey.PubKey().SerialiseCompressed()
@@ -729,16 +728,24 @@ func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context,
 	newTx := bt.NewTx()
 
 	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, errors.NewProcessingError("error creating new transaction", err)
+	}
 
 	err = newTx.AddP2PKHOutputFromPubKeyBytes(publicKey, 10000)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, errors.NewProcessingError("Error adding output to transaction", err)
+	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-	require.NoError(t, err)
+	if err != nil {
+		return nil, errors.NewProcessingError("Error filling transaction inputs", err)
+	}
 
-	_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
-	require.NoError(t, err)
+	_, err = t.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		return nil, errors.NewProcessingError("Failed to send new transaction", err)
+	}
 
 	logger.Infof("Transaction sent: %s", newTx.TxID())
 
@@ -746,11 +753,13 @@ func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context,
 }
 
 // CreateAndSendTxs creates and sends a chain of transactions, where each transaction spends from the previous one
-func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
+func (t *TeranodeTestClient) CreateAndSendTxs(ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
-	require.NoError(t, err)
+	w, err := wif.DecodeWIF(t.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error decoding private key", err)
+	}
 
 	privateKey := w.PrivKey
 	publicKey := privateKey.PubKey().SerialiseCompressed()
@@ -770,9 +779,12 @@ func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context
 		newTx := bt.NewTx()
 
 		err = newTx.FromUTXOs(utxo)
-		require.NoError(t, err)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("error creating new transaction", err)
+		}
 
-		outputAmount := currentParent.Outputs[0].Satoshis - 1000 // minus 1000 satoshis for fee
+		// Use the parent's output amount minus a small fee for the next transaction
+		outputAmount := currentParent.Outputs[0].Satoshis - 1000 // Subtract a small fee
 		if outputAmount <= 0 {
 			return transactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
 		}
@@ -783,129 +795,20 @@ func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context
 		}
 
 		err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-		require.NoError(t, err)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Error filling transaction inputs", err)
+		}
 
-		_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
-		require.NoError(t, err)
+		_, err = t.DistributorClient.SendTransaction(ctx, newTx)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Failed to send new transaction", err)
+		}
 
 		logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
 
 		transactions[i] = newTx
 		txHashes = append(txHashes, newTx.TxIDChainHash())
 		currentParent = newTx
-	}
-
-	return transactions, txHashes, nil
-}
-
-func (tc *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
-	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
-
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
-	require.NoError(t, err)
-
-	privateKey := w.PrivKey
-	publicKey := privateKey.PubKey().SerialiseCompressed()
-
-	// Step 1: Create a splitting transaction with count outputs
-	splitTx := bt.NewTx()
-	err = splitTx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
-	})
-	require.NoError(t, err)
-
-	// Calculate amount for each output, reserving some for fees
-	//nolint:gosec
-	splitAmount := (parentTx.Outputs[0].Satoshis - uint64(count*1000)) / uint64(count)
-	require.Greater(t, splitAmount, uint64(1000), "insufficient funds to split")
-
-	// Add count outputs to split transaction
-	for i := 0; i < count; i++ {
-		err = splitTx.AddP2PKHOutputFromPubKeyBytes(publicKey, splitAmount)
-		require.NoError(t, err)
-	}
-
-	err = splitTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-	require.NoError(t, err)
-
-	// Send the split transaction
-	_, err = tc.DistributorClient.SendTransaction(ctx, splitTx)
-	require.NoError(t, err)
-
-	logger.Infof("Split transaction sent: %s", splitTx.TxID())
-
-	// Step 2: Wait a bit for the split tx to be processed
-	time.Sleep(1 * time.Second)
-
-	// Step 3: Create and send transactions concurrently
-	var wg sync.WaitGroup
-
-	transactions := make([]*bt.Tx, count)
-	txHashes := make([]*chainhash.Hash, count)
-	errChan := make(chan error, count)
-
-	for i := 0; i < count; i++ {
-		wg.Add(1)
-
-		go func(index int) {
-			defer wg.Done()
-
-			// Create a new transaction spending one of the split outputs
-			//nolint:gosec
-			utxo := &bt.UTXO{
-				TxIDHash:      splitTx.TxIDChainHash(),
-				Vout:          uint32(index),
-				LockingScript: splitTx.Outputs[index].LockingScript,
-				Satoshis:      splitTx.Outputs[index].Satoshis,
-			}
-
-			newTx := bt.NewTx()
-
-			err := newTx.FromUTXOs(utxo)
-			if err != nil {
-				errChan <- errors.NewProcessingError("error creating tx %d: %v", index, err)
-				return
-			}
-
-			// Create a single output with slightly less satoshis (fee)
-			err = newTx.AddP2PKHOutputFromPubKeyBytes(publicKey, splitAmount-1000)
-			if err != nil {
-				errChan <- errors.NewProcessingError("error adding output to tx %d: %v", index, err)
-				return
-			}
-
-			err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-			if err != nil {
-				errChan <- errors.NewProcessingError("error filling inputs for tx %d: %v", index, err)
-				return
-			}
-
-			_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
-			if err != nil {
-				errChan <- errors.NewProcessingError("error sending tx %d: %v", index, err)
-				return
-			}
-
-			logger.Infof("Concurrent transaction %d sent: %s", index+1, newTx.TxID())
-			transactions[index] = newTx
-			txHashes[index] = newTx.TxIDChainHash()
-		}(i)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	select {
-	case err := <-errChan:
-		if err != nil {
-			return nil, nil, err
-		}
-	default:
 	}
 
 	return transactions, txHashes, nil

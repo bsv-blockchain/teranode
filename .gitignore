@@ -6,7 +6,6 @@ data/
 *.run
 .DS_Store
 *.pprof
-*.out
 .idea/
 keyfile.json
 bitcoin-data/

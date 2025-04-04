@@ -22,26 +22,20 @@ Usage:
 package validator
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator/validator_api"
 	"github.com/bitcoin-sv/teranode/settings"
-	utxometa "github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/libsv/go-bt/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // batchItem represents a single item in a validation batch request
@@ -78,9 +72,6 @@ type Client struct {
 
 	// batcher handles the batching of transaction validation requests
 	batcher batcher.Batcher2[batchItem]
-
-	// validatorHTTPAddr holds the HTTP endpoint address for validator fallback
-	validatorHTTPAddr *url.URL
 }
 
 // NewClient creates and initializes a new validator client
@@ -115,13 +106,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	running.Store(true)
 
 	client := &Client{
-		client:            grpcClient,
-		logger:            logger,
-		running:           &running,
-		conn:              conn,
-		batchSize:         sendBatchSize,
-		batchTimeout:      sendBatchTimeout,
-		validatorHTTPAddr: tSettings.Validator.HTTPAddress,
+		client:       grpcClient,
+		logger:       logger,
+		running:      &running,
+		conn:         conn,
+		batchSize:    sendBatchSize,
+		batchTimeout: sendBatchTimeout,
 	}
 
 	if sendBatchSize > 0 {
@@ -129,7 +119,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			client.sendBatchToValidator(ctx, batch)
 		}
 		duration := time.Duration(sendBatchTimeout) * time.Millisecond
-		client.batcher = *batcher.New(sendBatchSize, duration, sendBatch, true)
+		client.batcher = *batcher.New[batchItem](sendBatchSize, duration, sendBatch, true)
 	}
 
 	return client, nil
@@ -183,7 +173,7 @@ func (c *Client) TriggerBatcher() {
 	}
 }
 
-func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
 	validationOptions := NewDefaultOptions()
 	for _, opt := range opts {
 		opt(validationOptions)
@@ -197,19 +187,10 @@ type validateBatchResponse struct {
 	err      error
 }
 
-func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *utxometa.Data, err error) {
-	// serialize transaction to bytes
-	var txBytes []byte
-	if tx.IsExtended() {
-		txBytes = tx.ExtendedBytes()
-	} else {
-		txBytes = tx.Bytes()
-	}
-
+func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if c.batchSize == 0 {
-		// Non-batch mode: direct validation
 		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-			TransactionData:      txBytes,
+			TransactionData:      tx.ExtendedBytes(),
 			BlockHeight:          blockHeight,
 			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
@@ -218,74 +199,47 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		})
 		if err != nil {
 			c.logger.Errorf("[ValidateWithOptions] failed to validate non-batched transaction: %v", err)
-			return nil, c.handleValidationError(ctx, tx, blockHeight, validationOptions, err)
+
+			return nil, errors.UnwrapGRPC(err)
 		}
 
-		return c.processValidationResponse(response.Metadata), nil
+		if response.Metadata != nil {
+			txMetaData = &meta.Data{}
+			meta.NewMetaDataFromBytes(&response.Metadata, txMetaData)
+		}
+	} else {
+		doneCh := make(chan validateBatchResponse)
+		/* batch mode */
+		c.batcher.Put(&batchItem{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData:      tx.ExtendedBytes(),
+				BlockHeight:          blockHeight,
+				SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
+				AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
+				SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
+				CreateConflicting:    &validationOptions.CreateConflicting,
+			},
+			done: doneCh,
+		})
+
+		r := <-doneCh
+
+		if r.metaData != nil {
+			txMetaData = &meta.Data{}
+			meta.NewMetaDataFromBytes(&r.metaData, txMetaData)
+		}
+
+		if r.err != nil {
+			c.logger.Errorf("[ValidateWithOptions] failed to validate batched transaction: %v", r.err)
+
+			return nil, r.err
+		}
 	}
 
-	// Batch mode
-	doneCh := make(chan validateBatchResponse)
-	c.batcher.Put(&batchItem{
-		req: &validator_api.ValidateTransactionRequest{
-			TransactionData:      tx.ExtendedBytes(),
-			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
-			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
-			SkipPolicyChecks:     &validationOptions.SkipPolicyChecks,
-			CreateConflicting:    &validationOptions.CreateConflicting,
-		},
-		done: doneCh,
-	})
-
-	r := <-doneCh
-
-	if r.err != nil {
-		c.logger.Errorf("[ValidateWithOptions] failed to validate batched transaction: %v", r.err)
-		return nil, r.err
-	}
-
-	return c.processValidationResponse(r.metaData), nil
-}
-
-// processValidationResponse handles the metadata conversion
-func (c *Client) processValidationResponse(metadataBytes []byte) *utxometa.Data {
-	if metadataBytes == nil {
-		return nil
-	}
-
-	result := &utxometa.Data{}
-	utxometa.NewMetaDataFromBytes(&metadataBytes, result)
-
-	return result
-}
-
-// handleValidationError processes validation errors and attempts HTTP fallback if appropriate
-func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.ResourceExhausted || c.validatorHTTPAddr == nil {
-		return errors.UnwrapGRPC(err)
-	}
-
-	// Try HTTP fallback
-	c.logger.Warnf("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-		tx.TxID(), st.Message())
-
-	httpErr := c.validateTransactionViaHTTP(ctx, tx, blockHeight, validationOptions)
-	if httpErr == nil {
-		// HTTP validation succeeded, but we don't have metadata
-		c.logger.Debugf("[ValidateWithOptions][%s] Successfully validated via HTTP fallback", tx.TxID())
-		return nil
-	}
-
-	c.logger.Errorf("[ValidateWithOptions][%s] HTTP fallback also failed: %v", tx.TxID(), httpErr)
-
-	return errors.UnwrapGRPC(err)
+	return txMetaData, nil
 }
 
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
-	// Prepare batch request
 	requests := make([]*validator_api.ValidateTransactionRequest, 0, len(batch))
 	for _, item := range batch {
 		requests = append(requests, item.req)
@@ -295,157 +249,31 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 		Transactions: requests,
 	}
 
-	// Try gRPC validation first
 	resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
 	if err != nil {
-		c.logger.Errorf("Failed to validate transaction batch: %v", err)
+		c.logger.Errorf("%v", err)
 
-		// Check if the error is related to message size (ResourceExhausted)
-		if c.shouldAttemptHTTPFallback(err) {
-			c.handleBatchHTTPFallback(ctx, batch)
-			return
+		for _, item := range batch {
+			item.done <- validateBatchResponse{
+				metaData: nil,
+				err:      errors.UnwrapGRPC(err),
+			}
 		}
-
-		// For any other error, notify all transactions with the unwrapped error
-		c.notifyAllBatchItems(batch, nil, errors.UnwrapGRPC(err))
 
 		return
 	}
 
-	// Process successful responses
-	c.processBatchResponse(batch, resp)
-}
-
-// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based on the error
-func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.ResourceExhausted && c.validatorHTTPAddr != nil
-}
-
-// handleBatchHTTPFallback attempts to validate each transaction individually via HTTP
-func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem) {
-	c.logger.Warnf("Batch transaction exceeds gRPC message limit, trying HTTP fallback for individual transactions")
-
-	for _, item := range batch {
-		// Extract transaction data and options from the request
-		txReq := item.req
-
-		tx, err := bt.NewTxFromBytes(txReq.TransactionData)
-		if err != nil {
-			item.done <- validateBatchResponse{
-				metaData: nil,
-				err:      errors.NewServiceError("Failed to parse transaction for HTTP fallback: %v", err),
-			}
-
-			continue
-		}
-
-		// Create options from the request
-		options := &Options{
-			SkipUtxoCreation:     *txReq.SkipUtxoCreation,
-			AddTXToBlockAssembly: *txReq.AddTxToBlockAssembly,
-			SkipPolicyChecks:     *txReq.SkipPolicyChecks,
-			CreateConflicting:    *txReq.CreateConflicting,
-		}
-
-		// Try HTTP fallback for this individual transaction
-		httpErr := c.validateTransactionViaHTTP(ctx, tx, txReq.BlockHeight, options)
-
-		if httpErr == nil {
-			c.logger.Debugf("[%s] Successfully validated via HTTP fallback", tx.TxID())
-			item.done <- validateBatchResponse{metaData: nil, err: nil}
-		} else {
-			c.logger.Errorf("[%s] HTTP fallback failed: %v", tx.TxID(), httpErr)
-			item.done <- validateBatchResponse{metaData: nil, err: httpErr}
-		}
-	}
-}
-
-// processBatchResponse handles successful batch responses
-func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.ValidateTransactionBatchResponse) {
 	for i, item := range batch {
 		if !resp.Errors[i].IsNil() {
-			item.done <- validateBatchResponse{metaData: nil, err: resp.Errors[i]}
+			item.done <- validateBatchResponse{
+				metaData: nil,
+				err:      resp.Errors[i],
+			}
 		} else {
-			item.done <- validateBatchResponse{metaData: resp.Metadata[i], err: nil}
+			item.done <- validateBatchResponse{
+				metaData: resp.Metadata[i],
+				err:      nil,
+			}
 		}
 	}
-}
-
-// notifyAllBatchItems notifies all items in a batch with the same response
-func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err error) {
-	for _, item := range batch {
-		item.done <- validateBatchResponse{metaData: metadata, err: err}
-	}
-}
-
-// validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
-// This is used as a fallback when gRPC message size limits are exceeded
-func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
-	if c.validatorHTTPAddr == nil {
-		return errors.NewServiceError("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, but no HTTP endpoint configured for validator", tx.TxID())
-	}
-
-	// Create an HTTP client with a timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	// Prepare request to validator /tx endpoint
-	endpoint, err := url.Parse("/tx")
-	if err != nil {
-		return errors.NewServiceError("[ValidateWithOptions][%s] error parsing endpoint /tx: %v", tx.TxID(), err)
-	}
-
-	// Add validation options as query parameters
-	queryParams := url.Values{}
-	if validationOptions.SkipUtxoCreation {
-		queryParams.Add("skipUtxoCreation", "true")
-	}
-
-	if validationOptions.AddTXToBlockAssembly {
-		queryParams.Add("addTxToBlockAssembly", "true")
-	}
-
-	if validationOptions.SkipPolicyChecks {
-		queryParams.Add("skipPolicyChecks", "true")
-	}
-
-	if validationOptions.CreateConflicting {
-		queryParams.Add("createConflicting", "true")
-	}
-
-	if blockHeight > 0 {
-		queryParams.Add("blockHeight", fmt.Sprintf("%d", blockHeight))
-	}
-
-	endpoint.RawQuery = queryParams.Encode()
-
-	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
-
-	// Create the HTTP request with the transaction data
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(tx.ExtendedBytes()))
-	if err != nil {
-		return errors.NewServiceError("[ValidateWithOptions][%s] error creating request to validator /tx endpoint: %v", tx.TxID(), err)
-	}
-
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	// Send the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return errors.NewServiceError("[ValidateWithOptions][%s] error sending transaction to validator /tx endpoint: %v", tx.TxID(), err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-			tx.TxID(), resp.StatusCode, string(body))
-	}
-
-	c.logger.Debugf("[ValidateWithOptions][%s] successfully validated using validator /tx endpoint", tx.TxID())
-
-	return nil
 }

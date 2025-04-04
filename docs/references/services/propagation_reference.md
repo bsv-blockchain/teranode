@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Propagation Server is a component of a Bitcoin SV implementation that handles the propagation of transactions across the network. It supports multiple communication protocols, including UDP and gRPC, and integrates with various services such as transaction validation, blockchain, and Kafka for efficient data distribution and processing.
+The Propagation Server is a component of a Bitcoin SV implementation that handles the propagation of transactions across the network. It supports multiple communication protocols, including UDP, QUIC, and gRPC, and integrates with various services such as transaction validation, blockchain, and Kafka for efficient data distribution and processing.
 
 ## Types
 
@@ -65,7 +65,7 @@ Initializes the Propagation Server.
 func (ps *PropagationServer) Start(ctx context.Context) (err error)
 ```
 
-Starts the Propagation Server, including UDP6 listeners and Kafka producer.
+Starts the Propagation Server, including UDP6 listeners, QUIC server, and Kafka producer.
 
 ### Stop
 
@@ -91,12 +91,19 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 
 Processes a batch of transactions.
 
+### ProcessTransactionStream
+
+```go
+func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error
+```
+
+Processes a stream of transactions.
 
 ## Key Processes
 
 ### Transaction Processing
 
-1. The server receives transactions through various protocols (UDP, gRPC).
+1. The server receives transactions through various protocols (UDP, QUIC, gRPC).
 2. Transactions are validated to ensure they are not coinbase transactions and are in the extended format.
 3. Valid transactions are stored in the transaction store.
 4. Transactions are sent to the validator (either directly or via Kafka) for further processing.
@@ -104,6 +111,10 @@ Processes a batch of transactions.
 ### UDP6 Multicast Listening
 
 The server can listen on multiple IPv6 multicast addresses for incoming transactions.
+
+### QUIC Server
+
+An experimental QUIC server is implemented for high-throughput transaction processing.
 
 ### Kafka Integration
 
@@ -114,6 +125,7 @@ The server uses a Kafka producer to send transactions to a validator service for
 The Propagation Server uses various configuration values from `gocore.Config()`, including:
 
 - IPv6 multicast addresses and interface
+- QUIC server address
 - Kafka configuration for validator transactions
 - gRPC server settings
 
@@ -138,7 +150,7 @@ The server uses goroutines and error groups for handling concurrent operations, 
 
 ## Security
 
-The server supports various security levels for HTTP/HTTPS configurations.
+The server implements TLS for the QUIC server, generating self-signed certificates on startup. It also supports various security levels for HTTP/HTTPS configurations.
 
 ## Metrics
 
@@ -150,4 +162,4 @@ The server initializes Prometheus metrics for monitoring various aspects of its 
 
 ## Extensibility
 
-The server is designed to be extensible, supporting multiple communication protocols (UDP, gRPC) for transaction ingestion. New protocols or processing methods can be added by implementing additional handlers and integrating them into the server's start-up process.
+The server is designed to be extensible, supporting multiple communication protocols (UDP, QUIC, gRPC) for transaction ingestion. New protocols or processing methods can be added by implementing additional handlers and integrating them into the server's start-up process.

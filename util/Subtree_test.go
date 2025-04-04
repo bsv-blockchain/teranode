@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -624,23 +623,23 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 // }
 
 func BenchmarkSubtree_AddNode(b *testing.B) {
-	st, err := NewIncompleteTreeByLeafCount(b.N)
+	st, err := NewTree(20)
 	require.NoError(b, err)
 
 	// create a slice of random hashes
-	hashes := make([]chainhash.Hash, b.N)
+	hashes := make([]*chainhash.Hash, b.N)
 
-	b32 := make([]byte, 32)
 	for i := 0; i < b.N; i++ {
 		// create random 32 bytes
-		_, _ = rand.Read(b32)
-		hashes[i] = chainhash.Hash(b32)
+		bytes := make([]byte, 32)
+		_, _ = rand.Read(bytes)
+		hashes[i], _ = chainhash.NewHash(bytes)
 	}
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = st.AddNode(hashes[i], 111, 0)
+		_ = st.AddNode(*hashes[i], 111, 0)
 	}
 }
 
@@ -710,67 +709,4 @@ func TestSubtree_ConflictingNodes(t *testing.T) {
 	assert.Len(t, newSt.Nodes, 2)
 	assert.Equal(t, 2, newSt.Length())
 	assert.Len(t, newSt.ConflictingNodes, 1)
-}
-
-func BenchmarkSubtree_Deserialize(b *testing.B) {
-	// populate subtree for test
-	subtree, _ := NewTreeByLeafCount(1024 * 1024)
-	for i := uint64(0); i < 1024*1024; i++ {
-		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
-		_ = subtree.AddNode(*hash, i, i)
-	}
-
-	subtreeBytes, _ := subtree.Serialize()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_, err := NewSubtreeFromBytes(subtreeBytes)
-		require.NoError(b, err)
-	}
-}
-
-func BenchmarkSubtree_DeserializeNodesFromReader(b *testing.B) {
-	// populate subtree for test
-	subtree, _ := NewTreeByLeafCount(1024 * 1024)
-	for i := uint64(0); i < 1024*1024; i++ {
-		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
-		_ = subtree.AddNode(*hash, i, i)
-	}
-
-	subtreeBytes, _ := subtree.Serialize()
-	subtreeReader := bytes.NewReader(subtreeBytes)
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_, err := DeserializeNodesFromReader(subtreeReader)
-		require.NoError(b, err)
-
-		// reset the subtree reader for the next loop
-		_, _ = subtreeReader.Seek(0, 0)
-	}
-}
-
-func BenchmarkSubtree_DeserializeFromReader(b *testing.B) {
-	// populate subtree for test
-	subtree, _ := NewTreeByLeafCount(1024 * 1024)
-	for i := uint64(0); i < 1024*1024; i++ {
-		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
-		_ = subtree.AddNode(*hash, i, i)
-	}
-
-	subtreeBytes, _ := subtree.Serialize()
-	subtreeReader := bytes.NewReader(subtreeBytes)
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		s := &Subtree{}
-		err := s.DeserializeFromReader(subtreeReader)
-		require.NoError(b, err)
-
-		// reset the subtree reader for the next loop
-		_, _ = subtreeReader.Seek(0, 0)
-	}
 }

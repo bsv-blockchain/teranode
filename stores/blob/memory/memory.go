@@ -236,7 +236,7 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption)
 }
 
 func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	b, err := m.Get(context.Background(), hash, opts...)
+	b, err := m.Get(context.Background(), hash)
 	if err != nil {
 		return nil, err
 	}

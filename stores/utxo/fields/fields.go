@@ -29,7 +29,6 @@ const (
 	BlockIDs            FieldName = "blockIDs"
 	BlockHeights        FieldName = "blockHeights"
 	SubtreeIdxs         FieldName = "subtreeIdxs"
-	Reassignments       FieldName = "reassignments"
 )
 
 func (f FieldName) String() string {

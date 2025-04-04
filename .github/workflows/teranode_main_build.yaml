@@ -30,6 +30,7 @@ jobs:
       tag_latest: true
       build_args: |
         DEBUG=true
+        RACE=true
         GITHUB_SHA=${{ github.sha }}
         GITHUB_REF=${{ github.ref_name }}
       use_packages: true

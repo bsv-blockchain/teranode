@@ -119,8 +119,8 @@ func (m *mockCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return args.Get(0).(*utxo.SpendResponse), args.Error(1)
 }
 
-func (m *mockCache) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
+func (m *mockCache) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
+	args := m.Called(ctx, tx, ignoreUnspendable)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

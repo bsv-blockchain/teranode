@@ -1,4 +1,4 @@
-//go:build test_all || test_tna || debug
+//go:build test_all || test_tna
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNA1TestSuite$/TestBroadcastNewTxAllNodes$" -tags test_tna ./test/tna/tna1_test.go
@@ -47,12 +47,14 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	url := "http://" + testEnv.Nodes[0].AssetURL
 	found := 0
 
-	node1 := testEnv.Nodes[0]
-	blockchainClientNode1 := node1.BlockchainClient
+	blockchainClientNode0 := testEnv.Nodes[0].BlockchainClient
 
-	var receivedSubtreeHashes []*chainhash.Hash
+	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
 
-	blockchainSubscription, err := blockchainClientNode1.Subscribe(ctx, "test-broadcast-pow")
+	var hashes []*chainhash.Hash
+
+	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
 	if err != nil {
 		t.Errorf("error subscribing to blockchain service: %v", err)
 		return
@@ -70,9 +72,9 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 					hash, err := chainhash.NewHash(notification.Hash)
 					require.NoError(t, err)
 
-					receivedSubtreeHashes = append(receivedSubtreeHashes, hash)
+					hashes = append(hashes, hash)
 
-					t.Logf("Length of hashes: %d", len(receivedSubtreeHashes))
+					t.Logf("Length of hashes: %d", len(hashes))
 				} else {
 					t.Logf("other notifications than subtrees")
 					t.Logf("notification type: %v", notification.Type)
@@ -81,51 +83,38 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 		}
 	}()
 
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err)
+	time.Sleep(10 * time.Second)
+
 	parenTx := block1.CoinbaseTx
-	_, sentTxHashes, err := node1.CreateAndSendTxs(t, ctx, parenTx, 35)
+	_, hashesTx, err := testEnv.Nodes[0].CreateAndSendTxs(ctx, parenTx, 35)
 
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
-	t.Logf("Hashes in created block: %v", sentTxHashes)
+	t.Logf("Hashes in created block: %v", hashesTx)
 
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	timeout := time.After(10 * time.Second)
-
-	success := false
-	for !success {
-		select {
-		case <-timeout:
-			t.Fatalf("Timeout waiting for transaction to appear in block assembly")
-		case <-ticker.C:
-			if len(receivedSubtreeHashes) > 0 {
-				t.Logf("First element of hashes: %v", receivedSubtreeHashes[0])
-				success = true
-			} else {
-				t.Log("hashes is empty!")
-			}
-		}
+	if len(hashes) > 0 {
+		t.Logf("First element of hashes: %v", hashes[0])
+	} else {
+		t.Log("hashes is empty!")
 	}
 
-	t.Logf("num of subtrees: %d", len(receivedSubtreeHashes))
+	t.Logf("num of subtrees: %d", len(hashes))
 
-	//check if at least 1 tx it's included inside the subtree received by notification
-	txHashesInFirstSubtree, err := helper.GetSubtreeTxHashes(ctx, logger, receivedSubtreeHashes[0], url, node1.Settings)
+	//check if at least 1 tx it's included inside the subtree receveid by notification
+	txHashes, err := helper.GetSubtreeTxHashes(ctx, logger, hashes[0], url, testEnv.Nodes[0].Settings)
 	require.NoError(t, err, "Failed to get subtree tx hashes: %v", err)
-	t.Logf("Subtree tx hashes: %v", txHashesInFirstSubtree)
+	t.Logf("Subtree tx hashes: %v", txHashes)
 
 	hashSet := make(map[string]bool)
 
-	for _, hash := range sentTxHashes {
+	for _, hash := range hashesTx {
 		hashSet[hash.String()] = true
 	}
 
-	for _, eachTxInTheSubtree := range txHashesInFirstSubtree {
-		if hashSet[eachTxInTheSubtree.String()] {
+	for _, txSubtrees := range txHashes {
+		if hashSet[txSubtrees.String()] {
 			found += 1
 		}
 	}
@@ -135,6 +124,4 @@ func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	} else {
 		t.Fatalf("Test failed, no txs in common")
 	}
-
-	//TODO: We are not checking if all 35 TXs are included inside the subtrees received, so we should have a check for that
 }

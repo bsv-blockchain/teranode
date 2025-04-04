@@ -33,6 +33,7 @@ type Repository struct {
    SubtreeStore        blob.Store
    BlockPersisterStore blob.Store
    BlockchainClient    blockchain.ClientI
+   CoinbaseProvider    coinbase_api.CoinbaseAPIClient
 }
 ```
 
@@ -59,7 +60,7 @@ The `HTTP` type represents the HTTP server for the Asset Service.
 #### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
 ```
 
 Creates a new instance of the `Server`.
@@ -101,7 +102,7 @@ Stops the Asset Service.
 #### NewRepository
 
 ```go
-func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
+func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
 ```
 
 Creates a new instance of the `Repository`.
@@ -162,30 +163,6 @@ func (repo *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrph
 
 Retrieves the last N blocks.
 
-#### GetBlockHeaders
-
-```go
-func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-```
-
-Retrieves a sequence of block headers starting from a specific hash.
-
-#### GetBlockHeadersToCommonAncestor
-
-```go
-func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-```
-
-Retrieves block headers from the target hash back to the common ancestor with the provided block locator.
-
-#### GetBlockHeadersFromHeight
-
-```go
-func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-```
-
-Retrieves block headers starting from a specific height up to the specified limit.
-
 #### GetSubtree
 
 ```go
@@ -193,46 +170,6 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 ```
 
 Retrieves a subtree by its hash.
-
-#### GetSubtreeBytes
-
-```go
-func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
-```
-
-Retrieves the raw bytes of a subtree.
-
-#### GetSubtreeReader
-
-```go
-func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
-```
-
-Provides a reader interface for accessing subtree data.
-
-#### GetSubtreeDataReader
-
-```go
-func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
-```
-
-Provides a reader interface for accessing subtree data from the block persister.
-
-#### GetSubtreeExists
-
-```go
-func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
-```
-
-Checks if a subtree with the given hash exists in the store.
-
-#### GetSubtreeHead
-
-```go
-func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
-```
-
-Retrieves only the head portion of a subtree, containing fees and size information.
 
 #### GetUtxo
 
@@ -242,14 +179,6 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 
 Retrieves UTXO information.
 
-#### GetUtxoBytes
-
-```go
-func (repo *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error)
-```
-
-Retrieves the raw bytes of spending transaction ID for a specific UTXO.
-
 #### GetBestBlockHeader
 
 ```go
@@ -257,14 +186,6 @@ func (repo *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHea
 ```
 
 Retrieves the best (most recent) block header.
-
-#### GetBlockLocator
-
-```go
-func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
-```
-
-Retrieves a sequence of block hashes at exponentially increasing distances back from the provided block hash or the best block if no hash is specified.
 
 #### GetBalance
 
@@ -274,28 +195,12 @@ func (repo *Repository) GetBalance(ctx context.Context) (uint64, uint64, error)
 
 Retrieves the balance information.
 
-#### GetBlockForks
-
-```go
-func (repo *Repository) GetBlockForks(ctx context.Context, hash *chainhash.Hash) (*model.ForkInfo, error)
-```
-
-Retrieves information about forks related to the specified block.
-
-#### GetBlockSubtrees
-
-```go
-func (repo *Repository) GetBlockSubtrees(ctx context.Context, hash *chainhash.Hash) ([]*util.Subtree, error)
-```
-
-Retrieves all subtrees included in the specified block.
-
 ### HTTP
 
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository) (*HTTP, error)
+func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error)
 ```
 
 Creates a new instance of the HTTP server.

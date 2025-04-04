@@ -144,10 +144,41 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	subnet, err := parseAddress(ipOrSubnet)
-	if err != nil {
-		b.logger.Errorf("error parsing ip or subnet: %v", err)
-		return err
+	var subnet *net.IPNet
+
+	var err error
+
+	var key string
+
+	if strings.Contains(ipOrSubnet, "/") {
+		_, subnet, err = net.ParseCIDR(ipOrSubnet)
+		if err != nil {
+			b.logger.Errorf("error parsing ip or subnet: %v", err)
+
+			return err
+		}
+
+		key = subnet.String()
+	} else {
+		ip := net.ParseIP(ipOrSubnet)
+		if ip == nil {
+			b.logger.Errorf("Can't parse IP or subnet: %s", ipOrSubnet)
+
+			return err
+		}
+
+		if ip.To4() != nil {
+			_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/32", ipOrSubnet))
+		} else {
+			_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/128", ipOrSubnet))
+		}
+
+		if err != nil {
+			b.logger.Errorf("error creating subnet for IP: %v", err)
+			return err
+		}
+
+		key = ipOrSubnet
 	}
 
 	banInfo := BanInfo{
@@ -155,11 +186,11 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 		Subnet:         subnet,
 	}
 
-	b.bannedPeers[ipOrSubnet] = banInfo
+	go b.notifySubscribers(BanEvent{Action: "add", IP: key, Subnet: subnet})
 
-	go b.notifySubscribers(BanEvent{Action: "add", IP: ipOrSubnet, Subnet: subnet})
+	b.bannedPeers[key] = banInfo
 
-	return b.savePeerToDatabase(ctx, ipOrSubnet, banInfo)
+	return b.savePeerToDatabase(ctx, key, banInfo)
 }
 
 // Remove removes an IP or subnet from the ban list.
@@ -173,21 +204,43 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	subnet, err := parseAddress(ipOrSubnet)
-	if err != nil {
-		b.logger.Errorf("Invalid IP address or subnet: %s", ipOrSubnet)
-		return err
+	var key string
+
+	var subnet *net.IPNet
+
+	var err error
+
+	if strings.Contains(ipOrSubnet, "/") {
+		// It's a subnet
+		_, subnet, err = net.ParseCIDR(ipOrSubnet)
+		if err != nil {
+			return errors.New(errors.ERR_INVALID_SUBNET, fmt.Sprintf("can't parse subnet: %s", ipOrSubnet))
+		}
+
+		key = subnet.String()
+		delete(b.bannedPeers, key)
+	} else {
+		// It's an IP address
+		ip := net.ParseIP(ipOrSubnet)
+		if ip == nil {
+			return errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't parse IP: %s", ipOrSubnet))
+		}
+
+		if ip.To4() != nil {
+			_, subnet, _ = net.ParseCIDR(fmt.Sprintf("%s/32", ipOrSubnet))
+		} else {
+			_, subnet, _ = net.ParseCIDR(fmt.Sprintf("%s/128", ipOrSubnet))
+		}
+
+		key = ipOrSubnet
+		delete(b.bannedPeers, key)
 	}
 
-	if _, ok := b.bannedPeers[ipOrSubnet]; !ok {
-		return nil // Not found, nothing to do
-	}
+	_, err = b.db.ExecContext(ctx, "DELETE FROM bans WHERE key = $1", key)
 
-	delete(b.bannedPeers, ipOrSubnet)
+	go b.notifySubscribers(BanEvent{Action: "remove", IP: key, Subnet: subnet})
 
-	go b.notifySubscribers(BanEvent{Action: "remove", IP: ipOrSubnet, Subnet: subnet})
-
-	return b.removePeerFromDatabase(ctx, ipOrSubnet)
+	return err
 }
 
 // IsBanned checks if a given IP address is currently banned.
@@ -265,15 +318,6 @@ func (b *BanList) savePeerToDatabase(ctx context.Context, key string, info BanIn
 	return nil
 }
 
-func (b *BanList) removePeerFromDatabase(ctx context.Context, key string) error {
-	_, err := b.db.ExecContext(ctx, "DELETE FROM bans WHERE key = $1", key)
-	if err != nil {
-		return errors.NewProcessingError("failed to remove peer from database", err)
-	}
-
-	return nil
-}
-
 func (b *BanList) loadFromDatabase(ctx context.Context) error {
 	rows, err := b.db.QueryContext(ctx, "SELECT key, expiration_time, subnet FROM bans")
 	if err != nil {
@@ -338,48 +382,24 @@ func (b *BanList) Subscribe() chan BanEvent {
 // Unsubscribe removes a subscriber from receiving ban events.
 // Parameters:
 //   - ch: Channel to unsubscribe
-// Note: The subscriber is responsible for closing the channel after unsubscribing.
 func (b *BanList) Unsubscribe(ch chan BanEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.subscribers, ch)
-	// Don't close the channel here - let the subscriber close it
-	// to avoid race conditions with notifySubscribers
+	close(ch)
 }
 
 func (b *BanList) notifySubscribers(event BanEvent) {
-	// Make a copy of subscribers to avoid long lock and reduce chance of race conditions
 	b.mu.RLock()
-	subscribers := make([]chan BanEvent, 0, len(b.subscribers))
+	defer b.mu.RUnlock()
+
 	for ch := range b.subscribers {
-		subscribers = append(subscribers, ch)
-	}
-	b.mu.RUnlock()
-
-	// Notify each subscriber without holding the lock
-	for _, ch := range subscribers {
-		// Use a closure to safely send to each channel
-		func(ch chan BanEvent) {
-			defer func() {
-				if r := recover(); r != nil {
-					// If we hit a closed channel or other panic, log and continue
-					b.logger.Warnf("Failed to send notification: %v", r)
-					// Remove the subscriber if its channel is closed
-					if _, ok := r.(error); ok && strings.Contains(r.(error).Error(), "closed channel") {
-						b.mu.Lock()
-						delete(b.subscribers, ch)
-						b.mu.Unlock()
-					}
-				}
-			}()
-
-			select {
-			case ch <- event:
-				b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
-			default:
-				b.logger.Warnf("Skipped notification for %s due to full channel", event.IP)
-			}
-		}(ch)
+		select {
+		case ch <- event:
+			b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
+		default:
+			b.logger.Warnf("Skipped notification for %s due to full channel", event.IP)
+		}
 	}
 
 	b.logger.Debugf("Finished notifying subscribers for %s\n", event.IP)
@@ -410,41 +430,5 @@ func (b *BanList) Clear() {
 	_, err := b.db.ExecContext(ctx, "DELETE FROM bans")
 	if err != nil {
 		b.logger.Errorf("Failed to clear bans table: %v", err)
-	}
-}
-
-func parseAddress(ipOrSubnet string) (subnet *net.IPNet, err error) {
-	if strings.Contains(ipOrSubnet, "/") {
-		// It's a subnet
-		_, subnet, err = net.ParseCIDR(ipOrSubnet)
-		if err != nil {
-			return nil, errors.New(errors.ERR_INVALID_SUBNET, fmt.Sprintf("can't parse subnet: %s", ipOrSubnet))
-		}
-
-		return subnet, nil
-	} else {
-		if strings.Contains(ipOrSubnet, ":") {
-			// remove port
-			ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
-		}
-		// It's an IP address
-		ip := net.ParseIP(ipOrSubnet)
-		if ip == nil {
-			return nil, errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't parse IP: %s", ipOrSubnet))
-		}
-
-		var cidr string
-		if ip.To4() != nil {
-			cidr = fmt.Sprintf("%s/32", ipOrSubnet)
-		} else {
-			cidr = fmt.Sprintf("%s/128", ipOrSubnet)
-		}
-
-		_, subnet, err = net.ParseCIDR(cidr)
-		if err != nil {
-			return nil, errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't create subnet from IP: %s", ipOrSubnet))
-		}
-
-		return subnet, nil
 	}
 }

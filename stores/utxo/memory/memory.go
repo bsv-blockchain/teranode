@@ -125,7 +125,6 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 		frozenMap:       make(map[chainhash.Hash]bool),
 		frozen:          false,
 		conflicting:     options.Conflicting,
-		unspendable:     options.Unspendable,
 	}
 
 	if len(options.MinedBlockInfos) > 0 {
@@ -161,10 +160,6 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 				parentTx.conflictingChildren = append(parentTx.conflictingChildren, *txHash)
 			}
 		}
-	}
-
-	if options.Unspendable {
-		txMetaData.Unspendable = true
 	}
 
 	utxoHashes, err := utxo.GetUtxoHashes(tx)
@@ -271,7 +266,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 //   - UTXO is not frozen
 //   - UTXO is spendable (maturity/timelock)
 //   - UTXO is not already spent by different tx
-func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

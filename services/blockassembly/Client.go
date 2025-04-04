@@ -101,7 +101,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
 
 	return client, nil
 }
@@ -145,7 +145,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 	sendBatch := func(batch []*batchItem) {
 		client.sendBatchToBlockAssembly(ctx, batch)
 	}
-	client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
 
 	return client, nil
 }

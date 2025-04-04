@@ -24,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/ordishs/gocore"
@@ -145,7 +144,6 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"node":                  handleUnimplemented,
 	"ping":                  handleUnimplemented,
 	"invalidateblock":       handleInvalidateBlock,
-	"isbanned":              handleIsBanned,
 	"reconsiderblock":       handleReconsiderBlock,
 	"searchrawtransactions": handleUnimplemented,
 	"sendrawtransaction":    handleSendRawTransaction,
@@ -558,7 +556,6 @@ type RPCServer struct {
 	p2pClient              p2p.ClientI
 	assetHTTPURL           *url.URL
 	helpCacher             *helpCacher
-	utxoStore              utxo.Store
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1081,7 +1078,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1103,7 +1100,6 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		blockchainClient:       blockchainClient,
 		assetHTTPURL:           parsedURL,
 		helpCacher:             newHelpCacher(),
-		utxoStore:              utxoStore,
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

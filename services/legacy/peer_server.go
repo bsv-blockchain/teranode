@@ -66,10 +66,6 @@ const (
 	// retries when connecting to persistent peers.  It is adjusted by the
 	// number of retries such that there is a retry backoff.
 	connectionRetryInterval = time.Second * 5
-
-	// maxKnownAddresses is the maximum number of known addresses to
-	// store in the peer.
-	maxKnownAddresses = 10000
 )
 
 var (
@@ -365,22 +361,8 @@ func (sp *serverPeer) addKnownAddresses(addresses []*wire.NetAddress) {
 	sp.addrMtx.Lock()
 	defer sp.addrMtx.Unlock()
 
-	for _, addr := range addresses {
-		if len(sp.knownAddresses) >= maxKnownAddresses {
-			sp.cleanupKnownAddresses() // Remove old entries when limit is reached
-		}
-
-		sp.knownAddresses[addrmgr.NetAddressKey(addr)] = struct{}{}
-	}
-}
-
-func (sp *serverPeer) cleanupKnownAddresses() {
-	for addr := range sp.knownAddresses {
-		delete(sp.knownAddresses, addr)
-
-		if len(sp.knownAddresses) <= maxKnownAddresses/2 {
-			break // Stop after clearing half to prevent performance issues
-		}
+	for _, na := range addresses {
+		sp.knownAddresses[addrmgr.NetAddressKey(na)] = struct{}{}
 	}
 }
 

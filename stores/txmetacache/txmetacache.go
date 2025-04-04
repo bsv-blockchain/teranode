@@ -416,7 +416,7 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*utxo.Spend, error) {
 	return t.utxoStore.Spend(ctx, tx)
 }
 

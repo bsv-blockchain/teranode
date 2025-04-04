@@ -67,23 +67,15 @@ type Spend struct {
 	// ConflictingTxID is the transaction ID that conflicts with this UTXO
 	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
 
-	// BlockIDs is the list of blocks the transaction has been mined into
-	BlockIDs []uint32 `json:"blockIDs,omitempty"`
-
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
-}
-
-type IgnoreFlags struct {
-	IgnoreConflicting bool
-	IgnoreUnspendable bool
 }
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
 	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
-	MetaFieldsWithTx = append(MetaFields, fields.Tx)
+	MetaFieldsWithTx = []fields.FieldName{fields.Tx, fields.LockTime, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
 )
 
 // UnresolvedMetaData represents a transaction's metadata that needs to be resolved.
@@ -115,7 +107,6 @@ type CreateOptions struct {
 	IsCoinbase      *bool
 	Frozen          bool
 	Conflicting     bool
-	Unspendable     bool
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -151,17 +142,10 @@ func WithFrozen(b bool) CreateOption {
 	}
 }
 
-// WithConflicting marks a transaction as conflicting with another transaction.
+// WithConflicting returns a CreateOption that marks a UTXO as conflicting with another transaction.
 func WithConflicting(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.Conflicting = b
-	}
-}
-
-// WithUnspendable sets the transactions as unspendable on creation
-func WithUnspendable(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.Unspendable = b
 	}
 }
 
@@ -198,7 +182,7 @@ type Store interface {
 	// Blockchain specific functions
 
 	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+	Spend(ctx context.Context, tx *bt.Tx, ignoreUnspendable ...bool) ([]*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.

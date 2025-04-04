@@ -3,18 +3,19 @@
 
 ## Table of Contents
 
-- [GRPC Documentation - PropagationAPI](#grpc-documentation---propagationapi)
-  - [Table of Contents](#table-of-contents)
-  - [propagation\_api.proto](#propagation_apiproto)
-    - [EmptyMessage](#emptymessage)
-    - [GetRequest](#getrequest)
-    - [GetResponse](#getresponse)
-    - [HealthResponse](#healthresponse)
-    - [ProcessTransactionBatchRequest](#processtransactionbatchrequest)
-    - [ProcessTransactionBatchResponse](#processtransactionbatchresponse)
-    - [ProcessTransactionRequest](#processtransactionrequest)
-    - [PropagationAPI](#propagationapi)
-  - [Scalar Value Types](#scalar-value-types)
+- [propagation_api.proto](#propagation_api.proto)
+    - [EmptyMessage](#EmptyMessage)
+    - [GetRequest](#GetRequest)
+    - [GetResponse](#GetResponse)
+    - [HealthResponse](#HealthResponse)
+    - [ProcessTransactionBatchRequest](#ProcessTransactionBatchRequest)
+    - [ProcessTransactionBatchResponse](#ProcessTransactionBatchResponse)
+    - [ProcessTransactionHexRequest](#ProcessTransactionHexRequest)
+    - [ProcessTransactionRequest](#ProcessTransactionRequest)
+
+    - [PropagationAPI](#PropagationAPI)
+
+- [Scalar Value Types](#scalar-value-types)
 
 
 
@@ -112,6 +113,21 @@ swagger:model ProcessTransactionBatchResponse
 
 
 
+<a name="ProcessTransactionHexRequest"></a>
+
+### ProcessTransactionHexRequest
+swagger:model ProcessTransactionRequest
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| tx | [string](#string) |  |  |
+
+
+
+
+
+
 <a name="ProcessTransactionRequest"></a>
 
 ### ProcessTransactionRequest
@@ -143,6 +159,9 @@ swagger:model ProcessTransactionRequest
 | HealthGRPC | [EmptyMessage](#propagation_api-EmptyMessage) | [HealthResponse](#propagation_api-HealthResponse) | Health returns the health of the API. |
 | ProcessTransaction | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
 | ProcessTransactionBatch | [ProcessTransactionBatchRequest](#propagation_api-ProcessTransactionBatchRequest) | [ProcessTransactionBatchResponse](#propagation_api-ProcessTransactionBatchResponse) |  |
+| ProcessTransactionHex | [ProcessTransactionHexRequest](#propagation_api-ProcessTransactionHexRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
+| ProcessTransactionStream | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) stream | [EmptyMessage](#propagation_api-EmptyMessage) stream |  |
+| ProcessTransactionDebug | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
 
  <!-- end services -->
 

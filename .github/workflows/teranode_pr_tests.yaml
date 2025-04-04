@@ -9,7 +9,7 @@ permissions:
 
 env:
   SETTINGS_CONTEXT_DEFAULT: test
-  GO_VERSION: '1.24.1'
+  GO_VERSION: '1.24.0'
 
 jobs:
   golangci:
@@ -46,12 +46,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
       - name: Run Go tests
-        run: make test
+        # run: USE_JSON_REPORTER=true make longtests
+        run: make longtests
         continue-on-error: false
       - name: Upload coverage report
         if: always()
@@ -70,6 +77,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -116,7 +129,7 @@ jobs:
           service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
 
       - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v5
+        uses: sonarsource/sonarqube-scan-action@v4.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarqube.prod.ubsv.dev

@@ -1,6 +1,6 @@
 # These values should be overwritten by buildx --build-args and replaced with cluster base/run ID from repo
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
+ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
+ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
 ARG PLATFORM_ARCH=linux/arm64
 FROM ${BASE_IMG}
 ARG GITHUB_SHA
@@ -25,8 +25,8 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-RUN TXMETA_SMALL_TAG=true make build -j 32
-# RUN TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build -j 32
+# RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64

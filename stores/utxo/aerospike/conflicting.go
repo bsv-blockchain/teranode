@@ -139,6 +139,30 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
+func (s *Store) SetUnspendable(_ context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	var (
+		batchWritePolicy = aerospike.NewBatchWritePolicy()
+		batchRecords     = make([]aerospike.BatchRecordIfc, 0, len(txHashes))
+	)
+
+	for _, txHash := range txHashes {
+		key, err := aerospike.NewKey(s.namespace, s.setName, txHash.CloneBytes())
+		if err != nil {
+			return errors.NewProcessingError("could not create aerospike key", err)
+		}
+
+		op := aerospike.PutOp(aerospike.NewBin(fields.Unspendable.String(), setValue))
+
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, op))
+	}
+
+	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+		return errors.NewProcessingError("could not batch write conflicting flag", err)
+	}
+
+	return nil
+}
+
 func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
 	updateParentTxHashes := make(map[chainhash.Hash]struct{})
 	for _, input := range tx.Inputs {

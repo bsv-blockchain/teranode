@@ -9,6 +9,7 @@ permissions:
 
 env:
   SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: '>=1.24.0'
 
 jobs:
   # Tests and code lint
@@ -27,6 +28,7 @@ jobs:
       tag_latest: false
       build_args: |
         DEBUG=true
+        RACE=true
         GITHUB_SHA=${{ github.sha }}
         GITHUB_REF=${{ github.ref_name }}
       use_packages: true

@@ -10,13 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/services/blockchain"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -54,6 +52,14 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	logger := cluster.Logger
 	settingsMap := suite.TConfig.Teranode.SettingsMap()
 
+	// defer func() {
+	// 	if r := recover(); r != nil {
+	// 		t.Errorf("Recovered from panic: %v", r)
+
+	// 		_ = cluster.Compose.Down(cluster.Context)
+	// 	}
+	// }()
+
 	blockchainNode1 := cluster.Nodes[0].BlockchainClient
 	header1, meta1, _ := blockchainNode1.GetBestBlockHeader(ctx)
 	t.Logf("Best block header on Node 1: %s", header1.Hash().String())
@@ -78,13 +84,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	chainWork3 := new(big.Int).SetBytes(meta3.ChainWork)
 	logger.Infof("Chainwork on Node 3: %v", chainWork3)
 
-	clients := make([]blockchain.ClientI, len(cluster.Nodes))
-	for i, node := range cluster.Nodes {
-		clients[i] = node.BlockchainClient
-	}
-
-	errSync := helper.WaitForNodesToSync(ctx, clients, 30*time.Second)
-	require.NoError(t, errSync)
+	time.Sleep(60 * time.Second)
 
 	// Stage 2
 	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.teranode2.tnf6.stage2"

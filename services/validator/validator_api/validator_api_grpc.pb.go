@@ -24,11 +24,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ValidatorAPI_HealthGRPC_FullMethodName               = "/validator_api.ValidatorAPI/HealthGRPC"
-	ValidatorAPI_ValidateTransaction_FullMethodName      = "/validator_api.ValidatorAPI/ValidateTransaction"
-	ValidatorAPI_ValidateTransactionBatch_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
-	ValidatorAPI_GetBlockHeight_FullMethodName           = "/validator_api.ValidatorAPI/GetBlockHeight"
-	ValidatorAPI_GetMedianBlockTime_FullMethodName       = "/validator_api.ValidatorAPI/GetMedianBlockTime"
+	ValidatorAPI_HealthGRPC_FullMethodName                = "/validator_api.ValidatorAPI/HealthGRPC"
+	ValidatorAPI_ValidateTransaction_FullMethodName       = "/validator_api.ValidatorAPI/ValidateTransaction"
+	ValidatorAPI_ValidateTransactionBatch_FullMethodName  = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
+	ValidatorAPI_ValidateTransactionStream_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionStream"
+	ValidatorAPI_GetBlockHeight_FullMethodName            = "/validator_api.ValidatorAPI/GetBlockHeight"
+	ValidatorAPI_GetMedianBlockTime_FullMethodName        = "/validator_api.ValidatorAPI/GetMedianBlockTime"
 )
 
 // ValidatorAPIClient is the client API for ValidatorAPI service.
@@ -46,6 +47,9 @@ type ValidatorAPIClient interface {
 	// ValidateTransactionBatch validates multiple transactions in a single request
 	// Provides efficient batch processing of transactions
 	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error)
+	// ValidateTransactionStream validates transactions received through a stream
+	// Allows for continuous streaming of transactions for validation
+	ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ValidateTransactionRequest, ValidateTransactionResponse], error)
 	// GetBlockHeight retrieves the current block height
 	// Used for validation context and protocol upgrade determination
 	GetBlockHeight(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockHeightResponse, error)
@@ -92,6 +96,19 @@ func (c *validatorAPIClient) ValidateTransactionBatch(ctx context.Context, in *V
 	return out, nil
 }
 
+func (c *validatorAPIClient) ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ValidateTransactionRequest, ValidateTransactionResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ValidatorAPI_ServiceDesc.Streams[0], ValidatorAPI_ValidateTransactionStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ValidateTransactionRequest, ValidateTransactionResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ValidatorAPI_ValidateTransactionStreamClient = grpc.ClientStreamingClient[ValidateTransactionRequest, ValidateTransactionResponse]
+
 func (c *validatorAPIClient) GetBlockHeight(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockHeightResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeightResponse)
@@ -127,6 +144,9 @@ type ValidatorAPIServer interface {
 	// ValidateTransactionBatch validates multiple transactions in a single request
 	// Provides efficient batch processing of transactions
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
+	// ValidateTransactionStream validates transactions received through a stream
+	// Allows for continuous streaming of transactions for validation
+	ValidateTransactionStream(grpc.ClientStreamingServer[ValidateTransactionRequest, ValidateTransactionResponse]) error
 	// GetBlockHeight retrieves the current block height
 	// Used for validation context and protocol upgrade determination
 	GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error)
@@ -151,6 +171,9 @@ func (UnimplementedValidatorAPIServer) ValidateTransaction(context.Context, *Val
 }
 func (UnimplementedValidatorAPIServer) ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateTransactionBatch not implemented")
+}
+func (UnimplementedValidatorAPIServer) ValidateTransactionStream(grpc.ClientStreamingServer[ValidateTransactionRequest, ValidateTransactionResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ValidateTransactionStream not implemented")
 }
 func (UnimplementedValidatorAPIServer) GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeight not implemented")
@@ -233,6 +256,13 @@ func _ValidatorAPI_ValidateTransactionBatch_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ValidatorAPI_ValidateTransactionStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ValidatorAPIServer).ValidateTransactionStream(&grpc.GenericServerStream[ValidateTransactionRequest, ValidateTransactionResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ValidatorAPI_ValidateTransactionStreamServer = grpc.ClientStreamingServer[ValidateTransactionRequest, ValidateTransactionResponse]
+
 func _ValidatorAPI_GetBlockHeight_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
@@ -297,6 +327,12 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ValidatorAPI_GetMedianBlockTime_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ValidateTransactionStream",
+			Handler:       _ValidatorAPI_ValidateTransactionStream_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "services/validator/validator_api/validator_api.proto",
 }

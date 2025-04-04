@@ -128,7 +128,7 @@
 ### Additional Topics
 - [Technology Stack](./topics/technologyStack.md)
 - [Testing Framework](./topics/understandingTheTestingFramework.md)
-- [QA Guide & Instructions for Functional Requirement Tests](./topics/functionalRequirementTests.md)
+- [QA Guide & Instructions for Functional Requirement Tests](test/README.md)
 - [Double Spends](./topics/architecture/understandingDoubleSpends.md)
 
 -----
@@ -147,7 +147,6 @@
 - [P2P Server](./references/services/p2p_reference.md)
 - [Propagation Server](./references/services/propagation_reference.md)
 - [RPC Server](./references/services/rpc_reference.md)
-- [RPC API Docs](https://bitcoin-sv.github.io/teranode/references/wallet-toolbox/open-rpc/)
 - [Subtree Validation](./references/services/subtreevalidation_reference.md)
 - [UTXO Persister](./references/services/utxopersister_reference.md)
 - [TX Validator](./references/services/validator_reference.md)
@@ -188,16 +187,6 @@
 1. [Glossary](./references/glossary.md)
 2. Contributing to Teranode
 3. [License Information](./references/licenseInformation.md)
-
------
-
-## Conclusion
-
-Teranode represents a significant advancement in blockchain infrastructure, designed to provide a scalable, reliable, and high-performance foundation for the Bitcoin SV network. This documentation serves as a comprehensive resource for developers, miners, and other stakeholders involved with Teranode implementation and operation.
-
-By leveraging a microservices architecture and modern technologies, Teranode addresses the challenges of building a truly scalable blockchain system. Whether you're developing against Teranode, operating mining infrastructure, or simply exploring its architecture, this documentation provides the necessary guidance to understand and utilize the platform effectively.
-
-We encourage you to explore the various sections of this documentation based on your specific needs and to contribute to the ongoing development and improvement of Teranode.
 
 ---
 

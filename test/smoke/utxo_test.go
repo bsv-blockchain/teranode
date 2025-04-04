@@ -1,4 +1,4 @@
-//go:build test_all || test_smoke || test_utxo || debug
+//go:build test_all || test_smoke || test_utxo
 
 // How to run each test:
 // Clean up docker containers before running the test manually
@@ -33,6 +33,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -65,80 +66,120 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 	url := "http://" + framework.Nodes[0].AssetURL
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &framework.Nodes[0].DistributorClient
 
-	// Generate private keys and addresses
-	// privateKey0, err := bec.NewPrivateKey(bec.S256())
-	// require.NoError(t, err, "Failed to generate private key")
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		t.Errorf("Failed to generate private key: %v", err)
+	}
 
 	privateKey1, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	if err != nil {
+		t.Errorf("Failed to generate private key: %v", err)
+	}
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	if err != nil {
+		t.Errorf("Failed to create address: %v", err)
+	}
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
-	require.NoError(t, err, "Failed to create address")
+	if err != nil {
+		t.Errorf("Failed to create address: %v", err)
+	}
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	if err != nil {
+		t.Errorf("Failed to request funds: %v", err)
+	}
 
-	parentTx := block1.CoinbaseTx
-	w, err := wif.DecodeWIF(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
-	require.NoError(t, err)
+	t.Logf("Transaction: %s %s\n", faucetTx.TxIDChainHash(), faucetTx.TxID())
 
-	coinbasePrivateKey := w.PrivKey
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		t.Errorf("Failed to send transaction: %v", err)
+	}
 
-	// Create first transaction using coinbase UTXO
+	logger.Infof("Request funds Transaction sent: %s %v\n", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+	output := faucetTx.Outputs[0]
 	utxo := &bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
+		TxIDHash:      faucetTx.TxIDChainHash(),
 		Vout:          uint32(0),
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
 	}
 
 	firstTx := bt.NewTx()
+
 	err = firstTx.FromUTXOs(utxo)
-	require.NoError(t, err, "Error adding UTXO to transaction")
+	if err != nil {
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+	}
 
 	err = firstTx.AddP2PKHOutputFromAddress(address1.AddressString, 10000)
-	require.NoError(t, err, "Error adding output to transaction")
+	if err != nil {
+		t.Errorf("Error adding output to transaction: %v", err)
+	}
 
-	err = firstTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
-	require.NoError(t, err, "Error filling transaction inputs")
+	err = firstTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
+	if err != nil {
+		t.Errorf("Error filling transaction inputs: %v", err)
+	}
 
 	_, err = txDistributor.SendTransaction(ctx, firstTx)
-	require.NoError(t, err, "Failed to send first transaction")
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
 
-	logger.Infof("First Transaction created with output[0] of coinbase sent: %s %s", firstTx.TxIDChainHash(), firstTx.TxID())
+	logger.Infof("First Transaction created with output[0] of faucet sent: %s %s\n", firstTx.TxIDChainHash(), firstTx.TxID())
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
 
-	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	// Create second transaction using coinbase UTXO[1]
+	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
+
+	output = faucetTx.Outputs[1]
 	utxo = &bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
+		TxIDHash:      faucetTx.TxIDChainHash(),
 		Vout:          uint32(1),
-		LockingScript: parentTx.Outputs[1].LockingScript,
-		Satoshis:      parentTx.Outputs[1].Satoshis,
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
 	}
 
 	secondTx := bt.NewTx()
+
 	err = secondTx.FromUTXOs(utxo)
-	require.NoError(t, err, "Error adding UTXO to transaction")
+	if err != nil {
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+	}
 
 	err = secondTx.AddP2PKHOutputFromAddress(address1.AddressString, 10000)
-	require.NoError(t, err, "Error adding output to transaction")
+	if err != nil {
+		t.Errorf("Error adding output to transaction: %v", err)
+	}
 
-	err = secondTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
-	require.NoError(t, err, "Error filling transaction inputs")
+	err = secondTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
+	if err != nil {
+		t.Errorf("Error filling transaction inputs: %v", err)
+	}
 
 	_, err = txDistributor.SendTransaction(ctx, secondTx)
-	require.NoError(t, err, "Failed to send second transaction")
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
 
-	logger.Infof("Second Transaction created with output[1] of coinbase sent %s %s", secondTx.TxIDChainHash(), secondTx.TxID())
+	logger.Infof("Second Transaction created with output[1] of faucet sent %s %s\n", secondTx.TxIDChainHash(), secondTx.TxID())
 
 	blockStore := framework.Nodes[0].ClientBlockstore
 	subtreeStore := framework.Nodes[0].ClientSubtreestore
@@ -168,6 +209,11 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 		}
 
 		targetHeight++
+		// _, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")
@@ -191,27 +237,40 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	url := "http://" + framework.Nodes[0].AssetURL
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &framework.Nodes[0].DistributorClient
 
-	// Generate private keys and addresses
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
+
 	privateKey0, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
 
 	privateKey1, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
-	require.NoError(t, err, "Failed to create address")
+	assert.NoError(t, err, "Failed to create address")
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	assert.NoError(t, err, "Failed to request funds")
 
-	parentTx := block1.CoinbaseTx
+	logger.Infof("Faucet Transaction: %s %s", faucetTx.TxIDChainHash(), faucetTx.TxID())
+
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
+
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
+	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Split outputs into two parts
-	firstSet := len(parentTx.Outputs) - 2
+	firstSet := len(faucetTx.Outputs) - 2
 	secondSet := firstSet
 
 	createAndSendTx := func(outputs []*bt.Output, startIndex int) (*bt.Tx, error) {
@@ -219,6 +278,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 
 		spendingTx := bt.NewTx()
 		totalSatoshis := uint64(0)
+
 		utxos := make([]*bt.UTXO, 0)
 
 		const maxUint32 = 1<<32 - 1
@@ -229,85 +289,94 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 				return nil, errors.NewProcessingError("Vout index out of range")
 			}
 
+			// nolint: gosec
 			utxo := &bt.UTXO{
-				TxIDHash:      parentTx.TxIDChainHash(),
-				Vout:          uint32(idx),
+				TxIDHash:      faucetTx.TxIDChainHash(),
+				Vout:          uint32(idx), //nolint:gosec // G115: already checked for overflow above
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
 			}
-			utxos = append(utxos, utxo)
+			utxos = append(utxos, utxo) // Collect UTXOs
 			totalSatoshis += output.Satoshis
 		}
 
+		// Add UTXOs to the transaction
 		err := spendingTx.FromUTXOs(utxos...)
-		require.NoError(t, err, "Error adding UTXOs to transaction")
+		assert.NoError(t, err, "Error adding UTXOs to transaction")
 
+		// Subtract a small fee
 		fee := uint64(1000)
 		amountToSend := totalSatoshis - fee
 
 		err = spendingTx.AddP2PKHOutputFromAddress(address1.AddressString, amountToSend)
-		require.NoError(t, err, "Error adding output to transaction")
+		assert.NoError(t, err, "Error adding output to transaction")
 
 		err = spendingTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
-		require.NoError(t, err, "Error filling transaction inputs")
+		assert.NoError(t, err, "Error filling transaction inputs")
 
 		_, err = txDistributor.SendTransaction(ctx, spendingTx)
-		if err != nil {
-			return nil, err
-		}
+		assert.NoError(t, err, "Failed to send spending transaction")
 
 		return spendingTx, nil
 	}
 
 	// Create and send first transaction
-	tx1, err := createAndSendTx(parentTx.Outputs[:firstSet], 0)
-	require.NoError(t, err, "Failed to create and send first transaction")
+	tx1, err := createAndSendTx(faucetTx.Outputs[:firstSet], 0)
+	assert.NoError(t, err, "Failed to create and send first transaction")
 	logger.Infof("First Transaction sent: %s %s", tx1.TxIDChainHash(), tx1.TxID())
 
 	// Create and send second transaction
-	tx2, err := createAndSendTx(parentTx.Outputs[secondSet:], secondSet)
-	require.NoError(t, err, "Failed to create and send second transaction")
+	tx2, err := createAndSendTx(faucetTx.Outputs[secondSet:], secondSet)
+	assert.NoError(t, err, "Failed to create and send second transaction")
 	logger.Infof("Second Transaction sent: %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
-
-	blockStore := framework.Nodes[0].ClientBlockstore
-	subtreeStore := framework.Nodes[0].ClientSubtreestore
-	blockchainClient := framework.Nodes[0].BlockchainClient
+	assert.NoError(t, err, "Failed to mine block")
 
 	// Verify both transactions are in blocks
-	for i, tx := range []*bt.Tx{tx1, tx2} {
-		bl := false
-		targetHeight := height + 1
+	blTx1 := false
+	blTx2 := false
+	targetHeight := height + 1
 
-		for j := 0; j < 5; j++ {
-			err := helper.WaitForBlockHeight(url, targetHeight, 60)
-			require.NoError(t, err, "Failed to wait for block height")
+	for j := 0; j < 5; j++ {
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		assert.NoError(t, err, "Failed to wait for block height")
 
-			_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
-			require.NoError(t, err, "Failed to generate block")
+		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+		assert.NoError(t, err, "Failed to generate block")
 
-			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-			logger.Infof("Testing on Best block header: %v", header[0].Hash())
+		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-			bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
-			if err != nil {
-				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
-			}
-
-			if bl {
-				break
-			}
-
-			targetHeight++
+		if !blTx1 {
+			blTx1, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx1.TxIDChainHash())
 		}
 
-		assert.True(t, bl, "Transaction %d not found in block", i+1)
+		if !blTx2 {
+			blTx2, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx2.TxIDChainHash())
+		}
+
+		if err != nil {
+			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
+		}
+
+		if blTx1 && blTx2 {
+			break
+		}
+
+		targetHeight++
+		_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
+		assert.NoError(t, err, "Failed to mine block")
 	}
+
+	assert.True(t, blTx1, "Transaction %d not found in block", tx1.TxIDChainHash())
+	assert.True(t, blTx2, "Transaction %d not found in block", tx2.TxIDChainHash())
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
 }
 
 /*
@@ -364,27 +433,34 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	url := "http://" + framework.Nodes[0].AssetURL
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &framework.Nodes[0].DistributorClient
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
 
-	// Generate private keys and addresses
+	// Generate keys and addresses
 	privateKey0, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
 
 	privateKey1, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
-	require.NoError(t, err, "Failed to create address")
+	assert.NoError(t, err, "Failed to create address")
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	// Request funds from faucet
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	assert.NoError(t, err, "Failed to request funds")
 
-	parentTx := block1.CoinbaseTx
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
 	// Split outputs into two parts
-	firstSet := len(parentTx.Outputs) - 2
+	firstSet := len(faucetTx.Outputs) - 2
 	secondSet := firstSet
 
 	createTx := func(outputs []*bt.Output, startIndex int) (*bt.Tx, error) {
@@ -394,10 +470,11 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 		totalSatoshis := uint64(0)
 		utxos := make([]*bt.UTXO, 0)
 
+		// nolint: gosec
 		for i, output := range outputs {
 			idx := i + startIndex
 			utxo := &bt.UTXO{
-				TxIDHash:      parentTx.TxIDChainHash(),
+				TxIDHash:      faucetTx.TxIDChainHash(),
 				Vout:          uint32(idx),
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
@@ -428,16 +505,16 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	}
 
 	// Create and send first transaction
-	tx1, err := createTx(parentTx.Outputs[:firstSet], 0)
-	require.NoError(t, err, "Failed to create first transaction")
+	tx1, err := createTx(faucetTx.Outputs[:firstSet], 0)
+	assert.NoError(t, err, "Failed to create first transaction")
 
 	_, err = txDistributor.SendTransaction(ctx, tx1)
-	require.NoError(t, err, "Failed to send first transaction")
+	assert.NoError(t, err, "Failed to send first transaction")
 	logger.Infof("First Transaction sent: %s %s", tx1.TxIDChainHash(), tx1.TxID())
 
 	// Create second transaction
-	tx2, err := createTx(parentTx.Outputs[secondSet:], secondSet)
-	require.NoError(t, err, "Failed to create second transaction")
+	tx2, err := createTx(faucetTx.Outputs[secondSet:], secondSet)
+	assert.NoError(t, err, "Failed to create second transaction")
 
 	// Channel to coordinate operations
 	done := make(chan struct{})
@@ -481,7 +558,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	time.Sleep(2 * time.Second) // Wait before restart
 
 	err = framework.StartNode("aerospike-1")
-	require.NoError(t, err, "Failed to restart Aerospike")
+	assert.NoError(t, err, "Failed to restart Aerospike")
 	time.Sleep(5 * time.Second) // Wait for Aerospike to fully start
 
 	// Mine blocks and verify transactions
@@ -489,7 +566,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	logger.Infof("Block height before mining: %d", height)
 
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
+	assert.NoError(t, err, "Failed to mine block")
 
 	blockStore := framework.Nodes[0].ClientBlockstore
 	subtreeStore := framework.Nodes[0].ClientSubtreestore
@@ -500,10 +577,10 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 		targetHeight := height + 1
 		for i := 0; i < 5; i++ {
 			err := helper.WaitForBlockHeight(url, targetHeight, 60)
-			require.NoError(t, err, "Failed to wait for block height")
+			assert.NoError(t, err, "Failed to wait for block height")
 
 			_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
-			require.NoError(t, err, "Failed to generate block")
+			assert.NoError(t, err, "Failed to generate block")
 
 			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 			logger.Infof("Checking %s in block at height %d", desc, targetHeight)
@@ -529,7 +606,11 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 		return false
 	}
 
+	// assert.True(t, verifyTxInBlock(tx1, "first transaction"), "First transaction not found in block")
 	assert.True(t, verifyTxInBlock(tx2, "second transaction"), "Second transaction not found in block")
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
 }
 
 // nolint: gocognit
@@ -542,53 +623,93 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	url := "http://" + framework.Nodes[0].AssetURL
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := framework.Nodes[0].DistributorClient
 
-	// Generate private keys and addresses
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+
+	if err != nil {
+		t.Errorf("Failed to decode Coinbase private key: %v", err)
+	}
+
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+
 	privateKey, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	if err != nil {
+		t.Errorf("Failed to generate private key: %v", err)
+	}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err, "Failed to create address")
+	if err != nil {
+		t.Errorf("Failed to create address: %v", err)
+	}
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		t.Errorf("Failed to request funds: %v", err)
+	}
 
-	parentTx := block1.CoinbaseTx
+	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
-	// Create first transaction using coinbase UTXO
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	if err != nil {
+		t.Errorf("Failed to send transaction: %v", err)
+	}
+
+	logger.Infof("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
+	output := tx.Outputs[0]
 	utxo := &bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
+		TxIDHash:      tx.TxIDChainHash(),
 		Vout:          uint32(0),
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
 	}
 
 	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err, "Error adding UTXO to transaction")
 
-	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
-	require.NoError(t, err, "Error adding output to transaction")
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+	if err != nil {
+		t.Errorf("Error adding output to transaction: %v", err)
+	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
-	require.NoError(t, err, "Error filling transaction inputs")
+	if err != nil {
+		t.Errorf("Error filling transaction inputs: %v", err)
+	}
 
 	_, err = txDistributor.SendTransaction(ctx, newTx)
-	require.NoError(t, err, "Failed to send transaction")
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
 
-	logger.Infof("Transaction sent: %s %s", newTx.TxIDChainHash(), newTx.TxID())
+	logger.Infof("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 
 	height, _ := helper.GetBlockHeight(url)
-	logger.Infof("Block height before mining: %d", height)
+	logger.Infof("Block height before mining: %d\n", height)
 
-	err = framework.Nodes[0].UtxoStore.Delete(framework.Context, parentTx.TxIDChainHash())
-	require.NoError(t, err, "Failed to delete parent tx")
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+
+	err = framework.Nodes[0].UtxoStore.Delete(framework.Context, tx.TxIDChainHash())
+	if err != nil {
+		t.Errorf("Failed to delete parent tx: %v", err)
+	}
 
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
+
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
 
 	blockStore := framework.Nodes[0].ClientBlockstore
 	subtreeStore := framework.Nodes[0].ClientSubtreestore
@@ -598,10 +719,10 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 
 	for i := 0; i < 5; i++ {
 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
-		require.NoError(t, err, "Failed to wait for block height")
+		assert.NoError(t, err, "Failed to wait for block height")
 
 		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
-		require.NoError(t, err, "Failed to generate block")
+		assert.NoError(t, err, "Failed to generate block")
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
@@ -616,6 +737,10 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 		}
 
 		targetHeight++
+
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")
@@ -645,29 +770,41 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	require.NoError(t, err, "Failed to initialize Teranode test clients")
 
 	url := "http://" + framework.Nodes[0].AssetURL
-	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := framework.Nodes[0].DistributorClient
 
-	// Generate private keys and addresses
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
+
 	privateKey0, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
 
 	privateKey1, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
-	require.NoError(t, err, "Failed to create address")
+	assert.NoError(t, err, "Failed to create address")
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, false)
+	assert.NoError(t, err, "Failed to request funds")
 
-	parentTx := block1.CoinbaseTx
+	logger.Infof("Faucet Transaction: %s %s", faucetTx.TxIDChainHash(), faucetTx.TxID())
+
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
+
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+
+	blockStore := framework.Nodes[0].ClientBlockstore
+	subtreeStore := framework.Nodes[0].ClientSubtreestore
+	blockchainClient := framework.Nodes[0].BlockchainClient
 
 	// Split outputs into two parts
-	firstSet := len(parentTx.Outputs) - 2
+	firstSet := len(faucetTx.Outputs) - 2
 
 	getSpends := func(outputs []*bt.Output, startIndex int) []*utxo.Spend {
 		logger.Infof("Creating spends with %d outputs", len(outputs))
@@ -682,9 +819,11 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 				return nil
 			}
 
-			utxoHash, _ := util.UTXOHashFromOutput(parentTx.TxIDChainHash(), output, uint32(idx))
+			// nolint: gosec
+			utxoHash, _ := util.UTXOHashFromOutput(faucetTx.TxIDChainHash(), output, uint32(idx))
+			// nolint: gosec
 			spend := &utxo.Spend{
-				TxID:     parentTx.TxIDChainHash(),
+				TxID:     faucetTx.TxIDChainHash(),
 				Vout:     uint32(idx),
 				UTXOHash: utxoHash,
 			}
@@ -699,6 +838,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 		spendingTx := bt.NewTx()
 		totalSatoshis := uint64(0)
+
 		utxos := make([]*bt.UTXO, 0)
 
 		const maxUint32 = 1<<32 - 1
@@ -709,27 +849,30 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 				return nil, errors.NewProcessingError("Vout index out of range")
 			}
 
+			// nolint: gosec
 			utxo := &bt.UTXO{
-				TxIDHash:      parentTx.TxIDChainHash(),
-				Vout:          uint32(idx),
+				TxIDHash:      faucetTx.TxIDChainHash(),
+				Vout:          uint32(idx), //nolint:gosec // G115: already checked for overflow above
 				LockingScript: output.LockingScript,
 				Satoshis:      output.Satoshis,
 			}
-			utxos = append(utxos, utxo)
+			utxos = append(utxos, utxo) // Collect UTXOs
 			totalSatoshis += output.Satoshis
 		}
 
+		// Add UTXOs to the transaction
 		err := spendingTx.FromUTXOs(utxos...)
-		require.NoError(t, err, "Error adding UTXOs to transaction")
+		assert.NoError(t, err, "Error adding UTXOs to transaction")
 
+		// Subtract a small fee
 		fee := uint64(1000)
 		amountToSend := totalSatoshis - fee
 
 		err = spendingTx.AddP2PKHOutputFromAddress(address1.AddressString, amountToSend)
-		require.NoError(t, err, "Error adding output to transaction")
+		assert.NoError(t, err, "Error adding output to transaction")
 
 		err = spendingTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
-		require.NoError(t, err, "Error filling transaction inputs")
+		assert.NoError(t, err, "Error filling transaction inputs")
 
 		_, err = txDistributor.SendTransaction(ctx, spendingTx)
 		if err != nil {
@@ -739,60 +882,61 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 		return spendingTx, nil
 	}
 
-	// Get spends for the first set of outputs
-	spends := getSpends(parentTx.Outputs[:firstSet], 0)
+	// TODO: which settings do we use?
+
+	// get spends for the first set of outputs
+	spends := getSpends(faucetTx.Outputs[:firstSet], 0)
 	err = framework.Nodes[0].UtxoStore.FreezeUTXOs(ctx, spends, framework.Nodes[0].Settings)
-	require.NoError(t, err, "Failed to freeze UTXOs")
-
-	// Create and send transaction with the frozen spends - should fail
-	_, err = createAndSendTx(parentTx.Outputs[:firstSet], 0)
-	require.Error(t, err, "Should not allow to spend frozen UTXOs")
-
+	assert.NoError(t, err, "Failed to freeze UTXOs")
+	// Create and send transaction with the frozen spends
+	_, err = createAndSendTx(faucetTx.Outputs[:firstSet], 0)
+	assert.Error(t, err, "Should not allow to spend frozen UTXOs")
 	// Unfreeze the UTXOs
 	err = framework.Nodes[0].UtxoStore.UnFreezeUTXOs(ctx, spends, framework.Nodes[0].Settings)
-	require.NoError(t, err, "Failed to unfreeze UTXOs")
-
-	// Create and send transaction with the unfrozen spends - should succeed
-	tx1, err := createAndSendTx(parentTx.Outputs[:firstSet], 0)
-	require.NoError(t, err, "Failed to create and send transaction after unfreezing")
+	assert.NoError(t, err, "Failed to unfreeze UTXOs")
+	// Create and send transaction with the unfrozen spends
+	tx1, err := createAndSendTx(faucetTx.Outputs[:firstSet], 0)
+	assert.NoError(t, err, "Failed to create and send first transaction")
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
+	assert.NoError(t, err, "Failed to mine block")
 
-	// Verify transaction is in block
-	blockStore := framework.Nodes[0].ClientBlockstore
-	subtreeStore := framework.Nodes[0].ClientSubtreestore
-	blockchainClient := framework.Nodes[0].BlockchainClient
+	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
+	// Verify both transactions are in blocks
+	for i, tx := range []*bt.Tx{tx1} {
+		bl := false
+		targetHeight := height + 1
 
-	bl := false
-	targetHeight := height + 1
+		for j := 0; j < 5; j++ {
+			err := helper.WaitForBlockHeight(url, targetHeight, 60)
+			assert.NoError(t, err, "Failed to wait for block height")
 
-	for j := 0; j < 5; j++ {
-		err := helper.WaitForBlockHeight(url, targetHeight, 60)
-		require.NoError(t, err, "Failed to wait for block height")
+			_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
+			assert.NoError(t, err, "Failed to generate block")
 
-		_, err = helper.CallRPC(rpcEndpoint, "generate", []interface{}{101})
-		require.NoError(t, err, "Failed to generate block")
+			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+			logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-		logger.Infof("Testing on Best block header: %v", header[0].Hash())
+			bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx.TxIDChainHash())
+			if err != nil {
+				t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
+			}
 
-		bl, err = helper.TestTxInBlock(ctx, logger, blockStore, subtreeStore, header[0].Hash()[:], *tx1.TxIDChainHash())
-		if err != nil {
-			t.Errorf("error checking if tx exists in block: %v, error %v", meta[0].Height, err)
+			if bl {
+				break
+			}
+
+			targetHeight++
 		}
 
-		if bl {
-			break
-		}
-
-		targetHeight++
+		assert.True(t, bl, "Transaction %d not found in block", i+1)
 	}
 
-	assert.True(t, bl, "Transaction not found in block")
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
 }
 
 func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
@@ -803,46 +947,32 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 
 	framework.StopNode("teranode2")
 
-	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &framework.Nodes[0].DistributorClient
 
-	// Generate private key and address
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
+
 	privateKey0, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err, "Failed to generate private key")
+	assert.NoError(t, err, "Failed to generate private key")
 
-	// Get coinbase transaction from block 1
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err, "Failed to get block 1")
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
 
-	parentTx := block1.CoinbaseTx
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	assert.NoError(t, err, "Failed to request funds")
 
-	// Create first transaction using coinbase UTXO
-	utxo := &bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
-	}
+	logger.Infof("Faucet Transaction: %s %s", faucetTx.TxIDChainHash(), faucetTx.TxID())
 
-	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err, "Error adding UTXO to transaction")
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
 
-	err = newTx.AddP2PKHOutputFromPubKeyBytes(privateKey0.PubKey().SerialiseCompressed(), 10000)
-	require.NoError(t, err, "Error adding output to transaction")
-
-	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
-	require.NoError(t, err, "Error filling transaction inputs")
-
-	_, err = txDistributor.SendTransaction(ctx, newTx)
-	require.NoError(t, err, "Failed to send transaction")
-
-	logger.Infof("Transaction sent: %s with %d outputs", newTx.TxIDChainHash(), len(newTx.Outputs))
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
 	time.Sleep(10 * time.Second)
 
-	srcFile := fmt.Sprintf("teranode1/external/%s.tx", newTx.TxID())
-	destFile := fmt.Sprintf("teranode2/external/%s.tx", newTx.TxID())
+	srcFile := fmt.Sprintf("teranode1/external/%s.tx", faucetTx.TxID())
+	destFile := fmt.Sprintf("teranode2/external/%s.tx", faucetTx.TxID())
 	resp, err := suite.TeranodeTestEnv.ComposeSharedStorage.Copy(
 		ctx,
 		&tstore.CopyRequest{
@@ -858,20 +988,28 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	framework.StartNode("teranode2")
 
 	err = framework.InitializeTeranodeTestClients()
-	require.NoError(t, err, "Failed to initialize teranode test clients")
+	if err != nil {
+		t.Errorf("Failed to initialize teranode test clients: %v", err)
+	}
 	time.Sleep(10 * time.Second)
 
 	err = framework.Nodes[1].BlockchainClient.Run(framework.Context, "test")
-	require.NoError(t, err, "Failed to run blockchain client")
+	if err != nil {
+		t.Errorf("Failed to run blockchain client: %v", err)
+	}
 
 	// mine a block
 	_, err = helper.MineBlockWithRPC(ctx, framework.Nodes[0], logger)
-	require.NoError(t, err, "Failed to mine block")
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
 
 	time.Sleep(30 * time.Second)
 
-	md, err := framework.Nodes[1].UtxoStore.Get(ctx, newTx.TxIDChainHash())
-	require.NoError(t, err, "Failed to get UTXO")
+	md, err := framework.Nodes[1].UtxoStore.Get(ctx, faucetTx.TxIDChainHash())
+	if err != nil {
+		t.Errorf("Failed to get UTXO: %v", err)
+	}
 
 	assert.NotNil(t, md.Tx.TxID(), "Failed to get UTXO")
 }

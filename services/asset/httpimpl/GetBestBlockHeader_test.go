@@ -29,7 +29,7 @@ func TestGetBestBlockHeader(t *testing.T) {
 		}
 
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
-		assert.Equal(t, echo.MIMEApplicationJSON, responseRecorder.Header().Get("Content-Type"))
+		assert.Equal(t, "application/json; charset=UTF-8", responseRecorder.Header().Get("Content-Type"))
 
 		var response map[string]interface{}
 		if err = json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {

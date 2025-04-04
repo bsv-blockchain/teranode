@@ -85,7 +85,6 @@ The below table summarises the services supported in the current version:
 | RPC Command             | Status     | Description                                                                  |
 |------------------------|------------|------------------------------------------------------------------------------|
 | createrawtransaction   | Supported  | Creates a raw transaction without signing it                                 |
-| freeze                | Supported  | Freezes a specific UTXO, preventing it from being spent                     |
 | generate               | Supported  | Generates blocks (for testing)                                               |
 | generatetoaddress      | Supported  | Generates blocks to a specified address (for testing)                        |
 | getbestblockhash       | Supported  | Returns the hash of the best (tip) block in the longest blockchain           |
@@ -101,14 +100,11 @@ The below table summarises the services supported in the current version:
 | getrawtransaction     | Supported  | Returns raw transaction data                                                 |
 | getminingcandidate    | Supported  | Returns data needed to construct a block to work on                          |
 | invalidateblock       | Supported  | Permanently marks a block as invalid                                         |
-| isbanned              | Supported  | Checks if a network address is currently banned                              |
-| reassign              | Supported  | Reassigns ownership of a specific UTXO to a new Bitcoin address             |
 | reconsiderblock       | Supported  | Removes invalidity status of a block                                         |
 | sendrawtransaction    | Supported  | Submits raw transaction to local node and network                            |
 | setban               | Supported  | Attempts to add or remove an IP/Subnet from the banned list                  |
 | stop                 | Supported  | Stops the node                                                               |
 | submitminingsolution | Supported  | Submits a mining solution to the network                                     |
-| unfreeze             | Supported  | Unfreezes a previously frozen UTXO, allowing it to be spent                 |
 | version              | Supported  | Returns version information about the server                                 |
 
 
