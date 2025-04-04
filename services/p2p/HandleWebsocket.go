@@ -219,8 +219,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL s
 		select {
 		case <-ctx.Done():
 			ws.Close()
-		case <-done:
-			// Message handling completed normally
+		case <-done: // Message handling completed normally
 		}
 
 		return nil

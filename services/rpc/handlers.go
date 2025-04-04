@@ -28,6 +28,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // handleGetBlock implements the getblock command.
@@ -676,24 +677,30 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	defer deferFn()
 
 	peerCount := 0
+
+	var legacyPeerInfo *peer_api.GetPeersResponse
+
+	var newPeerInfo *p2p_api.GetPeersResponse
+
+	var err error
+
 	// get legacy peer info
-	legacyPeerInfo, err := s.peerClient.GetPeers(ctx)
+	legacyPeerInfo, err = s.peerClient.GetPeers(ctx)
 	if err != nil {
-		// not critical -legacy service may not be running, so log as info
+		// not critical - legacy service may not be running, so log as info
 		s.logger.Infof("error getting legacy peer info: %v", err)
-	} else {
+	} else if legacyPeerInfo != nil {
 		peerCount += len(legacyPeerInfo.Peers)
 	}
 
 	// get new peer info
-	newPeerInfo, err := s.p2pClient.GetPeers(ctx)
+	newPeerInfo, err = s.p2pClient.GetPeers(ctx)
 	if err != nil {
-		s.logger.Errorf("error getting new peer info: %v", err)
-	} else {
+		// not critical - p2p service may not be running, so log as warning
+		s.logger.Warnf("error getting new peer info: %v", err)
+	} else if newPeerInfo != nil {
 		peerCount += len(newPeerInfo.Peers)
-	}
 
-	if newPeerInfo != nil {
 		for _, np := range newPeerInfo.Peers {
 			s.logger.Debugf("new peer: %v", np)
 		}
@@ -996,19 +1003,83 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	// is banned teranode
+	// check if P2P service is available
+	var p2pBanned bool
+
 	isBanned, err := s.p2pClient.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 	if err != nil {
-		return nil, err
+		s.logger.Warnf("Failed to check if banned in P2P service: %v", err)
+	} else {
+		p2pBanned = isBanned.IsBanned
 	}
 
-	// is banned legacy
+	// check if legacy peer service is available
+	var peerBanned bool
+
 	isBannedLegacy, err := s.peerClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 	if err != nil {
-		return nil, err
+		s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
+	} else {
+		peerBanned = isBannedLegacy.IsBanned
 	}
 
-	return isBanned.IsBanned || isBannedLegacy.IsBanned, nil
+	return p2pBanned || peerBanned, nil
+}
+
+func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleListBanned",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleListBanned),
+		tracing.WithLogMessage(s.logger, "[handleListBanned] called"),
+	)
+	defer deferFn()
+
+	s.logger.Debugf("in handleListBanned")
+
+	// check if P2P service is available
+	var bannedList []string
+
+	p2pListBannedResp, err := s.p2pClient.ListBanned(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Warnf("Failed to get banned list in P2P service: %v", err)
+	} else {
+		bannedList = p2pListBannedResp.Banned
+	}
+
+	// check if legacy peer service is available
+
+	listBannedLegacy, err := s.peerClient.ListBanned(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Warnf("Failed to get banned list in legacy peer service: %v", err)
+	} else {
+		bannedList = append(bannedList, listBannedLegacy.Banned...)
+	}
+
+	return bannedList, nil
+}
+
+func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleClearBanned",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleClearBanned),
+		tracing.WithLogMessage(s.logger, "[handleClearBanned] called"),
+	)
+	defer deferFn()
+
+	s.logger.Debugf("in handleClearBanned")
+
+	// check if P2P service is available
+	_, err := s.p2pClient.ClearBanned(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
+	}
+	// check if legacy peer service is available
+	_, err = s.peerClient.ClearBanned(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+	}
+
+	return true, nil
 }
 func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleSetBan",

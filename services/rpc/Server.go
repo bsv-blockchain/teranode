@@ -146,6 +146,8 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"ping":                  handleUnimplemented,
 	"invalidateblock":       handleInvalidateBlock,
 	"isbanned":              handleIsBanned,
+	"listbanned":            handleListBanned,
+	"clearbanned":           handleClearBanned,
 	"reconsiderblock":       handleReconsiderBlock,
 	"searchrawtransactions": handleUnimplemented,
 	"sendrawtransaction":    handleSendRawTransaction,

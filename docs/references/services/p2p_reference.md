@@ -133,7 +133,7 @@ The server uses Kafka producers and consumers for efficient distribution of bloc
 
 The following settings can be configured for the p2p service:
 
-- `p2p_ip`: Specifies the IP address for the P2P service to bind to.
+- `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
 - `p2p_port`: Defines the port number on which the P2P service listens.
 - `p2p_topic_prefix`: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
 - `p2p_block_topic`: The topic name used for block-related messages in the P2P network.

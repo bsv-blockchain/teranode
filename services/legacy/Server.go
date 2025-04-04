@@ -263,6 +263,15 @@ func (s *Server) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (
 	return &peer_api.IsBannedResponse{IsBanned: s.server.banList.IsBanned(peer.IpOrSubnet)}, nil
 }
 
+func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
+	return &peer_api.ListBannedResponse{Banned: s.server.banList.ListBanned()}, nil
+}
+
+func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
+	s.server.banList.Clear()
+	return &peer_api.ClearBannedResponse{Ok: true}, nil
+}
+
 func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
 	err := s.banPeer(peer.Addr, peer.Until)
 	if err != nil {

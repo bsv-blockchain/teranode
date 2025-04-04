@@ -236,6 +236,20 @@ func (b *BanList) IsBanned(ipStr string) bool {
 	return false
 }
 
+// ListBanned returns a list of all banned IP addresses and subnets
+func (b *BanList) ListBanned() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	banned := make([]string, 0, len(b.bannedPeers))
+
+	for key := range b.bannedPeers {
+		banned = append(banned, key)
+	}
+
+	return banned
+}
+
 func (b *BanList) createTables(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -337,20 +351,21 @@ func (b *BanList) Subscribe() chan BanEvent {
 
 // Unsubscribe removes a subscriber from receiving ban events.
 // Parameters:
-//   - ch: Channel to unsubscribe
+// - ch: Channel to unsubscribe
 // Note: The subscriber is responsible for closing the channel after unsubscribing.
 func (b *BanList) Unsubscribe(ch chan BanEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	delete(b.subscribers, ch)
 	// Don't close the channel here - let the subscriber close it
 	// to avoid race conditions with notifySubscribers
+	delete(b.subscribers, ch)
 }
 
 func (b *BanList) notifySubscribers(event BanEvent) {
 	// Make a copy of subscribers to avoid long lock and reduce chance of race conditions
 	b.mu.RLock()
 	subscribers := make([]chan BanEvent, 0, len(b.subscribers))
+
 	for ch := range b.subscribers {
 		subscribers = append(subscribers, ch)
 	}

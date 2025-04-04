@@ -96,7 +96,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
     - If no existing key is found, it generates a new one using the `generatePrivateKey()` function.
 
 2. **Configuration Retrieval and Topic Registration**:
-    - Retrieves required configuration settings like `p2p_ip`, `p2p_port`, and `p2p_topic_prefix`.
+    - Retrieves required configuration settings like `p2p_listen_addresses`, `p2p_port`, and `p2p_topic_prefix`.
     - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
 
 3. **P2P Node Initialization**:
@@ -419,7 +419,7 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 The following settings can be configured for the p2p service:
 
-- **`p2p_ip`**: Specifies the IP address for the P2P service to bind to.
+- **`p2p_listen_addresses`**: Specifies the IP addresses for the P2P service to bind to.
 - **`p2p_port`**: Defines the port number on which the P2P service listens.
 - **`p2p_topic_prefix`**: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
 - **`p2p_block_topic`**: The topic name used for block-related messages in the P2P network.

@@ -190,7 +190,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxGetReorgHashes:                   getInt("blockassembly_maxGetReorgHashes", 10_000, alternativeContext...),
 			MinerWalletPrivateKeys:              getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
 			DifficultyCache:                     getBool("blockassembly_difficultyCache", true, alternativeContext...),
-			UseDynamicSubtreeSize:               getBool("blockassembly_useDynamicSubtreeSize", true, alternativeContext...),
+			UseDynamicSubtreeSize:               getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
@@ -300,7 +300,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:  getString("p2p_grpcListenAddress", ":9906", alternativeContext...),
 			HTTPAddress:        getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
 			HTTPListenAddress:  getString("p2p_httpListenAddress", "", alternativeContext...),
-			IP:                 getString("p2p_ip", "", alternativeContext...),
+			ListenAddresses:    getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
 			MiningOnTopic:      getString("p2p_mining_on_topic", "", alternativeContext...),
 			PeerID:             getString("p2p_peer_id", "", alternativeContext...),
 			Port:               getInt("p2p_port", 9906, alternativeContext...),

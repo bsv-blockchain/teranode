@@ -39,7 +39,7 @@ func TestSendToPeer(t *testing.T) {
 	// Create two P2PNode instances
 	config1 := P2PConfig{
 		ProcessName:     "test1",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12345,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -51,7 +51,7 @@ func TestSendToPeer(t *testing.T) {
 
 	config2 := P2PConfig{
 		ProcessName:     "test2",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12346,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -195,7 +195,7 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 	// Create two P2PNode instances
 	config1 := P2PConfig{
 		ProcessName:     "test1",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12345,
 		PrivateKey:      privKey1,
 		SharedKey:       "",
@@ -207,7 +207,7 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 
 	config2 := P2PConfig{
 		ProcessName:     "test2",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12346,
 		PrivateKey:      privKey2,
 		SharedKey:       "",
@@ -302,7 +302,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 	// Create two P2PNode instances
 	config1 := P2PConfig{
 		ProcessName:     "test1",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12345,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -314,7 +314,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 
 	config2 := P2PConfig{
 		ProcessName:     "test2",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12346,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -393,7 +393,7 @@ func TestSendToTopic(t *testing.T) {
 	// create two P2PNode instances
 	config1 := P2PConfig{
 		ProcessName:     "test1",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12345,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -405,7 +405,7 @@ func TestSendToTopic(t *testing.T) {
 
 	config2 := P2PConfig{
 		ProcessName:     "test2",
-		IP:              "127.0.0.1",
+		ListenAddresses: []string{"127.0.0.1"},
 		Port:            12346,
 		PrivateKey:      "",
 		SharedKey:       "",
@@ -591,12 +591,12 @@ func TestStartStaticPeerConnector(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := P2PConfig{
-				ProcessName:   "test",
-				IP:            "127.0.0.1",
-				Port:          12345,
-				StaticPeers:   tt.staticPeers,
-				UsePrivateDHT: false,
-				Advertise:     false,
+				ProcessName:     "test",
+				ListenAddresses: []string{"127.0.0.1"},
+				Port:            12345,
+				StaticPeers:     tt.staticPeers,
+				UsePrivateDHT:   false,
+				Advertise:       false,
 			}
 
 			node, err := NewP2PNode(logger, tSettings, config, nil)
@@ -643,11 +643,11 @@ func TestInitGossipSub(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := P2PConfig{
-				ProcessName:   "test",
-				IP:            "127.0.0.1",
-				Port:          12345,
-				UsePrivateDHT: false,
-				Advertise:     false,
+				ProcessName:     "test",
+				ListenAddresses: []string{"127.0.0.1"},
+				Port:            12345,
+				UsePrivateDHT:   false,
+				Advertise:       false,
 			}
 
 			node, err := NewP2PNode(logger, tSettings, config, nil)

@@ -108,7 +108,14 @@ message Peer {
   message IsBannedResponse {
       bool isBanned = 1;
   }
-  
+
+  message ListBannedResponse {
+      repeated string banned = 1;
+  }
+
+  message ClearBannedResponse {
+      bool ok = 1;
+  }
   
   // Add new service for peer operations
   service PeerService {
@@ -116,5 +123,7 @@ message Peer {
     rpc BanPeer(BanPeerRequest) returns (BanPeerResponse) {}
     rpc UnbanPeer(UnbanPeerRequest) returns (UnbanPeerResponse) {}
     rpc IsBanned(IsBannedRequest) returns (IsBannedResponse) {}
+    rpc ListBanned(google.protobuf.Empty) returns (ListBannedResponse) {}
+    rpc ClearBanned(google.protobuf.Empty) returns (ClearBannedResponse) {}
   }
   

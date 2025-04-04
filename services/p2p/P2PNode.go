@@ -59,7 +59,7 @@ type Handler func(ctx context.Context, msg []byte, from string)
 
 type P2PConfig struct {
 	ProcessName     string
-	IP              string
+	ListenAddresses []string
 	Port            int
 	PrivateKey      string
 	SharedKey       string
@@ -107,8 +107,13 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 		}
 	} else {
 		// If no private DHT is configured, create a standard libp2p host
+		listenMultiAddresses := []string{}
+		for _, addr := range config.ListenAddresses {
+			listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
+		}
+
 		h, err = libp2p.New(
-			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
+			libp2p.ListenAddrStrings(listenMultiAddresses...),
 			libp2p.Identity(*pk),
 		)
 		if err != nil {
@@ -160,8 +165,13 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 		return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding shared key", err)
 	}
 
+	listenMultiAddresses := []string{}
+	for _, addr := range config.ListenAddresses {
+		listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
+	}
+
 	h, err = libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
+		libp2p.ListenAddrStrings(listenMultiAddresses...),
 		libp2p.Identity(*pk),
 		libp2p.PrivateNetwork(psk),
 	)

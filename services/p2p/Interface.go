@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // ClientI defines the interface for P2P client operations.
@@ -15,4 +16,6 @@ type ClientI interface {
 	BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
 	UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
 	IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
+	ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
+	ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
 }

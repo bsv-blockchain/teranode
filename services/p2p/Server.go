@@ -78,9 +78,9 @@ func NewServer(
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
-	p2pIP := tSettings.P2P.IP
-	if p2pIP == "" {
-		return nil, errors.NewConfigurationError("p2p_ip not set in config")
+	listenAddresses := tSettings.P2P.ListenAddresses
+	if listenAddresses == nil {
+		return nil, errors.NewConfigurationError("p2p_listen_addresses not set in config")
 	}
 
 	p2pPort := tSettings.P2P.Port
@@ -142,7 +142,7 @@ func NewServer(
 
 	config := P2PConfig{
 		ProcessName:     "peer",
-		IP:              p2pIP,
+		ListenAddresses: listenAddresses,
 		Port:            p2pPort,
 		PrivateKey:      privateKey,
 		SharedKey:       sharedKey,
@@ -845,6 +845,15 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 
 func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
 	return &p2p_api.IsBannedResponse{IsBanned: s.banList.IsBanned(peer.IpOrSubnet)}, nil
+}
+
+func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
+	return &p2p_api.ListBannedResponse{Banned: s.banList.ListBanned()}, nil
+}
+
+func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
+	s.banList.Clear()
+	return &p2p_api.ClearBannedResponse{Ok: true}, nil
 }
 
 // contains checks if a slice of strings contains a specific string.

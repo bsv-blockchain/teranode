@@ -31,6 +31,8 @@ var (
 	prometheusHandleHelp                 prometheus.Histogram
 	prometheusHandleSetBan               prometheus.Histogram
 	prometheusHandleIsBanned             prometheus.Histogram
+	prometheusHandleListBanned           prometheus.Histogram
+	prometheusHandleClearBanned          prometheus.Histogram
 	prometheusHandleGetMiningInfo        prometheus.Histogram
 	prometheusHandleFreeze               prometheus.Histogram
 	prometheusHandleUnfreeze             prometheus.Histogram
@@ -241,6 +243,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "is_banned",
 			Help:      "Histogram of calls to handleIsBanned in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleListBanned = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "list_banned",
+			Help:      "Histogram of calls to handleListBanned in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleClearBanned = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "clear_banned",
+			Help:      "Histogram of calls to handleClearBanned in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

@@ -22,9 +22,9 @@ type PeerHeight struct {
 }
 
 func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration, p2pPort int, staticPeers []string, privateKey string) (*PeerHeight, error) {
-	p2pIP := tSettings.P2P.IP
-	if p2pIP == "" {
-		return nil, errors.NewConfigurationError("[PeerHeight] p2p_ip not set in config")
+	p2pListenAddresses := tSettings.P2P.ListenAddresses
+	if len(p2pListenAddresses) == 0 {
+		return nil, errors.NewConfigurationError("[PeerHeight] p2p_listen_addresses not set in config")
 	}
 
 	sharedKey := tSettings.P2P.SharedKey
@@ -38,7 +38,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 
 	config := P2PConfig{
 		ProcessName:     processName,
-		IP:              p2pIP,
+		ListenAddresses: p2pListenAddresses,
 		Port:            p2pPort,
 		PrivateKey:      privateKey,
 		SharedKey:       sharedKey,
