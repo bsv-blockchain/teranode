@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc || debug
+//go:build test_tnc || debug
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc ./test/tnc/tnc1_3_test.go

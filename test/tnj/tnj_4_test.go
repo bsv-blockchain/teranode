@@ -1,4 +1,4 @@
-//go:build test_all || test_tnj
+//go:build test_tnj
 
 package tnj
 

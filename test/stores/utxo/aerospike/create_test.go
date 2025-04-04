@@ -1,4 +1,4 @@
-//go:build test_all || test_stores || test_utxo || test_aerospike
+//go:build test_all || test_stores || test_utxo || test_aerospike || debug
 
 package aerospike
 
@@ -331,7 +331,7 @@ func BenchmarkStore_Create(b *testing.B) {
 func TestStore_TwoPhaseCommit(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:               true,
-		SettingsContextOverride: "dev.simon",
+		SettingsContextOverride: "dev.system.test",
 	})
 
 	t.Cleanup(func() {

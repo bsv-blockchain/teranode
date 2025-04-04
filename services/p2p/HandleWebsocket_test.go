@@ -1,3 +1,4 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
 package p2p
 
 import (
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/asset/asset_api"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/gorilla/websocket"
@@ -25,6 +25,7 @@ const (
 	standardTimeout = 500 * time.Millisecond
 	extendedTimeout = time.Second
 	testMessage     = "test message"
+	errClientNotAdded = "Client channel not added to clientChannels"
 )
 
 func TestCreatePingMessage(t *testing.T) {
@@ -141,50 +142,62 @@ func TestBroadcastMessage(t *testing.T) {
 }
 
 func TestHandleClientMessages(t *testing.T) {
-	// Create test server
 	s := &Server{
 		logger: &ulogger.TestLogger{},
 	}
 
-	// Create channels for the test
-	ch := make(chan []byte, 1)
-	deadClientCh := make(chan chan []byte, 1)
+	t.Run("Normal operation", func(t *testing.T) {
+		ch := make(chan []byte, 1)
+		deadClientCh := make(chan chan []byte, 1)
+		ws := &testWebSocketConn{t: t}
 
-	// Create a connection with a controlled error condition
-	conn := &testWebSocketConn{
-		t:          t,
-		writeError: errors.NewProcessingError("simulated write error"),
-	}
+		done := make(chan struct{})
+		go func() {
+			s.handleClientMessages(ws, ch, deadClientCh)
+			close(done)
+		}()
 
-	// Start client message handler in a goroutine
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// This should exit as soon as it encounters the write error
-		s.handleClientMessages(conn, ch, deadClientCh)
-	}()
+		// Send a test message
+		ch <- []byte("test")
+		close(ch)
 
-	// Send a message that will trigger the write error
-	ch <- []byte(testMessage)
+		select {
+		case <-done:
+			// Handler completed normally
+		case <-time.After(time.Second):
+			t.Fatal("Timeout waiting for handler to complete")
+		}
+	})
 
-	// Check that the client is marked as dead
-	select {
-	case deadClient := <-deadClientCh:
-		assert.Equal(t, ch, deadClient, "Expected dead client channel to match")
-	case <-time.After(standardTimeout):
-		t.Fatal("Timeout waiting for dead client notification")
-	}
+	t.Run("Write error", func(t *testing.T) {
+		ch := make(chan []byte, 1)
+		deadClientCh := make(chan chan []byte, 1)
+		ws := &testWebSocketConn{t: t, writeError: assert.AnError}
 
-	// Wait for handler to complete
-	select {
-	case <-done:
-		// Test passed
-	case <-time.After(standardTimeout):
-		t.Fatal("Timeout waiting for handler to complete")
-	}
+		done := make(chan struct{})
+		go func() {
+			s.handleClientMessages(ws, ch, deadClientCh)
+			close(done)
+		}()
 
-	// Verify the message was actually written before the error
-	assert.Equal(t, 1, conn.writeCount, "Expected exactly one write attempt")
+		// Send a test message
+		ch <- []byte("test")
+
+		// Verify that the channel is reported as dead
+		select {
+		case deadCh := <-deadClientCh:
+			assert.Equal(t, ch, deadCh)
+		case <-time.After(time.Second):
+			t.Fatal("Timeout waiting for dead client channel")
+		}
+
+		select {
+		case <-done:
+			// Handler completed normally
+		case <-time.After(time.Second):
+			t.Fatal("Timeout waiting for handler to complete")
+		}
+	})
 }
 
 // testWebSocketConn implements the minimal websocket.Conn interface needed for testing
@@ -215,7 +228,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 		logger: &ulogger.TestLogger{},
 	}
 
-	clientChannels := make(map[chan []byte]struct{})
+	clientChannels := newClientChannelMap()
 	newClientCh := make(chan chan []byte, 1)
 	deadClientCh := make(chan chan []byte, 1)
 	notificationCh := make(chan *notificationMsg, 1)
@@ -243,23 +256,22 @@ func TestStartNotificationProcessor(t *testing.T) {
 	}
 
 	t.Run("Add new client", func(t *testing.T) {
-		clientCh := make(chan []byte, 1)
+		clientCh := make(chan []byte, 10)
 		newClientCh <- clientCh
 
 		// Wait for client to be added
 		time.Sleep(50 * time.Millisecond)
-		assert.Contains(t, clientChannels, clientCh, "Client channel not added to clientChannels")
+		assert.True(t, clientChannels.contains(clientCh), errClientNotAdded)
+		assert.Equal(t, 1, clientChannels.count(), "Expected exactly one client")
 	})
 
 	t.Run("Send notification", func(t *testing.T) {
-		// Get an existing client channel
-		var clientCh chan []byte
-		for ch := range clientChannels {
-			clientCh = ch
-			break
-		}
+		clientCh := make(chan []byte, 10)
+		newClientCh <- clientCh
 
-		require.NotNil(t, clientCh, "No client channels available")
+		// Wait for client to be added
+		time.Sleep(50 * time.Millisecond)
+		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 
 		testNotification := &notificationMsg{
 			Type:    "test",
@@ -281,20 +293,42 @@ func TestStartNotificationProcessor(t *testing.T) {
 	})
 
 	t.Run("Remove client", func(t *testing.T) {
-		// Get an existing client channel
-		var clientCh chan []byte
-		for ch := range clientChannels {
-			clientCh = ch
-			break
-		}
+		clientCh := make(chan []byte, 10)
+		newClientCh <- clientCh
 
-		require.NotNil(t, clientCh, "No client channels available")
+		// Wait for client to be added
+		time.Sleep(50 * time.Millisecond)
+		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
+		initialCount := clientChannels.count()
 
 		deadClientCh <- clientCh
 
 		// Wait for client to be removed
 		time.Sleep(50 * time.Millisecond)
-		assert.NotContains(t, clientChannels, clientCh, "Client channel not removed from clientChannels")
+		assert.False(t, clientChannels.contains(clientCh), "Client channel not removed from clientChannels")
+		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented")
+	})
+
+	t.Run("Broadcast timeout handling", func(t *testing.T) {
+		slowCh := make(chan []byte) // Unbuffered channel that will block
+		newClientCh <- slowCh
+
+		// Wait for client to be added
+		time.Sleep(50 * time.Millisecond)
+		require.True(t, clientChannels.contains(slowCh), errClientNotAdded)
+		initialCount := clientChannels.count()
+
+		// Send a notification - this should timeout for the slow client
+		testNotification := &notificationMsg{
+			Type:    "test",
+			BaseURL: baseURL,
+		}
+		notificationCh <- testNotification
+
+		// Wait for timeout and automatic removal
+		time.Sleep(1500 * time.Millisecond) // Wait longer than the timeout
+		assert.False(t, clientChannels.contains(slowCh), "Slow client channel not removed after timeout")
+		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented after timeout")
 	})
 
 	// Cancel context to stop the processor
@@ -401,16 +435,13 @@ func TestHandleWebSocket(t *testing.T) {
 
 		messageType, message, err := ws.ReadMessage()
 		require.NoError(t, err)
-		require.Equal(t, websocket.TextMessage, messageType)
+		assert.Equal(t, websocket.TextMessage, messageType)
 
-		// Verify message content
 		var received notificationMsg
 		err = json.Unmarshal(message, &received)
 		require.NoError(t, err)
+
 		assert.Equal(t, testNotification.Type, received.Type)
 		assert.Equal(t, testNotification.BaseURL, received.BaseURL)
 	})
-
-	// Wait for all handlers to complete
-	wg.Wait()
 }

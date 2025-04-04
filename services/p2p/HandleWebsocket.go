@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/asset/asset_api"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
@@ -23,6 +25,71 @@ type notificationMsg struct {
 	Height       uint32 `json:"height,omitempty"`
 	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`
 	Miner        string `json:"miner,omitempty"`
+}
+
+type clientChannelMap struct {
+	sync.RWMutex
+	channels map[chan []byte]struct{}
+}
+
+func newClientChannelMap() *clientChannelMap {
+	return &clientChannelMap{
+		channels: make(map[chan []byte]struct{}),
+	}
+}
+
+func (cm *clientChannelMap) add(ch chan []byte) {
+	cm.Lock()
+	defer cm.Unlock()
+	cm.channels[ch] = struct{}{}
+}
+
+func (cm *clientChannelMap) remove(ch chan []byte) {
+	cm.Lock()
+	defer cm.Unlock()
+	delete(cm.channels, ch)
+}
+
+func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
+	// Get a snapshot of channels under the lock
+	cm.RLock()
+	channels := make([]chan []byte, 0, len(cm.channels))
+
+	for ch := range cm.channels {
+		channels = append(channels, ch)
+	}
+	cm.RUnlock()
+
+	if len(channels) == 0 {
+		return
+	}
+
+	// Send to all channels without holding the lock
+	for _, ch := range channels {
+		select {
+		case ch <- data:
+			// Data sent successfully
+		case <-time.After(time.Second):
+			logger.Errorf("Timeout sending data to client")
+			// Remove timed out client
+			cm.remove(ch)
+		}
+	}
+}
+
+func (cm *clientChannelMap) contains(ch chan []byte) bool {
+	cm.RLock()
+	defer cm.RUnlock()
+	_, exists := cm.channels[ch]
+
+	return exists
+}
+
+func (cm *clientChannelMap) count() int {
+	cm.RLock()
+	defer cm.RUnlock()
+
+	return len(cm.channels)
 }
 
 type WebSocketConn interface {
@@ -43,19 +110,8 @@ var (
 )
 
 // broadcastMessage sends a message to all connected clients
-func (s *Server) broadcastMessage(data []byte, clientChannels map[chan []byte]struct{}) {
-	if len(clientChannels) == 0 {
-		return
-	}
-
-	for clientCh := range clientChannels {
-		select {
-		case clientCh <- data:
-			// Data sent successfully
-		case <-time.After(time.Second): // Adjust timeout duration as needed
-			s.logger.Errorf("Timeout sending data to client")
-		}
-	}
+func (s *Server) broadcastMessage(data []byte, clientChannels *clientChannelMap) {
+	clientChannels.broadcast(data, s.logger)
 }
 
 // createPingMessage creates a ping notification message
@@ -87,7 +143,7 @@ func (s *Server) handleClientMessages(ws WebSocketConn, ch chan []byte, deadClie
 
 // startNotificationProcessor starts the goroutine that processes notifications and manages clients
 func (s *Server) startNotificationProcessor(
-	clientChannels map[chan []byte]struct{},
+	clientChannels *clientChannelMap,
 	newClientCh <-chan chan []byte,
 	deadClientCh <-chan chan []byte,
 	notificationCh <-chan *notificationMsg,
@@ -102,9 +158,9 @@ func (s *Server) startNotificationProcessor(
 		case <-ctx.Done():
 			return
 		case newClient := <-newClientCh:
-			clientChannels[newClient] = struct{}{}
+			clientChannels.add(newClient)
 		case deadClient := <-deadClientCh:
-			delete(clientChannels, deadClient)
+			clientChannels.remove(deadClient)
 		case <-pingTimer.C:
 			msg, err := createPingMessage(baseURL)
 			if err != nil {
@@ -132,7 +188,7 @@ func (s *Server) startNotificationProcessor(
 }
 
 func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL string) func(c echo.Context) error {
-	clientChannels := make(map[chan []byte]struct{})
+	clientChannels := newClientChannelMap()
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
 
@@ -141,7 +197,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL s
 	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, baseURL, ctx)
 
 	return func(c echo.Context) error {
-		ch := make(chan []byte)
+		ch := make(chan []byte, 100) // Add buffer to help prevent blocking
 
 		ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 		if err != nil {

@@ -1,4 +1,4 @@
-//go:build test_all || test_tnb || debug
+//go:build test_tnb || debug
 
 // How to run tests:
 //

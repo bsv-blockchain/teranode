@@ -1,4 +1,4 @@
-//go:build test_all || test_stores || test_utxo || test_aerospike
+//go:build test_all || test_stores || test_utxo || test_aerospike || debug
 
 package aerospike
 

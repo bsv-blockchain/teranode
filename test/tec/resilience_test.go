@@ -1,4 +1,4 @@
-//go:build test_all || test_tec
+//go:build test_tec
 
 package tec
 

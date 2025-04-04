@@ -1,4 +1,4 @@
-//go:build test_all || test_tnc || debug
+//go:build test_tnc || debug
 
 // TNC-1.2 Test Suite
 // Requirement: Teranode must refer to the hash of the previous block upon which the candidate block is being built.

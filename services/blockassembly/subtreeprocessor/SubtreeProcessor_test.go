@@ -931,16 +931,19 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		}
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
+		processingDone := make(chan struct{})
 
 		var wg sync.WaitGroup
-
 		wg.Add(4) // we are expecting 4 subtrees
 
 		go func() {
 			for {
-				// just read the subtrees of the processor
-				<-newSubtreeChan
-				wg.Done()
+				select {
+				case <-newSubtreeChan:
+					wg.Done()
+				case <-processingDone:
+					return
+				}
 			}
 		}()
 
@@ -997,6 +1000,10 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 			CoinbaseTx: coinbaseTx,
 		})
 		require.NoError(t, err)
+
+		// Wait for any background processing to complete
+		time.Sleep(100 * time.Millisecond)
+		close(processingDone)
 
 		fmt.Println("stp len2", len(stp.chainedSubtrees))
 		fmt.Println("current subtree len: ", stp.currentSubtree.Length())

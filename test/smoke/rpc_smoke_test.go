@@ -1,4 +1,4 @@
-//go:build test_all || test_smoke_rpc || test_rpc || debug
+//go:build test_smoke_rpc || test_rpc || debug
 
 package smoke
 

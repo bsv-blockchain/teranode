@@ -1,4 +1,4 @@
-//go:build test_all || test_docker_daemon || debug
+//go:build test_docker_daemon || debug
 
 package tnb
 

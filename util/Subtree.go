@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
@@ -32,6 +33,8 @@ type Subtree struct {
 	treeSize     int
 	feeBytes     []byte
 	feeHashBytes []byte
+
+	mu sync.RWMutex // protects Nodes slice
 }
 
 // NewTree creates a new Subtree with a fixed height
@@ -136,15 +139,27 @@ func (st *Subtree) Duplicate() *Subtree {
 }
 
 func (st *Subtree) Size() int {
-	return cap(st.Nodes)
+	st.mu.RLock()
+	size := cap(st.Nodes)
+	st.mu.RUnlock()
+
+	return size
 }
 
 func (st *Subtree) Length() int {
-	return len(st.Nodes)
+	st.mu.RLock()
+	length := len(st.Nodes)
+	st.mu.RUnlock()
+
+	return length
 }
 
 func (st *Subtree) IsComplete() bool {
-	return len(st.Nodes) == cap(st.Nodes)
+	st.mu.RLock()
+	isComplete := len(st.Nodes) == cap(st.Nodes)
+	st.mu.RUnlock()
+
+	return isComplete
 }
 
 func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
@@ -169,11 +184,14 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes
 }
 
 func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
+	st.mu.Lock()
 	if (len(st.Nodes) + 1) > st.treeSize {
+		st.mu.Unlock()
 		return errors.NewSubtreeError("subtree is full")
 	}
 
 	if node.Hash.Equal(CoinbasePlaceholder) {
+		st.mu.Unlock()
 		return errors.NewSubtreeError("[AddSubtreeNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
 	}
 
@@ -190,6 +208,7 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	st.rootHash = nil // reset rootHash
 	st.Fees += node.Fee
 	st.SizeInBytes += node.SizeInBytes
+	st.mu.Unlock()
 
 	return nil
 }

@@ -1,4 +1,4 @@
-//go:build test_all || test_fsm || test_functional
+//go:build test_fsm || test_functional
 
 // How to run this test:
 // $ cd test/fsm/

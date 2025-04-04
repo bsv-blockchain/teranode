@@ -1,4 +1,4 @@
-//go:build test_all || test_tne || test_functional
+//go:build test_tne || test_functional
 
 package tne
 

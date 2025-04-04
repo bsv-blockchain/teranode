@@ -41,6 +41,23 @@ func getBatchFiles(t *testing.T, store *memory.Memory) ([]byte, []byte) {
 	return data, keysData
 }
 
+// waitForBatchProcessing waits for batch processing to complete by checking the store
+func waitForBatchProcessing(t *testing.T, store *memory.Memory, maxWait time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(maxWait)
+
+	for time.Now().Before(deadline) {
+		if len(store.ListKeys()) > 0 {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("timeout waiting for batch processing")
+}
+
 func TestBatcher_New(t *testing.T) {
 	store := memory.New()
 	batcher := New(ulogger.TestLogger{}, store, 1024, true)
@@ -64,6 +81,7 @@ func TestBatcher_Set(t *testing.T) {
 	}
 
 	batcher.Close(context.Background())
+	waitForBatchProcessing(t, store, 2*time.Second)
 
 	batchData, keysData := getBatchFiles(t, store)
 
@@ -103,6 +121,7 @@ func TestBatcher_SetFromReader(t *testing.T) {
 	}
 
 	batcher.Close(context.Background())
+	waitForBatchProcessing(t, store, 2*time.Second)
 
 	batchData, keysData := getBatchFiles(t, store)
 
@@ -158,6 +177,7 @@ func TestBatcher_BatchSizeLimit(t *testing.T) {
 	}
 
 	batcher.Close(context.Background())
+	waitForBatchProcessing(t, store, 2*time.Second)
 
 	batchData, keysData := getBatchFiles(t, store)
 
@@ -206,15 +226,18 @@ func TestBatcher_BatchingBehavior(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Close to ensure all data is written
 	batcher.Close(context.Background())
+	waitForBatchProcessing(t, store, 2*time.Second)
 
-	// Get batch files
 	batchData, keysData := getBatchFiles(t, store)
 
-	// Verify batch data contains both values
-	if !bytes.Contains(batchData, value1) || !bytes.Contains(batchData, value2) {
-		t.Error("batch data doesn't contain all values")
+	// Verify batch contains both values
+	if !bytes.Contains(batchData, value1) {
+		t.Error("batch data doesn't contain value1")
+	}
+
+	if !bytes.Contains(batchData, value2) {
+		t.Error("batch data doesn't contain value2")
 	}
 
 	// Verify keys file format

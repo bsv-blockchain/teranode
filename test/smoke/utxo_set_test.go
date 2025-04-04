@@ -1,4 +1,4 @@
-//go:build test_all || test_smoke || test_utxo
+//go:build test_smoke || test_utxo
 
 // Package smoke contains smoke tests for the TERANODE node
 //

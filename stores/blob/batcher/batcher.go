@@ -24,6 +24,7 @@ type Batcher struct {
 	writeKeys        bool
 	queue            *util.LockFreeQ[BatchItem]
 	queueCtx         context.Context
+	queueCancel      context.CancelFunc
 	currentBatch     []byte
 	currentBatchKeys []byte
 }
@@ -40,13 +41,15 @@ type blobStoreSetter interface {
 }
 
 func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writeKeys bool) *Batcher {
+	ctx, cancel := context.WithCancel(context.Background())
 	b := &Batcher{
 		logger:           logger,
 		blobStore:        blobStore,
 		sizeInBytes:      sizeInBytes,
 		writeKeys:        writeKeys,
 		queue:            util.NewLockFreeQ[BatchItem](),
-		queueCtx:         context.Background(),
+		queueCtx:         ctx,
+		queueCancel:      cancel,
 		currentBatch:     make([]byte, 0, sizeInBytes),
 		currentBatchKeys: make([]byte, 0, sizeInBytes),
 	}
@@ -60,6 +63,23 @@ func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writ
 		for {
 			select {
 			case <-b.queueCtx.Done():
+				// Process remaining items before exiting
+				for {
+					batchItem = b.queue.Dequeue()
+					if batchItem == nil {
+						break
+					}
+
+					if err = b.processBatchItem(batchItem); err != nil {
+						b.logger.Errorf("error processing batch item during shutdown: %v", err)
+					}
+				}
+				// Write final batch if needed
+				if len(b.currentBatch) > 0 {
+					if err = b.writeBatch(b.currentBatch, b.currentBatchKeys); err != nil {
+						b.logger.Errorf("error writing final batch during shutdown: %v", err)
+					}
+				}
 				return
 			default:
 				batchItem = b.queue.Dequeue()
@@ -180,28 +200,11 @@ func (b *Batcher) Health(ctx context.Context, checkLiveness bool) (int, string, 
 }
 
 func (b *Batcher) Close(_ context.Context) error {
-	// close the context, no more additions to the queue
-	b.queueCtx.Done()
-	time.Sleep(10 * time.Millisecond)
+	// Signal the background goroutine to stop
+	b.queueCancel()
 
-	// dequeue all items
-	for {
-		batchItem := b.queue.Dequeue()
-		if batchItem == nil {
-			break
-		}
-
-		if err := b.processBatchItem(batchItem); err != nil {
-			b.logger.Errorf("error processing batch item in Close: %v", err)
-		}
-	}
-
-	// save the last batch we have in RAM
-	if len(b.currentBatch) > 0 {
-		if err := b.writeBatch(b.currentBatch, b.currentBatchKeys); err != nil {
-			b.logger.Errorf("error writing final batch in Close: %v", err)
-		}
-	}
+	// Wait a bit to ensure the goroutine has time to process remaining items
+	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }

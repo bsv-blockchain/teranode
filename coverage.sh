@@ -1,4 +1,4 @@
-TAGS="testtxmetacache,test_all,test_stores,test_model,test_services,test_util,test_smoke_rpc"
+TAGS="testtxmetacache,test_all"
 
 SETTINGS_CONTEXT=test \
   go test -race -count=1 -coverprofile=coverage.out -tags "${TAGS}" \

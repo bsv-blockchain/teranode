@@ -99,13 +99,35 @@ func TestHandleSetBanAdd(t *testing.T) {
 	banList, eventChan, err := setupBanList(t)
 	require.NoError(t, err)
 
+	// Create a WaitGroup to track notification goroutines
+	var wg sync.WaitGroup
+
+	t.Cleanup(func() {
+		// First unsubscribe to prevent new notifications
+		banList.Unsubscribe(eventChan)
+		// Wait for any pending notifications
+		wg.Wait()
+		// Now safe to close the channel
+		close(eventChan)
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
+			// Add to WaitGroup before potential notification
+			wg.Add(1)
 			err := banList.Add(ctx, tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
+
+			// Wait for notification to be processed
+			select {
+			case <-eventChan:
+				wg.Done()
+			case <-ctx.Done():
+				t.Fatal("timeout waiting for ban notification")
+			}
 
 			t.Logf("IP or Subnet: %s\n", tt.args.IPOrSubnet)
 
@@ -126,7 +148,6 @@ func TestHandleSetBanAdd(t *testing.T) {
 		})
 	}
 
-	close(eventChan)
 }
 
 func TestIsBanned(t *testing.T) {

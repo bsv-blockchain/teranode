@@ -1,4 +1,4 @@
-//go:build test_all || test_services || test_subtreeprocessor || test_longlong
+//go:build test_all || test_services || test_subtreeprocessor || test_longlong || debug
 
 package subtreeprocessor
 

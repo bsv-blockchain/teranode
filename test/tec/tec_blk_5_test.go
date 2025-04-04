@@ -1,4 +1,4 @@
-//go:build test_all || test_tec || test_tec_blk_5
+//go:build test_tec || test_tec_blk_5
 
 // How to run this test manually:
 // $ cd test/tec

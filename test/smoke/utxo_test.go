@@ -1,4 +1,4 @@
-//go:build test_all || test_smoke || test_utxo || debug
+//go:build test_smoke || test_utxo || debug
 
 // How to run each test:
 // Clean up docker containers before running the test manually

@@ -1,4 +1,4 @@
-//go:build test_all || test_util || test_bloom || test_longlong
+//go:build test_util || test_bloom || test_longlong
 
 package bloom
 

@@ -141,7 +141,7 @@ ifeq ($(USE_JSON_REPORTER),true)
 	# pipefail is needed so proper exit code is passed on in CI
 	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" -race -count=1 ./... | go-ctrf-json-reporter -output ctrf-report.json'
 else
-	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 ./...
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache,test_all" -count=1 -coverprofile=coverage.out ./...
 endif
 
 .PHONY: buildtest

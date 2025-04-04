@@ -1,4 +1,4 @@
-//go:build test_all || test_tna || debug
+//go:build test_tna || debug
 
 // How to run this test manually:
 // $ go test -v -run "^TestTNA4TestSuite$/TestBlockBroadcast$" -tags test_tna ./test/tna/tna4_test.go
