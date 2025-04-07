@@ -112,6 +112,7 @@ type AssetSettings struct {
 	CentrifugeListenAddress string
 	CentrifugeDisable       bool
 	HTTPAddress             string
+	HTTPPublicAddress       string
 	HTTPListenAddress       string
 	HTTPPort                int
 	HTTPSPort               int

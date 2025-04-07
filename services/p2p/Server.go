@@ -211,7 +211,10 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
-	AssetHTTPAddressURLString := s.settings.Asset.HTTPAddress
+	AssetHTTPAddressURLString := s.settings.Asset.HTTPPublicAddress
+	if AssetHTTPAddressURLString == "" {
+		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
+	}
 
 	AssetHTTPAddressURL, err := url.Parse(AssetHTTPAddressURLString)
 	if err != nil {

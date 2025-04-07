@@ -132,6 +132,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CentrifugeListenAddress: getString("asset_centrifugeListenAddress", ":8892", alternativeContext...),
 			CentrifugeDisable:       getBool("asset_centrifuge_disable", false, alternativeContext...),
 			HTTPAddress:             getString("asset_httpAddress", "http://localhost:8090/api/v1", alternativeContext...),
+			HTTPPublicAddress:       getString("asset_httpPublicAddress", "http://localhost:8090/api/v1", alternativeContext...),
 			HTTPListenAddress:       getString("asset_httpListenAddress", ":8090", alternativeContext...),
 			HTTPPort:                getInt("ASSET_HTTP_PORT", 8090, alternativeContext...),
 			HTTPSPort:               getInt("asset_https_port", 443, alternativeContext...),

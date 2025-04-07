@@ -1308,7 +1308,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		return util.DoHTTPRequestBodyReader(s.ctx, url)
 	})
 	if err != nil {
-		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
+		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1323,7 +1323,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 
 	var msgBlock wire.MsgBlock
 	if err = msgBlock.Deserialize(reader); err != nil {
-		sp.server.logger.Infof("Unable to deserialize requested block hash %v: %v", hash, err)
+		sp.server.logger.Errorf("Unable to deserialize requested block hash %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1358,7 +1358,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	if sendInv {
 		bestBlockHeader, _, err := s.blockchainClient.GetBestBlockHeader(s.ctx)
 		if err != nil {
-			s.logger.Infof("unable to fetch best block header: %v", err)
+			s.logger.Errorf("unable to fetch best block header: %v", err)
 		} else {
 			invMsg := wire.NewMsgInvSizeHint(1)
 			iv := wire.NewInvVect(wire.InvTypeBlock, bestBlockHeader.Hash())
