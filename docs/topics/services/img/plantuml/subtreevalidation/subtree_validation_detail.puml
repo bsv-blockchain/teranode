@@ -70,7 +70,7 @@ deactivate ValidateSubtree
 
 == For any Tx Metadata not found in the cache, obtain it directly from the store  ==
 
-ValidateSubtree -> ValidateSubtree: processTxMetaUsingStore(ctx, txHashes, txMetaSlice, failFast)
+ValidateSubtree -> ValidateSubtree: processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched, failFast)
 activate ValidateSubtree
 
 ValidateSubtree -> TxMetaStore: MetaBatchDecorate(gCtx, &txHash)

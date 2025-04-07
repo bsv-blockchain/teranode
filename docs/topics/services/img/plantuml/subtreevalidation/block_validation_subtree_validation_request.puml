@@ -33,9 +33,9 @@ BV -> BV: validateBlockSubtrees(ctx, block, baseUrl)
 activate BV
 
 loop for each subtree in the block
-    BV -> SVC: CheckSubtree(ctx, request)
+    BV -> SVC: CheckSubtreeFromBlock(ctx, subtreeHash, baseURL, blockHeight, blockHash)
     activate SVC
-    SVC -> SVS: CheckSubtree(ctx, request)
+    SVC -> SVS: CheckSubtreeFromBlock(ctx, request)
     deactivate SVC
     activate SVS
 
@@ -71,7 +71,7 @@ loop for each subtree in the block
     end
 
     deactivate SVS
-    SVS --> SVC: CheckSubtreeResponse
+    SVS --> SVC: CheckSubtreeFromBlockResponse
     SVC --> BV: Validation result
 end
 

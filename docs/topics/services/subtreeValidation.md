@@ -84,7 +84,8 @@ The subtree validator is a service that validates subtrees. After validating the
 
 ### 2.2. Receving subtrees for validation
 
-* The P2P service is responsible for receiving new subtrees from the network. When a new subtree is found, it will notify the subtree validation service either via the `SubtreeFound()` gRPC endpoint, or via the Kafka `kafka_subtreesConfig` producer (recommended for production).
+* The P2P service is responsible for receiving new subtrees from the network. When a new subtree is found, it will notify the subtree validation service via the Kafka `kafka_subtreesConfig` producer.
+
 * The subtree validation service will then check if the subtree is already known. If not, it will start the validation process.
 * Before validation, the service will "lock" the subtree, to avoid concurrent (and accidental) changes of the same subtree. To do this, the service will attempt to create a "lock" file in the shared subtree storage. If this succeeds, the subtree validation will then start.
 * Once validated, we add it to the Subtree store, from where it will be retrieved later on (when a block using the subtrees gets validated).
@@ -92,10 +93,6 @@ The subtree validator is a service that validates subtrees. After validating the
 Receiving subtrees for validation via Kafka:
 
 ![subtree_validation_kafka_subtree_found.svg](img/plantuml/subtreevalidation/subtree_validation_kafka_subtree_found.svg)
-
-Receiving subtrees for validation via gRPC:
-
-![subtree_validation_subtree_found.svg](img/plantuml/subtreevalidation/subtree_validation_subtree_found.svg)
 
 
 In addition to the P2P Service, the Block Validation service can also request for subtrees to be validated and added, together with its metadata, to the subtree store. Should the Block Validation service find, as part of the validation of a specific block, a subtree not known by the node, it can request its validation to the Subtree Validation service.
