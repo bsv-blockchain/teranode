@@ -272,7 +272,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	start := gocore.CurrentTime()
 
-	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
+	// Get the subtree hashes if they were passed in
 	txHashes := v.TxHashes
 
 	if txHashes == nil {

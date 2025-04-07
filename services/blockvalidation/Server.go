@@ -1165,19 +1165,6 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 	return batches
 }
 
-func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	// TODO - Delete or resurrect...
-	// subtreeHash, err := chainhash.NewHash(req.Hash)
-	// if err != nil {
-	// 	return nil, errors.NewError("[SubtreeFound][%s] failed to create subtree hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err)
-	// }
-	// u.subtreeFoundQueue.enqueue(&queueItem{
-	// 	hash:    *subtreeHash,
-	// 	baseURL: req.GetBaseUrl(),
-	// })
-	return &blockvalidation_api.EmptyMessage{}, nil
-}
-
 // Get retrieves a subtree from storage based on its hash identifier.
 // This method provides direct access to the underlying subtree storage system,
 // allowing retrieval of block organization structures for validation and

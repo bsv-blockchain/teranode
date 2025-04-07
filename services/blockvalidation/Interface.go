@@ -41,9 +41,6 @@ type Interface interface {
 	// ProcessBlock validates and processes a complete block at the specified height.
 	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error
 
-	// SubtreeFound notifies the service about a newly discovered subtree.
-	SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) error
-
 	// Get retrieves a subtree by its hash.
 	Get(ctx context.Context, subtreeHash []byte) ([]byte, error)
 
@@ -79,10 +76,6 @@ func (mv *MockBlockValidation) BlockFound(ctx context.Context, blockHash *chainh
 }
 
 func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) error {
 	return nil
 }
 

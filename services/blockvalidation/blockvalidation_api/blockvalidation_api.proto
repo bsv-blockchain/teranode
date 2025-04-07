@@ -10,7 +10,6 @@ service BlockValidationAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
-  rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
   rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
   rpc Exists (ExistsSubtreeRequest) returns (ExistsSubtreeResponse) {}
@@ -34,12 +33,6 @@ message BlockFoundRequest {
   bytes hash = 1;
   string base_url = 2;
   bool wait_to_complete = 3;
-}
-
-// swagger:model SubtreeFoundRequest
-message SubtreeFoundRequest {
-  bytes hash = 1;
-  string base_url = 2;
 }
 
 // swagger:model ProcessBlockRequest

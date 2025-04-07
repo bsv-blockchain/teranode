@@ -198,8 +198,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
 	}
 
-	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
-	// 2. create a slice of MissingTxHashes for all the txs in the subtree
+	// 1. create a slice of MissingTxHashes for all the txs in the subtree
 	txHashes := make([]chainhash.Hash, len(subtree.Nodes))
 
 	for i := 0; i < len(subtree.Nodes); i++ {

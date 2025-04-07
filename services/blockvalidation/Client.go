@@ -170,29 +170,6 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 	return nil
 }
 
-// SubtreeFound notifies the validation service about a newly discovered subtree.
-// This enables proper tracking and validation of block subtree structures.
-//
-// Parameters:
-//   - ctx: Context for the notification operation
-//   - subtreeHash: Unique identifier of the discovered subtree
-//   - baseURL: Source URL from which the subtree can be retrieved
-//
-// Returns an error if notification fails
-func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) error {
-	req := &blockvalidation_api.SubtreeFoundRequest{
-		Hash:    subtreeHash.CloneBytes(),
-		BaseUrl: baseURL,
-	}
-
-	_, err := s.apiClient.SubtreeFound(ctx, req)
-	if err != nil {
-		return errors.UnwrapGRPC(err)
-	}
-
-	return nil
-}
-
 // Get retrieves subtree data using a flexible multi-channel approach.
 // It attempts HTTP retrieval first if configured, falling back to gRPC if necessary.
 //
