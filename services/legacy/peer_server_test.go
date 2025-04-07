@@ -5,8 +5,11 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/addrmgr"
+	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // TestAddKnownAddresses tests that the addKnownAddresses function properly adds
@@ -201,4 +204,115 @@ func generateIPString(i int) string {
 	c := byte(i & 0xFF)
 
 	return net.IPv4(10, a, b, c).String()
+}
+
+type mockServerPeer struct {
+	mock.Mock
+}
+
+func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
+	m.Called(invVect)
+}
+
+// TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
+func TestHandleRelayTxMsg(t *testing.T) {
+	tests := []struct {
+		name          string
+		feeFilter     int64
+		txFee         uint64
+		txSize        uint64
+		expectedRelay bool
+	}{
+		{
+			name:          "no fee filter",
+			feeFilter:     0,
+			txFee:         1000,
+			txSize:        1000,
+			expectedRelay: true,
+		},
+		{
+			name:          "fee filter lower than tx fee per KB",
+			feeFilter:     500,
+			txFee:         1000,
+			txSize:        1000,
+			expectedRelay: true,
+		},
+		{
+			name:          "fee filter equal to tx fee per KB",
+			feeFilter:     1024,
+			txFee:         1000,
+			txSize:        1000,
+			expectedRelay: false, // 1000 * 1024 / 1000 = 1024, which is equal to feeFilter, not greater
+		},
+		{
+			name:          "fee filter higher than tx fee per KB",
+			feeFilter:     2000,
+			txFee:         1000,
+			txSize:        1000,
+			expectedRelay: false,
+		},
+		{
+			name:          "fee filter exactly equal to tx fee",
+			feeFilter:     1000,
+			txFee:         1000,
+			txSize:        1000,
+			expectedRelay: true,
+		},
+		{
+			name:          "fee filter with low amounts",
+			feeFilter:     1,
+			txFee:         1,
+			txSize:        245,
+			expectedRelay: true,
+		},
+		{
+			name:          "unknown size",
+			feeFilter:     1,
+			txFee:         1,
+			txSize:        0,
+			expectedRelay: true,
+		},
+		// Skip the conversion error tests as they're hard to verify without mocking
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a server peer with a custom QueueInventory function to track calls
+			var queueInvCalled bool
+
+			sp := &mockServerPeer{}
+
+			// Create a minimal server
+			s := &server{}
+
+			// Create a transaction hash
+			txHash := chainhash.Hash{0x01, 0x02, 0x03}
+
+			// Create an inventory vector for the transaction
+			invVect := wire.NewInvVect(wire.InvTypeTx, &txHash)
+
+			// Create a TxHashAndFee with the test values
+			txHashAndFee := &netsync.TxHashAndFee{
+				Fee:  tt.txFee,
+				Size: tt.txSize,
+			}
+
+			// Create a relay message
+			msg := relayMsg{
+				invVect: invVect,
+				data:    txHashAndFee,
+			}
+
+			sp.Mock.On("QueueInventory", invVect).Run(func(args mock.Arguments) {
+				queueInvCalled = true
+			})
+
+			// Call the function under test
+			s.handleRelayTxMsg(sp, msg, tt.feeFilter)
+
+			// Verify that QueueInventory was called as expected
+			assert.Equal(t, tt.expectedRelay, queueInvCalled,
+				"QueueInventory called status does not match expectation for case: %s", tt.name)
+		})
+	}
 }

@@ -174,7 +174,7 @@ type MockPeerNotifier struct {
 }
 
 type announceNewTransactionsCall struct {
-	newTxs []*chainhash.Hash
+	newTxs []*TxHashAndFee
 }
 
 type updatePeerHeightsCall struct {
@@ -192,7 +192,7 @@ type transactionConfirmedCall struct {
 	tx *bsvutil.Tx
 }
 
-func (mock *MockPeerNotifier) AnnounceNewTransactions(newTxs []*chainhash.Hash) {
+func (mock *MockPeerNotifier) AnnounceNewTransactions(newTxs []*TxHashAndFee) {
 	mock.announceNewTransactionsChan <- &announceNewTransactionsCall{
 		newTxs: newTxs,
 	}

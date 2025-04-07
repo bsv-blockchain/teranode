@@ -35,6 +35,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -242,6 +243,12 @@ func (sps *syncPeerState) setViolations(v int) {
 	sps.violations = v
 }
 
+type TxHashAndFee struct {
+	TxHash chainhash.Hash
+	Fee    uint64
+	Size   uint64
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -270,7 +277,7 @@ type SyncManager struct {
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
-	txAnnounceBatcher *batcher.BatcherWithDedup[chainhash.Hash]
+	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    *util.SyncedMap[chainhash.Hash, struct{}]
@@ -813,9 +820,11 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		return
 	}
 
+	var txMeta *meta.Data
+
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
-	_, err = sm.validationClient.Validate(ctx, btTx, 0)
+	txMeta, err = sm.validationClient.Validate(ctx, btTx, 0)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -867,7 +876,10 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 
 	// acceptedTxs also should contain any orphan transactions that were accepted when this transaction was processed
-	acceptedTxs := []*chainhash.Hash{btTx.TxIDChainHash()}
+	acceptedTxs := []*TxHashAndFee{{
+		TxHash: *btTx.TxIDChainHash(),
+		Fee:    txMeta.Fee,
+	}}
 
 	// process any orphan transactions that were waiting for this transaction to be accepted
 	// this is a recursive call, but the orphan pool should be limited in size
@@ -879,7 +891,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 }
 
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
-func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*chainhash.Hash) {
+func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processOrphanTransactions",
 		tracing.WithHistogram(prometheusLegacyNetsyncProcessOrphanTransactions),
@@ -900,7 +912,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
-		_, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		txMeta, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxUnspendable) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in
@@ -921,7 +933,11 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		}
 
 		// add the orphan transaction to the list of accepted transactions
-		*acceptedTxs = append(*acceptedTxs, orphanTx.tx.TxIDChainHash())
+		*acceptedTxs = append(*acceptedTxs, &TxHashAndFee{
+			TxHash: *orphanTx.tx.TxIDChainHash(),
+			Fee:    txMeta.Fee,
+			Size:   txMeta.SizeInBytes,
+		})
 
 		// add the time it took to process the orphan transaction to the histogram
 		prometheusLegacyNetsyncOrphanTime.Observe(float64(time.Since(orphanTx.addedAt).Microseconds()) / 1_000_000)
@@ -2045,7 +2061,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplication[chainhash.Hash](maxRequestedTxns, 1*time.Second, func(batch []*chainhash.Hash) {
+	sm.txAnnounceBatcher = batcher.NewWithDeduplication[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
 
 		// process the batch
@@ -2213,8 +2229,12 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 
 					// announce all the transactions in the subtree
 					// the batcher should de-duplicate the transactions that have already been sent in the last minute
-					for _, txHash := range subtree.Nodes {
-						sm.txAnnounceBatcher.Put(&txHash.Hash)
+					for _, subtreeNode := range subtree.Nodes {
+						sm.txAnnounceBatcher.Put(&TxHashAndFee{
+							TxHash: subtreeNode.Hash,
+							Fee:    subtreeNode.Fee,
+							Size:   subtreeNode.SizeInBytes,
+						})
 					}
 				}
 			}
@@ -2316,7 +2336,18 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 
 		if kafkaMsg.Action == kafkamessage.KafkaTxMetaActionType_ADD {
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
-			sm.txAnnounceBatcher.Put(hash)
+
+			txMeta, err := meta.NewDataFromBytes(kafkaMsg.Content)
+			if err != nil {
+				sm.logger.Errorf("Failed to parse tx meta from message: %v", err)
+				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx meta from message", err)
+			}
+
+			sm.txAnnounceBatcher.Put(&TxHashAndFee{
+				TxHash: *hash,
+				Fee:    txMeta.Fee,
+				Size:   txMeta.SizeInBytes,
+			})
 		}
 
 		return nil

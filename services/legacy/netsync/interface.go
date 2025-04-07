@@ -16,7 +16,7 @@ import (
 // transactions, blocks, etc. Currently, server (in the main package) implements
 // this interface.
 type PeerNotifier interface {
-	AnnounceNewTransactions(newTxs []*chainhash.Hash)
+	AnnounceNewTransactions(newTxs []*TxHashAndFee)
 
 	UpdatePeerHeights(latestBlkHash *chainhash.Hash, latestHeight int32, updateSource *peer.Peer)
 

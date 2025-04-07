@@ -1196,10 +1196,10 @@ func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
 
 // relayTransactions generates and relays inventory vectors for all of the
 // passed transactions to all connected peers.
-func (s *server) relayTransactions(txns []*chainhash.Hash) {
-	for _, txHash := range txns {
-		iv := wire.NewInvVect(wire.InvTypeTx, txHash)
-		s.RelayInventory(iv, txHash)
+func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
+	for _, txHashAndFee := range txns {
+		iv := wire.NewInvVect(wire.InvTypeTx, &txHashAndFee.TxHash)
+		s.RelayInventory(iv, txHashAndFee)
 	}
 }
 
@@ -1207,7 +1207,7 @@ func (s *server) relayTransactions(txns []*chainhash.Hash) {
 // both websocket and getblocktemplate long poll clients of the passed
 // transactions.  This function should be called whenever new transactions
 // are added to the mempool.
-func (s *server) AnnounceNewTransactions(txns []*chainhash.Hash) {
+func (s *server) AnnounceNewTransactions(txns []*netsync.TxHashAndFee) {
 	// Generate and relay inventory vectors for all newly accepted
 	// transactions.
 	s.relayTransactions(txns)
@@ -1707,21 +1707,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 		// generate and send a headers message instead of an inventory
 		// message.
 		if msg.invVect.Type == wire.InvTypeBlock && sp.WantsHeaders() {
-			blockHeader, ok := msg.data.(*wire.BlockHeader)
-			if !ok {
-				sp.server.logger.Warnf("Underlying data for headers is not a block header")
-				return
-			}
-
-			msgHeaders := wire.NewMsgHeaders()
-			if err := msgHeaders.AddBlockHeader(blockHeader); err != nil {
-				sp.server.logger.Errorf("Failed to add block"+
-					" header: %v", err)
-				return
-			}
-
-			sp.QueueMessage(msgHeaders, nil)
-
+			s.handleRelayBlockMsg(sp, msg)
 			return
 		}
 
@@ -1732,38 +1718,78 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 				return
 			}
 
-			// // Don't relay the transaction if the transaction fee-per-kb
-			// // is less than the peer's feeFilter.
-			// feeFilter := atomic.LoadInt64(&sp.feeFilter)
+			feeFilter := atomic.LoadInt64(&sp.feeFilter)
 
-			// if feeFilter > 0 {
-			// 	// tx, err := s.utxoStore.Get(s.ctx, &msg.invVect.Hash)
-			// 	tx, fee, err := s.getTxFromStore(&msg.invVect.Hash)
-			// 	if err != nil {
-			// 		sp.server.logger.Warnf("Failed to fetch tx %v from utxo store: %v", &msg.invVect.Hash, err)
+			// Don't relay the transaction if there is a bloom
+			// filter loaded and the transaction doesn't match it.
+			//
+			// if sp.filter.IsLoaded() {
+			// 	if !sp.filter.MatchTxAndUpdate(tx) {
 			// 		return
-			// 	}
-
-			// 	if feeFilter > 0 && fee < feeFilter {
-			// 		return
-			// 	}
-
-			// 	// Don't relay the transaction if there is a bloom
-			// 	// filter loaded and the transaction doesn't match it.
-
-			// 	if sp.filter.IsLoaded() {
-			// 		if !sp.filter.MatchTxAndUpdate(tx) {
-			// 			return
-			// 		}
 			// 	}
 			// }
+
+			s.handleRelayTxMsg(sp, msg, feeFilter)
+		}
+	})
+}
+
+type serverPeerQueueInventory interface {
+	QueueInventory(*wire.InvVect)
+}
+
+func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, feeFilter int64) {
+	// Don't relay the transaction if the transaction fee-per-kb
+	// is less than the peer's feeFilter.
+	if feeFilter > 0 {
+		var (
+			err      error
+			fee      int64
+			size     int64
+			feePerKB = int64(math.MaxInt64)
+		)
+
+		txHashAndFee, ok := msg.data.(*netsync.TxHashAndFee)
+		if ok {
+			fee, err = util.SafeUint64ToInt64(txHashAndFee.Fee)
+			if err != nil {
+				s.logger.Errorf("Failed to convert tx fee %v to int64: %v", txHashAndFee.Fee, err)
+			} else {
+				size, err = util.SafeUint64ToInt64(txHashAndFee.Size)
+				if err != nil {
+					s.logger.Errorf("Failed to convert tx size %v to int64: %v", txHashAndFee.Size, err)
+				} else if size > 0 {
+					// Calculate the fee per 1000 bytes, rounding up
+					feePerKB = fee * 1000 / size
+				}
+			}
 		}
 
-		// Queue the inventory to be relayed with the next batch.
-		// It will be ignored if the peer is already known to
-		// have the inventory.
-		sp.QueueInventory(msg.invVect)
-	})
+		if feePerKB < feeFilter {
+			return
+		}
+	}
+
+	// Queue the inventory to be relayed with the next batch.
+	// It will be ignored if the peer is already known to
+	// have the inventory.
+	sp.QueueInventory(msg.invVect)
+}
+
+func (s *server) handleRelayBlockMsg(sp *serverPeer, msg relayMsg) {
+	blockHeader, ok := msg.data.(*wire.BlockHeader)
+	if !ok {
+		sp.server.logger.Warnf("[handleRelayBlockMsg] Underlying data for headers is not a block header")
+		return
+	}
+
+	msgHeaders := wire.NewMsgHeaders()
+	if err := msgHeaders.AddBlockHeader(blockHeader); err != nil {
+		sp.server.logger.Errorf("[handleRelayBlockMsg] Failed to add block header: %v", err)
+		return
+	}
+
+	sp.QueueMessage(msgHeaders, nil)
 }
 
 // handleBroadcastMsg deals with broadcasting messages to peers.  It is invoked
