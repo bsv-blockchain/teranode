@@ -94,6 +94,8 @@ func (suite *TNC2_1TestSuite) TestUniqueCandidateIdentifiers() {
 
 // TestConcurrentCandidateIdentifiers verifies that candidate identifiers remain unique
 // when requesting multiple candidates concurrently
+
+// Retest - this is conflicting with the first test
 func (suite *TNC2_1TestSuite) TestConcurrentCandidateIdentifiers() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context

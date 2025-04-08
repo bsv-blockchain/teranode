@@ -119,6 +119,8 @@ func TestMoveDownMoveUp(t *testing.T) {
 	_, err = td2.BlockchainClient.GetBlockByHeight(td2.Ctx, 300)
 	require.NoError(t, err)
 
+	// create a mining candidate and test that the previous hash is the tip of the block 300 // TNC2
+
 	// Add cleanup for td2
 	t.Cleanup(func() {
 		if td2 != nil {

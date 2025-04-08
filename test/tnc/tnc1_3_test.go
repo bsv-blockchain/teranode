@@ -295,4 +295,6 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	if coinbaseValueBlock < amount {
 		t.Errorf("Error calculating fees")
 	}
+
+	//TODO: Still check the Tx fees should add up to the coinbase value
 }

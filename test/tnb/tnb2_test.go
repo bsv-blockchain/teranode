@@ -140,6 +140,7 @@ func (suite *TNB2TestSuite) TestUTXOValidation() {
 	_, err = helper.SendTransaction(ctx, node1, anotherTx)
 
 	require.Error(t, err)
+	//TODO: The error message is not being sent as expected, need to fix this
 }
 
 // TestScriptValidation verifies that Teranode correctly validates transaction scripts.

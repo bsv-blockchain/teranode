@@ -194,4 +194,6 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 	case <-ctxTimeout.Done():
 		t.Fatalf("Timeout waiting for transaction to be processed")
 	}
+
+	//TODO: Add more outputs to the transaction and test that they are added to the UTXO set
 }

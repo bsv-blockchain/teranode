@@ -712,3 +712,47 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 		}
 	}
 }
+
+func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
+	transactions := make([]*bt.Tx, count)
+	currentParent := parentTx
+	txHashes := make([]*chainhash.Hash, 0)
+
+	for i := 0; i < count; i++ {
+		utxo := &bt.UTXO{
+			TxIDHash:      currentParent.TxIDChainHash(),
+			Vout:          uint32(0),
+			LockingScript: currentParent.Outputs[0].LockingScript,
+			Satoshis:      currentParent.Outputs[0].Satoshis,
+		}
+
+		newTx := bt.NewTx()
+
+		err := newTx.FromUTXOs(utxo)
+		require.NoError(t, err)
+
+		outputAmount := currentParent.Outputs[0].Satoshis - 1000 // minus 1000 satoshis for fee
+		if outputAmount <= 0 {
+			return transactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
+		}
+
+		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), outputAmount)
+		if err != nil {
+			return transactions, nil, errors.NewProcessingError("Error adding output to transaction", err)
+		}
+
+		err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
+		require.NoError(t, err)
+
+		_, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+		require.NoError(t, err)
+
+		td.Logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
+
+		transactions[i] = newTx
+		txHashes = append(txHashes, newTx.TxIDChainHash())
+		currentParent = newTx
+	}
+
+	return transactions, txHashes, nil
+}
