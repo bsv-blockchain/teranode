@@ -2337,12 +2337,9 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 		if kafkaMsg.Action == kafkamessage.KafkaTxMetaActionType_ADD {
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 
-			txMeta, err := meta.NewDataFromBytes(kafkaMsg.Content)
-			if err != nil {
-				sm.logger.Errorf("Failed to parse tx meta from message: %v", err)
-				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx meta from message", err)
-			}
+			var txMeta meta.Data
 
+			meta.NewMetaDataFromBytes(&kafkaMsg.Content, &txMeta)
 			sm.txAnnounceBatcher.Put(&TxHashAndFee{
 				TxHash: *hash,
 				Fee:    txMeta.Fee,
