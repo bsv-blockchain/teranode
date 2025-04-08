@@ -86,7 +86,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
 
 	// Create a mock blockchain client
-	mockBlockchainClient := &blockchain.MockBlockchain{}
+	mockBlockchainClient := &blockchain.Mock{}
 
 	stp, _ := st.NewSubtreeProcessor(
 		context.Background(),
@@ -201,7 +201,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		settings := test.CreateBaseTestSettings()
 
 		// Create a mock blockchain client
-		mockBlockchainClient := &blockchain.MockBlockchain{}
+		mockBlockchainClient := &blockchain.Mock{}
 
 		stp, _ := st.NewSubtreeProcessor(
 			context.Background(),

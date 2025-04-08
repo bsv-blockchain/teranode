@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -19,6 +20,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -194,13 +196,17 @@ func setupPropagationServer(t *testing.T, mockValidator validator.Interface, sto
 	t.Helper()
 
 	// Initialize mocks
-	mockBlockchainClient := &CustomMockBlockchainClient{
-		healthStatus: http.StatusOK,
-		healthMsg:    "OK",
-	}
+	/*
+		mockBlockchainClient := &CustomMockBlockchainClient{
+			healthStatus: http.StatusOK,
+			healthMsg:    "OK",
+		}
+	*/
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
 
 	// Initialize with a simple mock block (removing model references)
-	mockBlockchainClient.Block = nil
+	// mockBlockchainClient.Block = nil
 
 	// Create our mock store
 	mockStore := &MockTxStore{
@@ -436,10 +442,11 @@ func TestHTTPIntegration(t *testing.T) {
 	// Create a minimal PropagationServer with just the dependencies needed for the test
 	ps := &MockPropagationServer{
 		PropagationServer: PropagationServer{
-			logger:           ulogger.New("test-logger"),
-			validator:        mockValidator,
-			txStore:          mockStore,
-			blockchainClient: &CustomMockBlockchainClient{},
+			logger:    ulogger.New("test-logger"),
+			validator: mockValidator,
+			txStore:   mockStore,
+			// blockchainClient: &CustomMockBlockchainClient{},
+			blockchainClient: &blockchain.Mock{},
 		},
 	}
 

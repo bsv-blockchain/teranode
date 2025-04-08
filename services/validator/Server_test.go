@@ -36,7 +36,7 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 
 	// Create empty mock implementations
 	utxoStore := &utxo.MockUtxostore{}
-	blockchainClient := &blockchain.MockBlockchain{}
+	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
 	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil)
@@ -179,7 +179,7 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 
 	// Create empty mock implementations
 	utxoStore := &utxo.MockUtxostore{}
-	blockchainClient := &blockchain.MockBlockchain{}
+	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
 	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil)
@@ -288,7 +288,7 @@ func TestHTTPServerIntegration(t *testing.T) {
 	tSettings.Validator.HTTPRateLimit = 1000
 
 	utxoStore := &utxo.MockUtxostore{}
-	blockchainClient := &blockchain.MockBlockchain{}
+	blockchainClient := &blockchain.Mock{}
 
 	// Create server instance
 	server := NewServer(logger, tSettings, utxoStore, blockchainClient, nil, nil, nil)

@@ -17,9 +17,11 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
+/*
 // CustomMockBlockchainClient extends the standard blockchain.MockBlockchain
 // with additional control over health check responses
 type CustomMockBlockchainClient struct {
@@ -73,7 +75,7 @@ func (m *CustomMockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockcha
 		return blockchain_api.FSMStateType_IDLE
 	}
 }
-
+*/
 // TestPropagationServer_HealthLiveness tests the Health function with liveness checks.
 func TestPropagationServer_HealthLiveness(t *testing.T) {
 	// Initialize tracing for tests
@@ -108,13 +110,22 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 			BlockHeight: 123,
 		}
 
-		mockBlockchainClient := &CustomMockBlockchainClient{
-			healthStatus: http.StatusOK,
-			healthMsg:    "OK",
-			healthErr:    nil,
-			fsmState:     "RUNNING",
-			fsmErr:       nil,
-		}
+		/*
+			mockBlockchainClient := &CustomMockBlockchainClient{
+				healthStatus: http.StatusOK,
+				healthMsg:    "OK",
+				healthErr:    nil,
+				fsmState:     "RUNNING",
+				fsmErr:       nil,
+			}*/
+
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+
+		// Configure FSM state to be RUNNING
+		fsmState := blockchain_api.FSMStateType_RUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+		mockBlockchainClient.On("GetFSMCurrentStateForE2ETestMode").Return(blockchain_api.FSMStateType_RUNNING)
 
 		// Create mock tx store
 		txStore, err := null.New(ulogger.TestLogger{})
@@ -153,13 +164,26 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 			// Return unhealthy status when called with Health
 		}
 
-		mockBlockchainClient := &CustomMockBlockchainClient{
-			healthStatus: http.StatusServiceUnavailable,
-			healthMsg:    "Service unavailable",
-			healthErr:    errors.NewServiceUnavailableError("blockchain unavailable"),
-			fsmState:     "",
-			fsmErr:       errors.NewServiceUnavailableError("fsm unavailable"),
-		}
+		/*
+			mockBlockchainClient := &CustomMockBlockchainClient{
+				healthStatus: http.StatusServiceUnavailable,
+				healthMsg:    "Service unavailable",
+				healthErr:    errors.NewServiceUnavailableError("blockchain unavailable"),
+				fsmState:     "",
+				fsmErr:       errors.NewServiceUnavailableError("fsm unavailable"),
+			}*/
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, false).Return(
+			http.StatusServiceUnavailable,
+			"Service unavailable",
+			errors.NewServiceUnavailableError("blockchain unavailable"),
+		)
+
+		// Configure FSM state to return error
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(
+			(*blockchain_api.FSMStateType)(nil),
+			errors.NewServiceUnavailableError("fsm unavailable"),
+		)
 
 		// Create mock tx store
 		txStore, err := null.New(ulogger.TestLogger{})
@@ -233,13 +257,21 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 		// Create mock dependencies - all healthy
 		mockValidator := &validator.MockValidatorClient{}
 
-		mockBlockchainClient := &CustomMockBlockchainClient{
-			healthStatus: http.StatusOK,
-			healthMsg:    "OK",
-			healthErr:    nil,
-			fsmState:     "RUNNING",
-			fsmErr:       nil,
-		}
+		/*
+			mockBlockchainClient := &CustomMockBlockchainClient{
+				healthStatus: http.StatusOK,
+				healthMsg:    "OK",
+				healthErr:    nil,
+				fsmState:     "RUNNING",
+				fsmErr:       nil,
+			}*/
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+
+		// Configure FSM state to be RUNNING
+		fsmState := blockchain_api.FSMStateType_RUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+		mockBlockchainClient.On("GetFSMCurrentStateForE2ETestMode").Return(blockchain_api.FSMStateType_RUNNING)
 
 		// Create mock tx store
 		txStore, err := null.New(ulogger.TestLogger{})
@@ -281,13 +313,20 @@ func TestPropagationServer_HealthGRPC(t *testing.T) {
 		// Create mock dependencies - all healthy
 		mockValidator := &validator.MockValidatorClient{}
 
-		mockBlockchainClient := &CustomMockBlockchainClient{
+		/* mockBlockchainClient := &CustomMockBlockchainClient{
 			healthStatus: http.StatusOK,
 			healthMsg:    "OK",
 			healthErr:    nil,
 			fsmState:     "RUNNING",
 			fsmErr:       nil,
-		}
+		} */
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+
+		// Configure FSM state to be RUNNING
+		fsmState := blockchain_api.FSMStateType_RUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+		mockBlockchainClient.On("GetFSMCurrentStateForE2ETestMode").Return(blockchain_api.FSMStateType_RUNNING)
 
 		// Create mock tx store
 		txStore, err := null.New(ulogger.TestLogger{})
@@ -320,16 +359,25 @@ func TestPropagationServer_HealthGRPC(t *testing.T) {
 	})
 
 	t.Run("unhealthy service", func(t *testing.T) {
-		// Create mock dependencies with one unhealthy
+		// Configure the blockchain mock to return unhealthy status
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, false).Return(
+			http.StatusServiceUnavailable,
+			"Service unavailable",
+			errors.NewServiceUnavailableError("blockchain unavailable"),
+		)
+
+		// Add missing expectation for GetFSMCurrentState
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(
+			(*blockchain_api.FSMStateType)(nil),
+			errors.NewServiceUnavailableError("fsm unavailable"),
+		)
+
+		// Create server with unhealthy blockchain client
 		ps := &PropagationServer{
-			logger:   ulogger.TestLogger{},
-			settings: test.CreateBaseTestSettings(),
-			// Unhealthy blockchain client
-			blockchainClient: &CustomMockBlockchainClient{
-				healthStatus: http.StatusServiceUnavailable,
-				healthMsg:    "Service unavailable",
-				healthErr:    errors.NewServiceUnavailableError("blockchain unavailable"),
-			},
+			logger:           ulogger.TestLogger{},
+			settings:         test.CreateBaseTestSettings(),
+			blockchainClient: mockBlockchainClient,
 		}
 
 		// Test HealthGRPC with unhealthy dependency

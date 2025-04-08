@@ -1347,7 +1347,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
-		mockBlockchainClient := &blockchain.MockBlockchain{}
+		mockBlockchainClient := &blockchain.Mock{}
 
 		stp, err := NewSubtreeProcessor(
 			context.Background(),
@@ -1436,7 +1436,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
 		utxosStore := memory.New(ulogger.TestLogger{})
-		mockBlockchainClient := &blockchain.MockBlockchain{}
+		mockBlockchainClient := &blockchain.Mock{}
 
 		stp, err := NewSubtreeProcessor(
 			context.Background(),

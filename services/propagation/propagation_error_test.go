@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -22,14 +23,18 @@ func TestPropagationServiceErrors(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	// tSettings.Propagation.GRPCListenAddress = "localhost:0" // Let OS choose port
 
+	mockClient := &blockchain.Mock{}
+
+	mockClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+
 	// Create a server with a null validator that always returns an error
 	server := New(
 		ulogger.TestLogger{},
 		tSettings,
-		nil,                          // No tx store
-		nil,                          // Validator that always returns error
-		&blockchain.MockBlockchain{}, // Mock blockchain client
-		nil,                          // No kafka producer
+		nil,        // No tx store
+		nil,        // Validator that always returns error
+		mockClient, // Mock blockchain client
+		nil,        // No kafka producer
 	)
 
 	// Start the server
