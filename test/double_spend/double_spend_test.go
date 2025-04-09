@@ -29,7 +29,7 @@ var (
 
 // TestDoubleSpendScenarios tests various double-spend scenarios in a blockchain.
 // NOTE: these tests cannot be run in parallel as they rely on the same blockchain instance. They have to be run sequentially.
-// All Double spend testcases are covering TNA-5: Teranode must only accept the block if all transactions in it are valid and not already spent 
+// All Double spend testcases are covering TNA-5: Teranode must only accept the block if all transactions in it are valid and not already spent
 
 func TestDoubleSpendSQLite(t *testing.T) {
 	utxoStore := "sqlite:///test"
@@ -137,7 +137,7 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	t.Run("double_spend_fork", func(t *testing.T) {
 		testDoubleSpendFork(t, utxoStore)
 	})
-	t.Run("double_spend_in_subsequent_block", func(t *testing.T) {
+	t.Run("🧨double_spend_in_subsequent_block", func(t *testing.T) {
 		testDoubleSpendInSubsequentBlock(t, utxoStore)
 	})
 	t.Run("triple_forked_chain", func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
 		testDoubleSpendForkWithNestedTXs(t, utxoStore)
 	})
-	t.Run("test_double_spend_with_frozen_tx", func(t *testing.T) {
+	t.Run("🧨test_double_spend_with_frozen_tx", func(t *testing.T) {
 		testSingleDoubleSpendFrozenTx(t, utxoStore)
 	})
 }

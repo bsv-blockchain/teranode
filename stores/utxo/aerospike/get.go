@@ -62,7 +62,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -431,8 +431,13 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		batchRecords[idx] = record
 	}
 
+	if len(batchRecords) == 0 {
+		return nil
+	}
+
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
+		s.logger.Errorf("error in aerospike map store batch records:\n%#v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
 

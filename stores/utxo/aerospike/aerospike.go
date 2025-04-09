@@ -65,8 +65,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v7"
-	asl "github.com/aerospike/aerospike-client-go/v7/logger"
+	"github.com/aerospike/aerospike-client-go/v8"
+	asl "github.com/aerospike/aerospike-client-go/v8/logger"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
@@ -256,10 +256,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setTTLBatchDuration := time.Duration(setTTLBatchDurationStr) * time.Millisecond
 	s.setTTLBatcher = batcher.New(setTTLBatchSize, setTTLBatchDuration, s.sendSetTTLBatch, true)
 
-	unspendableBatchSize := tSettings.UtxoStore.UnspendableBatcherSize
+	unspendableBatcherSize := tSettings.UtxoStore.UnspendableBatcherSize
 	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
 	unspendableBatchDuration := time.Duration(unspendableBatchDurationStr) * time.Millisecond
-	s.unspendableBatcher = batcher.New(unspendableBatchSize, unspendableBatchDuration, s.setUnspendableBatch, true)
+	s.unspendableBatcher = batcher.New(unspendableBatcherSize, unspendableBatchDuration, s.setUnspendableBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

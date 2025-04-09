@@ -488,7 +488,6 @@ func Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer(t *testing.T) {
 	req := &grpctest.TestRequest{
 		Message: "Hello",
 	}
-
 	_, err = client.TestMethod(ctx, req)
 	require.Error(t, err)
 
@@ -748,4 +747,30 @@ func TestErrorLogging(t *testing.T) {
 	// fmt.Println("Wrapped Error: ", terror)
 
 	require.Equal(t, sError, sTError)
+}
+
+func TestSetDataAndGetData(t *testing.T) {
+	err := New(ERR_BLOCK_INVALID, "block invalid")
+	err.SetData("key1", "value1")
+	require.Equal(t, "value1", err.GetData("key1"))
+
+	err.SetData("key2", 12345)
+	require.Equal(t, 12345, err.GetData("key2"))
+
+	require.Nil(t, err.GetData("nonexistent"))
+}
+
+func TestRemoveInvalidUTF8(t *testing.T) {
+	input := "valid\x80invalid\x80"
+	expected := "validinvalid"
+	result := RemoveInvalidUTF8(input)
+
+	require.Equal(t, expected, result)
+}
+
+func TestErrorNil(t *testing.T) {
+	var err *Error
+
+	require.Equal(t, "<nil>", err.Error())
+	require.False(t, err.Is(nil))
 }

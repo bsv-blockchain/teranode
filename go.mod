@@ -10,7 +10,7 @@ replace golang.org/x/tools => golang.org/x/tools v0.21.1-0.20240508182429-e35e4c
 
 require (
 	github.com/IBM/sarama v1.42.2
-	github.com/aerospike/aerospike-client-go/v7 v7.6.1
+	github.com/aerospike/aerospike-client-go/v8 v8.2.0
 	github.com/aws/aws-sdk-go-v2 v1.27.0
 	github.com/aws/aws-sdk-go-v2/config v1.27.16
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
@@ -18,7 +18,7 @@ require (
 	github.com/bitcoin-sv/alert-system v0.1.10
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta6
 	github.com/bitcoin-sv/go-sdk v1.1.17
-	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.1
+	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
@@ -123,6 +123,7 @@ require (
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tonistiigi/go-csvvalue v0.0.0-20240710180619-ddb21b71c0b4 // indirect
+	github.com/wadey/gocovmerge v0.0.0-20160331181800-b5bfa59ec0ad // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
@@ -148,7 +149,6 @@ require (
 	github.com/FZambia/eagle v0.1.0 // indirect
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/aerospike/aerospike-client-go/v6 v6.15.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.2 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.16 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.3 // indirect

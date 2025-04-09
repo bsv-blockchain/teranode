@@ -80,3 +80,6 @@ node*-data
 
 teranode-cli
 site/
+
+mainnet_14207txs_b886413_WUH.csv
+mainnet_large_txs.csv

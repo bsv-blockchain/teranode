@@ -114,7 +114,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore]", gCtx.Err())
+			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore]", err)
 		}
 
 		return int(missed.Load()), nil
@@ -168,7 +168,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
+			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore] context done", err)
 		}
 
 		return int(missed.Load()), nil
