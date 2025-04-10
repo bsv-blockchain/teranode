@@ -302,6 +302,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPAddress:        getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
 			HTTPListenAddress:  getString("p2p_httpListenAddress", "", alternativeContext...),
 			ListenAddresses:    getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
+			AdvertiseAddresses: getMultiString("p2p_advertise_addresses", "|", []string{}, alternativeContext...),
 			MiningOnTopic:      getString("p2p_mining_on_topic", "", alternativeContext...),
 			PeerID:             getString("p2p_peer_id", "", alternativeContext...),
 			Port:               getInt("p2p_port", 9906, alternativeContext...),

@@ -146,15 +146,16 @@ func NewServer(
 	privateKey := tSettings.P2P.PrivateKey
 
 	config := P2PConfig{
-		ProcessName:     "peer",
-		ListenAddresses: listenAddresses,
-		Port:            p2pPort,
-		PrivateKey:      privateKey,
-		SharedKey:       sharedKey,
-		UsePrivateDHT:   usePrivateDht,
-		OptimiseRetries: optimiseRetries,
-		Advertise:       true,
-		StaticPeers:     staticPeers,
+		ProcessName:        "peer",
+		ListenAddresses:    listenAddresses,
+		AdvertiseAddresses: tSettings.P2P.AdvertiseAddresses,
+		Port:               p2pPort,
+		PrivateKey:         privateKey,
+		SharedKey:          sharedKey,
+		UsePrivateDHT:      usePrivateDht,
+		OptimiseRetries:    optimiseRetries,
+		Advertise:          true,
+		StaticPeers:        staticPeers,
 	}
 
 	p2pNode, err := NewP2PNode(logger, tSettings, config, blocksKafkaProducerClient)
@@ -690,6 +691,7 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		Hash:       bh.Hash().String(),
 		Height:     bhMeta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
+		PeerID:     s.P2PNode.HostID().String(),
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)

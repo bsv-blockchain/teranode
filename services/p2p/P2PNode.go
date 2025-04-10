@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -84,15 +85,16 @@ type P2PNode struct {
 type Handler func(ctx context.Context, msg []byte, from string)
 
 type P2PConfig struct {
-	ProcessName     string
-	ListenAddresses []string
-	Port            int
-	PrivateKey      string
-	SharedKey       string
-	UsePrivateDHT   bool
-	OptimiseRetries bool
-	Advertise       bool
-	StaticPeers     []string
+	ProcessName        string
+	ListenAddresses    []string
+	AdvertiseAddresses []string
+	Port               int
+	PrivateKey         string
+	SharedKey          string
+	UsePrivateDHT      bool
+	OptimiseRetries    bool
+	Advertise          bool
+	StaticPeers        []string
 }
 
 func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig, blocksKafkaProducerClient kafka.KafkaAsyncProducerI) (*P2PNode, error) {
@@ -138,10 +140,45 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 			listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
 		}
 
-		h, err = libp2p.New(
+		opts := []libp2p.Option{
 			libp2p.ListenAddrStrings(listenMultiAddresses...),
 			libp2p.Identity(*pk),
-		)
+		}
+
+		// If advertise addresses are specified, add them to the options
+		if len(config.AdvertiseAddresses) > 0 {
+			advertiseMultiAddresses := []multiaddr.Multiaddr{}
+
+			for _, addr := range config.AdvertiseAddresses {
+				var maddr multiaddr.Multiaddr
+
+				var err error
+
+				// Try to parse as IP address first
+				if net.ParseIP(addr) != nil {
+					// It's a valid IP address
+					maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
+				} else {
+					// Assume it's a DNS name
+					maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", addr, config.Port))
+				}
+
+				if err != nil {
+					logger.Warnf("[P2PNode] invalid advertise address: %s, error: %v", addr, err)
+					continue
+				}
+
+				advertiseMultiAddresses = append(advertiseMultiAddresses, maddr)
+			}
+
+			if len(advertiseMultiAddresses) > 0 {
+				opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+					return advertiseMultiAddresses
+				}))
+			}
+		}
+
+		h, err = libp2p.New(opts...)
 		if err != nil {
 			return nil, errors.NewServiceError("[P2PNode] error creating libp2p host", err)
 		}
@@ -195,11 +232,48 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 		listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
 	}
 
-	h, err = libp2p.New(
+	// Set up libp2p options
+	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenMultiAddresses...),
 		libp2p.Identity(*pk),
 		libp2p.PrivateNetwork(psk),
-	)
+	}
+
+	// If advertise addresses are specified, add them to the options
+	if len(config.AdvertiseAddresses) > 0 {
+		advertiseMultiAddresses := []multiaddr.Multiaddr{}
+
+		for _, addr := range config.AdvertiseAddresses {
+			var maddr multiaddr.Multiaddr
+
+			var err error
+
+			// Try to parse as IP address first
+			if net.ParseIP(addr) != nil {
+				// It's a valid IP address
+				maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
+			} else {
+				// Assume it's a DNS name
+				maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", addr, config.Port))
+			}
+
+			if err != nil {
+				// Use fmt.Printf instead of logger since we don't have access to the logger instance here
+				fmt.Printf("[P2PNode] invalid advertise address for private network: %s, error: %v\n", addr, err)
+				continue
+			}
+
+			advertiseMultiAddresses = append(advertiseMultiAddresses, maddr)
+		}
+
+		if len(advertiseMultiAddresses) > 0 {
+			opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+				return advertiseMultiAddresses
+			}))
+		}
+	}
+
+	h, err = libp2p.New(opts...)
 	if err != nil {
 		return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
 	}

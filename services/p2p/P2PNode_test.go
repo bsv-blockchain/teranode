@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/connmgr"
@@ -2652,6 +2653,76 @@ func TestAttemptConnection(t *testing.T) {
 				// If peer was already stored, ensure no connection attempt
 				_, connectionAttempted := connectionAttempts.Load(tc.peer.ID.String())
 				assert.False(t, connectionAttempted, "Did not expect a connection attempt for already stored peer")
+			}
+		})
+	}
+}
+
+func TestAdvertiseAddresses(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := settings.NewSettings()
+
+	testCases := []struct {
+		name               string
+		advertiseAddresses []string
+		expectedPrefixes   []string
+	}{
+		{
+			name:               "IP addresses only",
+			advertiseAddresses: []string{"192.168.1.1", "10.0.0.1"},
+			expectedPrefixes:   []string{"/ip4/192.168.1.1/tcp/", "/ip4/10.0.0.1/tcp/"},
+		},
+		{
+			name:               "DNS names only",
+			advertiseAddresses: []string{"example.com", "test.local"},
+			expectedPrefixes:   []string{"/dns4/example.com/tcp/", "/dns4/test.local/tcp/"},
+		},
+		{
+			name:               "Mixed IP and DNS",
+			advertiseAddresses: []string{"192.168.1.1", "example.com"},
+			expectedPrefixes:   []string{"/ip4/192.168.1.1/tcp/", "/dns4/example.com/tcp/"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a P2PNode configuration with the test advertise addresses
+			config := P2PConfig{
+				ProcessName:        "test",
+				ListenAddresses:    []string{"127.0.0.1"},
+				AdvertiseAddresses: tc.advertiseAddresses,
+				Port:               12345,
+				PrivateKey:         generateTestPrivateKey(t),
+				UsePrivateDHT:      false,
+			}
+
+			// Create a mock for the Kafka producer
+			mockKafkaProducer := kafka.NewKafkaAsyncProducerMock()
+
+			// Create the P2PNode
+			node, err := NewP2PNode(logger, tSettings, config, mockKafkaProducer)
+			require.NoError(t, err)
+			require.NotNil(t, node)
+			// defer node.Close()
+
+			// Get the host's advertised addresses
+			advertised := node.host.Addrs()
+			require.Equal(t, len(tc.expectedPrefixes), len(advertised), "Number of advertised addresses doesn't match expected")
+
+			// Check that all expected prefixes are found in the advertised addresses
+			// (but not necessarily in the same order)
+			for _, prefix := range tc.expectedPrefixes {
+				found := false
+
+				for _, addr := range advertised {
+					addrStr := addr.String()
+					if strings.HasPrefix(addrStr, prefix) {
+						found = true
+						break
+					}
+				}
+
+				assert.True(t, found, "Expected prefix %s not found in advertised addresses", prefix)
 			}
 		})
 	}

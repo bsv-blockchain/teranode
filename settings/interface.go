@@ -292,8 +292,9 @@ type P2PSettings struct {
 	HTTPAddress       string
 	HTTPListenAddress string
 
-	ListenAddresses []string
-	MiningOnTopic   string
+	ListenAddresses    []string
+	AdvertiseAddresses []string
+	MiningOnTopic      string
 
 	PeerID string
 	Port   int

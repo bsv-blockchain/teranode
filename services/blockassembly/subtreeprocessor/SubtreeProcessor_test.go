@@ -934,6 +934,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		processingDone := make(chan struct{})
 
 		var wg sync.WaitGroup
+
 		wg.Add(4) // we are expecting 4 subtrees
 
 		go func() {
