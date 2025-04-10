@@ -1,9 +1,13 @@
 package ulogger
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 type VerboseTestLogger struct {
-	t *testing.T
+	t     *testing.T
+	mutex sync.Mutex
 }
 
 func NewVerboseTestLogger(t *testing.T) *VerboseTestLogger {
@@ -25,21 +29,31 @@ func (l *VerboseTestLogger) Duplicate(options ...Option) Logger {
 }
 
 func (l *VerboseTestLogger) Debugf(format string, args ...interface{}) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.t.Logf("[DEBUG] "+format, args...)
 }
 
 func (l *VerboseTestLogger) Infof(format string, args ...interface{}) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.t.Logf("[INFO] "+format, args...)
 }
 
 func (l *VerboseTestLogger) Warnf(format string, args ...interface{}) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.t.Logf("[WARN] "+format, args...)
 }
 
 func (l *VerboseTestLogger) Errorf(format string, args ...interface{}) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.t.Logf("[ERROR] "+format, args...)
 }
 
 func (l *VerboseTestLogger) Fatalf(format string, args ...interface{}) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.t.Fatalf("[FATAL] "+format, args...)
 }

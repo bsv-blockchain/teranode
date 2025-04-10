@@ -30,6 +30,7 @@ import (
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 const errorCreatingDhtMessage = "[P2PNode] error creating DHT"
@@ -290,28 +291,45 @@ func (s *P2PNode) startStaticPeerConnector(ctx context.Context) {
 	go func() {
 		logged := false
 
+		delay := 0 * time.Second
+
 		for {
+			// Use a ticker with context to handle cancellation during sleep
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+				// Timer completed, continue as normal
+			case <-ctx.Done():
+				// Context was canceled during wait, clean up and return
+				if !timer.Stop() {
+					<-timer.C
+				}
+
+				s.logger.Infof("[P2PNode] shutting down")
+
+				return
+			}
+
+			allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
+
 			select {
 			case <-ctx.Done():
-				s.logger.Infof("[P2PNode] shutting down")
 				return
 			default:
-				allConnected := s.connectToStaticPeers(ctx, s.config.StaticPeers)
-				if allConnected {
-					if !logged {
-						s.logger.Infof("[P2PNode] all static peers connected")
-					}
+			}
 
-					logged = true
-					// it is possible that a peer disconnects, so we need to keep checking
-					time.Sleep(30 * time.Second)
-				} else {
-					logged = false
-
-					s.logger.Infof("[P2PNode] all static peers NOT connected")
-
-					time.Sleep(5 * time.Second)
+			if allConnected {
+				if !logged {
+					s.logger.Infof("[P2PNode] all static peers connected")
 				}
+
+				logged = true
+				delay = 30 * time.Second // it is possible that a peer disconnects, so we need to keep checking
+			} else {
+				s.logger.Infof("[P2PNode] all static peers NOT connected")
+
+				logged = false
+				delay = 5 * time.Second
 			}
 		}
 	}()
@@ -342,7 +360,7 @@ func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream),
 
 	go func() {
 		if err := s.discoverPeers(ctx, topicNames); err != nil {
-			s.logger.Errorf("[P2PNode] error discovering peers: %+v", err)
+			s.logger.Errorf("[P2PNode] error discovering peers: %v", err)
 		}
 	}()
 
@@ -461,6 +479,7 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 
 	if err = s.host.Connect(ctx, h2pi); err != nil {
 		s.logger.Errorf("[P2PNode][SendToPeer] failed to connect: %+v", err)
+		return err
 	}
 
 	var st network.Stream
@@ -548,6 +567,12 @@ func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string
 	i := len(staticPeers)
 
 	for _, peerAddr := range staticPeers {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
 		peerInfo, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(peerAddr))
 		if err != nil {
 			s.logger.Errorf("[P2PNode] failed to get peerInfo from  %s: %v", peerAddr, err)
@@ -601,9 +626,11 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 		}
 	}
 
-	s.logger.Debugf("[P2PNode] %d peer connections\n", len(s.host.Network().Peers()))
-	s.logger.Debugf("[P2PNode] %d peers in peerstore\n", len(s.host.Peerstore().Peers()))
+	// Log peer store info
+	peerCount := len(s.host.Peerstore().Peers())
+	s.logger.Debugf("[P2PNode] %d peers in peerstore", peerCount)
 
+	// Use simultaneous connect for hole punching
 	ctx = network.WithSimultaneousConnect(ctx, true, "hole punching")
 	peerAddrErrorMap := sync.Map{}
 
@@ -611,45 +638,93 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 	for {
 		select {
 		case <-ctx.Done():
+			// Exit immediately if context is done
 			s.logger.Infof("[P2PNode] shutting down")
 			return nil
 		default:
+			// Create a copy of the map to avoid concurrent modifications
 			peerAddrMap := sync.Map{}
 
-			g := sync.WaitGroup{}
-			g.Add(len(topicNames))
+			eg := errgroup.Group{}
 
 			start := time.Now()
 
+			// Start all peer finding goroutines
 			for _, topicName := range topicNames {
-				// search for everything all at once
-				go s.findPeers(ctx, &g, topicName, routingDiscovery, &peerAddrMap, &peerAddrErrorMap)
+				// We need to create a copy of the topic name for each goroutine
+				// to avoid data races on the loop variable
+				topicNameCopy := topicName
+
+				eg.Go(func() error {
+					return s.findPeers(ctx, topicNameCopy, routingDiscovery, &peerAddrMap, &peerAddrErrorMap)
+				})
 			}
 
-			g.Wait()
+			if err := eg.Wait(); err != nil {
+				return err
+			}
 
-			s.logger.Debugf("[P2PNode] Completed discovery process in %v", time.Since(start))
+			duration := time.Since(start)
+			if duration > 0 { // Avoid logging negative durations due to clock skew
+				s.logger.Debugf("[P2PNode] Completed discovery process in %v", duration)
+			}
 
-			time.Sleep(5 * time.Second)
+			// Using a timer with context to handle cancellation during sleep
+			sleepTimer := time.NewTimer(5 * time.Second)
+			select {
+			case <-sleepTimer.C:
+				// Timer completed normally, continue the loop
+			case <-ctx.Done():
+				// Context was canceled, clean up and return
+				if !sleepTimer.Stop() {
+					select {
+					case <-sleepTimer.C:
+					default:
+					}
+				}
+
+				return ctx.Err()
+			}
 		}
 	}
 }
 
-func (s *P2PNode) findPeers(ctx context.Context, g *sync.WaitGroup, topicName string, routingDiscovery *dRouting.RoutingDiscovery, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
-	defer g.Done()
-
+func (s *P2PNode) findPeers(ctx context.Context, topicName string, routingDiscovery *dRouting.RoutingDiscovery, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) error {
+	// Find peers subscribed to the topic
 	addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
 	if err != nil {
 		s.logger.Errorf("[P2PNode] error finding peers: %+v", err)
+
+		return err
 	}
 
+	wg := &sync.WaitGroup{}
+
+	// Process each peer address discovered
 	for addr := range addrChan {
+		// Check if context is done before processing each peer
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Skip peers we shouldn't connect to
 		if s.shouldSkipPeer(addr, peerAddrErrorMap) {
 			continue
 		}
 
-		s.attemptConnection(ctx, addr, peerAddrMap, peerAddrErrorMap)
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			s.attemptConnection(ctx, addr, peerAddrMap, peerAddrErrorMap)
+		}()
 	}
+
+	wg.Wait()
+
+	return nil
 }
 
 // shouldSkipPeer determines if a peer should be skipped based on filtering criteria
@@ -722,23 +797,19 @@ func (s *P2PNode) shouldSkipNoGoodAddresses(addr peer.AddrInfo) bool {
 }
 
 // attemptConnection tries to connect to a peer if it hasn't been attempted already
-func (s *P2PNode) attemptConnection(ctx context.Context, addr peer.AddrInfo, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
-	peerAddr, loaded := peerAddrMap.LoadOrStore(addr.ID.String(), addr)
+func (s *P2PNode) attemptConnection(ctx context.Context, peerAddr peer.AddrInfo, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
+	if _, ok := peerAddrMap.Load(peerAddr.ID.String()); ok {
+		return
+	}
 
-	if !loaded {
-		/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
-		go func(addr peer.AddrInfo) {
-			// A peer may not be available at the time of discovery.
-			// A peer stays in the DHT for around 24 hours (according to ChatGPT) before it is removed from the peerstore
-			// Logging each attempt to connect to these peers is too noisy
-			err := s.host.Connect(ctx, addr)
-			if err != nil {
-				s.logger.Debugf("[P2PNode][%s] Connection failed : %+v", addr.String(), err)
-				peerAddrErrorMap.Store(addr.ID.String(), err.Error())
-			} else {
-				s.logger.Infof("[P2PNode][%s] Connected in %s", addr.String(), time.Since(s.startTime))
-			}
-		}(peerAddr.(peer.AddrInfo))
+	peerAddrMap.Store(peerAddr.ID.String(), true)
+
+	err := s.host.Connect(ctx, peerAddr)
+	if err != nil {
+		peerAddrErrorMap.Store(peerAddr.ID.String(), true)
+		s.logger.Debugf("[P2PNode][%s] Failed to connect: %v", peerAddr.String(), err)
+	} else {
+		s.logger.Infof("[P2PNode][%s] Connected in %s", peerAddr.String(), time.Since(s.startTime))
 	}
 }
 
@@ -760,21 +831,72 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error
 
 	var wg sync.WaitGroup
 
+	// Create a context with timeout to ensure bootstrap connections don't hang
+	connectCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	// Create a synchronization channel for handling connection errors
+	errorChan := make(chan error, len(dht.DefaultBootstrapPeers))
+
 	for _, peerAddr := range dht.DefaultBootstrapPeers {
 		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
 
 		wg.Add(1)
 
-		go func() {
+		go func(pi *peer.AddrInfo) {
 			defer wg.Done()
 
-			if err := h.Connect(ctx, *peerinfo); err != nil {
-				s.logger.Debugf("DHT Bootstrap warning: %v", err)
+			if err := h.Connect(connectCtx, *pi); err != nil {
+				errorChan <- err
 			}
-		}()
+		}(peerinfo)
 	}
 
+	// Launch a separate goroutine to collect and log errors
+	var wgLogging sync.WaitGroup
+
+	wgLogging.Add(1)
+
+	// Create a done channel to signal when to stop receiving from errorChan
+	doneChan := make(chan struct{})
+
+	go func() {
+		defer wgLogging.Done()
+
+		for {
+			select {
+			case err, ok := <-errorChan:
+				if !ok {
+					// Channel closed, exit
+					return
+				}
+				// Check context before logging
+				select {
+				case <-ctx.Done():
+					// Context canceled, stop logging
+					return
+				default:
+					s.logger.Debugf("DHT Bootstrap warning: %v", err)
+				}
+			case <-ctx.Done():
+				// Context canceled, stop logging
+				return
+			case <-doneChan:
+				// Signal to stop, exit
+				return
+			}
+		}
+	}()
+
+	// Wait for all connection attempts to complete
 	wg.Wait()
+
+	// Signal the logging goroutine to exit and close the error channel
+	close(doneChan)
+	close(errorChan)
+
+	// Wait for logging to complete
+	wgLogging.Wait()
 
 	return kademliaDHT, nil
 }
@@ -856,30 +978,18 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 	return kademliaDHT, nil
 }
 
-// LastSend returns the last send time of the peer.
-//
-// This function is safe for concurrent access.
 func (s *P2PNode) LastSend() time.Time {
 	return time.Unix(atomic.LoadInt64(&s.lastSend), 0)
 }
 
-// LastRecv returns the last recv time of the peer.
-//
-// This function is safe for concurrent access.
 func (s *P2PNode) LastRecv() time.Time {
 	return time.Unix(atomic.LoadInt64(&s.lastRecv), 0)
 }
 
-// BytesSent returns the total number of bytes sent by the peer.
-//
-// This function is safe for concurrent access.
 func (s *P2PNode) BytesSent() uint64 {
 	return atomic.LoadUint64(&s.bytesSent)
 }
 
-// BytesReceived returns the total number of bytes received by the peer.
-//
-// This function is safe for concurrent access.
 func (s *P2PNode) BytesReceived() uint64 {
 	return atomic.LoadUint64(&s.bytesReceived)
 }

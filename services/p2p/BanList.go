@@ -224,38 +224,49 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 // Returns:
 //   - bool: true if the IP is banned, false otherwise
 func (b *BanList) IsBanned(ipStr string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// ipStr may contain a port, so we need to split it
-	host, _, err := net.SplitHostPort(ipStr)
-	if err != nil {
-		// if SplitHostPort fails, it means there's no port, so use the original string
-		host = ipStr
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		b.logger.Errorf("Invalid IP address: %s", host)
+	if ipStr == "" {
 		return false
 	}
 
-	now := time.Now()
+	// If it contains a port, strip it off
+	if strings.Contains(ipStr, ":") {
+		ipStr = strings.Split(ipStr, ":")[0]
+	}
 
-	for key, banInfo := range b.bannedPeers {
-		// First, check if the ban has expired
-		if now.After(banInfo.ExpirationTime) {
-			delete(b.bannedPeers, key)
+	// First try direct lookup in our map
+	b.mu.RLock()
+	if info, exists := b.bannedPeers[ipStr]; exists {
+		isBanned := info.ExpirationTime.After(time.Now())
+		b.mu.RUnlock()
+
+		return isBanned
+	}
+	b.mu.RUnlock()
+
+	// Try to parse the IP address
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		// Not a valid IP address - no need to log this for test cases
+		return false
+	}
+
+	// Check each subnet
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for key, info := range b.bannedPeers {
+		// Skip expired bans
+		if !info.ExpirationTime.After(time.Now()) {
 			continue
 		}
 
-		// Check if it's a direct IP match
-		if key == host {
-			return true
+		// Skip simple IP bans (not subnets)
+		if !strings.Contains(key, "/") {
+			continue
 		}
 
-		// Check if the IP is in the subnet
-		if banInfo.Subnet.Contains(ip) {
+		// Check if IP is in this subnet
+		if info.Subnet != nil && info.Subnet.Contains(ip) {
 			return true
 		}
 	}
