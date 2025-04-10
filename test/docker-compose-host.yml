@@ -19,7 +19,7 @@ services:
     image: teranode:latest
     network_mode: "host"
     build:
-      context: .
+      context: ..
       dockerfile: local.Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
@@ -74,8 +74,8 @@ services:
 
   teranode-1:
     <<: *teranode-base
-    profiles:
-      - skip-teranode
+    # profiles:
+    #   - skip-teranode
     container_name: teranode-1
     depends_on:
       postgres:

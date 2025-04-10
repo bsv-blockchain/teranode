@@ -572,13 +572,29 @@ func (td *TestDaemon) WaitForBlockHeight(t *testing.T, expectedBlock *model.Bloc
 	deadline := time.Now().Add(timeout)
 
 	var (
-		err   error
-		state *blockassembly_api.StateMessage
+		tmpBlock *model.Block
+		err      error
+		state    *blockassembly_api.StateMessage
 	)
 
-	tmpBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, expectedBlock.Height)
+finished:
+	for {
+		switch {
+		case time.Now().After(deadline):
+			t.Fatalf("Timeout waiting for block height %d", expectedBlock.Height)
+		default:
+			tmpBlock, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, expectedBlock.Height)
+			if err == nil {
+				break finished
+			}
 
-	require.NoError(t, err, "Failed to get block at height %d", expectedBlock.Height)
+			if !errors.Is(err, errors.ErrBlockNotFound) {
+				t.Fatalf("Failed to get block at height %d: %v", expectedBlock.Height, err)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	assert.Equal(t, expectedBlock.Header.Hash().String(), tmpBlock.Header.Hash().String(),
 		"Block hash mismatch at height %d", expectedBlock.Height)
 

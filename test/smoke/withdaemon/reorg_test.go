@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -14,17 +15,20 @@ import (
 
 var (
 	// DEBUG DEBUG DEBUG
-	blockWait = 30 * time.Second
+	blockWait = 10 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
+	err := os.RemoveAll("../../data")
+	require.NoError(t, err)
+
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		ComposeFile: "../../docker-compose-host.yml",
 	})
 	require.NoError(t, err)
 
 	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
-	node2.CallRPC(t, "generate", []interface{}{101})
+	node2.CallRPC(t, "generate", []any{101})
 
 	block101, err := node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 101)
 	require.NoError(t, err)
@@ -49,10 +53,12 @@ func TestMoveUp(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 
+	// node2.CallRPC(t, "generate", []any{1})
+
 	td.WaitForBlockHeight(t, block101, blockWait, true)
 
 	// generate 1 block on node1
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC("generate", []any{1})
 	require.NoError(t, err)
 
 	// verify blockheight on node1
@@ -166,5 +172,3 @@ func TestTDRestart(t *testing.T) {
 // 2. Generate 100 blocks on node2
 // 3. Start node1
 // 6. Verify blockheight on node2
-
-
