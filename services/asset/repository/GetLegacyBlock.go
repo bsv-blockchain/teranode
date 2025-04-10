@@ -45,7 +45,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 	g.Go(func() error {
 		err := repo.writeLegacyBlockHeader(w, block, returnWireBlock)
 		if err != nil {
-			_ = w.Close()
+			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
 
 			return err
@@ -54,15 +54,14 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		if len(block.Subtrees) == 0 {
 			// Write the coinbase tx
 			if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-				_ = w.Close()
+				_ = w.CloseWithError(io.ErrClosedPipe)
 				_ = r.CloseWithError(err)
 
 				return err
 			}
 
 			// close the writer after the coinbase tx has been streamed
-			_ = w.Close()
-			_ = r.Close()
+			_ = w.CloseWithError(io.ErrClosedPipe)
 
 			return nil
 		}
@@ -75,7 +74,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			}
 
 			if err != nil {
-				_ = w.Close()
+				_ = w.CloseWithError(io.ErrClosedPipe)
 				_ = r.CloseWithError(err)
 
 				return err
@@ -83,8 +82,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		}
 
 		// close the writer after all subtrees have been streamed
-		_ = w.Close()
-		_ = r.Close()
+		_ = w.CloseWithError(io.ErrClosedPipe)
 
 		return nil
 	})

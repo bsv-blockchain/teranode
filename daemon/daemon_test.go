@@ -103,8 +103,47 @@ func TestDaemon_Start_Basic(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t, cancel)
 
 	if !isKafkaRunning() {
-		kafkaContainer, err := testkafka.RunTestContainer(ctx)
-		require.NoError(t, err)
+
+		var (
+			kafkaContainer *testkafka.GenericTestContainerWrapper
+			err            error
+		)
+
+		// Retry up to 3 times with random delays to reduce port conflicts
+		for attempt := 0; attempt < 3; attempt++ {
+			// Add random delay to reduce chance of simultaneous port allocation
+			if attempt > 0 {
+				delay := time.Duration(100+time.Now().Nanosecond()%500) * time.Millisecond
+				t.Logf("Retrying Kafka container setup after delay of %v (attempt %d)", delay, attempt+1)
+				time.Sleep(delay)
+			}
+
+			// Try to create and start the container
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Logf("Recovered from panic in Kafka container setup (attempt %d): %v", attempt+1, r)
+					}
+				}()
+
+				kafkaContainer, err = testkafka.RunTestContainer(ctx)
+				if err != nil {
+					t.Logf("Failed to create Kafka container on attempt %d: %v", attempt+1, err)
+					return
+				}
+			}()
+
+			// If successful, break out of retry loop
+			if kafkaContainer != nil {
+				break
+			}
+		}
+
+		// If all attempts failed, skip the test
+		if kafkaContainer == nil {
+			t.Skip("Failed to create Kafka test container after 3 attempts, likely due to port conflicts")
+			return
+		}
 
 		t.Cleanup(func() {
 			_ = kafkaContainer.CleanUp()

@@ -5,9 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -29,24 +27,52 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ordishs/gocore"
 )
 
 const errorCreatingDhtMessage = "[P2PNode] error creating DHT"
 
+// P2PNodeI defines the interface for P2P node functionality.
+// This interface abstracts the concrete implementation to allow for better testability.
+type P2PNodeI interface {
+	// Core lifecycle methods
+	Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
+	Stop(ctx context.Context) error
+
+	// Topic-related methods
+	SetTopicHandler(ctx context.Context, topicName string, handler Handler) error
+	GetTopic(topicName string) *pubsub.Topic
+	Publish(ctx context.Context, topicName string, msgBytes []byte) error
+
+	// Peer management methods
+	HostID() peer.ID
+	ConnectedPeers() []PeerInfo
+	DisconnectPeer(ctx context.Context, peerID peer.ID) error
+	SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
+
+	// Stats methods
+	LastSend() time.Time
+	LastRecv() time.Time
+	BytesSent() uint64
+	BytesReceived() uint64
+
+	// Additional accessors needed by Server
+	GetProcessName() string
+	UpdateBytesReceived(bytesCount uint64)
+	UpdateLastReceived()
+}
+
 type P2PNode struct {
-	config                    P2PConfig
-	settings                  *settings.Settings
-	host                      host.Host
-	pubSub                    *pubsub.PubSub
-	topics                    map[string]*pubsub.Topic
-	logger                    ulogger.Logger
-	bitcoinProtocolID         string
-	handlerByTopic            map[string]Handler
-	startTime                 time.Time
-	blocksKafkaProducerClient kafka.KafkaAsyncProducerI
+	config            P2PConfig
+	settings          *settings.Settings
+	host              host.Host
+	pubSub            *pubsub.PubSub
+	topics            map[string]*pubsub.Topic
+	logger            ulogger.Logger
+	bitcoinProtocolID string
+	handlerByTopic    map[string]Handler
+	startTime         time.Time
 
 	// The following variables must only be used atomically.
 	bytesReceived uint64
@@ -129,14 +155,13 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 	}
 
 	node := &P2PNode{
-		config:                    config,
-		logger:                    logger,
-		settings:                  tSettings,
-		host:                      h,
-		bitcoinProtocolID:         "teranode/bitcoin/1.0.0",
-		handlerByTopic:            make(map[string]Handler),
-		startTime:                 time.Now(),
-		blocksKafkaProducerClient: blocksKafkaProducerClient,
+		config:            config,
+		logger:            logger,
+		settings:          tSettings,
+		host:              h,
+		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
+		handlerByTopic:    make(map[string]Handler),
+		startTime:         time.Now(),
 	}
 
 	// Set up connection notifications
@@ -236,7 +261,7 @@ func (s *P2PNode) initGossipSub(ctx context.Context, topicNames []string) error 
 	return nil
 }
 
-func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
+func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
 	s.logger.Infof("[%s] starting", s.config.ProcessName)
 
 	s.startStaticPeerConnector(ctx)
@@ -251,7 +276,9 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 		return err
 	}
 
-	s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolID), s.streamHandler)
+	if streamHandler != nil {
+		s.host.SetStreamHandler(protocol.ID(s.bitcoinProtocolID), streamHandler)
+	}
 
 	return nil
 }
@@ -522,71 +549,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 
 			for _, topicName := range topicNames {
 				// search for everything all at once
-				go func(topicName string) {
-					defer g.Done()
-
-					addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
-					if err != nil {
-						s.logger.Errorf("[P2PNode] error finding peers: %+v", err)
-					}
-
-					for addr := range addrChan {
-						if addr.ID == s.host.ID() {
-							continue // No self connection
-						}
-
-						// no point trying to connect to a peer that is already connected
-						if s.host.Network().Connectedness(addr.ID) == network.Connected {
-							continue
-						}
-
-						// s.logger.Debugf("[P2PNode] found peer: %s, %+v", addr.ID.String(), addr.Addrs)
-
-						if s.config.OptimiseRetries {
-							if peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
-								if strings.Contains(peerConnectionErrorString.(string), "no good addresses") {
-									numAddresses := len(addr.Addrs)
-									switch numAddresses {
-									case 0:
-										// peer has no addresses, no point trying to connect to it
-										continue
-									case 1:
-										address := addr.Addrs[0].String()
-										if strings.Contains(address, "127.0.0.1") {
-											// Peer has a single localhost address and it failed on first attempt
-											// You aren't allowed to dial 'yourself' and there are no other addresses available
-											continue
-										}
-									}
-								}
-
-								if strings.Contains(peerConnectionErrorString.(string), "peer id mismatch") {
-									// "peer id mismatch" is where the node has started using a new private key
-									// No point trying to connect to it
-									continue
-								}
-							}
-						}
-
-						peerAddr, loaded := peerAddrMap.LoadOrStore(addr.ID.String(), addr)
-
-						if !loaded {
-							/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
-							go func(addr peer.AddrInfo) {
-								// A peer may not be available at the time of discovery.
-								// A peer stays in the DHT for around 24 hours (according to ChatGPT) before it is removed from the peerstore
-								// Logging each attempt to connect to these peers is too noisy
-								err := s.host.Connect(ctx, addr)
-								if err != nil {
-									s.logger.Debugf("[P2PNode][%s] Connection failed : %+v", addr.String(), err)
-									peerAddrErrorMap.Store(addr.ID.String(), err.Error())
-								} else {
-									s.logger.Infof("[P2PNode][%s] Connected in %s", addr.String(), time.Since(s.startTime))
-								}
-							}(peerAddr.(peer.AddrInfo))
-						}
-					}
-				}(topicName)
+				go s.findPeers(ctx, &g, topicName, routingDiscovery, &peerAddrMap, &peerAddrErrorMap)
 			}
 
 			g.Wait()
@@ -595,6 +558,113 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 
 			time.Sleep(5 * time.Second)
 		}
+	}
+}
+
+func (s *P2PNode) findPeers(ctx context.Context, g *sync.WaitGroup, topicName string, routingDiscovery *dRouting.RoutingDiscovery, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
+	defer g.Done()
+
+	addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
+	if err != nil {
+		s.logger.Errorf("[P2PNode] error finding peers: %+v", err)
+	}
+
+	for addr := range addrChan {
+		if s.shouldSkipPeer(addr, peerAddrErrorMap) {
+			continue
+		}
+
+		s.attemptConnection(ctx, addr, peerAddrMap, peerAddrErrorMap)
+	}
+}
+
+// shouldSkipPeer determines if a peer should be skipped based on filtering criteria
+func (s *P2PNode) shouldSkipPeer(addr peer.AddrInfo, peerAddrErrorMap *sync.Map) bool {
+	// Skip self connection
+	if addr.ID == s.host.ID() {
+		return true
+	}
+
+	// Skip already connected peers
+	if s.host.Network().Connectedness(addr.ID) == network.Connected {
+		return true
+	}
+
+	// Skip peers with no addresses
+	if len(addr.Addrs) == 0 {
+		return true
+	}
+
+	// Skip based on previous errors if optimizing retries
+	if s.config.OptimiseRetries {
+		return s.shouldSkipBasedOnErrors(addr, peerAddrErrorMap)
+	}
+
+	return false
+}
+
+// shouldSkipBasedOnErrors determines if a peer should be skipped based on previous errors
+func (s *P2PNode) shouldSkipBasedOnErrors(addr peer.AddrInfo, peerAddrErrorMap *sync.Map) bool {
+	peerConnectionErrorString, ok := peerAddrErrorMap.Load(addr.ID.String())
+	if !ok {
+		return false
+	}
+
+	errorStr := peerConnectionErrorString.(string)
+
+	// Check for "no good addresses" error
+	if strings.Contains(errorStr, "no good addresses") {
+		return s.shouldSkipNoGoodAddresses(addr)
+	}
+
+	// Check for "peer id mismatch" error
+	if strings.Contains(errorStr, "peer id mismatch") {
+		// "peer id mismatch" is where the node has started using a new private key
+		// No point trying to connect to it
+		return true
+	}
+
+	return false
+}
+
+// shouldSkipNoGoodAddresses determines if a peer with "no good addresses" error should be skipped
+func (s *P2PNode) shouldSkipNoGoodAddresses(addr peer.AddrInfo) bool {
+	numAddresses := len(addr.Addrs)
+
+	switch numAddresses {
+	case 0:
+		// peer has no addresses, no point trying to connect to it
+		return true
+	case 1:
+		address := addr.Addrs[0].String()
+		if strings.Contains(address, "127.0.0.1") {
+			// Peer has a single localhost address and it failed on first attempt
+			// You aren't allowed to dial 'yourself' and there are no other addresses available
+			return true
+		}
+	}
+
+	return false
+}
+
+// attemptConnection tries to connect to a peer if it hasn't been attempted already
+func (s *P2PNode) attemptConnection(ctx context.Context, addr peer.AddrInfo, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
+	peerAddr, loaded := peerAddrMap.LoadOrStore(addr.ID.String(), addr)
+
+	if !loaded {
+		/* A connection has a timeout of 5 seconds. Lets make parallel connect attempts rather than one at a time. */
+		go func(addr peer.AddrInfo) {
+			// A peer may not be available at the time of discovery.
+			// A peer stays in the DHT for around 24 hours (according to ChatGPT) before it is removed from the peerstore
+			// Logging each attempt to connect to these peers is too noisy
+			err := s.host.Connect(ctx, addr)
+			if err != nil {
+				s.logger.Debugf("[P2PNode][%s] Connection failed : %+v", addr.String(), err)
+				peerAddrErrorMap.Store(addr.ID.String(), err.Error())
+			} else {
+				s.logger.Infof("[P2PNode][%s] Connected in %s", addr.String(), time.Since(s.startTime))
+			}
+		}(peerAddr.(peer.AddrInfo))
 	}
 }
 
@@ -625,7 +695,7 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error
 			defer wg.Done()
 
 			if err := h.Connect(ctx, *peerinfo); err != nil {
-				fmt.Println("DHT Bootstrap warning:", err)
+				s.logger.Debugf("DHT Bootstrap warning: %v", err)
 			}
 		}()
 	}
@@ -650,12 +720,14 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
 			s.logger.Warnf("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err)
+
 			continue // Try the next bootstrap address
 		}
 
 		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
 		if err != nil {
 			s.logger.Warnf("[P2PNode] failed to get peerInfo from %s: %v", ba, err)
+
 			continue // Try the next bootstrap address
 		}
 
@@ -671,6 +743,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
 			s.logger.Warnf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err)
+
 			continue // Try the next bootstrap address
 		}
 
@@ -707,58 +780,6 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 	}
 
 	return kademliaDHT, nil
-}
-
-func (s *P2PNode) streamHandler(ns network.Stream) {
-	defer ns.Close()
-	fmt.Printf("[%s] streamHandler\n", s.config.ProcessName)
-
-	buf, err := io.ReadAll(ns)
-	if err != nil {
-		_ = ns.Reset()
-
-		s.logger.Errorf("[P2PNode] failed to read network stream: %+v", err)
-
-		fmt.Printf("[P2PNode] failed to read network stream: %+v", err)
-
-		return
-	}
-
-	_ = ns.Close()
-
-	atomic.AddUint64(&s.bytesReceived, uint64(len(buf)))
-
-	if len(buf) > 0 {
-		atomic.StoreInt64(&s.lastRecv, time.Now().Unix())
-		s.logger.Debugf("[P2PNode] Received message: %s", string(buf))
-
-		// try to decode it to a block message
-		var blockMessage BlockMessage
-
-		err := json.Unmarshal(buf, &blockMessage)
-		if err != nil {
-			s.logger.Errorf("[P2PNode] error unmarshalling block message: %v", err)
-			return
-		}
-
-		// send block to kafka, if configured
-		hash, err := chainhash.NewHashFromStr(blockMessage.Hash)
-		if err != nil {
-			s.logger.Errorf("[P2PNode] error parsing hash from string: %v", err)
-			return
-		}
-
-		if s.blocksKafkaProducerClient != nil {
-			value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubURL))
-			value = append(value, hash.CloneBytes()...)
-			value = append(value, []byte(blockMessage.DataHubURL)...)
-			s.blocksKafkaProducerClient.Publish(&kafka.Message{
-				Value: value,
-			})
-		}
-
-		s.logger.Debugf("[P2PNode] Received block message: %+v", blockMessage)
-	}
 }
 
 // LastSend returns the last send time of the peer.
@@ -838,4 +859,16 @@ func getIPFromMultiaddr(addr multiaddr.Multiaddr) (string, error) {
 	}
 
 	return "", errors.New(errors.ERR_ERROR, "no IP or DNS component found in multiaddr")
+}
+
+func (s *P2PNode) GetProcessName() string {
+	return s.config.ProcessName
+}
+
+func (s *P2PNode) UpdateBytesReceived(bytesCount uint64) {
+	atomic.AddUint64(&s.bytesReceived, bytesCount)
+}
+
+func (s *P2PNode) UpdateLastReceived() {
+	atomic.StoreInt64(&s.lastRecv, time.Now().Unix())
 }

@@ -1438,10 +1438,24 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		err = f.SetTTL(context.Background(), key, 0)
 		require.NoError(t, err)
 
-		// Verify TTL is removed
-		ttl, err = f.GetTTL(context.Background(), key)
-		require.NoError(t, err)
-		require.Zero(t, ttl)
+		// Add a small delay to ensure TTL is completely removed
+		// This helps with potential file system delays when running in parallel
+		time.Sleep(50 * time.Millisecond)
+
+		// Implement retry logic to handle potential race conditions
+		getTTLErr := error(nil)
+		for i := 0; i < 3; i++ {
+			// Verify TTL is removed
+			ttl, getTTLErr = f.GetTTL(context.Background(), key)
+			if getTTLErr == nil && ttl == 0 {
+				break // Success - TTL is zero as expected
+			}
+			// If not successful, wait and retry
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		require.NoError(t, getTTLErr)
+		require.Zero(t, ttl, "TTL should be zero after setting to 0, but was %v", ttl)
 	})
 
 	t.Run("get TTL for non-existent key", func(t *testing.T) {

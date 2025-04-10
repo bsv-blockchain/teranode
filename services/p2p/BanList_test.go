@@ -3,7 +3,9 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -147,7 +149,6 @@ func TestHandleSetBanAdd(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestIsBanned(t *testing.T) {
@@ -240,54 +241,45 @@ func TestBanListChannel(t *testing.T) {
 
 	// Start a goroutine to listen for events
 	go func() {
-		expectedEvents := []struct {
-			action     string
-			ip         string
-			subnetCIDR string
-		}{
-			{
-				action:     "add",
-				ip:         "192.168.1.1",
-				subnetCIDR: "192.168.1.1/32",
-			},
-			{
-				action:     "add",
-				ip:         "10.0.0.0/24",
-				subnetCIDR: "10.0.0.0/24",
-			},
-			{
-				action:     "remove",
-				ip:         "192.168.1.1",
-				subnetCIDR: "192.168.1.1/32",
-			},
+		expectedEvents := map[string]struct{}{
+			"add|192.168.1.1":    {},
+			"add|10.0.0.0/24":    {},
+			"remove|192.168.1.1": {},
 		}
 
 		receivedCount := 0
+
 		for event := range eventChan {
-			if receivedCount >= len(expectedEvents) {
-				t.Errorf("Received more events than expected")
+			// Create a key in the same format as our expected events map
+			eventKey := fmt.Sprintf("%s|%s", event.Action, event.IP)
+
+			if _, exists := expectedEvents[eventKey]; !exists {
+				t.Errorf("Received unexpected event: %s", eventKey)
 				done <- true
 
 				return
 			}
 
-			expected := expectedEvents[receivedCount]
-
-			if event.Action != expected.action {
-				t.Errorf("Expected action %s, got %s", expected.action, event.Action)
+			// For IP addresses (not subnets), verify the subnet is correctly formed
+			if !strings.Contains(event.IP, "/") {
+				expectedSubnet := fmt.Sprintf("%s/32", event.IP)
+				if event.Subnet.String() != expectedSubnet {
+					t.Errorf("For IP %s, expected subnet %s, got %s", event.IP, expectedSubnet, event.Subnet.String())
+				}
+			} else if event.Subnet.String() != event.IP {
+				t.Errorf("For subnet %s, got mismatched subnet %s", event.IP, event.Subnet.String())
 			}
 
-			if event.IP != expected.ip {
-				t.Errorf("Expected IP %s, got %s", expected.ip, event.IP)
-			}
-
-			if event.Subnet.String() != expected.subnetCIDR {
-				t.Errorf("Expected subnet %s, got %s", expected.subnetCIDR, event.Subnet.String())
-			}
+			// Delete this event from our expected map as we've processed it
+			delete(expectedEvents, eventKey)
 
 			receivedCount++
-			if receivedCount == len(expectedEvents) {
+			if receivedCount == 3 { // We expect 3 events total
+				if len(expectedEvents) > 0 {
+					t.Errorf("Not all expected events were received, missing: %v", expectedEvents)
+				}
 				done <- true
+
 				return
 			}
 		}

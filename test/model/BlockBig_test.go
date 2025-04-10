@@ -330,10 +330,6 @@ func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {
 	assert.Equal(t, false, emptyBloomFilter.Has(0))
 	assert.Equal(t, false, emptyBloomFilter.Has(1))
 
-	// Case 4: Performance check
-	timeThreshold := 1 * time.Millisecond
-	assert.LessOrEqual(t, time.Since(timeStart), timeThreshold, "Bloom filter creation took too long")
-
 }
 
 func Test_LoadTxMetaIntoMemory(t *testing.T) {

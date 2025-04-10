@@ -35,6 +35,33 @@ type BanEvent struct {
 	Subnet *net.IPNet // Subnet information if applicable
 }
 
+// BanListI defines the interface for peer banning functionality
+type BanListI interface {
+	// IsBanned checks if a peer is banned
+	IsBanned(ipStr string) bool
+
+	// Add adds an IP or subnet to the ban list
+	Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error
+
+	// Remove removes an IP or subnet from the ban list
+	Remove(ctx context.Context, ipOrSubnet string) error
+
+	// ListBanned returns a list of all banned IP addresses and subnets
+	ListBanned() []string
+
+	// Subscribe returns a channel to receive ban events
+	Subscribe() chan BanEvent
+
+	// Unsubscribe removes a subscription to ban events
+	Unsubscribe(ch chan BanEvent)
+
+	// Init initializes the ban list and starts any background processes
+	Init(ctx context.Context) error
+
+	// Clear removes all entries from the ban list and cleans up resources
+	Clear()
+}
+
 // BanList manages the list of banned peers and related operations.
 type BanList struct {
 	db          *usql.DB                   // Database connection

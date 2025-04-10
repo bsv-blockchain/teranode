@@ -80,7 +80,7 @@ func (p *PeerHeight) Start(ctx context.Context) error {
 
 	topicName := fmt.Sprintf("%s-%s", topicPrefix, topic)
 
-	err := p.P2PNode.Start(ctx, topicName)
+	err := p.P2PNode.Start(ctx, nil, topicName)
 	if err != nil {
 		return err
 	}

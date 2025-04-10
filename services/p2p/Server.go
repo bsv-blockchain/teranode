@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -25,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
 	ma "github.com/multiformats/go-multiaddr"
@@ -50,7 +53,7 @@ const (
 // Server represents the P2P server instance and implements the P2P service functionality.
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                       *P2PNode                  // The P2P network node instance
+	P2PNode                       P2PNodeI                  // The P2P network node instance - using interface instead of concrete type
 	logger                        ulogger.Logger            // Logger instance for the server
 	settings                      *settings.Settings        // Configuration settings
 	bitcoinProtocolID             string                    // Bitcoin protocol identifier
@@ -62,8 +65,10 @@ type Server struct {
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
 	subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
 	blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
-	banList                       *BanList                  // List of banned peers
+	banList                       BanListI                  // List of banned peers
 	banChan                       chan BanEvent             // Channel for ban events
+	bestBlockMessageReceived      atomic.Bool               // Flag to indicate if best block message has been processed
+	gCtx                          context.Context
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -169,6 +174,8 @@ func NewServer(
 		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
 		subtreeKafkaProducerClient:    subtreeKafkaProducerClient,
 		blocksKafkaProducerClient:     blocksKafkaProducerClient,
+		bestBlockMessageReceived:      atomic.Bool{},
+		gCtx:                          ctx,
 	}
 
 	return p2pServer, nil
@@ -331,6 +338,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	err = s.P2PNode.Start(
 		ctx,
+		s.receiveBestBlockStreamHandler,
 		bestBlockTopicName,
 		blockTopicName,
 		subtreeTopicName,
@@ -368,12 +376,80 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
 	msgBytes, err := json.Marshal(BestBlockMessage{PeerID: s.P2PNode.HostID().String()})
 	if err != nil {
-		s.logger.Errorf("[sendBestBlockMessage] json marshal error: %v", err)
+		s.logger.Errorf("[sendBestBlockMessage][p2p-handshake] json marshal error: %v", err)
+
+		return
 	}
 
-	if err := s.P2PNode.Publish(ctx, bestBlockTopicName, msgBytes); err != nil {
-		s.logger.Errorf("[sendBestBlockMessage] publish error: %v", err)
+	go func() {
+		deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		for {
+			select {
+			case <-deadline.Done():
+				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] timeout waiting for best block response")
+
+				return
+			case <-ctx.Done():
+				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] context done")
+
+				return
+			default:
+				if s.bestBlockMessageReceived.Load() {
+					s.logger.Infof("[sendBestBlockMessage][p2p-handshake] best block message processed")
+
+					return
+				}
+
+				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] publishing best block request message %s on topic %s", string(msgBytes), bestBlockTopicName)
+
+				if err := s.P2PNode.Publish(ctx, bestBlockTopicName, msgBytes); err != nil {
+					s.logger.Errorf("[sendBestBlockMessage][p2p-handshake] publish error: %v", err)
+				}
+
+				time.Sleep(1 * time.Second)
+			}
+		}
+	}()
+}
+
+func (s *Server) receiveBestBlockStreamHandler(ns network.Stream) {
+	defer ns.Close()
+	s.logger.Infof("[streamHandler][%s][p2p-handshake]", s.P2PNode.GetProcessName())
+
+	var (
+		buf []byte
+		err error
+	)
+
+	for {
+		buf, err = io.ReadAll(ns)
+		if err != nil {
+			_ = ns.Reset()
+
+			s.logger.Errorf("[streamHandler][%s][p2p-handshake] failed to read network stream: %+v", s.P2PNode.GetProcessName(), err)
+
+			return
+		}
+
+		_ = ns.Close()
+
+		if len(buf) > 0 {
+			s.logger.Infof("[streamHandler][%s][p2p-handshake] Received message: %s", s.P2PNode.GetProcessName(), string(buf))
+
+			break
+		}
+
+		s.logger.Infof("[streamHandler][%s][p2p-handshake] No message received, waiting...", s.P2PNode.GetProcessName())
+
+		time.Sleep(1 * time.Second)
 	}
+
+	s.P2PNode.UpdateBytesReceived(uint64(len(buf)))
+	s.P2PNode.UpdateLastReceived()
+	s.handleBlockTopic(s.gCtx, buf, ns.Conn().RemotePeer().String())
+	s.bestBlockMessageReceived.Store(true)
 }
 
 func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
@@ -511,11 +587,6 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 		}
 	}()
 
-	// err := h.e.Start(addr)
-	// if err != nil && !errors.Is(err, http.ErrServerClosed) {
-	// 	return err
-	// }
-
 	var err error
 
 	if s.settings.SecurityLevelHTTP == 0 {
@@ -570,12 +641,15 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	)
 
 	if from == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from self %s", from)
+
 		return
 	}
 
 	// is it from a banned peer
 	if s.banList.IsBanned(from) {
-		s.logger.Debugf("[handleBestBlockTopic] got p2p best block notification from banned peer %s", from)
+		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from banned peer %s", from)
+
 		return
 	}
 
@@ -584,27 +658,31 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 
 	err := json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic] json unmarshal error: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json unmarshal error: %v", err)
+
 		return
 	}
 
 	pid, err = peer.Decode(bestBlockMessage.PeerID)
 	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic] error decoding peerId: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding peerId: %v", err)
+
 		return
 	}
 
-	s.logger.Debugf("got p2p best block notification from %s", bestBlockMessage.PeerID)
+	s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] got p2p best block notification from %s", bestBlockMessage.PeerID)
 
 	// get best block from blockchain service
 	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic] error getting best block header: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
+
 		return
 	}
 
 	if bh == nil {
-		s.logger.Errorf("[handleBestBlockTopic] error getting best block header: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
+
 		return
 	}
 
@@ -616,14 +694,17 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic] json marshal error: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json marshal error: %v", err)
+
 		return
 	}
 
 	// send best block to the requester
 	err = s.P2PNode.SendToPeer(ctx, pid, msgBytes)
 	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic] error sending peer message: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
+
+		return
 	}
 }
 
