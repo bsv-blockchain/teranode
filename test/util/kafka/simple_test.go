@@ -23,7 +23,7 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 
 	var testContainer *TestContainerWrapper
 	var err error
-	
+
 	// Retry up to 3 times with random delays to reduce port conflicts
 	for attempt := 0; attempt < 3; attempt++ {
 		// Add random delay to reduce chance of simultaneous port allocation
@@ -32,7 +32,7 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 			t.Logf("Retrying container setup after delay of %v (attempt %d)", delay, attempt+1)
 			time.Sleep(delay)
 		}
-		
+
 		// Try to create and start the container
 		func() {
 			defer func() {
@@ -40,20 +40,20 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 					t.Logf("Recovered from panic in container setup (attempt %d): %v", attempt+1, r)
 				}
 			}()
-			
+
 			testContainer, err = RunContainer(ctx)
 			if err != nil {
 				t.Logf("Failed to create container on attempt %d: %v", attempt+1, err)
 				return
 			}
 		}()
-		
+
 		// If successful, break out of retry loop
 		if testContainer != nil {
 			break
 		}
 	}
-	
+
 	// If all attempts failed, skip the test
 	if testContainer == nil {
 		t.Skip("Failed to create test container after 3 attempts, likely due to port conflicts")
@@ -65,10 +65,8 @@ func TestKafkaProduceConsumeDirect(t *testing.T) {
 		message = "Hello, Kafka!"
 	)
 
-	host, err := testContainer.container.Host(ctx)
-	require.NoError(t, err)
-
-	kafkaBroker := fmt.Sprintf("%s:%d", host, testContainer.hostPort)
+	// Use the brokerAddress directly - it's already in host:port format
+	kafkaBroker := testContainer.GetBrokerAddresses()[0]
 	t.Logf("kafkaBroker: %s", kafkaBroker)
 
 	// Set up the producer configuration

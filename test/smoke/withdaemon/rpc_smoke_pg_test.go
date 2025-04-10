@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
+	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	postgres "github.com/bitcoin-sv/teranode/test/util/postgres"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
@@ -19,6 +22,7 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,10 +39,25 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 		}
 	})
 
+	gocore.Config().Set("POSTGRES_PORT", pg.Port)
+
+	kafkaContainer, err := testkafka.RunTestContainer(ctx)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = kafkaContainer.CleanUp()
+	})
+
+	gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
+
+	// Create custom settings with the PostgreSQL container's dynamic port
+	customSettings := settings.NewSettings("dev.system.test.postgres")
+	// Update the PostgreSQL connection settings with the dynamic port
+	customSettings.PostgresCheckAddress = fmt.Sprintf("%s:%s", pg.Host, pg.Port)
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:               true,
-		KillTeranode:            true,
-		SettingsContextOverride: "dev.system.test.postgres",
+		EnableRPC:        true,
+		KillTeranode:     true,
+		SettingsOverride: customSettings,
 	})
 
 	t.Cleanup(func() {
@@ -46,7 +65,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	})
 
 	// set run state
-	err := td.BlockchainClient.Run(td.Ctx, "test")
+	err = td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
 	// Generate initial blocks
