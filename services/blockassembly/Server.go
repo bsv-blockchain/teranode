@@ -1043,7 +1043,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		return nil, errors.NewProcessingError("error converting reset wait count", err)
 	}
 
-	resetWaitTimeUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitTime.Load())
+	resetWaitTimeUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitDuration.Load())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting reset wait time", err)
 	}

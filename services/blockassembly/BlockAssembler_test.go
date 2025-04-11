@@ -4,6 +4,7 @@ package blockassembly
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"math/big"
 	"net/url"
 	"sync"
@@ -11,10 +12,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
@@ -28,6 +31,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,6 +99,66 @@ func newTx(lockTime uint32) *bt.Tx {
 	tx.LockTime = lockTime
 
 	return tx
+}
+
+func TestBlockAssembly_Start(t *testing.T) {
+	t.Run("Start on mainnet, wait 2 blocks", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		tSettings := createTestSettings()
+		tSettings.BlockAssembly.ResetWaitCount = 2
+		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
+		tSettings.ChainCfgParams.Net = wire.MainNet
+
+		stats := gocore.NewStat("test")
+
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, nil, nil, blockchainClient, nil)
+		require.NoError(t, err)
+		require.NotNil(t, blockAssembler)
+
+		err = blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
+		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(tSettings.BlockAssembly.ResetWaitDuration).Unix())
+		require.NoError(t, err)
+
+		assert.Equal(t, int32(2), blockAssembler.resetWaitCount.Load())
+		assert.LessOrEqual(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32)
+		assert.Greater(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32/2)
+	})
+
+	t.Run("Start on testnet, no wait", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		tSettings := createTestSettings()
+		tSettings.BlockAssembly.ResetWaitCount = 2
+		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
+		tSettings.ChainCfgParams.Net = wire.TestNet
+
+		stats := gocore.NewStat("test")
+
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, nil, nil, blockchainClient, nil)
+		require.NoError(t, err)
+		require.NotNil(t, blockAssembler)
+
+		err = blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
+		assert.Equal(t, int32(0), blockAssembler.resetWaitCount.Load())
+		assert.Equal(t, int32(0), blockAssembler.resetWaitDuration.Load())
+	})
 }
 
 func TestBlockAssembly_AddTx(t *testing.T) {

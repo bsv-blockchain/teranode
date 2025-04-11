@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -96,8 +97,8 @@ type BlockAssembler struct {
 	// resetWaitCount tracks the number of blocks to wait after reset
 	resetWaitCount atomic.Int32
 
-	// resetWaitTime tracks the time to wait after reset
-	resetWaitTime atomic.Int32
+	// resetWaitDuration tracks the time to wait after reset
+	resetWaitDuration atomic.Int32
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -151,7 +152,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan struct{}, 2),
 		resetWaitCount:      atomic.Int32{},
-		resetWaitTime:       atomic.Int32{},
+		resetWaitDuration:   atomic.Int32{},
 		currentRunningState: atomic.Value{},
 	}
 	b.currentRunningState.Store("starting")
@@ -283,14 +284,14 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
-				b.resetWaitCount.Store(2) // wait 2 blocks before starting to mine again
+				b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine again
 
-				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(20 * time.Minute).Unix())
+				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error converting reset wait time: %v", err)
 				}
 
-				b.resetWaitTime.Store(resetWaitTimeInt32)
+				b.resetWaitDuration.Store(resetWaitTimeInt32)
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
@@ -312,8 +313,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					b.logger.Errorf("[BlockAssembler][MiningCandidate] error converting time now: %v", err)
 				}
 
-				if b.resetWaitCount.Load() > 0 || timeNowInt32 <= b.resetWaitTime.Load() {
-					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
+				if b.resetWaitCount.Load() > 0 || timeNowInt32 <= b.resetWaitDuration.Load() {
+					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitDuration.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: errors.NewProcessingError("waiting for reset to complete"),
 					})
@@ -478,6 +479,20 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 			b.bestBlockHeader.Store(header)
 			b.bestBlockHeight.Store(meta.Height)
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
+		}
+	}
+
+	// on mainnet, wait for 2 blocks before starting to mine, to make sure we are not mining invalid blocks
+	// this should not be needed after #2326 is merged and the block assembly can handle out of order txs
+	if b.settings.ChainCfgParams.Net == wire.MainNet {
+		b.logger.Warnf("[BlockAssembler] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
+		b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine
+
+		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler][Reset] error converting reset wait time: %v", err)
+		} else {
+			b.resetWaitDuration.Store(resetWaitTimeInt32)
 		}
 	}
 

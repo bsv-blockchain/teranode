@@ -25,6 +25,12 @@ func getInt(key string, defaultValue int, alternativeContext ...string) int {
 	return value
 }
 
+func getInt32(key string, defaultValue int32, alternativeContext ...string) int32 {
+	value, _ := gocore.Config(alternativeContext...).GetInt32(key, defaultValue)
+
+	return value
+}
+
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
 	value, _, _ := gocore.Config(alternativeContext...).GetURL(key, defaultValue)
 

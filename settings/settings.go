@@ -192,6 +192,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MinerWalletPrivateKeys:              getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
 			DifficultyCache:                     getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:               getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
+			ResetWaitCount:                      getInt32("blockassembly_resetWaitCount", 3, alternativeContext...),
+			ResetWaitDuration:                   getDuration("blockassembly_resetWaitDuration", 20*time.Minute),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
