@@ -337,57 +337,60 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 }
 
 func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
+	// copy the bins slice to avoid modifying the original
+	newBins := append([]fields.FieldName{}, bins...)
+
 	// add missing bins
-	if slices.Contains(bins, fields.ParentTxHashes) {
-		if !slices.Contains(bins, fields.Inputs) {
-			bins = append(bins, fields.Inputs)
-			bins = append(bins, fields.External)
+	if slices.Contains(newBins, fields.ParentTxHashes) {
+		if !slices.Contains(newBins, fields.Inputs) {
+			newBins = append(newBins, fields.Inputs)
+			newBins = append(newBins, fields.External)
 		}
 	}
 
-	if slices.Contains(bins, fields.Tx) {
-		if !slices.Contains(bins, fields.Inputs) {
-			bins = append(bins, fields.Inputs)
+	if slices.Contains(newBins, fields.Tx) {
+		if !slices.Contains(newBins, fields.Inputs) {
+			newBins = append(newBins, fields.Inputs)
 		}
 
-		if !slices.Contains(bins, fields.Outputs) {
-			bins = append(bins, fields.Outputs)
+		if !slices.Contains(newBins, fields.Outputs) {
+			newBins = append(newBins, fields.Outputs)
 		}
 
-		if !slices.Contains(bins, fields.Version) {
-			bins = append(bins, fields.Version)
+		if !slices.Contains(newBins, fields.Version) {
+			newBins = append(newBins, fields.Version)
 		}
 
-		if !slices.Contains(bins, fields.LockTime) {
-			bins = append(bins, fields.LockTime)
+		if !slices.Contains(newBins, fields.LockTime) {
+			newBins = append(newBins, fields.LockTime)
 		}
 
-		if !slices.Contains(bins, fields.External) {
-			bins = append(bins, fields.External)
-		}
-	}
-
-	if slices.Contains(bins, fields.BlockIDs) {
-		if !slices.Contains(bins, fields.BlockHeights) {
-			bins = append(bins, fields.BlockHeights)
-		}
-
-		if !slices.Contains(bins, fields.SubtreeIdxs) {
-			bins = append(bins, fields.SubtreeIdxs)
+		if !slices.Contains(newBins, fields.External) {
+			newBins = append(newBins, fields.External)
 		}
 	}
 
-	if slices.Contains(bins, fields.Utxos) {
-		if !slices.Contains(bins, fields.TotalExtraRecs) {
-			bins = append(bins, fields.TotalExtraRecs)
+	if slices.Contains(newBins, fields.BlockIDs) {
+		if !slices.Contains(newBins, fields.BlockHeights) {
+			newBins = append(newBins, fields.BlockHeights)
 		}
 
-		if !slices.Contains(bins, fields.TotalUtxos) {
-			bins = append(bins, fields.TotalUtxos)
+		if !slices.Contains(newBins, fields.SubtreeIdxs) {
+			newBins = append(newBins, fields.SubtreeIdxs)
 		}
 	}
 
-	return bins
+	if slices.Contains(newBins, fields.Utxos) {
+		if !slices.Contains(newBins, fields.TotalExtraRecs) {
+			newBins = append(newBins, fields.TotalExtraRecs)
+		}
+
+		if !slices.Contains(newBins, fields.TotalUtxos) {
+			newBins = append(newBins, fields.TotalUtxos)
+		}
+	}
+
+	return newBins
 }
 
 // BatchDecorate efficiently fetches metadata for multiple transactions.
@@ -781,7 +784,7 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 		default: // Empty default to prevent blocking
 		}
 
-		keySource := uaerospike.CalculateKeySource(txID, uint32(recordNum)) //nolint: gosec
+		keySource := uaerospike.CalculateKeySource(txID, uint32(recordNum)) // nolint: gosec
 
 		extraKey, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
