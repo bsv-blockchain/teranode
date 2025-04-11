@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -148,7 +149,15 @@ func GetTxStore(logger ulogger.Logger) (blob.Store, error) {
 		return nil, errors.NewConfigurationError("no txstore setting found")
 	}
 
-	mainTxstore, err = blob.NewStore(logger, txStoreURL)
+	hashPrefix := 2
+	if txStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(txStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("txstore hashPrefix config error", err)
+		}
+	}
+
+	mainTxstore, err = blob.NewStore(logger, txStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
@@ -172,7 +181,15 @@ func GetSubtreeStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(2))
+	hashPrefix := 2
+	if subtreeStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(subtreeStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("subtreestore hashPrefix config error", err)
+		}
+	}
+
+	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
@@ -222,7 +239,15 @@ func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
 		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
 
-	mainBlockStore, err = blob.NewStore(logger, blockStoreURL)
+	hashPrefix := 2
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("blockstore hashPrefix config error", err)
+		}
+	}
+
+	mainBlockStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
@@ -247,7 +272,15 @@ func GetBlockPersisterStore(logger ulogger.Logger) (blob.Store, error) {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")
 	}
 
-	mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL)
+	hashPrefix := 2
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("blockPersisterStore hashPrefix config error", err)
+		}
+	}
+
+	mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}

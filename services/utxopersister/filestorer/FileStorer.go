@@ -55,6 +55,12 @@ type FileStorer struct {
 
 	// mu provides mutex locking for thread safety
 	mu sync.Mutex
+
+	// done is a channel that signals when the reader goroutine is done
+	done chan struct{}
+
+	// readerError stores any error encountered by the reader goroutine
+	readerError error
 }
 
 // NewFileStorer creates a new FileStorer instance with the provided parameters.
@@ -62,7 +68,16 @@ type FileStorer struct {
 // The function initiates a background goroutine that reads from a pipe and writes to blob storage.
 // Returns a pointer to the initialized FileStorer ready for use.
 // It initializes the file storage system with buffering and hashing capabilities.
-func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) *FileStorer {
+func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) (*FileStorer, error) {
+	exists, err := store.Exists(ctx, key, options.WithFileExtension(extension))
+	if err != nil {
+		return nil, errors.NewStorageError("error checking if %s.%s exists", key, extension, err)
+	}
+
+	if exists {
+		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", key, extension)
+	}
+
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
 
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
@@ -74,10 +89,12 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	logger.Infof("Using %s buffer for file storer", bufferSize)
 
+	// Note that the reader will close when the writer closes and vice versa.
 	reader, writer := io.Pipe()
-	hasher := sha256.New()
 
 	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
+
+	hasher := sha256.New()
 	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize.Int())
 
 	fs := &FileStorer{
@@ -88,29 +105,32 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		hasher:         hasher,
 		writer:         writer,
 		bufferedWriter: bufferedWriter,
+		done:           make(chan struct{}),
 	}
 
 	fs.wg.Add(1) // Increment the WaitGroup counter
 
 	go func() {
 		defer func() {
-			if err := reader.Close(); err != nil {
-				logger.Errorf("Failed to close reader: %v", err)
-			}
-			// logger.Infof("Closed reader")
-			fs.wg.Done() // Decrement the WaitGroup counter
+			close(fs.done) // Signal that the goroutine is done
+			fs.wg.Done()   // Decrement the WaitGroup counter
 		}()
 
-		if err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithTTL(0)); err != nil {
-			if errors.Is(err, errors.ErrBlobAlreadyExists) {
-				logger.Warnf("[BlockPersister] File already exists: %v", err)
-			} else {
-				logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
-			}
+		err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithTTL(0))
+		if err != nil {
+			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
+			fs.mu.Lock()
+			fs.readerError = err
+			fs.mu.Unlock()
+		}
+
+		// Close the reader after we're done with it
+		if err := reader.Close(); err != nil {
+			logger.Errorf("Failed to close reader: %v", err)
 		}
 	}()
 
-	return fs
+	return fs, nil
 }
 
 // Write writes the provided bytes to the file storage.
@@ -122,6 +142,10 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.readerError != nil {
+		return 0, f.readerError
+	}
+
 	return f.bufferedWriter.Write(b)
 }
 
@@ -131,36 +155,51 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 // Returns any error encountered during the closing process.
 // It returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
+	// Flush the buffered writer
 	if err := f.bufferedWriter.Flush(); err != nil {
+		// Even if flush fails, we need to close the pipe writer to prevent deadlocks
+		_ = f.writer.Close()
+
+		// Wait for the goroutine to finish
+		f.wg.Wait()
+
+		// Check if the reader encountered an error
+		f.mu.Lock()
+		readerErr := f.readerError
+		f.mu.Unlock()
+
+		if readerErr != nil {
+			return errors.NewStorageError("Error in reader goroutine", readerErr)
+		}
+
 		return errors.NewStorageError("Error flushing writer", err)
 	}
 
-	// f.logger.Infof("Closed buffered writer")
-
+	// Close the pipe writer to signal EOF to the reader
 	if err := f.writer.Close(); err != nil {
 		return errors.NewStorageError("Error closing writer", err)
 	}
 
-	// f.logger.Infof("Closed underlying writer")
+	// Wait for the goroutine to finish
+	f.wg.Wait()
 
-	f.wg.Wait() // Wait for the goroutine to finish
+	// Check if the reader encountered an error
+	f.mu.Lock()
+	readerErr := f.readerError
+	f.mu.Unlock()
 
-	// f.logger.Infof("Wait group finished")
+	if readerErr != nil {
+		return errors.NewStorageError("Error in reader goroutine", readerErr)
+	}
 
+	// Set TTL to 0 (no expiration) as per the memory about Aerospike TTL usage
 	if err := f.store.SetTTL(ctx, f.key, 0, options.WithFileExtension(f.extension)); err != nil {
 		return errors.NewStorageError("Error setting ttl on additions file", err)
 	}
 
-	// f.logger.Infof("Set TTL to 0")
-
 	if err := f.waitUntilFileIsAvailable(ctx, f.extension); err != nil {
 		f.logger.Warnf("Error waiting for file to be available: %v", err)
 	}
-
-	// f.logger.Infof("File is available")
 
 	hashData := fmt.Sprintf("%x  %x.%s\n", f.hasher.Sum(nil), bt.ReverseBytes(f.key), f.extension) // N.B. The 2 spaces is important for the hash to be valid
 
@@ -174,8 +213,6 @@ func (f *FileStorer) Close(ctx context.Context) error {
 	); err != nil {
 		return errors.NewStorageError("error setting sha256 hash", err)
 	}
-
-	// f.logger.Infof("Set sha256 hash")
 
 	return nil
 }

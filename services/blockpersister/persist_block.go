@@ -85,7 +85,10 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
-	storer := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], "block")
+	storer, err := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], "block")
+	if err != nil {
+		return errors.NewStorageError("error creating block file", err)
+	}
 
 	if _, err = storer.Write(blockBytes); err != nil {
 		return errors.NewStorageError("error writing block to disk", err)

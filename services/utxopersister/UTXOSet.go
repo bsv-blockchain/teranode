@@ -117,8 +117,15 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	// Now, write the block file
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
 
-	additionsStorer := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], additionsExtension)
-	deletionsStorer := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], deletionsExtension)
+	additionsStorer, err := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], additionsExtension)
+	if err != nil {
+		return nil, errors.NewStorageError("error creating additions file", err)
+	}
+
+	deletionsStorer, err := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], deletionsExtension)
+	if err != nil {
+		return nil, errors.NewStorageError("error creating deletions file", err)
+	}
 
 	// Write the headers
 	additionsHeader, err := BuildHeaderBytes("U-A-1.0", blockHash, blockHeight)
@@ -497,7 +504,10 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 	us.logger.Infof("[CreateUTXOSet] Creating UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
-	storer := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], utxosetExtension)
+	storer, err := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], utxosetExtension)
+	if err != nil {
+		return errors.NewStorageError("error creating utxo-set file", err)
+	}
 
 	b, err := BuildHeaderBytes("U-S-1.0", c.lastBlockHash, c.lastBlockHeight, c.previousBlockHash)
 	if err != nil {

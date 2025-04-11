@@ -231,10 +231,15 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 				// Process the block
 				if err := u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
-					u.logger.Errorf("Failed to persist block %s: %v", block.Hash(), err)
-					time.Sleep(time.Minute)
+					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
+						// We log the error but continue processing
+						u.logger.Infof("Block %s already exists, skipping...", block.Hash())
+					} else {
+						u.logger.Errorf("Failed to persist block %s: %v", block.Hash(), err)
+						time.Sleep(time.Minute)
 
-					continue
+						continue
+					}
 				}
 
 				// Add this after successful persistence
