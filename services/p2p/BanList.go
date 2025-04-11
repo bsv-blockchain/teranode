@@ -252,11 +252,17 @@ func (b *BanList) IsBanned(ipStr string) bool {
 
 	// Check each subnet
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+
+	// First, collect keys to delete without modifying the map
+	var (
+		expiredKeys []string
+		isBanned    bool
+	)
 
 	for key, info := range b.bannedPeers {
-		// Skip expired bans
+		// Mark expired bans for deletion
 		if !info.ExpirationTime.After(time.Now()) {
+			expiredKeys = append(expiredKeys, key)
 			continue
 		}
 
@@ -267,11 +273,25 @@ func (b *BanList) IsBanned(ipStr string) bool {
 
 		// Check if IP is in this subnet
 		if info.Subnet != nil && info.Subnet.Contains(ip) {
-			return true
+			isBanned = true
+			break
 		}
 	}
+	b.mu.RUnlock()
 
-	return false
+	// If we found any expired entries, clean them up now with a write lock
+	if len(expiredKeys) > 0 {
+		b.mu.Lock()
+		for _, key := range expiredKeys {
+			// Double-check the entry is still expired (it might have been updated)
+			if info, exists := b.bannedPeers[key]; exists && !info.ExpirationTime.After(time.Now()) {
+				delete(b.bannedPeers, key)
+			}
+		}
+		b.mu.Unlock()
+	}
+
+	return isBanned
 }
 
 // ListBanned returns a list of all banned IP addresses and subnets
