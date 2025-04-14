@@ -106,7 +106,6 @@ func TestServer_Performance(t *testing.T) {
 	t.Run("1_million_txs_-_in_batches", func(t *testing.T) {
 		var wg sync.WaitGroup
 		startingTxCount := ba.TxCount()
-		
 
 		for n := uint64(0); n < 1_024; n++ {
 			bytesN := make([]byte, 8)
@@ -151,7 +150,7 @@ func TestServer_Performance(t *testing.T) {
 			}
 		}
 
-		assert.Equal(t, prevSubtreeCount+33, ba.SubtreeCount())      // SubtreeCount now is accumulated with the previous test case
+		assert.Equal(t, prevSubtreeCount+33, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
 	})
 }
 
@@ -164,6 +163,9 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	tSettings.BlockAssembly.ResetWaitCount = 0
+	tSettings.BlockAssembly.ResetWaitDuration = 0
 
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)

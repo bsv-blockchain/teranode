@@ -313,7 +313,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					b.logger.Errorf("[BlockAssembler][MiningCandidate] error converting time now: %v", err)
 				}
 
-				if b.resetWaitCount.Load() > 0 || timeNowInt32 <= b.resetWaitDuration.Load() {
+				if b.resetWaitCount.Load() > 0 || timeNowInt32 < b.resetWaitDuration.Load() {
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitDuration.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: errors.NewProcessingError("waiting for reset to complete"),
