@@ -1,3 +1,4 @@
+// nolint:forbidigo,depguard // This test file needs the standard errors package for testing the custom errors package
 package errors
 
 import (

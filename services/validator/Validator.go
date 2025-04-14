@@ -735,6 +735,8 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 		input.PreviousTxSatoshis = outpoints[i].Satoshis
 	}
 
+	tx.SetExtended(true)
+
 	return nil
 }
 

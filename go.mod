@@ -2,7 +2,7 @@ module github.com/bitcoin-sv/teranode
 
 go 1.24.0
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.18
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.22
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
@@ -73,7 +73,7 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.8.0
 	google.golang.org/grpc v1.67.1
-	google.golang.org/protobuf v1.36.4
+	google.golang.org/protobuf v1.36.6
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.29.3
 	k8s.io/apimachinery v0.30.1
