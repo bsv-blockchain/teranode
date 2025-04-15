@@ -37,6 +37,12 @@ var (
 	// prometheusTransactionSpendUtxos measures UTXO spending operations
 	prometheusTransactionSpendUtxos prometheus.Histogram
 
+	// getTransactionInputBlockHeights measures time taken to get UTXO heights
+	getTransactionInputBlockHeights prometheus.Histogram
+
+	// prometheusTransaction2PhaseCommit measures 2-phase commit operations
+	prometheusTransaction2PhaseCommit prometheus.Histogram
+
 	// prometheusValidateTransaction measures overall transaction processing
 	prometheusValidateTransaction prometheus.Histogram
 
@@ -142,6 +148,28 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "transactions_spend_utxos",
 			Help:      "Histogram of transaction spending utxos",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	// UTXO heights histogram
+	getTransactionInputBlockHeights = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "transactions_input_block_heights",
+			Help:      "Histogram of transaction input block heights",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	// 2-phase commit operations histogram
+	prometheusTransaction2PhaseCommit = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "transactions_2phase_commit",
+			Help:      "Histogram of 2-phase commit operations",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

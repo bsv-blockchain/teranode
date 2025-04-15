@@ -133,6 +133,10 @@ func (c *Client) Stop() {
 // Returns:
 //   - error: Error if transaction processing fails
 func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
+	if c.settings.Propagation.AlwaysUseHTTP {
+		return c.sendTransactionViaHTTP(ctx, tx)
+	}
+
 	if c.batchSize > 0 {
 		done := make(chan error)
 		c.batcher.Put(&batchItem{tx: tx, done: done})
@@ -158,39 +162,43 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
 			tx.TxID(), st.Message())
 
-		// Create an HTTP client with a timeout
-		client := &http.Client{
-			Timeout: 30 * time.Second,
-		}
-
-		// Prepare request to validator /tx endpoint
-		req, err := http.NewRequestWithContext(ctx, "POST", c.propagationHTTPAddr.String()+"/tx", bytes.NewBuffer(tx.ExtendedBytes()))
-		if err != nil {
-			return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", tx.TxID(), err)
-		}
-
-		// Send the request
-		resp, err := client.Do(req)
-		if err != nil {
-			return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", tx.TxID(), err)
-		}
-		defer resp.Body.Close()
-
-		// Check response status
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			httpErr := errors.NewServiceError("HTTP status %d: %s", resp.StatusCode, string(body))
-
-			return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status", tx.TxID(), httpErr)
-		}
-
-		c.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", tx.TxID())
-
-		return nil
+		return c.sendTransactionViaHTTP(ctx, tx)
 	}
 
 	// For any other types of errors, return the unwrapped gRPC error
 	return errors.UnwrapGRPC(err)
+}
+
+func (c *Client) sendTransactionViaHTTP(ctx context.Context, tx *bt.Tx) error {
+	// Create an HTTP client with a timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Prepare request to validator /tx endpoint
+	req, err := http.NewRequestWithContext(ctx, "POST", c.propagationHTTPAddr.String()+"/tx", bytes.NewBuffer(tx.ExtendedBytes()))
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", tx.TxID(), err)
+	}
+
+	// Send the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", tx.TxID(), err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		httpErr := errors.NewServiceError("HTTP status %d: %s", resp.StatusCode, string(body))
+
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status", tx.TxID(), httpErr)
+	}
+
+	c.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", tx.TxID())
+
+	return nil
 }
 
 // TriggerBatcher forces the current batch to be processed immediately,
@@ -278,6 +286,10 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	txs := make([][]byte, len(batch))
 	for i, item := range batch {
 		txs[i] = item.tx.ExtendedBytes()
+	}
+
+	if c.settings.Propagation.AlwaysUseHTTP {
+		return c.processBatchViaHTTP(ctx, batch, txs)
 	}
 
 	// First, try to process the batch using gRPC

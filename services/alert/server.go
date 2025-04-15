@@ -25,7 +25,6 @@ import (
 	p2pservice "github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/mrz1836/go-datastore"
@@ -119,12 +118,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 // HealthGRPC implements the gRPC health check endpoint.
 func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(s.stats),
-		tracing.WithCounter(prometheusHealth),
-		tracing.WithDebugLogMessage(s.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
+	prometheusHealth.Add(1)
 
 	status, details, err := s.Health(ctx, false)
 

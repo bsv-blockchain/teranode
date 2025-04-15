@@ -39,6 +39,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	maxTransactionsPerRequest = 1024
+	maxDataPerRequest         = 32 * 1024 * 1024
+)
+
 var (
 	// maxDatagramSize defines the maximum size of UDP datagrams for IPv6 multicast
 	maxDatagramSize = 512 // 100 * 1024 * 1024
@@ -151,12 +156,10 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 //   - *propagation_api.HealthResponse: health check response including status and timestamp
 //   - error: error if health check fails
 func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(ps.stats),
-		tracing.WithHistogram(prometheusHealth),
-		tracing.WithDebugLogMessage(ps.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
+	startTime := time.Now()
+	defer func() {
+		prometheusHealth.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
 
 	status, details, err := ps.Health(ctx, false)
 
@@ -342,8 +345,14 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint
-func (ps *PropagationServer) handleSingleTx(ctx context.Context) echo.HandlerFunc {
+func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleSingleTx",
+			tracing.WithParentStat(ps.stats),
+			tracing.WithHistogram(prometheusProcessedHandleSingleTx),
+		)
+		defer deferFn()
+
 		body, err := io.ReadAll(c.Request().Body)
 		if err != nil {
 			return c.String(http.StatusBadRequest, "Invalid request body")
@@ -360,28 +369,85 @@ func (ps *PropagationServer) handleSingleTx(ctx context.Context) echo.HandlerFun
 }
 
 // handleMultipleTx handles multiple transactions on the /txs endpoint
-func (ps *PropagationServer) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
+func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleMultipleTx",
+			tracing.WithParentStat(ps.stats),
+			tracing.WithHistogram(prometheusProcessedHandleMultipleTx),
+		)
+		defer deferFn()
+
+		processTxs := make(chan *bt.Tx, maxTransactionsPerRequest)
+		processErrors := make(chan error, maxTransactionsPerRequest)
+		processingWg := sync.WaitGroup{}
+		processingErrorWg := sync.WaitGroup{}
+		totalNrTransactions := 0
+		totalBytesRead := int64(0)
+
+		go func() {
+			// Process transactions in a separate goroutine
+			for tx := range processTxs {
+				if err := ps.processTransactionInternal(ctx, tx); err != nil {
+					processingErrorWg.Add(1)
+					processErrors <- err
+				}
+
+				processingWg.Done()
+			}
+		}()
+
+		errStr := ""
+
+		go func() {
+			for err := range processErrors {
+				errStr += err.Error() + "\n"
+
+				processingErrorWg.Done()
+			}
+		}()
+
 		// Read transactions with the bt reader in a loop
 		for {
 			tx := &bt.Tx{}
 
 			// Read transaction from request body
-			_, err := tx.ReadFrom(c.Request().Body)
+			bytesRead, err := tx.ReadFrom(c.Request().Body)
 			if err != nil {
 				// End of stream is expected and not an error
 				if err == io.EOF {
 					break
 				}
 
-				return c.String(http.StatusBadRequest, "Invalid request body: "+err.Error())
+				processingErrorWg.Add(1)
+				processErrors <- err
 			}
 
-			// Process the transaction
-			err = ps.processTransactionInternal(ctx, tx)
-			if err != nil {
-				return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+			totalNrTransactions++
+			totalBytesRead += bytesRead
+
+			if totalNrTransactions > maxTransactionsPerRequest {
+				// return error, max 1024 txs per request
+				return c.String(http.StatusBadRequest, "Invalid request body: too many transactions")
 			}
+
+			if totalBytesRead > maxDataPerRequest {
+				// return error, max 32MB per request
+				return c.String(http.StatusBadRequest, "Invalid request body: too much data")
+			}
+
+			// Send transaction to processing channel
+			processingWg.Add(1)
+			processTxs <- tx
+		}
+
+		processingWg.Wait()
+		processingErrorWg.Wait()
+
+		close(processTxs)
+		close(processErrors)
+
+		if errStr != "" {
+			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+errStr)
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -396,9 +462,12 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 	ps.httpServer.HideBanner = true
 
 	// Configure middleware and timeouts
-	ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
-	ps.httpServer.Server.ReadTimeout = 5 * time.Second
-	ps.httpServer.Server.WriteTimeout = 10 * time.Second
+	if ps.settings.Propagation.HTTPRateLimit > 0 {
+		ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
+	}
+
+	ps.httpServer.Server.ReadTimeout = 30 * time.Second
+	ps.httpServer.Server.WriteTimeout = 30 * time.Second
 	ps.httpServer.Server.IdleTimeout = 120 * time.Second
 
 	// Register route handlers

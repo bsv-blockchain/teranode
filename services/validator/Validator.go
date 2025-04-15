@@ -298,8 +298,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
-	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	utxoHeights, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -459,11 +458,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if txMetaData.Unspendable {
-		// the tx was marked as unspendable on creation, we have added it successfully to block assembly
-		// so we can now mark it as spendable again
-		if err = v.utxoStore.SetUnspendable(setSpan.Ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
-			// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
-			return nil, errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
+		if err = v.twoPhaseCommitTransaction(setSpan, tx, txID); err != nil {
+			return txMetaData, err
 		}
 
 		txMetaData.Unspendable = false
@@ -472,6 +468,40 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	return txMetaData, nil
 }
 
+// getTransactionInputBlockHeights returns the block heights for each input of the transaction
+func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getTransactionInputBlockHeights",
+		tracing.WithHistogram(getTransactionInputBlockHeights),
+	)
+	defer deferFn()
+
+	// get the utxo heights for each input
+	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	if err != nil {
+		return nil, err
+	}
+
+	return utxoHeights, nil
+}
+
+// twoPhaseCommitTransaction marks the transaction as spendable
+func (v *Validator) twoPhaseCommitTransaction(setSpan tracing.Span, tx *bt.Tx, txID string) error {
+	ctx, _, deferFn := tracing.StartTracing(setSpan.Ctx, "twoPhaseCommitTransaction",
+		tracing.WithHistogram(prometheusTransaction2PhaseCommit),
+	)
+	defer deferFn()
+
+	// the tx was marked as unspendable on creation, we have added it successfully to block assembly
+	// so we can now mark it as spendable again
+	if err := v.utxoStore.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
+		// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
+		return errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
+	}
+
+	return nil
+}
+
+// getUtxoBlockHeights returns the block heights for each input of the transaction
 func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)

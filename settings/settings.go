@@ -397,6 +397,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPListenAddress:    getString("propagation_httpListenAddress", "", alternativeContext...),
 			HTTPAddresses:        getMultiString("propagation_httpAddresses", "|", []string{}, alternativeContext...),
 			HTTPRateLimit:        getInt("propagation_httpRateLimit", 1024, alternativeContext...),
+			AlwaysUseHTTP:        getBool("propagation_alwaysUseHTTP", false, alternativeContext...),
 			SendBatchSize:        getInt("propagation_sendBatchSize", 100, alternativeContext...),
 			SendBatchTimeout:     getInt("propagation_sendBatchTimeout", 5, alternativeContext...),
 			GRPCAddresses:        getMultiString("propagation_grpcAddresses", "|", []string{}, alternativeContext...),

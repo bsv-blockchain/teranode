@@ -252,12 +252,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // suitable for gRPC health monitoring systems. Any errors are properly wrapped
 // to maintain gRPC error semantics.
 func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(u.stats),
-		tracing.WithCounter(prometheusBlockValidationHealth),
-		tracing.WithDebugLogMessage(u.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
+	prometheusBlockValidationHealth.Add(1)
 
 	status, details, err := u.Health(ctx, false)
 

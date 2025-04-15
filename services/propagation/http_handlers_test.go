@@ -382,8 +382,8 @@ func TestHandleMultipleTx(t *testing.T) {
 			setupRequestBody: func() *bytes.Buffer {
 				return bytes.NewBuffer([]byte("invalid-tx-data"))
 			},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedResponse:   "Invalid request body",
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedResponse:   "transaction is not extended",
 		},
 	}
 

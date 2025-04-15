@@ -396,6 +396,7 @@ type PropagationSettings struct {
 	GRPCMaxConnectionAge time.Duration
 	HTTPListenAddress    string
 	HTTPAddresses        []string
+	AlwaysUseHTTP        bool
 	HTTPRateLimit        int
 	SendBatchSize        int
 	SendBatchTimeout     int

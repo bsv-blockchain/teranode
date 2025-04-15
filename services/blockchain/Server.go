@@ -1303,12 +1303,11 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 // FSM related endpoints
 
 // GetFSMCurrentState retrieves the current state of the finite state machine.
-func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetFSMCurrentState),
-	)
-	defer deferFn()
+func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	startTime := time.Now()
+	defer func() {
+		prometheusBlockchainGetFSMCurrentState.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
 
 	var state string
 
@@ -1347,7 +1346,7 @@ func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, tar
 	return nil
 }
 
-// WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
+// WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
 func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// If the FSM is not initialized, we need to wait
 	// or if the FSM is in the IDLE state, we need to wait

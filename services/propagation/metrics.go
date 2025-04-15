@@ -12,6 +12,8 @@ var (
 	prometheusHealth                    prometheus.Histogram
 	prometheusProcessedTransactions     prometheus.Histogram
 	prometheusProcessedTransactionBatch prometheus.Histogram
+	prometheusProcessedHandleSingleTx   prometheus.Histogram
+	prometheusProcessedHandleMultipleTx prometheus.Histogram
 	prometheusTransactionSize           prometheus.Histogram
 	prometheusInvalidTransactions       prometheus.Counter
 )
@@ -49,6 +51,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "propagation",
 			Name:      "transactions_batch",
 			Help:      "Histogram of transaction processing by the propagation service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusProcessedHandleSingleTx = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "propagation",
+			Name:      "handle_single_tx",
+			Help:      "Histogram of transaction processing by the propagation service using HTTP",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusProcessedHandleMultipleTx = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "propagation",
+			Name:      "handle_multiple_tx",
+			Help:      "Histogram of multiple transaction processing by the propagation service using HTTP",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

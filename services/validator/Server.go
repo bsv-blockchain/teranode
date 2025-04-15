@@ -137,12 +137,7 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 //   - *validator_api.HealthResponse: Health check response
 //   - error: Any errors encountered
 func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(v.stats),
-		tracing.WithCounter(prometheusHealth),
-		tracing.WithDebugLogMessage(v.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
+	prometheusHealth.Add(1)
 
 	status, details, err := v.Health(ctx, false)
 

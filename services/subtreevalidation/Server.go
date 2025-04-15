@@ -179,12 +179,10 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 // HealthGRPC implements the gRPC health check endpoint.
 func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(u.stats),
-		tracing.WithHistogram(prometheusHealth),
-		tracing.WithDebugLogMessage(u.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
+	startTime := time.Now()
+	defer func() {
+		prometheusHealth.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
 
 	status, details, err := u.Health(ctx, false)
 
