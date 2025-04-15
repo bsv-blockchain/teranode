@@ -2215,7 +2215,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 					// we just got notified of a new subtree internally, announce all the transactions to our peers
 					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
 
-					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash)
+					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash, options.WithFileExtension("subtree"))
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
 						continue
