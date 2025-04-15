@@ -515,11 +515,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			u.logger.Infof("[ValidateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
-			return nil
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 		}
-
-		return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 	}
 
 	//
@@ -536,17 +535,21 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.settings.BlockAssembly.SubtreeTTL), options.WithFileExtension("subtree"))
+	err = u.subtreeStore.Set(ctx,
+		merkleRoot[:],
+		completeSubtreeBytes,
+		options.WithTTL(u.settings.BlockAssembly.SubtreeTTL),
+		options.WithFileExtension("subtree"),
+	)
 
 	stat.NewStat("8. storeSubtree").AddTime(start)
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			u.logger.Infof("[ValidateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
-			return nil
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
+		} else {
+			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 		}
-
-		return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 	}
 
 	_ = u.SetSubtreeExists(&v.SubtreeHash)

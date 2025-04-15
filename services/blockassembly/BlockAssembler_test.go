@@ -377,6 +377,31 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		assert.Equal(t, blockHeader4Alt.Hash(), moveForwardBlockHeaders[2].Hash())
 	})
 
+	// this situation has been observed when a reorg is triggered when a moveForward should have been triggered
+	t.Run("getReorgBlocks - not moving back", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		err := items.addBlock(blockHeader1)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader2)
+		require.NoError(t, err)
+		err = items.addBlock(blockHeader3)
+		require.NoError(t, err)
+
+		// set the cached BlockAssembler items to block 2
+		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
+		items.blockAssembler.bestBlockHeight.Store(2)
+
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader3, 3)
+		require.NoError(t, err)
+
+		assert.Len(t, moveBackBlockHeaders, 0)
+
+		assert.Len(t, moveForwardBlockHeaders, 1)
+		assert.Equal(t, blockHeader3.Hash(), moveForwardBlockHeaders[0].Hash())
+	})
+
 	t.Run("getReorgBlocks - missing block", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)

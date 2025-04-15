@@ -1990,7 +1990,12 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 						return errors.NewProcessingError("error serializing subtree %s", subtreeHash.String(), err)
 					}
 
-					if err = stp.subtreeStore.Set(gCtx, subtreeHash[:], subtreeBytes, options.WithFileExtension("subtree")); err != nil {
+					if err = stp.subtreeStore.Set(gCtx,
+						subtreeHash[:],
+						subtreeBytes,
+						options.WithFileExtension("subtree"),
+						options.WithAllowOverwrite(true),
+					); err != nil {
 						return errors.NewServiceError("error saving subtree %s", subtreeHash.String(), err)
 					}
 				}

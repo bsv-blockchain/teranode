@@ -274,8 +274,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				}
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
-				b.bestBlockHeader.Store(bestBlockchainBlockHeader)
-				b.bestBlockHeight.Store(currentHeight)
+
+				b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
 
 				if err = b.SetState(ctx); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error setting state: %v", err)
@@ -364,17 +364,17 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		deferFn()
 	}()
 
-	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
+	bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 		return
 	}
 
-	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), bestBlockchainBlockHeaderMeta.Height)
 
-	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
+	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), bestBlockchainBlockHeaderMeta.Height)
 
-	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
+	prometheusBlockAssemblyBestBlockHeight.Set(float64(bestBlockchainBlockHeaderMeta.Height))
 
 	switch {
 	case bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Load().Hash()):
@@ -384,7 +384,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		b.currentRunningState.Store("reorging")
 
-		err = b.handleReorg(ctx, bestBlockchainBlockHeader, meta.Height)
+		err = b.handleReorg(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 		if err != nil {
 			if errors.Is(err, errors.ErrBlockAssemblyReset) {
 				// only warn about the reset
@@ -413,8 +413,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		}
 	}
 
-	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
-	b.bestBlockHeight.Store(meta.Height)
+	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
@@ -436,6 +435,15 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	b.currentDifficulty.Store(currentDifficulty)
 }
 
+func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
+	b.logger.Infof("[BlockAssembler][%s] setting best block header: %d", bestBlockchainBlockHeader.Hash(), height)
+
+	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
+	b.bestBlockHeight.Store(height)
+
+	b.logger.Infof("[BlockAssembler][%s] set best block header to: %d", b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
+}
+
 // GetCurrentRunningState returns the current operational state.
 //
 // Returns:
@@ -453,9 +461,6 @@ func (b *BlockAssembler) GetCurrentRunningState() string {
 //   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) error {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
-	b.bestBlockHeight.Store(bestBlockHeight)
-	b.bestBlockHeader.Store(bestBlockHeader)
-
 	if err != nil {
 		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
 		if strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
@@ -468,6 +473,8 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
 	}
 
+	b.setBestBlockHeader(bestBlockHeader, bestBlockHeight)
+
 	// we did not get any state back from the blockchain db, so we get the current best block header
 	if b.bestBlockHeader.Load() == nil || b.bestBlockHeight.Load() == 0 {
 		header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
@@ -476,8 +483,7 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		} else {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Load().Hash())
 
-			b.bestBlockHeader.Store(header)
-			b.bestBlockHeight.Store(meta.Height)
+			b.setBestBlockHeader(header, meta.Height)
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
 		}
 	}
