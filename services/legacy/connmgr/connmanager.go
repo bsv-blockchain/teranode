@@ -67,7 +67,7 @@ type ConnReq struct {
 	conn       net.Conn
 	state      ConnState
 	stateMtx   sync.RWMutex
-	retryCount uint32
+	retryCount atomic.Uint32
 }
 
 // updateState updates the state of the connection request.
@@ -226,9 +226,9 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 	}
 
 	if c.Permanent {
-		c.retryCount++
+		c.retryCount.Add(1)
 
-		d := time.Duration(c.retryCount) * cm.cfg.RetryDuration
+		d := time.Duration(c.retryCount.Load()) * cm.cfg.RetryDuration
 		if d > maxRetryDuration {
 			d = maxRetryDuration
 		}
@@ -292,7 +292,7 @@ out:
 				cm.conns.Set(connReq.id, connReq)
 
 				cm.logger.Debugf("Connected to %v", connReq)
-				connReq.retryCount = 0
+				connReq.retryCount.Store(0)
 				cm.failedAttempts = 0
 
 				cm.pending.Delete(connReq.id)
@@ -452,7 +452,7 @@ func (cm *ConnManager) NewConnReq() {
 		cm.pending.Iterate(func(_ uint64, connReq *ConnReq) bool {
 			connReqAddr := connReq.GetAddr()
 			if connReqAddr != nil && connReqAddr.String() == addr.String() {
-				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %s, retries: %d)", addr, connReq.State(), connReq.retryCount)
+				cm.logger.Debugf("Ignoring connection to %v, already pending (state: %s, retries: %d)", addr, connReq.State(), connReq.retryCount.Load())
 
 				existingPendingTx = true
 
