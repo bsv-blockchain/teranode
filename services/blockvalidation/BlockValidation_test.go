@@ -1230,3 +1230,128 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, exists, "The missing transaction should have been stored after validation")
 }
+
+func TestBlockValidationExcessiveBlockSize(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tests := []struct {
+		name               string
+		excessiveBlockSize int
+		blockSize          uint64
+		expectError        bool
+		errorMessage       string
+	}{
+		{
+			name:               "Block size within limit",
+			excessiveBlockSize: 1000000,
+			blockSize:          999999,
+			expectError:        false,
+		},
+		{
+			name:               "Block size equals limit",
+			excessiveBlockSize: 1000000,
+			blockSize:          1000000,
+			expectError:        false,
+		},
+		{
+			name:               "Block size exceeds limit",
+			excessiveBlockSize: 1000000,
+			blockSize:          1000001,
+			expectError:        true,
+			errorMessage:       "block size 1000001 exceeds excessiveblocksize 1000000",
+		},
+		{
+			name:               "Zero excessive block size (unlimited)",
+			excessiveBlockSize: 0,
+			blockSize:          5000000000,
+			expectError:        false,
+		},
+		{
+			name:               "Very large block within 4GB default",
+			excessiveBlockSize: 4294967296,
+			blockSize:          4294967295,
+			expectError:        false,
+		},
+		{
+			name:               "Block exceeds 4GB default",
+			excessiveBlockSize: 4294967296,
+			blockSize:          4294967297,
+			expectError:        true,
+			errorMessage:       "block size 4294967297 exceeds excessiveblocksize 4294967296",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup test environment
+			txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, cleanup := setup()
+			defer cleanup()
+
+			// Create test settings with specified excessive block size
+			tSettings := test.CreateBaseTestSettings()
+			tSettings.Policy.ExcessiveBlockSize = tt.excessiveBlockSize
+
+			// Create blockchain store
+			blockchainStoreURL, err := url.Parse("sqlitememory://")
+			require.NoError(t, err)
+			blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
+			require.NoError(t, err)
+
+			// Create blockchain client
+			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+			require.NoError(t, err)
+
+			// Create block validator with 10 minute bloom filter expiration
+			blockValidator := NewBlockValidation(
+				ctx, // Use the context with cancel
+				ulogger.TestLogger{},
+				tSettings,
+				blockchainClient,
+				subtreeStore,
+				txStore,
+				txMetaStore,
+				validatorClient,
+				subtreeValidationClient,
+				10*time.Minute,
+			)
+
+			// Create a valid block header
+			nBits, _ := model.NewNBitFromString("2000ffff")
+			hashPrevBlock := chaincfg.RegressionNetParams.GenesisHash
+			merkleRoot := chainhash.Hash{}
+
+			blockHeader := &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  hashPrevBlock,
+				HashMerkleRoot: &merkleRoot,
+				Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+				Bits:           *nBits,
+				Nonce:          0,
+			}
+
+			// Create a test block with specified size and valid header
+			block := &model.Block{
+				Header:           blockHeader,
+				SizeInBytes:      tt.blockSize,
+				TransactionCount: 1,
+				CoinbaseTx:       tx1,                 // Using tx1 from test setup
+				Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
+			}
+
+			// Validate the block
+			err = blockValidator.ValidateBlock(ctx, block, "test", nil)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errorMessage)
+			} else if err != nil {
+				// For non-error cases, we only care about the excessive block size check
+				// If there are other validation errors, we can ignore them
+				require.NotContains(t, err.Error(), "exceeds excessiveblocksize")
+			}
+		})
+	}
+}

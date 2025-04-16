@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
@@ -28,9 +29,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 		SettingsContextOverride: "dev.system.test",
 	})
 
-	t.Cleanup(func() {
-		td.Stop()
-	})
+	defer td.Stop()
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -254,9 +253,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 		SettingsOverride: settings.NewSettings("dev.system.test"),
 	})
 
-	t.Cleanup(func() {
-		td.Stop()
-	})
+	defer td.Stop()
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -312,4 +309,239 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
 	require.Error(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
+}
+
+func TestShouldRejectOversizedTx(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:              true,
+		KillTeranode:           true,
+		SettingsContextOverride: "dev.system.test.txsizetest",
+	})
+
+	defer td.Stop()
+
+	tSettings := td.Settings
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks to get coinbase funds
+	_, err = td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Get the policy settings to know the max tx size
+	maxTxSize := td.Settings.Policy.MaxTxSizePolicy
+
+	// Create a transaction that exceeds MaxTxSizePolicy by adding many outputs
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+
+	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// Add many outputs to make the transaction exceed MaxTxSizePolicy
+	// Each P2PKH output is roughly 34 bytes for the locking script
+	// Plus 8 bytes for the satoshi amount
+	// So each output is roughly 42 bytes
+	// We'll create enough outputs to exceed MaxTxSizePolicy
+	numOutputs := (maxTxSize / 34) + 1000 // Add extra outputs to ensure we exceed the limit
+	satoshisPerOutput := output.Satoshis / uint64(numOutputs) //nolint:gosec
+
+	t.Logf("Creating transaction with %d outputs to exceed MaxTxSizePolicy of %d bytes", numOutputs, maxTxSize)
+
+	for i := 0; i < numOutputs; i++ {
+		err = newTx.AddP2PKHOutputFromAddress(address.AddressString, satoshisPerOutput)
+		require.NoError(t, err)
+	}
+
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	t.Logf("Created transaction with size: %d bytes", len(newTx.ExtendedBytes()))
+	t.Logf("MaxTxSizePolicy: %d bytes", maxTxSize)
+
+	// Try to send the oversized transaction
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	
+	// The transaction should be rejected for being too large
+	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxTxSizePolicy")
+	require.Contains(t, err.Error(), "transaction size in bytes is greater than max tx size policy", "Expected error message to indicate transaction size policy violation")
+}
+
+func TestShouldRejectOversizedScript(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:              true,
+		KillTeranode:           true,
+		SettingsContextOverride: "dev.system.test.oversizedscripttest",
+	})
+
+	defer td.Stop()
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks to get coinbase funds
+	_, err = td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Get the policy settings to know the max script size
+	maxScriptSize := td.Settings.Policy.MaxScriptSizePolicy
+
+	// Create a transaction with an oversized script
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+	output := coinbaseTx.Outputs[0]
+
+	coinbasePrivKey := td.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// Create an oversized OP_RETURN script
+	// We'll create a script that's larger than MaxScriptSizePolicy
+	oversizedData := make([]byte, maxScriptSize+1000) // Add extra bytes to ensure we exceed the limit
+	for i := range oversizedData {
+		oversizedData[i] = byte(i % 256) // Fill with some pattern
+	}
+
+	// Create the oversized script using OP_RETURN
+	err = newTx.AddOpReturnOutput(oversizedData)
+	require.NoError(t, err)
+
+	// Add a normal P2PKH output to spend the rest of the coins
+	addr, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+	err = newTx.AddP2PKHOutputFromAddress(addr.AddressString, 10000) // Leave some for fees
+	require.NoError(t, err)
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	t.Logf("Created transaction with OP_RETURN data size: %d bytes", len(oversizedData))
+	t.Logf("MaxScriptSizePolicy: %d bytes", maxScriptSize)
+	padding := bytes.Repeat([]byte{0x00}, maxScriptSize)
+	err = newTx.Inputs[0].UnlockingScript.AppendPushDataString(string(padding))
+	require.NoError(t, err)
+
+	// Try to send the transaction with oversized script
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	
+	// The transaction should be rejected for having a script that's too large
+	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxScriptSizePolicy")
+	require.Contains(t, err.Error(), "Script is too big", "Expected error message to indicate script size violation")
+}
+
+func TestShouldRejectLargeScriptNum(t *testing.T) {
+	t.Skip("Test is disabled")
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:               true,
+		KillTeranode:            true,
+		SettingsContextOverride: "dev.system.test.toomanyopstest", // Using the context where MaxScriptNumLengthPolicy = 1
+	})
+
+	defer td.Stop()
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks
+	_, err = td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Get the MaxScriptNumLengthPolicy from settings
+	maxScriptNumLength := td.Settings.Policy.MaxScriptNumLengthPolicy
+
+	// Get the coinbase tx from block 1
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+	
+	coinbaseTx := block1.CoinbaseTx
+	output := coinbaseTx.Outputs[0]
+
+	coinbasePrivKey := td.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	// Build transaction
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// Add a valid P2PKH output with enough fee reserved
+	addr, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	require.NoError(t, err)
+	err = newTx.AddP2PKHOutputFromAddress(addr.AddressString, output.Satoshis-1000)
+	require.NoError(t, err)
+
+	// Create a script with a number that exceeds MaxScriptNumLengthPolicy
+	// For MaxScriptNumLengthPolicy = 1, any number larger than 127 or smaller than -128 should be rejected
+	var script bytes.Buffer
+	script.WriteByte(0x02)    // Push 2 bytes
+	script.WriteByte(0xFF)    // First byte of number (255)
+	script.WriteByte(0x00)    // Second byte of number
+	script.WriteByte(0x87)    // OP_EQUAL
+
+	err = newTx.Inputs[0].UnlockingScript.AppendPushDataString(script.String())
+	require.NoError(t, err)
+
+	// Fill all inputs after modifying the unlocking script
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	t.Logf("Created script with number exceeding MaxScriptNumLengthPolicy of %d bytes", maxScriptNumLength)
+
+	// Try to send transaction
+	txHex := hex.EncodeToString(newTx.ExtendedBytes())
+	_, err = td.CallRPC("sendrawtransaction", []interface{}{txHex})
+
+	// Assert that error occurred and it's due to script number length
+	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxScriptNumLengthPolicy")
+	require.Contains(t, err.Error(), "Script number overflow", "Expected error message to mention script number overflow")
 }
