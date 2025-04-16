@@ -709,7 +709,7 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 	}
 
 	// Never go below minimum size
-	minSubtreeSize := 1024
+	minSubtreeSize := stp.settings.BlockAssembly.MinimumMerkleItemsPerSubtree
 	if newSize < minSubtreeSize {
 		newSize = minSubtreeSize
 	}
@@ -728,25 +728,9 @@ func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeade
 	stp.Lock()
 	defer stp.Unlock()
 
-	// When starting a new block, calculate the average interval per subtree
-	// from the previous block and adjust the subtree size
-	if stp.currentBlockHeader != nil && stp.blockStartTime != (time.Time{}) {
-		blockDuration := time.Since(stp.blockStartTime)
-		if stp.subtreesInBlock > 0 {
-			avgIntervalPerSubtree := blockDuration / time.Duration(stp.subtreesInBlock)
-
-			stp.blockIntervals = append(stp.blockIntervals, avgIntervalPerSubtree)
-			if len(stp.blockIntervals) > stp.maxBlockSamples {
-				stp.blockIntervals = stp.blockIntervals[1:]
-			}
-
-			stp.adjustSubtreeSize()
-		}
-	}
-
 	stp.currentBlockHeader = blockHeader
 	stp.blockStartTime = time.Now()
-	stp.subtreesInBlock = 0
+	stp.subtreesInBlock = 1
 }
 
 // addNode adds a new transaction node to the current subtree.
@@ -953,6 +937,7 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Su
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	errChan := make(chan error)
+
 	stp.moveForwardBlockChan <- moveBlockRequest{
 		block:   block,
 		errChan: errChan,
@@ -1527,6 +1512,23 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 	// set the current block header
 	stp.currentBlockHeader = block.Header
+
+	// When starting a new block, calculate the average interval per subtree
+	// from the previous block and adjust the subtree size
+	if stp.currentBlockHeader != nil && stp.blockStartTime != (time.Time{}) {
+		blockDuration := time.Since(stp.blockStartTime)
+
+		if stp.subtreesInBlock > 0 {
+			avgIntervalPerSubtree := blockDuration / time.Duration(stp.subtreesInBlock)
+			stp.blockIntervals = append(stp.blockIntervals, avgIntervalPerSubtree)
+
+			if len(stp.blockIntervals) > stp.maxBlockSamples {
+				stp.blockIntervals = stp.blockIntervals[1:]
+			}
+		}
+	}
+
+	stp.adjustSubtreeSize()
 
 	return nil
 }

@@ -36,8 +36,13 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
-	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	// Generate initial blocks in smaller batches
+	for i := 0; i < 5; i++ {
+		_, err = td.CallRPC("generate", []interface{}{20})
+		require.NoError(t, err)
+		time.Sleep(1 * time.Second) // Allow time for block processing
+	}
+	_, err = td.CallRPC("generate", []interface{}{1}) // Final block to reach 101
 	require.NoError(t, err)
 
 	tSettings := td.Settings
@@ -97,8 +102,12 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	t.Logf("Resp: %s", resp)
 
-	_, err = td.CallRPC("generate", []interface{}{100})
-	require.NoError(t, err, "Failed to generate blocks")
+	// Generate remaining blocks in smaller batches
+	for i := 0; i < 5; i++ {
+		_, err = td.CallRPC("generate", []interface{}{20})
+		require.NoError(t, err)
+		time.Sleep(1 * time.Second) // Allow time for block processing
+	}
 
 	t.Logf("Resp: %s", resp)
 
@@ -162,7 +171,6 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	assert.Nil(t, blockchainInfo.ID)
 
 	resp, err = td.CallRPC("getinfo", []interface{}{})
-
 	require.NoError(t, err)
 
 	var getInfo helper.GetInfo

@@ -187,6 +187,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeRetryChanBuffer:              getInt("blockassembly_subtreeRetryChanBuffer", 1_000, alternativeContext...),
 			SubmitMiningSolutionWaitForResponse: getBool("blockassembly_SubmitMiningSolution_waitForResponse", true, alternativeContext...),
 			InitialMerkleItemsPerSubtree:        getInt("initial_merkle_items_per_subtree", 1_048_576, alternativeContext...),
+			MinimumMerkleItemsPerSubtree:        getInt("minimum_merkle_items_per_subtree", 1024, alternativeContext...),
 			DoubleSpendWindow:                   doubleSpendWindow,
 			MaxGetReorgHashes:                   getInt("blockassembly_maxGetReorgHashes", 10_000, alternativeContext...),
 			MinerWalletPrivateKeys:              getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),

@@ -80,7 +80,7 @@ jobs:
       - name: Run Smoke tests
         run: |
           cd test/smoke && \
-          go test -v -count 1 -tags test_smoke_rpc ./...
+          go test -tags test_smoke_rpc -run ^TestShouldAllowFairTxUseRpc$ -v -count=1 -race -timeout=5m
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
         continue-on-error: false

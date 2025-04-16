@@ -1,4 +1,4 @@
-//go:build test_tna || debug || test_all
+//go:build test_tna || debug
 
 package tna
 

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,7 @@ type TestDaemon struct {
 	UtxoStore             utxo.Store
 	DistributorClient     *distributor.Distributor
 	rpcURL                *url.URL
+	AssetURL              string
 	Settings              *settings.Settings
 }
 
@@ -272,6 +274,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		UtxoStore:             utxoStore,
 		DistributorClient:     distributorClient,
 		rpcURL:                tSettings.RPC.RPCListenerURL,
+		AssetURL:              fmt.Sprintf("http://localhost:%d", tSettings.Asset.HTTPPort),
 		Settings:              tSettings,
 	}
 }
@@ -768,6 +771,134 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 		transactions[i] = newTx
 		txHashes = append(txHashes, newTx.TxIDChainHash())
 		currentParent = newTx
+	}
+
+	return transactions, txHashes, nil
+}
+
+// CreateParentTransactions creates a single transaction with multiple outputs from a parent transaction.
+// Each output can then be spent concurrently by child transactions.
+// count specifies how many outputs to create in the transaction.
+func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx *bt.Tx, count int) (*bt.Tx, error) {
+	// Create a new transaction
+	newTx := bt.NewTx()
+
+	// Add input from parent transaction using UTXO
+	utxo := &bt.UTXO{
+		TxIDHash:      parentTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: parentTx.Outputs[0].LockingScript,
+		Satoshis:      parentTx.Outputs[0].Satoshis,
+	}
+	err := newTx.FromUTXOs(utxo)
+
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to add input", err)
+	}
+
+	// Calculate satoshis per output, leaving some for fees
+	// Reserve 1000 satoshis for fees
+	//nolint:gosec
+	totalSatoshis := parentTx.Outputs[0].Satoshis - 1000
+	satoshisPerOutput := totalSatoshis / uint64(count) //nolint:gosec
+
+	// Create the specified number of outputs, all using the same key
+	for i := 0; i < count; i++ {
+		// Add output using TestDaemon's key
+		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), satoshisPerOutput)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to add output", err)
+		}
+	}
+
+	// Fill all inputs (signs the transaction)
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to sign transaction", err)
+	}
+
+	// Send the transaction
+	response, err := td.DistributorClient.SendTransaction(td.Ctx, newTx)
+	require.NoError(t, err)
+
+	require.Equal(t, len(response), 1)
+
+	td.Logger.Infof("Created parent transaction with %d outputs: %s, error: %v", count, newTx.TxID(), response[0].Error)
+
+	// Wait a bit for the transaction to be processed
+	time.Sleep(1 * time.Second)
+
+	return newTx, nil
+}
+
+// CreateAndSendTxsConcurrently creates and sends transactions concurrently using multiple goroutines
+func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx) ([]*bt.Tx, []*chainhash.Hash, error) {
+	transactions := make([]*bt.Tx, len(parentTx.Outputs))
+	txHashes := make([]*chainhash.Hash, len(parentTx.Outputs))
+
+	resultChan := make(chan struct {
+		index int
+		tx    *bt.Tx
+	}, len(parentTx.Outputs))
+	errorChan := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	// Create a goroutine for each output to spend
+	for index := 0; index < len(parentTx.Outputs); index++ {
+		// for index := 0; index < 10; index++ {
+		wg.Add(1)
+
+		go func(index int) {
+			defer wg.Done()
+
+			//nolint:gosec
+			utxo := &bt.UTXO{
+				TxIDHash:      parentTx.TxIDChainHash(),
+				Vout:          uint32(index),
+				LockingScript: parentTx.Outputs[index].LockingScript,
+				Satoshis:      parentTx.Outputs[index].Satoshis,
+			}
+
+			newTx := bt.NewTx()
+			if err := newTx.FromUTXOs(utxo); err != nil {
+				errorChan <- errors.NewProcessingError("Error creating transaction from UTXO", err)
+			}
+
+			outputAmount := parentTx.Outputs[index].Satoshis - 1000 // minus 1000 satoshis for fee
+
+			// Add two outputs to allow for further spending
+			// splitAmount := outputAmount / 2
+			if err := newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), outputAmount); err != nil {
+				errorChan <- errors.NewProcessingError("Error adding first output to transaction", err)
+			}
+
+			if err := newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey}); err != nil {
+				errorChan <- errors.NewProcessingError("Error filling inputs", err)
+			}
+
+			if _, err := td.DistributorClient.SendTransaction(td.Ctx, newTx); err != nil {
+				errorChan <- errors.NewProcessingError("Error sending transaction", err)
+			}
+
+			resultChan <- struct {
+				index int
+				tx    *bt.Tx
+			}{index: index, tx: newTx}
+		}(index)
+	}
+
+	// Start a goroutine to close the result channel when all work is done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	for index := 0; index < len(parentTx.Outputs); index++ {
+		result := <-resultChan
+		transactions[result.index] = result.tx
+		txHashes[result.index] = result.tx.TxIDChainHash()
+		td.Logger.Infof("Transaction %d sent: %s", result.index+1, result.tx.TxID())
 	}
 
 	return transactions, txHashes, nil

@@ -1414,6 +1414,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 			// Set the new header after recording intervals
 			stp.SetCurrentBlockHeader(newHeader)
+			stp.adjustSubtreeSize()
 			blockHeader = newHeader
 		}
 
@@ -1499,6 +1500,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 			stp.blockIntervals = append(stp.blockIntervals, time.Duration(2)*time.Second/time.Duration(5)) // 2s/5 subtrees = 400ms per subtree
 			fmt.Printf("DEBUG: Block intervals after block %d: %v\n", i, stp.blockIntervals)
 			stp.SetCurrentBlockHeader(newHeader)
+			stp.adjustSubtreeSize()
 			blockHeader = newHeader
 		}
 
