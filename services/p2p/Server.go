@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -224,22 +223,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
 	}
 
-	AssetHTTPAddressURL, err := url.Parse(AssetHTTPAddressURLString)
-	if err != nil {
-		return errors.NewServiceError("error parsing asset_httpAddress", err)
-	}
-
-	if AssetHTTPAddressURL.Scheme == "http" && s.settings.SecurityLevelHTTP == 1 {
-		AssetHTTPAddressURL.Scheme = "https"
-
-		s.logger.Warnf("[Init] asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-	} else if AssetHTTPAddressURL.Scheme == "https" && s.settings.SecurityLevelHTTP == 0 {
-		AssetHTTPAddressURL.Scheme = "http"
-
-		s.logger.Warnf("[Init] asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
-	}
-
-	s.AssetHTTPAddressURL = AssetHTTPAddressURL.String()
+	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
 
 	return nil
 }
