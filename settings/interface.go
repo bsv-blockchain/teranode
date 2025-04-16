@@ -225,6 +225,7 @@ type BlockValidationSettings struct {
 	CatchupConcurrency                        int
 	ValidationWarmupCount                     int
 	BatchMissingTransactions                  bool
+	CheckSubtreeFromBlockTimeout              time.Duration
 }
 
 type ValidatorSettings struct {

@@ -1218,7 +1218,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				if !subtreeExists {
 					u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
 
-					checkCtx, cancel := context.WithTimeout(gCtx, 2*time.Minute)
+					checkCtx, cancel := context.WithTimeout(gCtx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
 					defer cancel()
 
 					err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash())
