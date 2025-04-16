@@ -225,6 +225,52 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
 }
 
+func TestMaxScriptSizePolicy(t *testing.T) {
+	// TxID := 9f569c12dfe382504748015791d1994725a7d81d92ab61a6221eadab9f122ece
+	testTxHex := "010000000000000000ef011c044c4db32b3da68aa54e3f30c71300db250e0b48ea740bd3897a8ea1a2cc9a020000006b483045022100c6177fa406ecb95817d3cdd3e951696439b23f8e888ef993295aa73046504029022052e75e7bfd060541be406ec64f4fc55e708e55c3871963e95bf9bd34df747ee041210245c6e32afad67f6177b02cfc2878fce2a28e77ad9ecbc6356960c020c592d867ffffffffd4c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac0301000000000000001976a914a4429da7462800dedc7b03a4fc77c363b8de40f588ac000000000000000024006a4c2042535620466175636574207c20707573682d7468652d627574746f6e2e617070d2c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac00000000"
+	testTx, errTx := bt.NewTxFromString(testTxHex)
+	assert.NoError(t, errTx)
+
+	testBlockHeight := uint32(886413)
+	testUtxoHeights := []uint32{886412}
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.MaxScriptSizePolicy = 1 // low
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{disableConsensus: true})
+	assert.NoError(t, err)
+
+	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{disableConsensus: true})
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
+}
+
+func TestMaxTxSigopsCountsPolicy(t *testing.T) {
+	// TxID := 9f569c12dfe382504748015791d1994725a7d81d92ab61a6221eadab9f122ece
+	testTxHex := "010000000000000000ef011c044c4db32b3da68aa54e3f30c71300db250e0b48ea740bd3897a8ea1a2cc9a020000006b483045022100c6177fa406ecb95817d3cdd3e951696439b23f8e888ef993295aa73046504029022052e75e7bfd060541be406ec64f4fc55e708e55c3871963e95bf9bd34df747ee041210245c6e32afad67f6177b02cfc2878fce2a28e77ad9ecbc6356960c020c592d867ffffffffd4c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac0301000000000000001976a914a4429da7462800dedc7b03a4fc77c363b8de40f588ac000000000000000024006a4c2042535620466175636574207c20707573682d7468652d627574746f6e2e617070d2c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac00000000"
+	testTx, errTx := bt.NewTxFromString(testTxHex)
+	assert.NoError(t, errTx)
+
+	testBlockHeight := uint32(886413)
+	testUtxoHeights := []uint32{886412}
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.Policy.MaxTxSigopsCountsPolicy = 1 // low
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{disableConsensus: true})
+	assert.NoError(t, err)
+
+	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{disableConsensus: true})
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
+}
+
 func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
