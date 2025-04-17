@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/IBM/sarama"
@@ -23,6 +24,8 @@ import (
 
 func TestMain(m *testing.M) {
 	InitPrometheusMetrics()
+	exitCode := m.Run()
+	os.Exit(exitCode)
 }
 
 type mockLogger struct {

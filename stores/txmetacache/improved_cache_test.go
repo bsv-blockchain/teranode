@@ -19,23 +19,23 @@ func init() {
 	}()
 }
 
-func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
-	cache, _ := NewImprovedCache(128*1024, Trimmed)
+func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
+	cache, _ := NewImprovedCache(128*1024*1024, Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 
 	var err error
 
-	numberOfKeys := 2000
-
-	// cache size : 128 KB
-	// 8 buckets
-	// bucket size: 128 KB / 8 = 16 KB per bucket
+	// cache size : 128 MB
+	// 8 * 1024 buckets
+	// bucket size: 128 MB / 8 * 1024 = 16 KB per bucket
 	// chunk size: 4 KB
 	// 16 KB / 4 KB = 4 chunks per bucket
 	// 4 KB / 68  = 60 key-value pairs per chunk
 	// 60 * 4 = 240 key-value pairs per bucket
-	// 240 * 8 = 1920 key-value pairs per cache
+	// 240 * 8 * 1024 =  1966080 key-value pairs per cache
+
+	numberOfKeys := 1_967_000
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)

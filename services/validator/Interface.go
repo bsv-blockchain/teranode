@@ -11,6 +11,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -96,7 +97,7 @@ func (mv *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, s
 // Returns:
 //   - error: Always returns nil
 func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error) {
-	return nil, nil
+	return util.TxMetaDataFromTx(tx)
 }
 
 // ValidateWithOptions implements mock transaction validation with options set directly
@@ -110,7 +111,7 @@ func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight ui
 // Returns:
 //   - error: Always returns nil
 func (mv *MockValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error) {
-	return nil, nil
+	return util.TxMetaDataFromTx(tx)
 }
 
 // GetBlockHeight implements mock block height retrieval

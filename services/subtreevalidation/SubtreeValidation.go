@@ -573,7 +573,12 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	// TODO add the metric for how long this takes
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
 	if err != nil {
-		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String(), err)
+		// check whether this is a 404 error
+		if errors.Is(err, errors.ErrNotFound) {
+			return nil, errors.NewSubtreeNotFoundError("[getSubtreeTxHashes][%s] subtree not found on host %s", subtreeHash.String(), baseURL, err)
+		}
+
+		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request on host %s", subtreeHash.String(), baseURL, err)
 	}
 	defer body.Close()
 

@@ -21,7 +21,7 @@ type NullStore struct {
 
 // BatchDecorate implements utxo.Store.
 func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...fields.FieldName) error {
-	panic("unimplemented")
+	return nil
 }
 
 func NewNullStore() (*NullStore, error) {

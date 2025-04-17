@@ -2,17 +2,21 @@ package subtreevalidation
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,11 +75,14 @@ func (s *testServer) ValidateSubtreeInternal(ctx context.Context, v ValidateSubt
 }
 
 func TestSubtreesHandler(t *testing.T) {
+	subtreeHash, _ := chainhash.NewHashFromStr("d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf")
 	tests := []struct {
-		name    string
-		msg     *kafka.KafkaMessage
-		setup   func(*testServer)
-		wantErr bool
+		name           string
+		msg            *kafka.KafkaMessage
+		setup          func(*testServer)
+		httpResponse   []byte
+		httpStatusCode int
+		wantErr        bool
 	}{
 		{
 			name: "valid message",
@@ -83,7 +90,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: make([]byte, 32),
+							Hash: subtreeHash[:],
 							URL:  "http://example.com",
 						}
 						data, _ := proto.Marshal(msg)
@@ -91,6 +98,8 @@ func TestSubtreesHandler(t *testing.T) {
 					}(),
 				},
 			},
+			httpStatusCode: http.StatusOK,
+			httpResponse:   hash1.CloneBytes(),
 			setup: func(s *testServer) {
 				s.validateSubtreeInternalFn = func(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) error {
 					return nil
@@ -160,6 +169,29 @@ func TestSubtreesHandler(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "not found error",
+			msg: &kafka.KafkaMessage{
+				ConsumerMessage: sarama.ConsumerMessage{
+					Value: func() []byte {
+						msg := &kafkamessage.KafkaSubtreeTopicMessage{
+							Hash: make([]byte, 32),
+							URL:  "http://example.com",
+						}
+						data, _ := proto.Marshal(msg)
+						return data
+					}(),
+				},
+			},
+			httpStatusCode: http.StatusNotFound,
+			httpResponse:   []byte{},
+			setup: func(s *testServer) {
+				s.validateSubtreeInternalFn = func(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) error {
+					return errors.NewSubtreeNotFoundError("subtree not found")
+				}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -171,15 +203,42 @@ func TestSubtreesHandler(t *testing.T) {
 				_ = os.RemoveAll(tSettings.SubtreeValidation.QuorumPath)
 			}()
 
+			logger := ulogger.TestLogger{}
+			subtreeStore := memory.New()
+			utxoStore, _ := nullstore.NewNullStore()
+
 			server := &testServer{
 				Server: Server{
-					logger: ulogger.TestLogger{},
+					logger:          logger,
+					settings:        tSettings,
+					subtreeStore:    subtreeStore,
+					utxoStore:       utxoStore,
+					validatorClient: &validator.MockValidator{},
 				},
 			}
+
+			q, _ = NewQuorum(
+				logger,
+				subtreeStore,
+				tSettings.SubtreeValidation.QuorumPath,
+			)
 
 			if tt.setup != nil {
 				tt.setup(server)
 			}
+
+			// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
+			httpmock.Activate()
+			httpmock.RegisterResponder(
+				"GET",
+				`=~.*`,
+				httpmock.NewBytesResponder(tt.httpStatusCode, tt.httpResponse),
+			)
+			httpmock.RegisterResponder(
+				"POST",
+				`=~.*`,
+				httpmock.NewBytesResponder(tt.httpStatusCode, tx1.ExtendedBytes()),
+			)
 
 			err := server.subtreesHandler(tt.msg)
 			if tt.wantErr {

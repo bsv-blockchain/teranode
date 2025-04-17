@@ -71,20 +71,25 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		errFn := errors.NewServiceError
+		if resp.StatusCode == http.StatusNotFound {
+			errFn = errors.NewNotFoundError
+		}
+
 		if resp.Body != nil {
 			defer resp.Body.Close()
 
 			b, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode, err)
+				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode, err)
 			}
 
 			if b != nil {
-				return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
+				return nil, cancelFn, errFn("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
 			}
 		}
 
-		return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode)
+		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
 	return resp.Body, cancelFn, nil
