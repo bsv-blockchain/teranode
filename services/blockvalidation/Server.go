@@ -359,8 +359,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
 
-					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
+					for {
+						if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
+							u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] - will retry [%v]", c.block.Hash().String(), err)
+
+							continue
+						}
+
+						break
 					}
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
