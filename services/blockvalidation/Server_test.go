@@ -397,6 +397,69 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 	assert.Len(t, s.catchupCh, 1)
 }
 
+func TestServer_catchup(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	settings := test.CreateBaseTestSettings()
+	settings.BlockValidation.CatchupConcurrency = 1
+
+	baseURL := "http://test.com"
+
+	t.Run("catchup", func(t *testing.T) {
+		// Setup
+		mockBlockchainStore := blockchain_store.NewMockStore()
+		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
+		require.NoError(t, err)
+
+		server := &Server{
+			logger:           logger,
+			settings:         settings,
+			blockchainClient: mockBlockchainClient,
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+		}
+
+		// Create a chain of test blocks
+		blocks := createTestBlockChain(t, 200)
+		lastBlock := blocks[len(blocks)-1]
+
+		// Mark first 50 blocks as existing
+		for i := 0; i < 50; i++ {
+			_, _, err := mockBlockchainStore.StoreBlock(ctx, blocks[i], "")
+			require.NoError(t, err)
+		}
+
+		headers := make([]byte, 0)
+		blocksBytes := make([]byte, 0)
+
+		for _, block := range blocks[1:] {
+			headerBytes := block.Header.Bytes()
+			headers = append(headerBytes, headers...)
+
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			blocksBytes = append(blocksBytes, blockBytes...)
+		}
+
+		// Setup HTTP mocks
+		httpmock.Activate()
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Header.HashPrevBlock.String()),
+			httpmock.NewBytesResponder(200, headers))
+
+		httpmock.RegisterResponder("GET",
+			`=~^/blocks/.*\z`,
+			httpmock.NewBytesResponder(200, blocksBytes))
+
+		err = server.catchup(ctx, lastBlock, baseURL)
+		require.NoError(t, err)
+	})
+}
+
 func TestServer_catchupGetBlocks(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -564,9 +627,13 @@ func createTestBlockChain(t *testing.T, numBlocks int) []*model.Block {
 			Nonce:          uint32(2083236893 + i), // nolint:gosec
 		}
 
+		testCoinbaseTx := coinbaseTx.Clone()
+		testCoinbaseTx.Outputs[0].Satoshis = 2500000000
+
 		block := &model.Block{
-			Header: header,
-			Height: uint32(i), // nolint:gosec
+			Header:     header,
+			Height:     uint32(i), // nolint:gosec
+			CoinbaseTx: testCoinbaseTx,
 		}
 
 		blocks[i] = block

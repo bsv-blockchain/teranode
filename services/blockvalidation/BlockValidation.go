@@ -725,6 +725,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
+	if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockInvalidError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
+	}
+
 	// check the coinbase length
 	if len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(block.CoinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(u.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
 		return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
@@ -933,8 +937,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
-	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
+	if u.txStore != nil {
+		if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
+		}
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
@@ -1078,15 +1084,35 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 //   - ctx: Context for the operation
 //   - block: Block to create filter for
 func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "createAppendBloomFilter",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String()),
+	)
+	defer deferFn()
+
 	if u.blockBloomFiltersBeingCreated.Exists(*block.Hash()) {
 		return
 	}
 
 	// check whether the bloom filter for this block already exists
+	u.recentBlocksBloomFiltersMu.Lock()
+
+	var (
+		err               error
+		bloomFilterExists bool
+	)
+
 	for _, bf := range u.recentBlocksBloomFilters {
 		if bf.BlockHash.IsEqual(block.Hash()) {
-			return
+			bloomFilterExists = true
+			break
 		}
+	}
+
+	u.recentBlocksBloomFiltersMu.Unlock()
+
+	if bloomFilterExists {
+		return
 	}
 
 	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
@@ -1095,10 +1121,6 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	}()
 
 	startTime := time.Now()
-
-	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String())
-
-	var err error
 
 	// create a bloom filter for the block
 	bbf := &model.BlockBloomFilter{
@@ -1114,6 +1136,8 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 
 	// prune older bloom filters
 	u.recentBlocksBloomFiltersMu.Lock()
+	defer u.recentBlocksBloomFiltersMu.Unlock()
+
 	newBloomFilters := make([]*model.BlockBloomFilter, 0, len(u.recentBlocksBloomFilters))
 
 	for _, bf := range u.recentBlocksBloomFilters {
@@ -1129,8 +1153,6 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters, bbf)
 
 	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter DONE in %s (%d slices)", block.Hash().String(), time.Since(startTime), len(u.recentBlocksBloomFilters))
-
-	u.recentBlocksBloomFiltersMu.Unlock()
 }
 
 // updateSubtreesTTL manages retention periods for block subtrees.

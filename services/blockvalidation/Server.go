@@ -979,7 +979,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		blockCount := 0
 		i := 0
 
-		var blocks []*model.Block
+		var (
+			blocks []*model.Block
+			err    error
+		)
 
 		for _, batch := range batches {
 			batch := batch

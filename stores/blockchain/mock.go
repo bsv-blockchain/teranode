@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -20,6 +21,7 @@ type MockStore struct {
 	BlockByHeight map[uint32]*model.Block
 	BestBlock     *model.Block
 	state         string
+	mu            sync.RWMutex
 }
 
 func NewMockStore() *MockStore {
@@ -50,6 +52,9 @@ func (m *MockStore) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*
 }
 
 func (m *MockStore) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	block, ok := m.Blocks[*blockHash]
 	if !ok {
 		return nil, 0, errors.ErrBlockNotFound
@@ -63,6 +68,9 @@ func (m *MockStore) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, nu
 }
 
 func (m *MockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	block, ok := m.BlockByHeight[height]
 	if !ok {
 		return nil, errors.ErrBlockNotFound
@@ -109,6 +117,9 @@ func (m *MockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chain
 }
 
 func (m *MockStore) GetBlockExists(_ context.Context, blockHash *chainhash.Hash) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	exists, ok := m.BlockExists[*blockHash]
 
 	if !ok {
@@ -123,6 +134,9 @@ func (m *MockStore) GetBlockHeight(ctx context.Context, blockHash *chainhash.Has
 }
 
 func (m *MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.Blocks[*block.Hash()] = block
 	m.BlockByHeight[block.Height] = block
 	m.BlockExists[*block.Hash()] = true
@@ -135,10 +149,16 @@ func (m *MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID s
 }
 
 func (m *MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	return m.BestBlock.Header, &model.BlockHeaderMeta{Height: m.BestBlock.Height}, nil
 }
 
 func (m *MockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	block, ok := m.Blocks[*blockHash]
 	if !ok {
 		return nil, nil, errors.NewBlockNotFoundError(blockHash.String())
@@ -148,6 +168,9 @@ func (m *MockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Has
 }
 
 func (m *MockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	headers := make([]*model.BlockHeader, 0, numberOfHeaders)
 	metas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
@@ -245,10 +268,16 @@ func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 }
 
 func (m *MockStore) SetFSMState(ctx context.Context, fsmState string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.state = fsmState
 	return nil
 }
 
 func (m *MockStore) GetFSMState(ctx context.Context) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	return m.state, nil
 }
