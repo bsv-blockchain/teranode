@@ -1243,6 +1243,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 					checkCtx, cancel := context.WithTimeout(gCtx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
 					defer cancel()
 
+					// note: the subtree validation client will handle retries
 					err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash())
 					if err != nil {
 						return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)

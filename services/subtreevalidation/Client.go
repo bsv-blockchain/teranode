@@ -18,6 +18,7 @@ import (
 type Client struct {
 	apiClient subtreevalidation_api.SubtreeValidationAPIClient
 	logger    ulogger.Logger
+	settings  *settings.Settings
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (Interface, error) {
@@ -27,7 +28,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
+		MaxRetries:   tSettings.BlockValidation.CheckSubtreeFromBlockRetries,
+		RetryBackoff: tSettings.BlockValidation.CheckSubtreeFromBlockRetryBackoffDuration,
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init subtree validation service connection for '%s'", source, err)
@@ -36,6 +38,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	client := &Client{
 		apiClient: subtreevalidation_api.NewSubtreeValidationAPIClient(baConn),
 		logger:    logger,
+		settings:  tSettings,
 	}
 
 	return client, nil

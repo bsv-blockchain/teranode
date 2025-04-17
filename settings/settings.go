@@ -243,6 +243,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ValidationWarmupCount:                     getInt("blockvalidation_validation_warmup_count", 128, alternativeContext...),
 			BatchMissingTransactions:                  getBool("blockvalidation_batch_missing_transactions", false, alternativeContext...),
 			CheckSubtreeFromBlockTimeout:              getDuration("blockvalidation_check_subtree_from_block_timeout", 5*time.Minute),
+			CheckSubtreeFromBlockRetries:              getInt("blockvalidation_check_subtree_from_block_retries", 5, alternativeContext...),
+			CheckSubtreeFromBlockRetryBackoffDuration: getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:               getString("validator_grpcAddress", "localhost:8081", alternativeContext...),

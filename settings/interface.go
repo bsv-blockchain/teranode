@@ -226,6 +226,8 @@ type BlockValidationSettings struct {
 	ValidationWarmupCount                     int
 	BatchMissingTransactions                  bool
 	CheckSubtreeFromBlockTimeout              time.Duration
+	CheckSubtreeFromBlockRetries              int
+	CheckSubtreeFromBlockRetryBackoffDuration time.Duration
 }
 
 type ValidatorSettings struct {
