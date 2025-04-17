@@ -1,7 +1,7 @@
 name: cleanup-gh-cache
 on:
   schedule:
-    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
 jobs:
   cleanup:
     runs-on: ubuntu-latest
