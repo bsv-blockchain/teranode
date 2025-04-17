@@ -283,7 +283,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
-				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
+				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
 				b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine again
 
 				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
@@ -488,9 +488,9 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		}
 	}
 
-	// on mainnet, wait for 2 blocks before starting to mine, to make sure we are not mining invalid blocks
-	// this should not be needed after #2326 is merged and the block assembly can handle out of order txs
-	if b.settings.ChainCfgParams.Net == wire.MainNet {
+	// on mainnet and testnet, wait for 2 blocks before starting to mine, to make sure we are not mining invalid blocks
+	// this should not be needed after #2326 is merged and the block assembly can handle out-of-order txs
+	if b.settings.ChainCfgParams.Net == wire.MainNet || b.settings.ChainCfgParams.Net == wire.TestNet {
 		b.logger.Warnf("[BlockAssembler] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
 		b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine
 
