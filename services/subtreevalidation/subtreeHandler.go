@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,6 +20,15 @@ import (
 // It handles both recoverable and unrecoverable errors appropriately.
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
+		state, err := u.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			return errors.NewProcessingError("[consumerMessageHandler] failed to get FSM current state", err)
+		}
+
+		if *state == blockchain.FSMStateCATCHINGBLOCKS {
+			return nil
+		}
+
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- u.subtreesHandler(msg)
