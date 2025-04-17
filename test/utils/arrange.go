@@ -7,11 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
+	postgres "github.com/bitcoin-sv/teranode/test/util/postgres"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -176,4 +180,35 @@ func teardownLocalTeranodeTestEnv(testEnv *TeranodeTestEnv) error {
 	}
 
 	return nil
+}
+
+func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName string) *daemon.TestDaemon {
+	pg, errPsql := postgres.RunPostgresTestContainer(ctx, containerName)
+	require.NoError(t, errPsql)
+
+	t.Cleanup(func() {
+		if err := pg.Terminate(ctx); err != nil {
+			t.Fatalf("failed to terminate postgres container: %v", err)
+		}
+	})
+
+	// Create custom settings with the PostgreSQL container's dynamic port
+	customSettings := settings.NewSettings("dev.system.test.postgres")
+	// Update the PostgreSQL connection settings with the dynamic port
+	customSettings.PostgresCheckAddress = fmt.Sprintf("%s:%s", pg.Host, pg.Port)
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:        true,
+		KillTeranode:     true,
+		SettingsOverride: customSettings,
+	})
+
+	t.Cleanup(func() {
+		td.Stop()
+	})
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test-tna2")
+	require.NoError(t, err)
+
+	return td
 }
