@@ -27,16 +27,37 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 3. Persisting the data into the utxo store,
 4. Propagating the transactions to the `Subtree Validation` and `Block Assembly` service (if the Tx is passed), or notify the `P2P` service (if the tx is rejected).
 
+### 1.1 Deployment Models
+
+The Validator can be deployed in two distinct ways:
+
+1. **Local Validator (Recommended)**:
+   - The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)
+   - This is the recommended approach for production deployments due to better performance
+   - No additional network calls are needed between services and validator
+   - Configuration: Set `validator.useLocalValidator=true` in your settings
+
+2. **Remote Validator Service**:
+   - The Validator runs as an independent service with a gRPC interface
+   - Other services connect to it remotely via gRPC
+   - This approach has higher latency due to additional network calls
+   - Useful for development, testing, or specialized deployment scenarios
+   - Configuration: Set `validator.useLocalValidator=false` and configure validator gRPC endpoint
+
+The performance difference between these approaches can be significant, as the local validator approach eliminates network overhead between services.
+
+> **Note**: For detailed information about how the daemon initializes services and manages dependencies, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
+
+![Tx_Validator_Container_Diagram.png](img/Tx_Validator_Container_Diagram.png)
+
 The Validator, as a component, is instantiated as part of any service requiring to validate transactions.
 However, the Validator can also be started as a service, allowing to interact with it via gRPC or Kafka. This setup is not recommended, given its performance overhead.
 
-![Tx_Validator_Container_Diagram.png](img%2FTx_Validator_Container_Diagram.png)
-
-The `Validator` receives notifications about new Txs.
+The Validator receives notifications about new Txs.
 
 Also, the `Validator` will accept subscriptions from the P2P Service, where rejected tx notifications are pushed to.
 
-![Tx_Validator_Component_Diagram.png](img%2FTx_Validator_Component_Diagram.png)
+![Tx_Validator_Component_Diagram.png](img/Tx_Validator_Component_Diagram.png)
 
 The Validator notifies the Block Assembly service of new transactions through two channels: gRPC and Kafka. The gRPC channel is used for direct communication, while the Kafka channel is used for broadcasting the transaction to the `blockassembly_kafkaBrokers` topic. Either channel can be enabled or disabled through the configuration settings.
 
@@ -271,7 +292,33 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
     - Other services in the system, such as the P2P Service or any component interested in invalid transactions, can subscribe to this Kafka topic.
     - By consuming messages from this topic, these services receive notifications about rejected transactions.
 
+#### 2.4.1. Two-Phase Transaction Commit Process
 
+The Validator implements a two-phase commit process for transaction creation and addition to block assembly:
+
+1. **Phase 1 - Transaction Creation with Unspendable Flag**:
+   - When a transaction is created, it is initially stored in the UTXO store with an "unspendable" flag set to `true`.
+   - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
+
+2. **Phase 2 - Unsetting the Unspendable Flag**:
+   - The unspendable flag is unset in two key scenarios:
+
+   a. **After Successful Addition to Block Assembly**:
+      - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "unspendable" flag (sets it to `false`).
+      - This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block.
+
+   b. **When Mined in a Block (Fallback Mechanism)**:
+      - As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block.
+      - When the transaction is mined in a block and that block is processed by the Block Validation service, the "unspendable" flag is unset (set to `false`) during the `SetMinedMulti` operation.
+
+3. **Ignoring Unspendable Flag for Block Transactions**:
+   - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the unspendable flag.
+   - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their unspendable status.
+   - The validator uses the `WithIgnoreUnspendable` option to control this behavior during transaction validation.
+
+This two-phase commit approach ensures that transactions are only made spendable after they've been successfully added to block assembly, reducing the risk of race conditions and double-spend attempts during the transaction processing lifecycle.
+
+> **For a comprehensive explanation of the two-phase commit process across the entire system, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 
 
 ## 3. gRPC Protobuf Definitions
@@ -343,18 +390,45 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration options (settings flags)
 
-1. **`validator_grpcAddress`**: Specifies the address for the validator's gRPC server to connect to.
-2. **`blockassembly_disabled`**: Indicates whether the block assembly feature is disabled.
-3. **`kafka_validatortxsConfig`**: URL for the Kafka configuration for validator transactions.
-4. **`kafka_txmetaConfig`**: URL for the Kafka configuration for transaction metadata.
-5. **`kafka_rejectedTxConfig`**: URL for the Kafka configuration for rejected transactions.
-6. **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
-7. **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests to the validator gRPC server.
-8. **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests before sending them to the validator.
-9. **`validator_kafkaWorkers`**: Configures the number of workers for Kafka operations related to the validator.
-10. **`validator_scriptVerificationLibrary`**: Specifies the library to use for script verification, with a default value of `VerificatorGoBT`.
-11. **`fsm_state_restore`**: A boolean flag related to FSM (Finite State Machine) state restoration.
-12. **`blockvalidation_kafkaWorkers`**: Number of workers for Kafka related to block validation.
+### Network and Communication
+
+1. **`validator_grpcAddress`**: Specifies the address for connecting to the validator's gRPC server. Default: "localhost:8081".
+2. **`validator_grpcListenAddress`**: Specifies the address on which the validator's gRPC server listens. Default: ":8081".
+3. **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
+4. **`validator_httpListenAddress`**: Address on which the validator's HTTP server listens, if enabled.
+5. **`validator_httpAddress`**: URL for the validator's HTTP API endpoint.
+6. **`validator_httpRateLimit`**: Rate limit for HTTP requests to the validator. Default: 1024.
+
+### Transaction Processing and Block Assembly
+
+7. **`blockassembly_disabled`**: When true, disables the integration with block assembly, meaning validated transactions won't be forwarded to block assembly. Default: false.
+8. **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests. Default: 100.
+9. **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests. Default: 2 ms.
+10. **`validator_sendBatchWorkers`**: Number of worker goroutines for processing batched validation requests. Default: 10.
+11. **`useLocalValidator`**: When true, uses a local validator instance instead of a remote one. Default: false.
+
+### Kafka Integration
+
+12. **`validator_kafkaWorkers`**: Number of worker goroutines for Kafka operations. Default: 0 (auto-calculated).
+13. **`kafka_validatortxsConfig`**: URL for the Kafka configuration for validator transactions.
+14. **`kafka_txmetaConfig`**: URL for the Kafka configuration for transaction metadata.
+15. **`kafka_rejectedTxConfig`**: URL for the Kafka configuration for rejected transactions.
+16. **`validator_kafka_maxMessageBytes`**: Maximum size of Kafka messages in bytes. Default: 1MB.
+
+### Validation Configuration
+
+17. **`validator_blockvalidation_delay`**: Delay before initiating block validation. Default: 0.
+18. **`validator_blockvalidation_maxRetries`**: Maximum number of retries for block validation. Default: 5.
+19. **`validator_blockvalidation_retrySleep`**: Sleep duration between block validation retries. Default: "2s".
+
+### Debugging and State Management
+
+20. **`validator_verbose_debug`**: Enables verbose debug logging for the validator. Default: false.
+21. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
+
+### Script Verification
+
+22. **`validator_scriptVerificationLibrary`**: Library to use for Bitcoin script verification. Default: "VerificatorGoBT".
 
 
 ## 9. Other Resources

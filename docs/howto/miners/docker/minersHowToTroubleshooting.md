@@ -132,7 +132,7 @@ For Docker Compose, replace `[service_name]` with the appropriate service or pod
 * P2P Service (service name: `p2p`)
 * Block Assembly Service (service name: `blockassembly`)
 * Subtree Validation Service (service name: `subtreevalidation`)
-* RPC Service (service name: `rpc`)
+* RPC Server (service name: `rpc`)
 * Postgres Database (service name: `postgres`)          [*Only in Docker*]
 * Aerospike Database (service name: `aerospike`)        [*Only in Docker*]
 * Kafka   (service name: `kafka-shared`)                [*Only in Docker*]

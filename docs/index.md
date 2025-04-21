@@ -77,7 +77,7 @@
 #### Common Tasks
 
 1. [Interacting with Asset Server](./howto/miners/minersHowToInteractWithAssetServer.md)
-2. [Interacting with RPC Server](./howto/miners/minersHowToInteractWithRPCServer.md)
+2. [Interacting with RPC Service](./howto/miners/minersHowToInteractWithRPCServer.md)
 3. [Interacting with the FSM via RPC](./howto/miners/minersHowToInteractWithFSM.md)
 4. [Interacting with the Teranode CLI](./howto/miners/minersHowToTeranodeCLI.md)
 5. [Managing Disk Space](./howto/miners/minersManagingDiskSpace.md)
@@ -110,9 +110,9 @@
 - [Block Persister Service](./topics/services/blockPersister.md)
 - [UTXO Persister Service](./topics/services/utxoPersister.md)
 - [P2P Service](./topics/services/p2p.md)
-- [P2P Bootstrap Service](./topics/services/p2pBootstrap.md)
-- [P2P Legacy Service](./topics/services/p2pLegacy.md)
-- [RPC Server](./topics/services/rpc.md)
+
+- [Legacy Service](./topics/services/legacy)
+- [RPC Service](./topics/services/rpc.md)
 
 #### Infrastructure Components
 - **Stores**
@@ -143,11 +143,11 @@
 - [Blockchain Server](./references/services/blockchain_reference.md)
 - [Block Persister](./references/services/blockpersister_reference.md)
 - [Block Validation](./references/services/blockvalidation_reference.md)
-- [Coinbase Service](./references/services/coinbase_reference.md)
+- [Coinbase Service](../../teranode-coinbase/docs/references/services/coinbase_reference.md)
 - [Legacy Server](./references/services/legacy_reference.md)
 - [P2P Server](./references/services/p2p_reference.md)
 - [Propagation Server](./references/services/propagation_reference.md)
-- [RPC Server](./references/services/rpc_reference.md)
+- [RPC Service](./references/services/rpc_reference.md)
 - [RPC API Docs](https://bitcoin-sv.github.io/teranode/references/wallet-toolbox/open-rpc/)
 - [Subtree Validation](./references/services/subtreevalidation_reference.md)
 - [UTXO Persister](./references/services/utxopersister_reference.md)
@@ -169,7 +169,7 @@
 - [Block Assembly gRPC API](./references/protobuf_docs/blockassemblyProto.md)
 - [Blockchain gRPC API](./references/protobuf_docs/blockchainProto.md)
 - [Block Validation gRPC API](./references/protobuf_docs/blockvalidationProto.md)
-- [Coinbase gRPC API](./references/protobuf_docs/coinbaseProto.md)
+- [Coinbase gRPC API](../../teranode-coinbase/docs/references/protobuf_docs/coinbaseProto.md)
 - [Propagation gRPC API](./references/protobuf_docs/propagationProto.md)
 - [Subtree Validation gRPC API](./references/protobuf_docs/subtreevalidationProto.md)
 - [Validator gRPC API](./references/protobuf_docs/validatorProto.md)
@@ -202,7 +202,7 @@ We encourage you to explore the various sections of this documentation based on 
 
 ---
 
-**Copyright © 2025 BSV Blockchain org.**
+**Copyright 2025 BSV Blockchain org.**
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this software except in compliance with the License.

@@ -11,6 +11,7 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **recordUtxos**          | `Integer`                            | Total number of UTXOs in this record.                                                                              |
 | **spentUtxos**           | `Integer`                            | Number of UTXOs that have been spent in this record.                                                               |
 | **frozen**               | `Boolean`                            | Indicates whether the UTXO or transaction is frozen.                                                               |
+| **unspendable**          | `Boolean`                            | Indicates whether the transaction outputs can be spent. Set to true during initial creation when the transaction is validated. Set to false in two scenarios: (1) immediately after successful addition to block assembly, or (2) when the transaction is mined in a block through the `SetMinedMulti` operation.  |
 | **conflicting**          | `Boolean`                            | Indicates whether this transaction is a double spend.                                                              |
 | **conflictingChildren**  | `Array<chainhash.Hash>`              | List of transaction hashes that spend from this transaction and are also marked as conflicting.                    |
 | **spendingHeight**       | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
@@ -77,6 +78,7 @@ For convenience, the UTXO can be decorated using the `UTXO MetaData` format, wid
 | SubtreeIdxs         | List of subtree indexes where this transaction appears within blocks.                              | Array of Integers                        |
 | LockTime            | The earliest time or block number that this transaction can be included in the blockchain.       | Integer/Timestamp or Block Number        |
 | IsCoinbase          | Indicates whether the transaction is a coinbase transaction.                                     | Boolean                                  |
+| Unspendable         | Flag indicating whether the transaction outputs can be spent. Part of the two-phase commit process for block assembly.   | Boolean                                 |
 | Conflicting         | Indicates whether this transaction is a double spend.                                            | Boolean                                  |
 | ConflictingChildren | List of transaction hashes that spend from this transaction and are also marked as conflicting.  | Array of Strings/Hexadecimals            |
 

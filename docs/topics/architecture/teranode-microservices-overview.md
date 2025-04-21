@@ -18,9 +18,8 @@
     - [3.1 Block Persister Service](#31-block-persister-service)
     - [3.2 UTXO Persister Service](#32-utxo-persister-service)
     - [3.3 P2P Service](#33-p2p-service)
-    - [3.4 P2P Bootstrap Service](#34-p2p-bootstrap-service)
-    - [3.5 P2P Legacy Service](#35-p2p-legacy-service)
-    - [3.6 RPC Server](#36-rpc-server)
+    - [3.4 Legacy Service](#34-legacy-service)
+    - [3.5 RPC Service](#35-rpc-service)
   - [4. Stores](#4-stores)
     - [4.1 TX and Subtree Store (Blob Server)](#41-tx-and-subtree-store-blob-server)
     - [4.2 UTXO Store](#42-utxo-store)
@@ -387,32 +386,12 @@ The P2P Service manages peer-to-peer communications within the network.
 You can read more about this service [here](../services/p2p.md).
 
 
-### 3.4 P2P Bootstrap Service
 
-This service helps new nodes discover peers in the Teranode network.
+### 3.4 Legacy Service
 
-![P2P_Bootstrap_Component_Service.png](../services/img/P2P_Bootstrap_Component_Service.png)
+The Legacy Service facilitates communication between Teranode and traditional Bitcoin SV nodes.
 
-**Key Responsibilities:**
-
-- Allow nodes to register themselves
-- Provide information about existing nodes to new nodes
-- Manage a private P2P network using Kademlia and pre-shared keys
-
-**Key Technologies:**
-
-- libp2p
-- Kademlia Distributed Hash Table (DHT)
-- Private network with Pre-shared Keys (PSK)
-
-You can read more about this service [here](../services/p2pBootstrap.md).
-
-
-### 3.5 P2P Legacy Service
-
-The P2P Legacy Service facilitates communication between Teranode and traditional Bitcoin SV nodes.
-
-![P2P_Legacy_Container_Diagram.png](../services/img/P2P_Legacy_Container_Diagram.png)
+![P2P_Legacy_Container_Diagram.png](../services/img/Legacy_Container_Diagram.png)
 
 **Key Responsibilities:**
 
@@ -426,12 +405,12 @@ The P2P Legacy Service facilitates communication between Teranode and traditiona
 - Processing new blocks and converting them to Teranode format
 - Handling requests from Teranode components for legacy data
 
-You can read more about this service [here](../services/p2pLegacy.md).
+You can read more about this service [here](../services/legacy).
 
 
-### 3.6 RPC Server
+### 3.5 RPC Service
 
-The RPC Server provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.
+The RPC Service provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.
 
 ![RPC_Component_Context_Diagram.png](../services/img/RPC_Component_Context_Diagram.png)
 
@@ -607,8 +586,8 @@ Miners are responsible for the computational work of finding valid blocks.
     - [Block Persister Service](../services/blockPersister.md)
     - [UTXO Persister Service](../services/utxoPersister.md)
     - [P2P Service](../services/p2p.md)
-    - [P2P Bootstrap Service](../services/p2pBootstrap.md)
-    - [P2P Legacy Service](../services/p2pLegacy.md)
+
+    - [Legacy Service](../services/legacy)
     - [RPC Server](../services/rpc.md)
 
 - Stores:

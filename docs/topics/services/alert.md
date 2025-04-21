@@ -56,6 +56,8 @@ The Service features are:
 * Include valid transactions in the next block(s) to be built.
 * Start building the new longest honest chain from the block height -1 of the invalidated block.
 
+> **Note**: For information about how the Alert service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
+
 The Alert Service uses the third party `github.com/bitcoin-sv/alert-system` library. This library provides the ability to subscribe to a private P2P network where other BSV nodes participate, and subscribes to topics where Alert related messages are received.
 Based on the received messages, the Alert Service handles the UTXO freezing, unfreezing, reassignment, block invalidation and peer management operations.
 

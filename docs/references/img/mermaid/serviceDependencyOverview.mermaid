@@ -1,0 +1,25 @@
+graph TD
+    bc[Blockchain] --> ba[Block Assembly]
+    bc --> p2p[P2P]
+    bc --> bv[Block Validation]
+
+    p2p --> sv[Subtree Validation]
+
+    ba --> val[Validator]
+    sv --> val
+    bv --> val
+
+    bv --> bp[Block Persister]
+    bp --> up[UTXO Persister]
+
+    val --> us[UTXO Store]
+
+    style bc fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style ba fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style p2p fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style bv fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style sv fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style val fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style bp fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style up fill:#f9f9f9,stroke:#333,stroke-width:1px
+    style us fill:#f9f9f9,stroke:#333,stroke-width:1px

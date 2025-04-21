@@ -46,7 +46,11 @@ alt if TX is valid
     Validator -> UTXOStore: Spend() # Mark TX input UTXOs as spent
 
     Validator -> Validator: storeTxInUtxoMap()
-    Validator -> UTXOStore: Create() # Persist new UTXOs from TX
+    Validator -> UTXOStore: Create(unspendable=true) \n# Persist new UTXOs from TX as unspendable
+    note right of UTXOStore
+      UTXOs are initially created as unspendable
+      (first phase of two-phase commit)
+    end note
 
     alt if Tx Meta Kafka Producer exists
         Validator -> TxMetaKafka: Publish tx meta
@@ -58,6 +62,12 @@ alt if TX is valid
             Validator -> UTXOStore: Delete() # reverseTxMetaStore
             Validator -> UTXOStore: Unspend() # reverseSpends
             Validator --> Server: Return error
+        else if successful
+            Validator -> UTXOStore: SetUnspendable(txHash, false)  \n # Set the UTXOs as spendable \n # after successful addition to block assembly
+            note right of UTXOStore
+              Second phase of two-phase commit:
+              UTXOs are now marked as spendable
+            end note
         end
     end
 

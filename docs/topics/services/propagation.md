@@ -6,6 +6,7 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
+    - [2.1.1 Validator Integration](#211-validator-integration)
     - [2.2. Propagating Transactions](#22-propagating-transactions)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
@@ -38,7 +39,7 @@ A node can start multiple parallel instances of the Propagation service. This tr
 
 ![Propagation_Service_Component_Diagram.png](img/Propagation_Service_Component_Diagram.png)
 
-Notice that the Validator, as shown in the diagram above, can be either an instantiated library or a separate service, depending on the Node configuration. To know more, please refer to the Transaction Validator documentation.
+Notice that the Validator, as shown in the diagram above, can be either a local validator or a remote validator service, depending on the Node configuration. To know more, please refer to the Transaction Validator documentation.
 
 Also, note how the Blockchain client is used in order to wait for the node State to change to `RUNNING` state. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
 
@@ -49,6 +50,26 @@ Also, note how the Blockchain client is used in order to wait for the node State
 ![propagation_startup.svg](img/plantuml/propagation/propagation_startup.svg)
 
 Upon startup, the Propagation service starts the relevant communication channels, as configured via settings.
+
+### 2.1.1 Validator Integration
+
+The Propagation service can work with the Validator in two different configurations:
+
+1. **Local Validator**:
+   - When `validator.useLocalValidator=true` (recommended for production)
+   - The Validator is instantiated directly within the Propagation service
+   - Direct method calls are used without network overhead
+   - This provides the best performance and lowest latency
+
+2. **Remote Validator Service**:
+   - When `validator.useLocalValidator=false`
+   - The Propagation service connects to a separate Validator service via gRPC
+   - Useful for development, testing, or specialized deployment scenarios
+   - Has higher latency due to additional network calls
+
+This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
+
+> **Note**: For detailed information about how services are initialized and connected during daemon startup, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 ### 2.2. Propagating Transactions
 
@@ -126,6 +147,16 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 ## 8. Configuration options (settings flags)
 
 The Propagation service uses the following configuration options:
+
+### Daemon Level Settings
+
+1. **`validator.useLocalValidator`**: Controls the validator deployment model used by the Propagation service.
+   - When `true`: Uses a local validator instance embedded within the service (recommended for production).
+   - When `false`: Connects to a remote validator service via gRPC.
+   - This setting affects performance and deployment architecture across multiple services.
+   - Default: `false`
+
+### Propagation Service Settings
 
 - **`propagation_sendBatchSize`**: Defines the batch size for sending transactions (default: 100).
 - **`propagation_sendBatchTimeout`**: Sets the timeout for sending batches of transactions, likely in seconds (default: 5).

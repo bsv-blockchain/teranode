@@ -25,7 +25,6 @@
 
 ## 1. Description
 
-
 The Block Validator is responsible for ensuring the integrity and consistency of each block before it is added to the blockchain. It performs several key functions:
 
 1. **Validation of Block Structure**: Verifies that each block adheres to the defined structure and format, and that their subtrees are known and valid.
@@ -38,13 +37,15 @@ The Block Validator is responsible for ensuring the integrity and consistency of
 
 The Block Validation Service:
 
-* Receives new blocks from the P2P Service. The P2P Service has received them from other nodes on the network.
+* Receives new blocks from the Legacy Service. The Legacy Service has received them from other nodes on the network.
 * Validates the blocks, after fetching them from the remote asset server.
 * Updates stores, and notifies the blockchain service of the new block.
 
-The P2P Service communicates with the Block Validation over either gRPC protocols.
+The Legacy Service communicates with the Block Validation over the gRPC protocol.
 
 ![Block_Validation_Service_Component_Diagram.png](img/Block_Validation_Service_Component_Diagram.png)
+
+> **Note**: For information about how the Block Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 To improve performance, the Block Validation Service uses a caching mechanism for UTXO Meta data, called `Tx Meta Cache`. This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `blockvalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Block Validation Service:
 
@@ -75,7 +76,7 @@ The block validator is a service that validates blocks. After validating them, i
 
 ![block_validation_p2p_block_found.svg](img/plantuml/blockvalidation/block_validation_p2p_block_found.svg)
 
-* The P2P service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
+* The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
 * The block validation service will then check if the block is already known. If not, it will start the validation process.
 * The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
 
@@ -152,9 +153,15 @@ Effectively, the following validations are performed:
 
 ### 2.3. Marking Txs as mined
 
-When a block is validated, the transactions in the block are marked as mined in the UTXO store. This is done to ensure that the UTXO store knows which block(s) the transaction is in.
+When a block is validated, the transactions in the block are marked as mined in the UTXO store. This process includes:
 
-The Block Validation service is exclusively responsible for marking block Txs as mined, independently of whether the transaction as mined by the local Block Assembly, or mined by another node.
+1. **Updating Transaction Status**: The Block Validation service marks each transaction as mined by setting its block information.
+
+2. **Unsetting the Unspendable Flag**: For any transaction that still has the "unspendable" flag set, the flag is unset during the mined transaction update process.
+
+3. **Storing Subtree Information**: The service also stores the subtree index in the block where the transaction was located, enabling more efficient transaction lookups.
+
+The Block Validation service is exclusively responsible for marking block transactions as mined and ensuring their flags are properly updated, regardless of whether the transaction was mined by the local Block Assembly service or by another node in the network.
 
 As a first step, either the `Block Validation` (after a remotely mined block is validated) or the `Block Assembly` (if a block is locally mined) marks the block subtrees as "set", by invoking the `Blockchain` `SetBlockSubtreesSet` gRPC call, as shown in the diagram below.
 
@@ -164,6 +171,8 @@ The `Blockchain` client then notifies subscribers (in this case, the `BlockValid
 The `BlockValidation` proceeds to mark all transactions within the block as "mined" in the `UTXOStore`. This allows to identify in which block a given tx was mined. See diagram below:
 
 ![block_validation_set_tx_mined.svg](img/plantuml/blockvalidation/block_validation_set_tx_mined.svg)
+
+> **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 
 
 ## 3. gRPC Protobuf Definitions
@@ -240,39 +249,69 @@ The Block Validation service uses the following configuration options:
 
 ### Network and Communication Settings
 
-1. **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. It is crucial for initializing the block validation client and establishing communication with the block validation service.
+1. **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. Default: "localhost:8088".
 
-### Kafka and Concurrency Settings
+2. **`blockvalidation_grpcListenAddress`**: Specifies the address on which the block validation service's gRPC server listens. Default: ":8088".
 
-4. **`kafka_blocksConfig`**: Specifies the Kafka configuration for block messages, enabling the service to consume block data from Kafka.
+### Kafka and Transaction Processing
 
-5. **`blockvalidation_subtreeGroupConcurrency`**: Determines the concurrency level for processing subtree groups. Default: 1.
+3. **`kafka_blocksConfig`**: Specifies the Kafka configuration for block messages, enabling the service to consume block data from Kafka.
 
-6. **`blockvalidation_blockFoundCh_buffer_size`**: Configures the buffer size for the channel used in handling block found events. Default: 1000.
+4. **`blockvalidation_kafkaWorkers`**: Sets the number of workers for processing Kafka messages. Default: 0 (auto-calculated).
 
-7. **`blockvalidation_catchupCh_buffer_size`**: Sets the buffer size for the channel used in handling catchup events. Default: 10.
+5. **`blockvalidation_txMetaCacheEnabled`**: Enables or disables the transaction metadata cache, which improves performance by caching recently accessed transaction metadata. Default: true.
 
-8. **`blockvalidation_kafkaBlockConcurrency`**: Sets the concurrency level for processing Kafka block messages. Default: Max(4, Number of CPUs - 16).
+### Transaction Processing Settings
 
-9. **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls the concurrency level for validating block subtrees. Default: Max(4, Number of CPUs / 2).
+6. **`blockvalidation_localSetTxMinedConcurrency`**: Controls concurrency level for marking transactions as mined locally. Default: 8.
 
-10. **`blockvalidation_subtreeTTLConcurrency`**: Sets the concurrency level for subtree TTL operations. Default: 32.
+7. **`blockvalidation_missingTransactionsBatchSize`**: Sets the batch size for retrieving missing transactions. Default: 5000.
 
-11. **`blockvalidation_catchupConcurrency`**: Determines the concurrency level for catch-up operations. Default: Max(4, Number of CPUs / 2).
+8. **`blockvalidation_processTxMetaUsingStoreBatchSize`**: Sets the batch size for processing transaction metadata using the store. Default: Max(4, Number of CPUs / 2).
+
+9. **`blockvalidation_processTxMetaUsingStoreConcurrency`**: Sets the concurrency level for processing transaction metadata using the store. Default: 32.
+
+10. **`blockvalidation_batch_missing_transactions`**: Enables or disables batching when retrieving missing transactions. Default: false.
+
+### Concurrency and Channel Settings
+
+11. **`blockvalidation_subtreeGroupConcurrency`**: Controls concurrency level for processing subtree groups. Default: 1.
+
+12. **`blockvalidation_blockFoundCh_buffer_size`**: Sets the buffer size for the channel used to queue newly found blocks. Default: 1000.
+
+13. **`blockvalidation_catchupCh_buffer_size`**: Sets the buffer size for the channel used in handling catchup events. Default: 10.
+
+14. **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls concurrency level for validating block subtrees. Default: Max(4, Number of CPUs / 2).
+
+15. **`blockvalidation_subtreeTTLConcurrency`**: Sets concurrency level for subtree TTL operations. Default: 32.
+
+16. **`blockvalidation_catchupConcurrency`**: Sets concurrency level for catch-up operations. Default: Max(4, Number of CPUs / 2).
 
 ### Performance and Optimization
 
-12. **`optimisticMining`**: Enables or disables optimistic mining. Default: true.
+17. **`blockvalidation_optimistic_mining`**: When enabled, blocks are added to the blockchain before full validation, improving performance at the cost of potential temporary inconsistencies if a block is later found invalid. Default: true.
 
-13. **`excessiveblocksize`**: Sets the excessive block size limit. Default: 0 (no limit).
+18. **`blockvalidation_subtreeTTL`**: Sets the Time-To-Live for subtrees (in minutes). Default: 120 minutes.
 
-14. **`blockvalidation_subtreeTTL`**: Sets the Time-To-Live (in minutes) for subtrees. Default: 120 minutes.
+19. **`blockvalidation_maxPreviousBlockHeadersToCheck`**: Specifies the maximum number of previous block headers to check during validation. Default: 100.
 
-15. **`blockvalidation_maxPreviousBlockHeadersToCheck`**: Specifies the maximum number of previous block headers to check during validation. Default: 100.
+20. **`blockvalidation_validation_warmup_count`**: Sets the number of operations to perform during validation warmup. Default: 128.
 
-16. **`blockvalidation_isParentMined_retry_backoff_multiplier`**: Sets the backoff multiplier for retrying parent block mining checks. Default: 30.
+### Error Handling and Retries
 
-17. **`blockvalidation_isParentMined_retry_max_retry`**: Specifies the maximum number of retries for parent block mining checks. Default: 60.
+21. **`blockvalidation_validation_max_retries`**: Maximum number of retries for validation operations. Default: 3.
+
+22. **`blockvalidation_validation_retry_sleep`**: Duration to sleep between validation retries. Default: 5 seconds.
+
+23. **`blockvalidation_isParentMined_retry_max_retry`**: Maximum number of retries when checking if a parent block is mined. Default: 20.
+
+24. **`blockvalidation_isParentMined_retry_backoff_multiplier`**: Backoff multiplier for parent block mining check retries. Default: 30.
+
+25. **`blockvalidation_useCatchupWhenBehind`**: When enabled, the service will use a catchup process when it falls behind the blockchain. Default: false.
+
+26. **`blockvalidation_skipCheckParentMined`**: When enabled, skips checking if the parent block is mined. Generally used for testing. Default: false.
+
+27. **`excessiveblocksize`**: Sets the excessive block size limit for block validation. Default: 4GB.
 
 ### Storage and State Management
 

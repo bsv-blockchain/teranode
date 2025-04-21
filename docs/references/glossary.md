@@ -46,7 +46,7 @@
 
 **P2P Bootstrap Service**: Helps new nodes discover peers and join the network, using libp2p and Kademlia.
 
-**P2P Legacy Service**: Bridges the gap between traditional BSV nodes and advanced Teranode-BSV nodes, ensuring seamless communication and data translation.
+**Legacy Service**: Bridges the gap between traditional BSV nodes and advanced Teranode-BSV nodes, ensuring seamless communication and data translation.
 
 **P2P Service**: Allows peers to subscribe and receive blockchain notifications about new blocks and subtrees in the network.
 
@@ -54,7 +54,7 @@
 
 **Propagation Service**: Handles the propagation of transactions across the peer-to-peer Teranode network.
 
-**RPC Server**: Provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.
+**RPC Service**: Provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.
 
 **Subtree**: An intermediate data structure that holds batches of transaction IDs and their corresponding Merkle root.
 

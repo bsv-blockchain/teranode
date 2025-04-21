@@ -43,6 +43,8 @@ The main features of the service are:
 
 4. **Block Invalidation**: It allows to invalidate blocks (`InvalidateBlock` function), as part of a rollback process.
 
+> **Note**: For information about how the Blockchain service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
+
 ![Blockchain_Service_Container_Diagram.png](img/Blockchain_Service_Container_Diagram.png)
 
 To fulfill its purpose, the service interfaces with a blockchain store for data persistence and retrieval.

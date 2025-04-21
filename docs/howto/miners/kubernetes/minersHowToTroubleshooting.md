@@ -146,7 +146,7 @@ Replace `[service_name]` or `<pod-name>` with the appropriate service or pod nam
 * Block Assembly Service (service name: `block-assembly`)
 * Subtree Validation Service (service name: `subtree-validator`)
 * Miner Service (service name: `miner`)
-* RPC Service (service name: `rpc`)
+* RPC Server (service name: `rpc`)
 * Block Persister Service (service name: `block-persister`)
 * UTXO Persister Service (service name: `utxo-persister`)
 

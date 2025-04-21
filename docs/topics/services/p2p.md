@@ -33,7 +33,7 @@ The `p2p` package implements a peer-to-peer (P2P) server using `libp2p` (`github
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
-The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology. To read more about the p2p bootstrap service, please refer to the [p2p-bootstrap](p2pBootstrap.md) documentation.
+The p2p peers are part of a private network. This private network is managed by the p2p bootstrap service, which is responsible for bootstrapping the network and managing the network topology.
 
 1. **Initialization and Configuration**:
     - The `Server` struct holds essential information for the P2P server, such as hosts, topics, subscriptions, clients for blockchain and validation, and logger for logging activities.
@@ -67,6 +67,7 @@ The p2p peers are part of a private network. This private network is managed by 
     - The server generates or reads a private key for secure communication (peerId and encryption) in the P2P network.
     - The generated private key is persisted.
 
+> **Note**: For information about how the P2P service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 ![P2P_System_Container_Diagram.png](img/P2P_System_Container_Diagram.png)
 

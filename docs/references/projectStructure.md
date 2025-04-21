@@ -50,7 +50,7 @@ teranode/
 │
 ├── model/                        # Key model definitions for the project
 │
-├── modules/                      # Various modules, including p2pBootstrap
+├── modules/                      # Various modules
 │
 ├── scripts/                      # Various scripts
 │

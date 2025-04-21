@@ -174,7 +174,7 @@ Allowed Operations in Catching Blocks State:
 
 The gRPC `LegacySync` method triggers the FSM to transition to the `LegacySyncing` state. This event is used to indicate that the node is syncing from legacy BSV nodes.
 
-The P2P Legacy service triggers this event when the node is starting up and needs to perform a legacy sync.
+The Legacy service triggers this event when the node is starting up and needs to perform a legacy sync.
 
 ![fsm_legacy_symc.svg](img/plantuml/fsm_legacy_sync.svg)
 

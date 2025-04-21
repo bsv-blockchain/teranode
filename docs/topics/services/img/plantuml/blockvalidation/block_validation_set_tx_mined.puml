@@ -66,6 +66,10 @@ alt Block does not exist
     loop for each batch of tx hashes in the block subtrees
         BlockValidation -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
         activate UTXOStore
+        note right of UTXOStore
+          SetMinedMulti also unsets the unspendable flag
+          (second phase of two-phase commit)
+        end note
         UTXOStore --> BlockValidation
         deactivate UTXOStore
     end

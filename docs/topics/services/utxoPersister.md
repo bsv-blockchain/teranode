@@ -48,6 +48,7 @@ The UTXO set file can be exported and used as an input for initializing the UTXO
 6. File Management:
     - The service interacts with the storage system to read and write necessary files.
 
+> **Note**: For information about how the UTXO Persister service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 ![UTXO_Persister_Service_Container_Diagram.png](img/UTXO_Persister_Service_Container_Diagram.png)
 

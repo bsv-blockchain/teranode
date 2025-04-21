@@ -78,10 +78,9 @@ nav:
           - Validator: topics/services/validator.md
       - Overlay Services:
           - Block Persister: topics/services/blockPersister.md
-          - Coinbase: topics/services/coinbase.md
           - P2P: topics/services/p2p.md
-          - P2P Bootstrap: topics/services/p2pBootstrap.md
-          - P2P Legacy: topics/services/p2pLegacy.md
+
+          - Legacy: topics/services/legacy.md
           - RPC: topics/services/rpc.md
           - UTXO Persister: topics/services/utxoPersister.md
       - Stores:

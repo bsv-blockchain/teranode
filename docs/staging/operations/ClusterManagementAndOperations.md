@@ -201,11 +201,11 @@ Example:
 #### Resetting a Service
 
 - **To reset a Service**:
-    - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example (for the p2pbootstrap namespace) can be seen here:
+    - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example can be seen here:
     ```sh
-    kubectl delete pod -n p2pbootstrap --all
+    kubectl delete pod -n [namespace] --all
     ```
-    - This command deletes all pods in the namespace `p2pbootstrap`, which should cause them to be recreated based on their deployment or stateful set configurations.
+    - This command deletes all pods in the specified namespace, which should cause them to be recreated based on their deployment or stateful set configurations.
 
 - **To reset a specific service in all namespaces**:
     - Example to reset the p2p service can be seen here:

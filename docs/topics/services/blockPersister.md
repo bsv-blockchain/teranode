@@ -28,6 +28,8 @@ This service plays a key role within the Teranode network, guaranteeing that txs
 
 The Block Persister files are optionally post-processed by the UTXO Persister, which maintains a UTXO Set in a similar disk format.
 
+> **Note**: For information about how the Block Persister service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
+
 ![Block_Persister_Service_Container_Diagram.png](img/Block_Persister_Service_Container_Diagram.png)
 
 * The Block Persister consumes notifications from the Blockchain service, and stores the decorated block in a data store (such as S3).

@@ -66,6 +66,8 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
     - The node also handles the resolution of forks in the blockchain and conflicting subtrees or blocks mined by other nodes.
     - This involves choosing between different versions of the blockchain (in case of forks) and resolving conflicts in transactions and subtrees included in other nodes' blocks.
 
+> **Note**: For information about how the Block Assembly service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
+
 A high level diagram:
 
 ![Block_Assembly_Service_Container_Diagram.png](img%2FBlock_Assembly_Service_Container_Diagram.png)
@@ -284,7 +286,7 @@ The service automatically manages chain selection through:
 
 
 
-![block_assembly_reorg.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_reorg.svg)
+![block_assembly_reorg.svg](img/plantuml/blockassembly/block_assembly_reorg.svg)
 
 The following diagram illustrates how the Block Assembly service handles a chain reorganization:
 

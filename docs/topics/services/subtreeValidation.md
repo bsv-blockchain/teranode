@@ -34,6 +34,7 @@ The Subtree Validator is responsible for ensuring the integrity and consistency 
 3. **Decorates the Subtree with additional metadata**: Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service).
     - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
 
+> **Note**: For information about how the Subtree Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 ![Subtree_Validation_Service_Container_Diagram.png](img/Subtree_Validation_Service_Container_Diagram.png)
 
@@ -46,6 +47,24 @@ The Subtree Validation Service:
 The P2P Service communicates with the Block Validation over either gRPC protocols.
 
 ![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
+
+### 1.1 Validator Integration
+
+The Subtree Validation service interacts with the Validator service to validate transactions that might be missing during subtree processing. This interaction can happen in two different configurations:
+
+1. **Local Validator**:
+   - When `validator.useLocalValidator=true` (recommended for production)
+   - The Validator is instantiated directly within the Subtree Validation service
+   - Direct method calls are used without network overhead
+   - This provides the best performance and lowest latency
+
+2. **Remote Validator Service**:
+   - When `validator.useLocalValidator=false`
+   - The Subtree Validation service connects to a separate Validator service via gRPC
+   - Useful for development, testing, or specialized deployment scenarios
+   - Has higher latency due to additional network calls
+
+This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
 
 To improve performance, the Subtree Validation Service uses a caching mechanism for UTXO meta data (called `TX Meta Cache` for historical reasons). This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `subtreevalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Subtree Validation Service:
 
@@ -197,7 +216,15 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration options (settings flags)
 
-## gRPC Settings
+### Daemon Level Settings
+
+1. **`validator.useLocalValidator`**: Controls the validator deployment model used by the Subtree Validation service.
+   - When `true`: Uses a local validator instance embedded within the service (recommended for production).
+   - When `false`: Connects to a remote validator service via gRPC.
+   - This setting affects performance and deployment architecture across multiple services.
+   - Default: `false`
+
+### gRPC Settings
 
 1. **`subtreevalidation_grpcAddress`**: Specifies the gRPC address for the subtree validation service.
 
