@@ -57,9 +57,15 @@ func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMet
 	return nil
 }
 
+// to help mocking the operations
+type txMetaCacheOps interface {
+	Delete(ctx context.Context, hash *chainhash.Hash) error
+	SetCacheFromBytes(key, txMetaBytes []byte) error
+}
+
 // SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
 func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
 
@@ -68,7 +74,7 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 
 // DelTxMetaCache removes transaction metadata from the cache if caching is enabled.
 func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
 		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCache")
 		defer deferFn()
 

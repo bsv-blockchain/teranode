@@ -133,7 +133,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		assert.Greater(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32/2)
 	})
 
-	t.Run("Start on testnet, no wait", func(t *testing.T) {
+	t.Run("Start on testnet, inherits same wait as mainnet", func(t *testing.T) {
 		initPrometheusMetrics()
 
 		tSettings := createTestSettings()
@@ -156,8 +156,13 @@ func TestBlockAssembly_Start(t *testing.T) {
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		assert.Equal(t, int32(0), blockAssembler.resetWaitCount.Load())
-		assert.Equal(t, int32(0), blockAssembler.resetWaitDuration.Load())
+		// should have exactly the configured ResetWaitCount and a positive ResetWaitDuration
+		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(tSettings.BlockAssembly.ResetWaitDuration).Unix())
+		require.NoError(t, err)
+
+		assert.Equal(t, int32(2), blockAssembler.resetWaitCount.Load(), "resetWaitCount should be set on TestNet as on MainNet")
+		assert.LessOrEqual(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32, "resetWaitDuration must be no greater than now+configured duration")
+		assert.Greater(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32/2, "resetWaitDuration must be at least halfway towards the target time")
 	})
 }
 
