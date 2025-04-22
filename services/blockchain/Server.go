@@ -1624,42 +1624,29 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	}
 
 	locator := make([]*chainhash.Hash, 0, maxEntries)
-
 	step := uint32(1)
+	height := blockHeaderHeight
+	hash := blockHeaderHash
 
-	ancestorBlockHeaderHash := blockHeaderHash
-
-	ancestorBlockHeight := blockHeaderHeight // this needs to be signed
-
-	for ancestorBlockHeaderHash != nil {
-		locator = append(locator, ancestorBlockHeaderHash)
-
-		// Nothing more to add once the genesis block has been added.
-		if ancestorBlockHeight == 0 {
-			break
-		}
-
-		// Calculate height of previous node to include ensuring the
-		// final node is the genesis block.
-		height := ancestorBlockHeight - step
-
-		// check whether step > ancestorBlockHeight, which would give a negative value for height, but
-		// since height is an uint32, it will wrap around to the maximum value and overflow
-		if step > ancestorBlockHeight {
-			height = 0
-		}
-
-		ancestorBlock, _, err := store.GetBlockInChainByHeightHash(ctx, height, ancestorBlockHeaderHash)
+	for {
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, height, hash)
 		if err != nil {
 			return nil, err
 		}
 
-		ancestorBlockHeaderHash = ancestorBlock.Header.Hash()
+		hash = block.Header.Hash()
+		locator = append(locator, hash)
 
-		ancestorBlockHeight = height
+		if height == 0 {
+			break
+		}
 
-		// Once 11 entries have been included, start doubling the
-		// distance between included hashes.
+		if step > height {
+			step = height
+		}
+
+		height -= step
+
 		if len(locator) > 10 {
 			step *= 2
 		}

@@ -101,10 +101,10 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		&invalid,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, errors.NewBlockNotFoundError("failed to get block by height", err)
+			return nil, false, errors.NewBlockNotFoundError("failed to get block in-chain by height", err)
 		}
 
-		return nil, false, errors.NewStorageError("failed to get block by height", err)
+		return nil, false, errors.NewStorageError("failed to get block in-chain by height", err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)

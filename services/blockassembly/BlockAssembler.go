@@ -895,15 +895,35 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, errors.NewError("header is nil")
 	}
 
+	// We want to use block locators to find the common ancestor
+	// This is because block locators are more efficient than fetching blocks
+	// and we want to avoid fetching blocks that we don't need
+
+	// We will get a block locator for requested header
+	// and another block locator for on the best block header
+
+	// Important: in order to compare 2 block locators, it is critical that
+	// the starting height of both locators is the same
+	// otherwise the common ancestor might be the genesis block
+	// because none of the mentioned block hashes in the block locators
+	// are necessarily going to be on the same height
+
+	bestBlockHash := b.bestBlockHeader.Load().Hash()
 	bestBlockHeight := b.bestBlockHeight.Load()
-	// Get block locators for both chains
-	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, b.bestBlockHeader.Load().Hash(), bestBlockHeight)
+	startingHeight := height
+
+	if height > bestBlockHeight {
+		startingHeight = bestBlockHeight
+	}
+
+	// Get block locator for current chain
+	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, bestBlockHash, startingHeight)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting block locator for current chain", err)
 	}
 
-	// newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), height)
-	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), bestBlockHeight+1) // start from the best block header so that the locator returned works in step with the current chain locator
+	// Get block locator for the new best block
+	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), startingHeight)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting block locator for new chain", err)
 	}
