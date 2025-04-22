@@ -964,6 +964,14 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		return nil
 	}
 
+	lastCommonAncestorBlockHash := catchupBlockHeaders[len(catchupBlockHeaders)-1].HashPrevBlock
+	if secretMining, err := u.checkSecretMining(ctx, lastCommonAncestorBlockHash); err != nil {
+		return err
+	} else if secretMining {
+		u.logger.Infof("[catchup][%s] ignoring catchup, last common ancestor block %s is too far behind current head", blockUpTo.Hash().String(), lastCommonAncestorBlockHash.String())
+		return nil
+	}
+
 	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", blockUpTo.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
 	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
@@ -1041,6 +1049,26 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	u.logger.Infof("[catchup][%s] done validating catchup blocks", blockUpTo.Hash().String())
 
 	return nil
+}
+
+func (u *Server) checkSecretMining(ctx context.Context, lastCommonAncestorBlockHash *chainhash.Hash) (bool, error) {
+	// check whether we are catching up to very old blocks, while we are ahead
+	// this could mean we are catching up on a secretly mined chain, which we should ignore
+	lastCommonAncestorBlock, err := u.blockchainClient.GetBlock(ctx, lastCommonAncestorBlockHash)
+	if err != nil {
+		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block from db %s", lastCommonAncestorBlockHash.String(), err)
+	}
+
+	if lastCommonAncestorBlock == nil {
+		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block %s", lastCommonAncestorBlockHash.String())
+	}
+
+	// the last common ancestor block should not be more than X blocks behind the current block height in the utxo store
+	if lastCommonAncestorBlock.Height < u.utxoStore.GetBlockHeight()-u.settings.BlockValidation.SecretMiningThreshold {
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func (u *Server) catchupGetBlocks(ctx context.Context, blockUpTo *model.Block, baseURL string) ([]*model.BlockHeader, error) {

@@ -229,6 +229,7 @@ type BlockValidationSettings struct {
 	CheckSubtreeFromBlockTimeout              time.Duration
 	CheckSubtreeFromBlockRetries              int
 	CheckSubtreeFromBlockRetryBackoffDuration time.Duration
+	SecretMiningThreshold                     uint32
 }
 
 type ValidatorSettings struct {
