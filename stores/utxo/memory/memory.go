@@ -189,6 +189,11 @@ func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields
 			return nil, err
 		}
 
+		utxoHashes, err := utxo.GetUtxoHashes(data.tx)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to get utxo hashes", err)
+		}
+
 		txMeta.BlockIDs = data.blockIDs
 		txMeta.BlockHeights = data.blockHeights
 		txMeta.SubtreeIdxs = data.subtreeIdxs
@@ -196,6 +201,11 @@ func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields
 		txMeta.ConflictingChildren = data.conflictingChildren
 		txMeta.Frozen = data.frozen
 		txMeta.Unspendable = data.unspendable
+		txMeta.SpendingTxIDs = make([]*chainhash.Hash, len(utxoHashes))
+
+		for idx, utxoHash := range utxoHashes {
+			txMeta.SpendingTxIDs[idx] = data.utxoMap[*utxoHash]
+		}
 
 		return txMeta, nil
 	}

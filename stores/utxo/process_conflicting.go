@@ -282,26 +282,26 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		parentTxs[*parentTxHash] = parentTxMeta.SpendingTxIDs
 	}
 
-	for idx, input := range txMeta.Tx.Inputs {
+	for _, input := range txMeta.Tx.Inputs {
 		parenTxIDS, ok := parentTxs[*input.PreviousTxIDChainHash()]
 		if ok {
 			// check the length of the spending txs, if it's less than the index, then the input is not spent
-			if len(parenTxIDS) <= idx {
+			if len(parenTxIDS) <= int(input.PreviousTxOutIndex) {
 				// throw an error
-				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range", txHash.String(), idx, input.PreviousTxIDChainHash().String())
+				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range", txHash.String(), input.PreviousTxOutIndex, input.PreviousTxIDChainHash().String())
 			}
 
-			spendingTxID := parenTxIDS[idx]
+			spendingTxID := parenTxIDS[input.PreviousTxOutIndex]
 			if spendingTxID != nil {
 				counterConflictingMap[*spendingTxID] = struct{}{}
 
-				children, err := s.GetConflictingChildren(ctx, *spendingTxID)
+				childHashes, err := s.GetConflictingChildren(ctx, *spendingTxID)
 				if err != nil {
 					return nil, err
 				}
 
-				for _, child := range children {
-					counterConflictingMap[child] = struct{}{}
+				for _, childHash := range childHashes {
+					counterConflictingMap[childHash] = struct{}{}
 				}
 			}
 		}
