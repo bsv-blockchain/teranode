@@ -373,7 +373,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxChanBufferSize:                          getInt("subtreevalidation_txChanBufferSize", 0, alternativeContext...),
 			BatchMissingTransactions:                  getBool("subtreevalidation_batch_missing_transactions", true, alternativeContext...),
 			SpendBatcherSize:                          getInt("subtreevalidation_spendBatcherSize", 1024, alternativeContext...),
-			MissingTransactionsBatchSize:              getInt("subtreevalidation_missingTransactionsBatchSize", 100_000, alternativeContext...),
+			MissingTransactionsBatchSize:              getInt("subtreevalidation_missingTransactionsBatchSize", 16_384, alternativeContext...),
 		},
 		Legacy: LegacySettings{
 			ListenAddresses:                  getMultiString("legacy_listen_addresses", "|", []string{}, alternativeContext...),
