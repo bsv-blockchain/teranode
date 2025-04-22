@@ -562,6 +562,97 @@ func TestFileExists(t *testing.T) {
 	})
 }
 
+func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
+	t.Run("check if TTL remains unchanged when file overwriting disabled using setFromReader", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		key := []byte("key-exists")
+		content := "This is test content for setFromReader"
+		reader := strings.NewReader(content)
+
+		// Content should not exist before setting
+		exists, err := f.Exists(context.Background(), key)
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// Wrap the reader to satisfy the io.ReadCloser interface
+		readCloser := readCloser{Reader: reader}
+
+		// Set the content
+		err = f.SetFromReader(context.Background(), key, readCloser)
+		require.NoError(t, err)
+
+		// Now content should exist
+		exists, err = f.Exists(context.Background(), key)
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		// Set TTL to 0
+		err = f.SetTTL(context.Background(), key, 0)
+		require.NoError(t, err)
+
+		// Set the content again with overwrite disabled
+		err = f.SetFromReader(context.Background(), key, readCloser, options.WithTTL(time.Second), options.WithAllowOverwrite(false))
+		require.Error(t, err)
+
+		// Check the TTL again, should still be 0
+		ttl, err := f.GetTTL(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, time.Duration(0), ttl)
+	})
+
+	t.Run("check if TTL remains unchanged when file overwriting disabled using Set", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		key := []byte("key-exists")
+		content := "This is test content for set"
+
+		// Content should not exist before setting
+		exists, err := f.Exists(context.Background(), key)
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// Set the content
+		err = f.Set(context.Background(), key, []byte(content))
+		require.NoError(t, err)
+
+		// Now content should exist
+		exists, err = f.Exists(context.Background(), key)
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		// Set TTL to 0
+		err = f.SetTTL(context.Background(), key, 0)
+		require.NoError(t, err)
+
+		// Set the content again with overwrite disabled
+		err = f.Set(context.Background(), key, []byte(content), options.WithTTL(time.Second), options.WithAllowOverwrite(false))
+		require.Error(t, err)
+
+		// Check the TTL again, should still be 0
+		ttl, err := f.GetTTL(context.Background(), key)
+		require.NoError(t, err)
+		require.Equal(t, time.Duration(0), ttl)
+	})
+}
 func TestFileSetWithHashPrefix(t *testing.T) {
 	u, err := url.Parse("file:///data/subtreestore?hashPrefix=2")
 	require.NoError(t, err)

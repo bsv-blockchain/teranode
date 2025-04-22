@@ -354,7 +354,7 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 }
 
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
-	filename, err := s.constructFilenameWithTTL(key, opts)
+	filename, err := s.constructFilename(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
@@ -362,6 +362,10 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	merged := options.MergeOptions(s.options, opts)
 
 	if err := s.errorOnOverwrite(filename, merged); err != nil {
+		return err
+	}
+
+	if err := s.updateTTL(filename, opts); err != nil {
 		return err
 	}
 
@@ -474,7 +478,7 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 }
 
 func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.FileOption) error {
-	filename, err := s.constructFilenameWithTTL(key, opts)
+	filename, err := s.constructFilename(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
@@ -482,6 +486,10 @@ func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.
 	merged := options.MergeOptions(s.options, opts)
 
 	if err := s.errorOnOverwrite(filename, merged); err != nil {
+		return err
+	}
+
+	if err := s.updateTTL(filename, opts); err != nil {
 		return err
 	}
 
@@ -533,7 +541,7 @@ func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.
 	return nil
 }
 
-func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) (string, error) {
+func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string, error) {
 	merged := options.MergeOptions(s.options, opts)
 
 	if merged.SubDirectory != "" {
@@ -547,6 +555,12 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 		return "", err
 	}
 
+	return fileName, nil
+}
+
+func (s *File) updateTTL(fileName string, opts []options.FileOption) error {
+	merged := options.MergeOptions(s.options, opts)
+
 	if merged.TTL != nil && *merged.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(*merged.TTL)
@@ -555,12 +569,12 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 		ttlTempFilename := ttlFilename + ".tmp"
 
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-		if err = os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return "", errors.NewStorageError("[File][%s] failed to write ttl to file", err)
+		if err := os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
+			return errors.NewStorageError("[File][%s] failed to write ttl to file", fileName, err)
 		}
 
-		if err = os.Rename(ttlTempFilename, ttlFilename); err != nil {
-			return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
+		if err := os.Rename(ttlTempFilename, ttlFilename); err != nil {
+			return errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
 		}
 
 		s.fileTTLsMu.Lock()
@@ -575,7 +589,7 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 		s.fileTTLsMu.Unlock()
 	}
 
-	return fileName, nil
+	return nil
 }
 
 // create a global limiting semaphore for setTTL file operations
