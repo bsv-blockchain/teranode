@@ -708,6 +708,13 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 		stp.logger.Debugf("newSize capped at 2x=%d\n", newSize)
 	}
 
+	// never go over maximum size
+	maxSubtreeSize := stp.settings.BlockAssembly.MaximumMerkleItemsPerSubtree
+	if newSize > maxSubtreeSize {
+		newSize = maxSubtreeSize
+		stp.logger.Debugf("newSize capped at maxSubtreeSize=%d\n", newSize)
+	}
+
 	// Never go below minimum size
 	minSubtreeSize := stp.settings.BlockAssembly.MinimumMerkleItemsPerSubtree
 	if newSize < minSubtreeSize {

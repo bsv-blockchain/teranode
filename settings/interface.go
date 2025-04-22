@@ -183,6 +183,7 @@ type BlockAssemblySettings struct {
 	SubmitMiningSolutionWaitForResponse bool
 	InitialMerkleItemsPerSubtree        int
 	MinimumMerkleItemsPerSubtree        int
+	MaximumMerkleItemsPerSubtree        int
 	DoubleSpendWindow                   time.Duration
 	MaxGetReorgHashes                   int
 	MinerWalletPrivateKeys              []string
