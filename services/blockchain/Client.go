@@ -222,7 +222,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 	}
 
 	if _, err := c.client.AddBlock(ctx, req); err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -426,7 +426,7 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	bits, err := model.NewNBitFromSlice(resp.Bits)
@@ -697,7 +697,7 @@ func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Has
 func (c *Client) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	_, err := c.client.SendNotification(ctx, notification)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -825,7 +825,7 @@ func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 		Data: data,
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -848,7 +848,7 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -881,7 +881,7 @@ func (c *Client) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.H
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -919,7 +919,7 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 
 	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return &state.State, nil
@@ -940,7 +940,7 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
 		State: targetState,
 	}); err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -1012,7 +1012,7 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 	if _, err := c.client.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{
 		Event: event,
 	}); err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -1036,7 +1036,7 @@ func (c *Client) Run(ctx context.Context, source string) error {
 
 	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -1056,7 +1056,7 @@ func (c *Client) CatchUpBlocks(ctx context.Context) error {
 
 	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -1076,7 +1076,7 @@ func (c *Client) LegacySync(ctx context.Context) error {
 
 	_, err := c.client.LegacySync(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -1095,7 +1095,7 @@ func (c *Client) Idle(ctx context.Context) error {
 
 	_, err := c.client.Idle(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil

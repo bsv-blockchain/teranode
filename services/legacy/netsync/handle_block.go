@@ -76,6 +76,17 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			sm.logger.Errorf("[HandleBlockDirect][%s] failed to close block reader: %s", blockHash.String(), err)
 			return errors.NewStorageError("failed to close block reader", err)
 		}
+
+		defer func() {
+			// delete the temporarily saved block from disk after this function completes
+			if err = sm.tempStore.Del(ctx,
+				blockHash.CloneBytes(),
+				options.WithFileExtension("msgBlock"),
+				options.WithSubDirectory("blocks"),
+			); err != nil {
+				sm.logger.Errorf("failed to delete block from disk: %v", err)
+			}
+		}()
 	} else {
 		block = bsvutil.NewBlock(msgBlock)
 	}
@@ -222,17 +233,6 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 	}()
 
-	if msgBlock == nil {
-		// delete the temporarily saved block from disk
-		if err = sm.tempStore.Del(ctx,
-			blockHash.CloneBytes(),
-			options.WithFileExtension("msgBlock"),
-			options.WithSubDirectory("blocks"),
-		); err != nil {
-			sm.logger.Errorf("failed to delete block from disk: %v", err)
-		}
-	}
-
 	return nil
 }
 
@@ -250,12 +250,14 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 		deferFn(err)
 	}()
 
-	// FROM HERE IT IS RETURNED WITH ERROR: SERVICE_ERROR (error code: 49), Message: failed block validation BlockFound
-
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
 	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height); err != nil {
-		// this returned error is a wrapped error.
+		if errors.Is(err, errors.ErrBlockExists) {
+			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
+			return nil
+		}
+
 		return errors.NewProcessingError("failed to process block", err)
 	}
 

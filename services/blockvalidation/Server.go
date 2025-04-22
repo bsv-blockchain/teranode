@@ -700,9 +700,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// GOKHAN: ERROR IS RETURNED FROM HERE: failed block validation BlockFound
-	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
-	if err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
