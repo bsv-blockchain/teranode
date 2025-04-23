@@ -4,8 +4,10 @@ import (
 	"encoding/binary"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -44,7 +46,45 @@ func NewClient(hostname string, port int) (*Client, error) {
 }
 
 func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerospike.Host) (*Client, aerospike.Error) {
-	client, err := aerospike.NewClientWithPolicyAndHost(policy, hosts...)
+	var (
+		client *aerospike.Client
+		err    aerospike.Error
+	)
+
+	const (
+		maxRetries = 3
+		retryDelay = 1 * time.Second
+	)
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		client, err = aerospike.NewClientWithPolicyAndHost(policy, hosts...)
+		if err == nil {
+			// Connection successful
+			break
+		}
+
+		// Use the Matches method to check against transient error codes
+		isTransientError := err.Matches(
+			types.INVALID_NODE_ERROR,
+			types.TIMEOUT,
+			types.NO_RESPONSE,
+			types.NETWORK_ERROR,
+			types.SERVER_NOT_AVAILABLE,
+			types.NO_AVAILABLE_CONNECTIONS_TO_NODE,
+		)
+
+		if !isTransientError {
+			// Error is not transient, don't retry
+			break
+		}
+
+		// Log the retry attempt (optional, but useful for debugging)
+		// log.Printf("Aerospike connection attempt %d failed with transient error (%d): %v. Retrying in %v...", attempt, asAeroErr.ResultCode(), err, retryDelay)
+
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+		}
+	}
 
 	if err != nil {
 		return nil, err

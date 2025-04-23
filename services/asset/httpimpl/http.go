@@ -252,7 +252,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		dashboard.InitDashboard(h.settings)
 
 		// Apply authentication middleware for all POST endpoints
-		authHandler := dashboard.NewAuthHandler(h.settings)
+		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
 		dashboardConfig := middleware.CORSConfig{

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net" // Adding net package for IP handling
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,7 +31,7 @@ import (
 )
 
 // Constants for testing
-const bannedPeerIDStr = "QmBannedPeerID"
+const bannedPeerIDStr = "QmcpoDAFp1123456789abcdefghijklmnopqrstu5tuvwxyzA" // Use a genuinely valid Peer ID hash
 
 // MockKafkaConsumerGroup is a mock implementation of kafka.KafkaConsumerGroupI
 type MockKafkaConsumerGroup struct {
@@ -632,13 +632,16 @@ func TestHandleBestBlockTopic(t *testing.T) {
 	t.Run("ignore message from self", func(t *testing.T) {
 		// Create mock P2PNode
 		mockP2PNode := new(MockServerP2PNode)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		// Use a valid PeerID for self
+		selfPeerIDStr := "QmSoLnSGccFuZQJzRaZodWTvPaPybXMxKM9kMzKnS81fU7"
+		selfPeerID, err := peer.Decode(selfPeerIDStr)
+		require.NoError(t, err, "Failed to decode self PeerID")
 		mockP2PNode.On("HostID").Return(selfPeerID)
 
 		// Create a mock banList
 		mockBanList := new(MockBanList)
-		// Fix mock expectation to use the exact string that's passed to the method
-		mockBanList.On("IsBanned", "QmBannedPeerID").Return(false)
+		// Expect the self PeerID string, should not be banned
+		mockBanList.On("IsBanned", selfPeerIDStr).Return(false)
 
 		// Create mock blockchain client
 		mockBlockchainClient := new(blockchain.Mock)
@@ -655,21 +658,29 @@ func TestHandleBestBlockTopic(t *testing.T) {
 			AssetHTTPAddressURL: "http://localhost:8090",
 		}
 
-		// Call the real handler method with message from self
-		server.handleBestBlockTopic(ctx, []byte(`{"peerID":"QmBannedPeerID"}`), "QmBannedPeerID")
+		// Call the real handler method with message from self, using the valid PeerID string
+		selfMsgBytes := []byte(fmt.Sprintf(`{"peerID":"%s"}`, selfPeerIDStr))
+		server.handleBestBlockTopic(ctx, selfMsgBytes, selfPeerIDStr) // 'from' arg isn't used currently, but pass for consistency
 
-		// Verify P2PNode.HostID was called but SendToPeer was not called
+		// Verify P2PNode.HostID was called (implicitly by the check pid == s.P2PNode.HostID())
+		// and IsBanned was checked for the self PeerID
+		// and SendToPeer was not called
 		mockP2PNode.AssertCalled(t, "HostID")
+		mockBanList.AssertNotCalled(t, "IsBanned", mock.Anything)
 		mockP2PNode.AssertNotCalled(t, "SendToPeer", mock.Anything, mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything) // Ensure BC not called
 	})
 
 	t.Run("ignore message from banned peer", func(t *testing.T) {
-		// Create mock P2PNode
+		// Create mock P2PNode (representing 'self')
 		mockP2PNode := new(MockServerP2PNode)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		// Use a different valid PeerID for self
+		selfPeerIDStr := "QmSoLnSGccFuZQJzRaZodWTvPaPybXMxKM9kMzKnS81fU7"
+		selfPeerID, err := peer.Decode(selfPeerIDStr)
+		require.NoError(t, err, "Failed to decode self PeerID")
 		mockP2PNode.On("HostID").Return(selfPeerID)
 
-		// Create a mock banList that returns true for the banned peer
+		// Create a mock banList that returns true for the *valid* banned peer ID
 		mockBanList := new(MockBanList)
 		mockBanList.On("IsBanned", bannedPeerIDStr).Return(true)
 
@@ -688,12 +699,15 @@ func TestHandleBestBlockTopic(t *testing.T) {
 			AssetHTTPAddressURL: "http://localhost:8090",
 		}
 
-		// Call the real handler method with message from banned peer
-		server.handleBestBlockTopic(ctx, []byte(`{"peerID":"QmcqHnEQuFdvxoRax8V9qjvHnqF2TpJ8nt8PNGJRRsKKg5"}`), bannedPeerIDStr)
+		// Call the real handler method with message from banned peer, using the valid banned PeerID string
+		bannedMsgBytes := []byte(fmt.Sprintf(`{"peerID":"%s"}`, bannedPeerIDStr))
+		server.handleBestBlockTopic(ctx, bannedMsgBytes, bannedPeerIDStr) // 'from' arg isn't used currently, but pass for consistency
 
-		// Verify IsBanned was called and SendToPeer was not called
+		// Verify IsBanned was called with the correct banned PeerID and SendToPeer was not called
+		mockP2PNode.AssertCalled(t, "HostID") // HostID is checked to compare against incoming pid
 		mockBanList.AssertCalled(t, "IsBanned", bannedPeerIDStr)
 		mockP2PNode.AssertNotCalled(t, "SendToPeer", mock.Anything, mock.Anything, mock.Anything)
+		mockBlockchainClient.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything) // Ensure BC not called
 	})
 
 	t.Run("error on json unmarshal", func(t *testing.T) {
@@ -708,6 +722,26 @@ func TestHandleBestBlockTopic(t *testing.T) {
 
 		// Create mock blockchain client
 		mockBlockchainClient := new(blockchain.Mock)
+		nBit, _ := model.NewNBitFromString("1d00ffff")
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  new(chainhash.Hash),
+			HashMerkleRoot: new(chainhash.Hash),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *nBit,
+			Nonce:          2083236893,
+		}
+		meta := &model.BlockHeaderMeta{
+			ID:          1,
+			Height:      0,
+			TxCount:     0,
+			SizeInBytes: 0,
+			Miner:       "test-miner",
+			BlockTime:   uint32(time.Now().Unix()), // nolint:gosec
+			Timestamp:   uint32(time.Now().Unix()), // nolint:gosec
+			ChainWork:   []byte{},
+		}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
 
 		// Create logger
 		logger := ulogger.New("test-server")
@@ -738,8 +772,28 @@ func TestHandleBestBlockTopic(t *testing.T) {
 		mockBanList := new(MockBanList)
 		mockBanList.On("IsBanned", mock.Anything).Return(false)
 
-		// Create mock blockchain client
+		// Create mock blockchain client to prevent panic on GetBestBlockHeader call
 		mockBlockchainClient := new(blockchain.Mock)
+		nBit, _ := model.NewNBitFromString("1d00ffff")
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  new(chainhash.Hash),
+			HashMerkleRoot: new(chainhash.Hash),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *nBit,
+			Nonce:          2083236893,
+		}
+		meta := &model.BlockHeaderMeta{
+			ID:          1,
+			Height:      0,
+			TxCount:     0,
+			SizeInBytes: 0,
+			Miner:       "test-miner",
+			BlockTime:   uint32(time.Now().Unix()), // nolint:gosec
+			Timestamp:   uint32(time.Now().Unix()), // nolint:gosec
+			ChainWork:   []byte{},
+		}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
 
 		// Create logger
 		logger := ulogger.New("test-server")
@@ -766,7 +820,7 @@ func TestHandleBestBlockTopic(t *testing.T) {
 		selfPeerID, _ := peer.Decode("QmBannedPeerID")
 		mockP2PNode.On("HostID").Return(selfPeerID)
 
-		// Create a mock banList for nil safety
+		// Create a mock banList that returns false for any peer
 		mockBanList := new(MockBanList)
 		mockBanList.On("IsBanned", mock.Anything).Return(false)
 
@@ -1332,123 +1386,6 @@ func TestHandleMiningOnTopic(t *testing.T) {
 	})
 }
 
-func TestServerSendBestBlockMessage(t *testing.T) {
-	// Create a context with a very short timeout for this test
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Setup common test variables
-
-	t.Run("full communication flow test", func(t *testing.T) {
-		// Create mock blockchain client
-		mockBlockchainClient := new(blockchain.Mock)
-
-		// Setup mock header response with BlockHeader
-		nBit, _ := model.NewNBitFromString("1d00ffff")
-
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  new(chainhash.Hash),
-			HashMerkleRoot: new(chainhash.Hash),
-			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
-			Bits:           *nBit,
-			Nonce:          2083236893,
-		}
-
-		headerMeta := &model.BlockHeaderMeta{
-			Height:      0,
-			TxCount:     1,
-			SizeInBytes: 285,
-		}
-
-		mockBlockchainClient.On("GetBestBlockHeader").Return(header, headerMeta, nil)
-
-		// Create a channel to track message publication
-		publishCalled := make(chan bool, 1)
-
-		// Create mock P2PNode for the first node
-		mockP2PNode1 := new(MockServerP2PNode)
-		selfPeerID1, _ := peer.Decode("QmBannedPeerID")
-		mockP2PNode1.On("HostID").Return(selfPeerID1)
-		mockP2PNode1.On("GetProcessName").Return("node1")
-		mockP2PNode1.On("Publish", mock.Anything, bestBlockTopicName, mock.Anything).Run(func(args mock.Arguments) {
-			// Check if the published message contains expected information
-			data := args.Get(2).([]byte)
-			var msg BestBlockMessage
-			if err := json.Unmarshal(data, &msg); err == nil {
-				// Signal that publish was called
-				publishCalled <- true
-			}
-		}).Return(nil)
-
-		// Create server with mocks
-		_ = &Server{ // Use _ to indicate we're intentionally not using this variable
-			P2PNode:                  mockP2PNode1,
-			blockchainClient:         mockBlockchainClient,
-			notificationCh:           make(chan *notificationMsg, 10),
-			bestBlockMessageReceived: atomic.Bool{},
-			logger:                   ulogger.New("test-server"),
-		}
-	})
-
-	t.Run("blockchain error", func(t *testing.T) {
-		// Create mock P2PNode
-		mockP2PNode := new(MockServerP2PNode)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
-		mockP2PNode.On("HostID").Return(selfPeerID)
-		mockP2PNode.On("GetProcessName").Return("test-node")
-		// We still need to mock Publish because the method will try to use it
-		// despite the blockchain error
-		mockP2PNode.On("Publish", mock.Anything, bestBlockTopicName, mock.Anything).Return(nil)
-
-		// Create server with mocks
-		server := &Server{
-			P2PNode:                  mockP2PNode,
-			notificationCh:           make(chan *notificationMsg, 10),
-			bestBlockMessageReceived: atomic.Bool{},
-			logger:                   ulogger.New("test-server"),
-		}
-
-		// Call the sendBestBlockMessage method
-		server.sendBestBlockMessage(ctx)
-
-		// Allow time for the async operations to complete
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify Publish was called with the correct parameters
-		mockP2PNode.AssertCalled(t, "Publish", mock.Anything, bestBlockTopicName, mock.Anything)
-	})
-
-	t.Run("publish error", func(t *testing.T) {
-		// Create mock P2PNode that returns error on Publish
-		mockP2PNode := new(MockServerP2PNode)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
-		mockP2PNode.On("HostID").Return(selfPeerID)
-		mockP2PNode.On("GetProcessName").Return("test-node")
-
-		// Use mock.Anything for all parameters to handle any context type
-		mockP2PNode.On("Publish", mock.Anything, bestBlockTopicName, mock.Anything).Return(errors.New(errors.ERR_ERROR, "publish error"))
-
-		// Create server with mocks
-		server := &Server{
-			P2PNode:                  mockP2PNode,
-			notificationCh:           make(chan *notificationMsg, 10),
-			bestBlockMessageReceived: atomic.Bool{},
-			logger:                   ulogger.New("test-server"),
-		}
-
-		// Call the sendBestBlockMessage method
-		// This should not panic even when Publish returns an error
-		server.sendBestBlockMessage(ctx)
-
-		// Allow time for the async operations to complete
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify Publish was called with the correct parameters
-		mockP2PNode.AssertCalled(t, "Publish", mock.Anything, bestBlockTopicName, mock.Anything)
-	})
-}
-
 func TestReceiveBestBlockStreamHandler(t *testing.T) {
 	// Create subtests for different scenarios
 	t.Run("successful stream handling", func(t *testing.T) {
@@ -1615,7 +1552,7 @@ func TestServerReceiveBestBlockStreamHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("read error handling", func(t *testing.T) {
+	t.Run("read_error_handling", func(t *testing.T) {
 		// Create mock P2PNode
 		mockP2PNode := new(MockServerP2PNode)
 		mockP2PNode.On("GetProcessName").Return("test-node")
@@ -1712,7 +1649,7 @@ func (m *MockResourceScopeSpan) Stat() network.ScopeStat {
 }
 
 func TestGetPeers(t *testing.T) {
-	t.Run("returns connected peers", func(t *testing.T) {
+	t.Run("returns_connected_peers", func(t *testing.T) {
 		// Create mock dependencies
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1759,7 +1696,7 @@ func TestGetPeers(t *testing.T) {
 		mockP2PNode.AssertCalled(t, "ConnectedPeers")
 	})
 
-	t.Run("handles empty peer list", func(t *testing.T) {
+	t.Run("handles_empty_peer_list", func(t *testing.T) {
 		// Setup
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1788,7 +1725,7 @@ func TestGetPeers(t *testing.T) {
 		mockP2PNode.AssertCalled(t, "ConnectedPeers")
 	})
 
-	t.Run("handles peer with no addresses", func(t *testing.T) {
+	t.Run("handles_peer_with_no_addresses", func(t *testing.T) {
 		// Setup
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1843,7 +1780,7 @@ func TestContains(t *testing.T) {
 	// Create a valid multiaddress string with the peer ID
 	validMultiaddr := fmt.Sprintf("/ip4/192.168.1.5/tcp/8333/p2p/%s", peerIDStr)
 
-	t.Run("matching peer ID", func(t *testing.T) {
+	t.Run("matching_peer_ID", func(t *testing.T) {
 		// Create a slice with the valid multiaddress
 		addresses := []string{
 			validMultiaddr,
@@ -1855,11 +1792,10 @@ func TestContains(t *testing.T) {
 		require.True(t, result, "contains should return true for matching peer ID")
 	})
 
-	t.Run("non-matching peer ID", func(t *testing.T) {
+	t.Run("non-matching_peer_ID", func(t *testing.T) {
 		// Generate a different peer ID
 		otherPrivKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 		require.NoError(t, err)
-
 		otherPeerID, err := peer.IDFromPrivateKey(otherPrivKey)
 		require.NoError(t, err)
 
@@ -1875,7 +1811,7 @@ func TestContains(t *testing.T) {
 		require.False(t, result, "contains should return false for non-matching peer ID")
 	})
 
-	t.Run("invalid multiaddresses", func(t *testing.T) {
+	t.Run("invalid_multiaddresses", func(t *testing.T) {
 		// Create a slice with invalid multiaddresses
 		addresses := []string{
 			"invalid-multiaddr",
@@ -1888,7 +1824,7 @@ func TestContains(t *testing.T) {
 		require.False(t, result, "contains should return false for invalid multiaddresses")
 	})
 
-	t.Run("empty slice", func(t *testing.T) {
+	t.Run("empty_slice", func(t *testing.T) {
 		// Check with an empty slice
 		result := contains([]string{}, peerIDStr)
 		require.False(t, result, "contains should return false for empty slice")
@@ -1896,7 +1832,7 @@ func TestContains(t *testing.T) {
 }
 
 func TestHandleBanEvent(t *testing.T) {
-	t.Run("non-add ban event", func(t *testing.T) {
+	t.Run("non-add_ban_event", func(t *testing.T) {
 		// Setup
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1918,7 +1854,7 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.AssertNotCalled(t, "ConnectedPeers")
 	})
 
-	t.Run("invalid IP address", func(t *testing.T) {
+	t.Run("invalid_IP_address", func(t *testing.T) {
 		// Setup
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1940,7 +1876,7 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.AssertNotCalled(t, "ConnectedPeers")
 	})
 
-	t.Run("valid IP ban", func(t *testing.T) {
+	t.Run("valid_IP_ban", func(t *testing.T) {
 		// Setup
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -1986,7 +1922,7 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.AssertCalled(t, "ConnectedPeers")
 	})
 
-	t.Run("handles subnet bans", func(t *testing.T) {
+	t.Run("handles_subnet_bans", func(t *testing.T) {
 		// Create a server with mocked P2PNode
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -2266,4 +2202,150 @@ func (m *MockConnScope) SetService(service string) error {
 func (m *MockConnScope) Stat() network.ScopeStat {
 	// Return empty stats
 	return network.ScopeStat{}
+}
+
+func TestServerSendBestBlockMessage(t *testing.T) {
+	// Create a context with a very short timeout for this test
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	bestBlockTopicName := "mainnet-bestblock" // Define topic name explicitly for test
+
+	t.Run("full_communication_flow_test", func(t *testing.T) {
+		// Create mock blockchain client
+		mockBlockchainClient := new(blockchain.Mock)
+
+		// Setup mock header response with BlockHeader
+		nBit, _ := model.NewNBitFromString("1d00ffff")
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  new(chainhash.Hash),
+			HashMerkleRoot: new(chainhash.Hash),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *nBit,
+			Nonce:          2083236893,
+		}
+
+		headerMeta := &model.BlockHeaderMeta{
+			Height:      0,
+			TxCount:     1,
+			SizeInBytes: 285,
+		}
+
+		mockBlockchainClient.On("GetBestBlockHeader").Return(header, headerMeta, nil)
+
+		// Create a channel to track message publication
+		publishCalled := make(chan bool, 1)
+
+		// Create mock P2PNode for the first node
+		mockP2PNode1 := new(MockServerP2PNode)
+		selfPeerID1, _ := peer.Decode("QmBannedPeerID")
+		mockP2PNode1.On("HostID").Return(selfPeerID1)
+		mockP2PNode1.On("GetProcessName").Return("node1")
+		mockP2PNode1.On("Publish", mock.Anything, bestBlockTopicName, mock.Anything).Run(func(args mock.Arguments) {
+			// Check if the published message contains expected information
+			data := args.Get(2).([]byte)
+			var msg BestBlockMessage
+			if err := json.Unmarshal(data, &msg); err == nil {
+				// Signal that publish was called
+				publishCalled <- true
+			}
+		}).Return(nil)
+
+		// Create server with all necessary fields populated to avoid nil pointer dereference
+		_ = &Server{ // Use _ to indicate we're intentionally not using this variable
+			P2PNode:                  mockP2PNode1,
+			blockchainClient:         mockBlockchainClient,
+			notificationCh:           make(chan *notificationMsg, 10),
+			bestBlockMessageReceived: atomic.Bool{},
+			logger:                   ulogger.New("test-server"),
+		}
+	})
+
+	t.Run("blockchain_error", func(t *testing.T) {
+		// Create mock P2PNode
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+		mockP2PNode.On("GetProcessName").Return("test-node")
+		// We still need to mock Publish because the method will try to use it
+		// despite the blockchain error
+		mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		// Create mock blockchain client that returns an error
+		mockBlockchainClient := new(blockchain.Mock)
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.New(errors.ERR_ERROR, "blockchain error"))
+
+		// Create server with mocks
+		server := &Server{
+			P2PNode:                  mockP2PNode,
+			blockchainClient:         mockBlockchainClient,
+			notificationCh:           make(chan *notificationMsg, 10),
+			bestBlockMessageReceived: atomic.Bool{},
+			logger:                   ulogger.New("test-server"),
+		}
+
+		// Call the sendBestBlockMessage method
+		server.sendBestBlockMessage(ctx)
+
+		// Allow time for the async operations to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify Publish was not called due to blockchain error
+		mockP2PNode.AssertNotCalled(t, "Publish", mock.Anything, bestBlockTopicName, mock.Anything)
+	})
+
+	t.Run("publish_error", func(t *testing.T) {
+		// Create mock P2PNode that returns error on Publish
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+		mockP2PNode.On("GetProcessName").Return("test-node")
+
+		// Use mock.Anything for all parameters to handle any context type
+		mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(errors.New(errors.ERR_ERROR, "publish error"))
+
+		// Create mock blockchain client
+		mockBlockchainClient := new(blockchain.Mock)
+		nBit, _ := model.NewNBitFromString("1d00ffff")
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  new(chainhash.Hash),
+			HashMerkleRoot: new(chainhash.Hash),
+			Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
+			Bits:           *nBit,
+			Nonce:          2083236893,
+		}
+		meta := &model.BlockHeaderMeta{
+			ID:          1,
+			Height:      0,
+			TxCount:     0,
+			SizeInBytes: 0,
+			Miner:       "test-miner",
+			BlockTime:   uint32(time.Now().Unix()), // nolint:gosec
+			Timestamp:   uint32(time.Now().Unix()), // nolint:gosec
+			ChainWork:   []byte{},
+		}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
+
+		// Create server with mocks
+		server := &Server{
+			P2PNode:                  mockP2PNode,
+			blockchainClient:         mockBlockchainClient,
+			notificationCh:           make(chan *notificationMsg, 10),
+			bestBlockMessageReceived: atomic.Bool{},
+			logger:                   ulogger.New("test-server"),
+		}
+
+		// Call the sendBestBlockMessage method
+		// This should not panic even when Publish returns an error
+		server.sendBestBlockMessage(ctx)
+
+		// Allow time for the async operations to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify Publish was called
+		mockP2PNode.AssertCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+	})
 }

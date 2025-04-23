@@ -350,8 +350,8 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 			}()
 
 			td = daemon.NewTestDaemon(t, daemon.TestOptions{
-				EnableRPC:               true,
-				SettingsContextOverride: "dev.system.test",
+				EnableRPC:       true,
+				SettingsContext: "dev.system.test",
 			})
 		}()
 
@@ -368,7 +368,7 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		td.Stop()
+		td.Stop(t)
 	})
 
 	// set run state

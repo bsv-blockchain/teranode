@@ -398,6 +398,17 @@ func subscribeToTopics(topicNames []string, ps *pubsub.PubSub, s *P2PNode) (map[
 
 func (s *P2PNode) Stop(ctx context.Context) error {
 	s.logger.Infof("[P2PNode] stopping")
+
+	// Close the underlying libp2p host
+	if s.host != nil {
+		if err := s.host.Close(); err != nil {
+			s.logger.Errorf("[P2PNode] error closing host: %v", err)
+			return err // Return the error if closing fails
+		}
+
+		s.logger.Infof("[P2PNode] host closed")
+	}
+
 	return nil
 }
 
@@ -427,7 +438,9 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 			default:
 				m, err := sub.Next(ctx)
 				if err != nil {
-					s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
+					if !errors.Is(err, context.Canceled) {
+						s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
+					}
 					continue
 				}
 

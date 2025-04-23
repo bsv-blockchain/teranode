@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,26 +12,20 @@ import (
 func TestMiningCandidate(t *testing.T) {
 	t.Skip("Skipping test")
 
-	tSettings := settings.NewSettings()
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsOverride: tSettings,
-		EnableRPC:        true,
+		EnableRPC: true,
 	})
 
-	// t.Cleanup(func() {
-	// 	td.Stop()
-	// })
+	defer td.Stop(t)
 
 	res, err := td.CallRPC("getminingcandidate", nil)
 	require.NoError(t, err)
 
-	var rpcResponse map[string]interface{}
+	var rpcResponse map[string]any
 	err = json.Unmarshal([]byte(res), &rpcResponse)
 	require.NoError(t, err)
 
-	candidate, ok := rpcResponse["result"].(map[string]interface{})
+	candidate, ok := rpcResponse["result"].(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, float64(1), candidate["num_tx"].(float64))

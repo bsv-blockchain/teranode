@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"slices"
 	"strconv"
 	"sync"
@@ -32,7 +32,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
+	"github.com/bitcoin-sv/teranode/testutil"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -48,10 +48,13 @@ import (
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
+const memoryScheme = "memory"
+
 type TestDaemon struct {
 	Ctx                   context.Context
 	ctxCancel             context.CancelFunc
-	Logger                *ulogger.ErrorTestLogger
+	Logger                ulogger.Logger
+	composeDependencies   tc.ComposeStack
 	d                     *Daemon
 	BlockchainClient      blockchain.ClientI
 	BlockAssemblyClient   *blockassembly.Client
@@ -68,16 +71,15 @@ type TestDaemon struct {
 
 type TestOptions struct {
 	SkipRemoveDataDir       bool
-	KillTeranode            bool
-	UtxoStoreOverride       string
 	UseTracing              bool
 	EnableRPC               bool
 	EnableP2P               bool
 	EnableValidator         bool
 	EnableLegacy            bool
-	StartDockerNetwork      bool
-	SettingsContextOverride string
-	SettingsOverride        *settings.Settings
+	StartDaemonDependencies bool
+	SettingsContext         string
+	SettingsOverrideFunc    func(*settings.Settings)
+	EnableFullLogging       bool
 }
 
 type JSONError struct {
@@ -92,79 +94,64 @@ func (je *JSONError) Error() string {
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	logger := ulogger.NewErrorTestLogger(t, cancel)
+	var composeDependencies tc.ComposeStack
 
 	if !opts.SkipRemoveDataDir {
 		err := os.RemoveAll("./data")
 		require.NoError(t, err)
 	}
 
-	if opts.KillTeranode {
-		// Kill teranode processes
-		cmd := exec.Command("sh", "-c", "kill -9 $(pgrep -f teranode)")
-		_ = cmd.Run()
-	}
+	// if opts.StartDaemonDependencies {
+	// composeDependencies = StartDaemonDependencies(ctx, t, !opts.SkipRemoveDataDir, calculateDependencies(t, opts.Settings))
+	// }
 
-	if opts.StartDockerNetwork {
-		var err error
+	var tSettings *settings.Settings
 
-		identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
-
-		var compose tc.ComposeStack
-
-		compose, err = tc.NewDockerComposeWith(tc.WithStackFiles("../docker-compose-host.yml"), identifier)
-		if err != nil {
-			t.Fatalf("Failed to create docker network: %v", err)
-		}
-
-		if err := compose.Up(ctx); err != nil {
-			t.Fatalf("Failed to start docker network: %v", err)
-		}
-	}
-
-	persistentStore, err := url.Parse("sqlite:///test")
-	require.NoError(t, err)
-
-	useUxoStore := persistentStore
-	if len(opts.UtxoStoreOverride) > 0 {
-		useUxoStore, err = url.Parse(opts.UtxoStoreOverride)
-		require.NoError(t, err)
+	if opts.SettingsContext != "" {
+		tSettings = settings.NewSettings(opts.SettingsContext)
+	} else {
+		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 	}
 
 	memoryStore, err := url.Parse("memory:///")
 	require.NoError(t, err)
 
-	if !isKafkaRunning() && !opts.StartDockerNetwork {
-		kafkaContainer, err := testkafka.RunTestContainer(ctx)
-		require.NoError(t, err)
+	blockchainStoreURLString := "sqlite:///daemon"
+	coinbaseStoreURLString := "sqlite:///daemoncoinbase"
+	clientName := tSettings.ClientName
+	digit := clientName[len(clientName)-1]
+	blockchainStoreURLString += string(digit)
+	coinbaseStoreURLString += string(digit)
 
-		t.Cleanup(func() {
-			_ = kafkaContainer.CleanUp()
-		})
+	blockchainStoreURL, err := url.Parse(blockchainStoreURLString)
+	require.NoError(t, err)
 
-		gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
-	}
+	coinbaseStoreURL, err := url.Parse(coinbaseStoreURLString)
+	require.NoError(t, err)
 
-	var tSettings *settings.Settings
+	// use sqlite for db stores
+	tSettings.UtxoStore.UtxoStore = blockchainStoreURL // safe to re-use blockchain store for utxo db schema as they don't conflict
+	tSettings.BlockChain.StoreURL = blockchainStoreURL
+	tSettings.Coinbase.Store = coinbaseStoreURL
 
-	switch {
-	case opts.SettingsContextOverride != "":
-		tSettings = settings.NewSettings(opts.SettingsContextOverride)
-	case opts.SettingsOverride != nil:
-		tSettings = opts.SettingsOverride
-	default:
-		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
-		tSettings.SubtreeValidation.SubtreeStore = memoryStore
-		tSettings.BlockChain.StoreURL = persistentStore
-		tSettings.UtxoStore.UtxoStore = useUxoStore
-		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-	}
+	// use memory store for subtree store
+	tSettings.SubtreeValidation.SubtreeStore = memoryStore
+
+	// use in-memory kafka
+	tSettings.Kafka.BlocksConfig.Scheme = memoryScheme
+	tSettings.Kafka.BlocksFinalConfig.Scheme = memoryScheme
+	tSettings.Kafka.LegacyInvConfig.Scheme = memoryScheme
+	tSettings.Kafka.RejectedTxConfig.Scheme = memoryScheme
+	tSettings.Kafka.SubtreesConfig.Scheme = memoryScheme
+	tSettings.Kafka.TxMetaConfig.Scheme = memoryScheme
 
 	// Override with test settings...
 	tSettings.Asset.CentrifugeDisable = true
 	tSettings.UtxoStore.DBTimeout = 500 * time.Second
 	tSettings.LocalTestStartFromState = "RUNNING"
 	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
+	tSettings.ProfilerAddr = ""
 
 	if opts.UseTracing {
 		// tracing
@@ -172,9 +159,31 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		tSettings.TracingSampleRate = "1" // 100% sampling during the test
 	}
 
+	// Override with test settings...
+	if opts.SettingsOverrideFunc != nil {
+		opts.SettingsOverrideFunc(tSettings)
+	}
+
 	readyCh := make(chan struct{})
 
-	d := New()
+	var (
+		logger        ulogger.Logger
+		loggerFactory Option
+	)
+
+	if opts.EnableFullLogging {
+		logger = ulogger.New(tSettings.ClientName)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.New(tSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
+		})
+	} else {
+		logger = ulogger.NewErrorTestLogger(t, cancel)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return logger
+		})
+	}
+
+	d := New(loggerFactory)
 
 	services := []string{
 		"-all=0",
@@ -206,9 +215,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	select {
 	case <-readyCh:
-		t.Log("Daemon started successfully")
+		t.Logf("Daemon %s started successfully", tSettings.ClientName)
 	case <-time.After(20 * time.Second):
-		t.Fatal("Daemon failed to start within timeout")
+		t.Fatalf("Daemon %s failed to start within timeout", tSettings.ClientName)
 	}
 
 	if opts.UseTracing {
@@ -264,6 +273,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		Ctx:                   ctx,
 		ctxCancel:             cancel,
 		Logger:                logger,
+		composeDependencies:   composeDependencies,
 		d:                     d,
 		BlockchainClient:      blockchainClient,
 		BlockAssemblyClient:   blockAssemlyClient,
@@ -279,9 +289,18 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 }
 
-func (td *TestDaemon) Stop() {
-	_ = td.d.Stop()
+func (td *TestDaemon) Stop(t *testing.T) {
+	if err := td.d.Stop(); err != nil {
+		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
+	}
+
 	td.ctxCancel()
+
+	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
+}
+
+func (td *TestDaemon) StopDaemonDependencies() {
+	StopDaemonDependencies(td.Ctx, td.composeDependencies)
 }
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
@@ -718,7 +737,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	for {
 		select {
 		case <-timeoutElapsed:
-			return errors.NewError("health check failed for port %d after timeout: %v", port, err)
+			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
 			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
 			if err != nil {
@@ -774,6 +793,162 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 	}
 
 	return transactions, txHashes, nil
+}
+
+type daemonDependency struct {
+	name string
+	port int
+}
+
+// nolint:unused
+func calculateDependencies(t *testing.T, tSettings []*settings.Settings) []daemonDependency {
+	dependencies := make([]daemonDependency, 5)
+
+	// Blockchain store
+	url := tSettings[0].BlockChain.StoreURL
+
+	port, err := strconv.Atoi(url.Port())
+	if err != nil {
+		t.Fatalf("Failed to parse store port: %v", err)
+	}
+
+	dependencies = append(dependencies, daemonDependency{"postgres", port})
+
+	// Kafka
+	url = tSettings[0].Kafka.BlocksConfig
+
+	port, err = strconv.Atoi(url.Port())
+	if err != nil {
+		t.Fatalf("Failed to parse store port: %v", err)
+	}
+
+	dependencies = append(dependencies, daemonDependency{"kafka-shared", port})
+
+	// Aerospike
+	for i, s := range tSettings {
+		url = s.UtxoStore.UtxoStore
+
+		port, err = strconv.Atoi(url.Port())
+		if err != nil {
+			t.Fatalf("Failed to parse store port: %v", err)
+		}
+
+		dependencies = append(dependencies, daemonDependency{"aerospike-" + strconv.Itoa(i+1), port})
+	}
+
+	return dependencies
+}
+
+func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []daemonDependency) tc.ComposeStack {
+	var (
+		err     error
+		compose tc.ComposeStack
+	)
+
+	identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
+
+	if removeDataDir {
+		err := os.RemoveAll("./data")
+		require.NoError(t, err)
+	}
+
+	compose, err = tc.NewDockerComposeWith(tc.WithStackFiles("../../docker-compose-host.yml"), identifier)
+	if err != nil {
+		t.Fatalf("Failed to create docker network: %v", err)
+	}
+
+	services := make([]string, len(dependencies))
+	for i, dependency := range dependencies {
+		services[i] = dependency.name
+	}
+
+	if err := compose.Up(t.Context(), tc.RunServices(services...)); err != nil {
+		t.Fatalf("Failed to start docker network: %v", err)
+	}
+
+	ports := make([]int, len(dependencies))
+	for i, dependency := range dependencies {
+		ports[i] = dependency.port
+	}
+
+	// Wait for dependent services to become ready
+	if err := testutil.WaitForPortsReady(t.Context(), "localhost", ports, 5*time.Second, 100*time.Millisecond); err != nil {
+		// If the wait fails (timeout), stop the docker stack before failing the test
+		log.Printf("Services failed to start, attempting to stop docker stack...")
+
+		downCtx, downCancel := context.WithTimeout(t.Context(), 30*time.Second)
+
+		defer downCancel()
+
+		if downErr := compose.Down(downCtx, tc.RemoveOrphans(true)); downErr != nil {
+			log.Printf("Error stopping docker stack after port wait failure: %v", downErr)
+		}
+
+		t.Fatalf("Failed waiting for service ports: %v", err)
+	}
+
+	// even tho the ports are 'ready', if you try to connect to aerospike you might see:
+	// Node C81A9166430781A (127.0.0.1:3200) is not yet fully initialized
+	// time.Sleep(1 * time.Second)
+
+	return compose
+}
+
+func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
+	if compose == nil {
+		log.Printf("No docker stack to stop.")
+		return
+	}
+
+	log.Printf("Attempting to stop docker stack...")
+
+	// Inside StopDaemonDependencies
+	downCtx, downCancel := context.WithTimeout(context.Background(), 60*time.Second) // Use a separate timeout for cleanup
+	defer downCancel()
+
+	downErr := compose.Down(downCtx, tc.RemoveOrphans(true))
+	if downErr != nil {
+		log.Printf("Error stopping docker stack: %v. Will still attempt container and port checks.", downErr)
+	} else {
+		log.Printf("Docker stack stopped successfully (according to compose.Down).")
+	}
+
+	// ----> NEW: Wait for containers to disappear <----
+	// Assuming project name is 'test', derived from 'test/docker-compose-host.yml'
+	projectName := "test"
+	containerWaitTimeout := 60 * time.Second // Timeout for waiting for containers to be gone
+	containerCheckInterval := 2 * time.Second
+	// Use a separate context for this wait, derived from Background
+	containerWaitCtx, containerWaitCancel := context.WithTimeout(context.Background(), containerWaitTimeout)
+	defer containerWaitCancel()
+
+	log.Printf("Checking if containers for project '%s' are gone...", projectName)
+
+	if err := testutil.WaitForDockerComposeProjectDown(containerWaitCtx, projectName, containerWaitTimeout, containerCheckInterval); err != nil {
+		// Log potentially more severe error, but don't necessarily fail the test run here
+		log.Printf("ERROR: %v", err)
+	} else {
+		log.Printf("Container check passed for project '%s'.", projectName)
+	}
+	// ----> END NEW <----
+
+	// Wait for the ports used by the services to become free (existing code)
+	portsToCheck := []int{15432, 19092, 3100, 3200, 3300}
+	waitTimeout := 30 * time.Second
+	waitInterval := 500 * time.Millisecond
+
+	log.Printf("Calling WaitForPortsFree (timeout %s, interval %s)...", waitTimeout, waitInterval)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), waitTimeout)
+
+	defer cancelWait()
+
+	if err := testutil.WaitForPortsFree(waitCtx, "localhost", portsToCheck, waitTimeout, waitInterval); err != nil {
+		log.Printf("Warning during WaitForPortsFree: %v", err)
+	} else {
+		log.Printf("Confirmed dependent service ports are free.")
+	}
+
+	log.Printf("StopDaemonDependencies finished.")
 }
 
 // CreateParentTransactions creates a single transaction with multiple outputs from a parent transaction.

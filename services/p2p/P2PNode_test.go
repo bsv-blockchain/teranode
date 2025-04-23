@@ -2146,10 +2146,6 @@ func TestStop(t *testing.T) {
 	err = node.Stop(ctx)
 	assert.NoError(t, err, "Stop should not return an error")
 
-	// Verify that the host is still functional
-	addrs = h.Addrs()
-	assert.NotEmpty(t, addrs, "Host should still have addresses after Stop")
-
 	// Verify the host ID is still accessible
 	_ = h.ID()
 
@@ -2161,7 +2157,7 @@ func TestStop(t *testing.T) {
 	require.NoError(t, err)
 	defer h2.Close()
 
-	// Try to connect - this should actually succeed since Stop() doesn't close the host
+	// Try to connect - this should actually fail since Stop() closes the host
 	peerInfo := peer.AddrInfo{
 		ID:    hostID,
 		Addrs: addrs,
@@ -2171,9 +2167,8 @@ func TestStop(t *testing.T) {
 	connectCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// This should succeed since the host wasn't actually closed
 	err = h2.Connect(connectCtx, peerInfo)
-	assert.NoError(t, err, "Connection should succeed since Stop() doesn't close the host")
+	assert.Error(t, err, "Connection should fail since Stop() closes the host")
 }
 
 func TestSendToPeerIsolated(t *testing.T) {

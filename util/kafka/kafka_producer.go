@@ -9,6 +9,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util"
+	imk "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
 )
 
 /**
@@ -80,15 +81,36 @@ func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 
 // NewKafkaProducer creates a new Kafka producer from the given URL.
 // It also creates the topic if it doesn't exist with the specified configuration.
+// For "memory" scheme, it uses an in-memory implementation.
 //
 // Parameters:
 //   - kafkaURL: URL containing Kafka configuration including topic and partition settings
 //
 // Returns:
-//   - ClusterAdmin: Kafka cluster administrator interface
+//   - ClusterAdmin: Kafka cluster administrator interface (nil for memory scheme)
 //   - KafkaProducerI: Configured Kafka producer
 //   - error: Any error encountered during setup
 func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, error) {
+	topic := kafkaURL.Path[1:]
+
+	// Handle in-memory producer case
+	if kafkaURL.Scheme == memoryScheme {
+		// Get the shared broker instance
+		broker := imk.GetSharedBroker()
+		// Create the in-memory sync producer (implements sarama.SyncProducer)
+		inMemSaramaProducer := imk.NewInMemorySyncProducer(broker)
+		// No error expected from mock creation
+
+		// Wrap the sarama.SyncProducer in our SyncKafkaProducer to satisfy KafkaProducerI
+		producer := &SyncKafkaProducer{
+			Producer: inMemSaramaProducer,
+			Topic:    topic,
+		}
+
+		return nil, producer, nil // Return wrapper type
+	}
+
+	// Proceed with real Kafka connection
 	brokersURL := strings.Split(kafkaURL.Host, ",")
 
 	config := sarama.NewConfig()
@@ -104,8 +126,6 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 	retentionPeriod := util.GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
 	segmentBytes := util.GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
-	topic := kafkaURL.Path[1:]
-
 	partitionsInt32, err := util.SafeIntToInt32(partitions)
 	if err != nil {
 		return nil, nil, err
@@ -113,6 +133,8 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	replicationFactorInt16, err := util.SafeIntToInt16(replicationFactor)
 	if err != nil {
+		// Clean up cluster admin if topic creation prep fails
+		_ = clusterAdmin.Close() // Best effort close
 		return nil, nil, err
 	}
 
@@ -127,6 +149,7 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			_ = clusterAdmin.Close() // Best effort close
 			return nil, nil, err
 		}
 	}
@@ -135,6 +158,7 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	producer, err := ConnectProducer(brokersURL, topic, partitionsInt32, flushBytes)
 	if err != nil {
+		_ = clusterAdmin.Close() // Best effort close
 		return nil, nil, errors.NewServiceError("unable to connect to kafka", err)
 	}
 

@@ -495,7 +495,11 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 	// Start the server
 	go func() {
 		if err := ps.httpServer.Start(httpAddresses); err != nil {
-			ps.logger.Errorf("error starting HTTP server: %v", err)
+			if err == http.ErrServerClosed {
+				ps.logger.Infof("http server shutdown")
+			} else {
+				ps.logger.Errorf("failed to start http server: %v", err)
+			}
 		}
 	}()
 

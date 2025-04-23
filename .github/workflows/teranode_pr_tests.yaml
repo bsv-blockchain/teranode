@@ -8,6 +8,8 @@ permissions:
   pull-requests: read
 
 env:
+  REPO: teranode
+  ECR_REGION: eu-north-1
   SETTINGS_CONTEXT_DEFAULT: test
   GO_VERSION: '1.24.1'
 
@@ -46,6 +48,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -68,6 +85,22 @@ jobs:
     name: smoketest
     runs-on: ubuntu-latest
     steps:
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -75,7 +108,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
+          cache: "false"
 
       - name: Run Smoke tests
         run: |

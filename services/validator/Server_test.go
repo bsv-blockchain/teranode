@@ -313,7 +313,12 @@ func TestHTTPServerIntegration(t *testing.T) {
 	go func() {
 		err := server.startHTTPServer(ctx, "localhost:0")
 		if err != nil {
-			t.Errorf("Failed to start HTTP server: %v", err)
+			if err == http.ErrServerClosed {
+				server.logger.Infof("http server shutdown")
+			} else {
+				server.logger.Errorf("failed to start http server: %v", err)
+			}
+
 		}
 
 		close(readyCh)

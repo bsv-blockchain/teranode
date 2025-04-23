@@ -255,9 +255,9 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 	go func() {
 		if err := e.Start(httpAddress); err != nil {
 			if err == http.ErrServerClosed {
-				b.logger.Infof("[Blockchain][Start] http server shutdown")
+				b.logger.Infof("http server shutdown")
 			} else {
-				b.logger.Errorf("[Blockchain][Start] failed to start http server: %v", err)
+				b.logger.Errorf("failed to start http server: %v", err)
 			}
 		}
 	}()

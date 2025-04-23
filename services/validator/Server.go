@@ -551,7 +551,12 @@ func (v *Server) startAndMonitorHTTPServer(ctx context.Context, httpAddresses st
 	// Start the server
 	go func() {
 		if err := v.httpServer.Start(httpAddresses); err != nil {
-			v.logger.Errorf("error starting HTTP server: %v", err)
+			if err == http.ErrServerClosed {
+				v.logger.Infof("http server shutdown")
+			} else {
+				v.logger.Errorf("failed to start http server: %v", err)
+			}
+
 		}
 	}()
 

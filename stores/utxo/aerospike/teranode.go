@@ -59,8 +59,10 @@ import (
 	_ "embed"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -200,9 +202,39 @@ const (
 //
 // Returns error if registration fails.
 func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, funcName string, funcBytes []byte) error {
-	udfs, err := client.ListUDF(nil)
-	if err != nil {
-		return err
+	var (
+		udfs    []*aerospike.UDF
+		listErr error
+	)
+
+	const (
+		maxRetries = 5
+		retryDelay = 1 * time.Second
+	)
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		udfs, listErr = client.ListUDF(nil)
+		if listErr == nil {
+			// Success!
+			break
+		}
+
+		// Check if the error is a known transient one using errors.As and Matches() with ResultCodes from types package
+		var asErr aerospike.Error
+		isTransientError := errors.As(listErr, &asErr) && asErr.Matches(types.INVALID_NODE_ERROR, types.TIMEOUT, types.NO_RESPONSE, types.NETWORK_ERROR, types.SERVER_NOT_AVAILABLE, types.NO_AVAILABLE_CONNECTIONS_TO_NODE)
+
+		if isTransientError && attempt < maxRetries {
+			logger.Warnf("Failed to list UDFs on attempt %d (cluster initializing?): %v. Retrying in %v...", attempt, listErr, retryDelay)
+			time.Sleep(retryDelay)
+		} else {
+			// Not a transient error, or last attempt failed
+			logger.Errorf("Failed to list UDFs after %d attempts: %v", attempt, listErr)
+			return listErr
+		}
+	}
+	// If loop finished without error, listErr is nil
+	if listErr != nil {
+		return listErr
 	}
 
 	foundScript := false
@@ -229,6 +261,8 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 		if err != nil {
 			return err
 		}
+
+		logger.Infof("LUA script %s registered successfully", funcName)
 	}
 
 	return nil

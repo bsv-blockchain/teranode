@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,7 +44,18 @@ var (
 	metricsRegistered atomic.Bool
 	healthRegistered  atomic.Bool
 	traceCloser       io.Closer
+	globalStoreMu     sync.RWMutex
 )
+
+// Option is a functional option type for configuring the Daemon.
+type Option func(*Daemon)
+
+// WithLoggerFactory provides a custom logger factory for the Daemon and its services.
+func WithLoggerFactory(factory func(serviceName string) ulogger.Logger) Option {
+	return func(d *Daemon) {
+		d.loggerFactory = factory
+	}
+}
 
 type externalService struct {
 	Name     string
@@ -61,21 +73,35 @@ type Daemon struct {
 	server           *http.Server // Add this field
 	ServiceManager   *servicemanager.ServiceManager
 	externalServices []*externalService
+	loggerFactory    func(serviceName string) ulogger.Logger // Factory for creating loggers
 }
 
-func New() *Daemon {
+func New(opts ...Option) *Daemon {
 	ctx := context.Background()
 
-	return &Daemon{
+	d := &Daemon{
 		Ctx:              ctx,
 		closeDoneOnce:    sync.Once{},
 		closeStopOnce:    sync.Once{},
 		doneCh:           make(chan struct{}),
 		stopCh:           make(chan struct{}),
 		server:           nil,
-		ServiceManager:   servicemanager.NewServiceManager(ctx, ulogger.New("ServiceManager")),
 		externalServices: make([]*externalService, 0),
+		// Default logger factory
+		loggerFactory: func(serviceName string) ulogger.Logger {
+			return ulogger.New(serviceName)
+		},
 	}
+
+	// Apply functional options
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	// Initialize ServiceManager with the configured logger factory
+	d.ServiceManager = servicemanager.NewServiceManager(ctx, d.loggerFactory("ServiceManager"))
+
+	return d
 }
 
 func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager.Service, error)) {
@@ -86,8 +112,11 @@ func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager
 }
 
 func (d *Daemon) Stop(timeout ...time.Duration) error {
+	logger := d.loggerFactory("Daemon")
+
 	if traceCloser != nil {
 		_ = traceCloser.Close()
+		traceCloser = nil
 	}
 
 	d.serverMu.Lock()
@@ -98,30 +127,76 @@ func (d *Daemon) Stop(timeout ...time.Duration) error {
 
 		if err := d.server.Shutdown(ctx); err != nil {
 			// Log error but continue with shutdown
-			fmt.Printf("Error shutting down health check server: %v\n", err)
+			logger.Warnf("Error shutting down health check server: %v", err)
 		}
 	}
 	d.serverMu.Unlock()
 
+	// Use sync.Once to ensure channels are closed only once
 	d.closeDoneOnce.Do(func() { close(d.doneCh) })
 
 	if appCount == 0 {
+		// Ensure stopCh is closed only once as well
 		d.closeStopOnce.Do(func() { close(d.stopCh) })
 		return nil
 	}
 
+	// Default timeout of 10 seconds if not provided
+	shutdownTimeout := 10 * time.Second
 	if len(timeout) > 0 {
-		select {
-		case <-d.stopCh: // Wait for all services to complete
-			return nil
-		case <-time.After(timeout[0]):
-			return errors.NewProcessingError("timeout waiting for services to stop after %v", timeout[0])
-		}
+		shutdownTimeout = timeout[0]
 	}
 
-	<-d.stopCh // Wait for all services to complete without timeout
+	// Set up a timeout channel
+	timeoutCh := time.After(shutdownTimeout)
 
-	return nil
+	// Wait for services to shut down or timeout
+	select {
+	case <-d.stopCh: // Wait for all services to complete
+		return nil
+	case <-timeoutCh:
+		logger.Warnf("Timeout waiting for services to stop after %v", shutdownTimeout)
+
+		// Get detailed information about all services
+		type serviceStatus struct {
+			Name   string
+			Status string
+		}
+
+		serviceStatuses := make([]serviceStatus, 0)
+
+		// Directly access ServiceManager fields using reflection to extract service names
+		// This is only used for debugging purposes during timeout
+		smValue := reflect.ValueOf(d.ServiceManager).Elem()
+		servicesField := smValue.FieldByName("services")
+
+		if servicesField.IsValid() && servicesField.Kind() == reflect.Slice {
+			for i := 0; i < servicesField.Len(); i++ {
+				serviceWrapper := servicesField.Index(i)
+				nameField := serviceWrapper.FieldByName("name")
+
+				if nameField.IsValid() && nameField.Kind() == reflect.String {
+					serviceName := nameField.String()
+					serviceStatuses = append(serviceStatuses, serviceStatus{
+						Name:   serviceName,
+						Status: "Running",
+					})
+				}
+			}
+		}
+
+		if len(serviceStatuses) > 0 {
+			logger.Warnf("The following services are still running:")
+
+			for _, status := range serviceStatuses {
+				logger.Warnf("  - %s: %s", status.Name, status.Status)
+			}
+		} else {
+			logger.Infof("No services were identified as running, but stopCh was not closed")
+		}
+
+		return errors.NewProcessingError("timeout waiting for services to stop after %v", shutdownTimeout)
+	}
 }
 
 func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings.Settings, readyCh ...chan struct{}) {
@@ -135,27 +210,6 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 
 	sm := d.ServiceManager
 
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-
-		//
-		// close all the stores
-		//
-
-		if mainTxstore != nil {
-			logger.Debugf("closing tx store")
-
-			_ = mainTxstore.Close(shutdownCtx)
-		}
-
-		if mainSubtreestore != nil {
-			logger.Debugf("closing subtree store")
-
-			_ = mainSubtreestore.Close(shutdownCtx)
-		}
-	}()
-
 	var readyChInternal chan struct{}
 	if len(readyCh) > 0 {
 		readyChInternal = readyCh[0]
@@ -165,6 +219,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	if err != nil {
 		logger.Errorf("error starting services: %v", err)
 		sm.ForceShutdown()
+		// d.closeDoneOnce.Do(func() { close(d.doneCh) })
 		d.closeDoneOnce.Do(func() { close(d.doneCh) })
 	}
 
@@ -235,12 +290,46 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	case <-d.doneCh:
 		logger.Infof("daemon shutdown requested")
 
+		err = server.Shutdown(sm.Ctx)
+		if err != nil {
+			logger.Errorf("error shutting down server: %v", err)
+		}
+
+		// Close stores safely
+		globalStoreMu.RLock()
+		txStoreToClose := mainTxstore
+		subtreeStoreToClose := mainSubtreestore
+		tempStoreToClose := mainTempStore
+		globalStoreMu.RUnlock()
+
+		if txStoreToClose != nil {
+			logger.Debugf("closing tx store")
+
+			_ = txStoreToClose.Close(sm.Ctx)
+		}
+
+		if subtreeStoreToClose != nil {
+			logger.Debugf("closing subtree store")
+
+			_ = subtreeStoreToClose.Close(sm.Ctx)
+		}
+
+		if tempStoreToClose != nil {
+			logger.Debugf("closing temp store")
+
+			_ = tempStoreToClose.Close(sm.Ctx)
+		}
+
 		sm.ForceShutdown()
+
+		logger.Infof("daemon shutdown waiting for services to finish")
 
 		// Wait for services to complete shutdown using the existing waitCh
 		if err := <-waitErr; err != nil {
 			logger.Errorf("error during service shutdown: %v", err)
 		}
+
+		logger.Infof("daemon shutdown completed")
 	}
 
 	d.closeStopOnce.Do(func() { close(d.stopCh) })
@@ -249,11 +338,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 // startServices starts the services based on the command line arguments and the config file
 // nolint:gocognit
 func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string, readyCh chan<- struct{}) error {
-	var closeOnce sync.Once
+	var (
+		closeOnce sync.Once
+	)
 
-	if readyCh != nil {
-		defer closeOnce.Do(func() { close(readyCh) })
-	}
+	// Create logger using the factory
+	createLogger := d.loggerFactory
 
 	help := shouldStart("help", args)
 	startBlockchain := shouldStart("Blockchain", args)
@@ -348,12 +438,12 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return errors.NewStorageError("blockchain store url not found")
 		}
 
-		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL, tSettings)
+		blockchainStore, err := blockchain_store.NewStore(createLogger("bcsql"), blockchainStoreURL, tSettings)
 		if err != nil {
 			return err
 		}
 
-		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, logger, tSettings)
+		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, createLogger("kpbf"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -374,7 +464,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			localTestStartFromState = tSettings.LocalTestStartFromState
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), tSettings, blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
+		blockchainService, err = blockchain.New(ctx, createLogger("bchn"), tSettings, blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
 		if err != nil {
 			return err
 		}
@@ -386,28 +476,28 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 
 	// p2p server
 	if startP2P {
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "p2p")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "p2p")
 		if err != nil {
 			return err
 		}
 
-		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, tSettings, "p2p"+"."+tSettings.ClientName)
+		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(createLogger("kprtx"), tSettings, "p2p"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
-		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, logger, tSettings)
+		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, createLogger("kps"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, logger, tSettings)
+		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, createLogger("kpb"), tSettings)
 		if err != nil {
 			return err
 		}
 
 		p2pService, err := p2p.NewServer(ctx,
-			logger.New("P2P"),
+			createLogger("p2p"),
 			tSettings,
 			blockchainClient,
 			rejectedTxKafkaConsumerClient,
@@ -425,33 +515,33 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 
 	// asset service
 	if startAsset {
-		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		txStore, err := GetTxStore(logger)
+		txStore, err := GetTxStore(createLogger("txs"))
 		if err != nil {
 			return err
 		}
 
-		subtreeStore, err := GetSubtreeStore(logger, tSettings)
+		subtreeStore, err := GetSubtreeStore(createLogger("subtrees"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockPersisterStore, err := GetBlockPersisterStore(logger)
+		blockPersisterStore, err := GetBlockPersisterStore(createLogger("bp"))
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "asset")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "asset")
 		if err != nil {
 			return err
 		}
 
 		if err := sm.AddService("Asset", asset.NewServer(
-			logger.New("asset"),
+			createLogger("asset"),
 			tSettings,
 			utxoStore,
 			txStore,
@@ -464,17 +554,17 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startRPC {
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "rpc")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "rpc")
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		rpcServer, err := rpc.NewServer(logger.New("RPC"), tSettings, blockchainClient, utxoStore)
+		rpcServer, err := rpc.NewServer(createLogger("rpc"), tSettings, blockchainClient, utxoStore)
 		if err != nil {
 			return err
 		}
@@ -485,33 +575,33 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startAlert {
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "alert")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "alert")
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockassemblyClient, err := blockassembly.NewClient(ctx, logger, tSettings)
+		blockassemblyClient, err := blockassembly.NewClient(ctx, createLogger("ba"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		peerClient, err := peer.NewClient(ctx, logger, tSettings)
+		peerClient, err := peer.NewClient(ctx, createLogger("peer"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		p2pClient, err := p2p.NewClient(ctx, logger, tSettings)
+		p2pClient, err := p2p.NewClient(ctx, createLogger("p2p"), tSettings)
 		if err != nil {
 			return err
 		}
 
 		if err = sm.AddService("Alert", alert.New(
-			logger.New("alert"),
+			createLogger("alert"),
 			tSettings,
 			blockchainClient,
 			utxoStore,
@@ -524,28 +614,28 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startBlockPersister {
-		blockStore, err := GetBlockStore(logger)
+		blockStore, err := GetBlockStore(createLogger("bps"))
 		if err != nil {
 			return err
 		}
 
-		subtreeStore, err := GetSubtreeStore(logger, tSettings)
+		subtreeStore, err := GetSubtreeStore(createLogger("subtrees"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockpersister")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockpersister")
 		if err != nil {
 			return err
 		}
 
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
-			logger.New("bp"),
+			createLogger("bp"),
 			tSettings,
 			blockStore,
 			subtreeStore,
@@ -557,18 +647,18 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startUTXOPersister {
-		blockStore, err := GetBlockStore(logger)
+		blockStore, err := GetBlockStore(createLogger("bps"))
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "utxopersister")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "utxopersister")
 		if err != nil {
 			return err
 		}
 
 		if err := sm.AddService("UTXOPersister", utxopersister.New(ctx,
-			logger.New("utxop"),
+			createLogger("utxop"),
 			tSettings,
 			blockStore,
 			blockchainClient,
@@ -580,28 +670,28 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// blockAssembly
 	if startBlockAssembly {
 		if tSettings.BlockAssembly.GRPCListenAddress != "" {
-			txStore, err := GetTxStore(logger)
+			txStore, err := GetTxStore(createLogger("txs"))
 			if err != nil {
 				return err
 			}
 
-			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			subtreeStore, err := GetSubtreeStore(logger, tSettings)
+			subtreeStore, err := GetSubtreeStore(createLogger("subtrees"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockassembly")
+			blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockassembly")
 			if err != nil {
 				return err
 			}
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				logger.New("bass"),
+				createLogger("bass"),
 				tSettings,
 				txStore,
 				utxoStore,
@@ -615,43 +705,43 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 
 	// subtreeValidation
 	if startSubtreeValidation {
-		subtreeStore, err := GetSubtreeStore(logger, tSettings)
+		subtreeStore, err := GetSubtreeStore(createLogger("subtrees"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		txStore, err := GetTxStore(logger)
+		txStore, err := GetTxStore(createLogger("txs"))
 		if err != nil {
 			return err
 		}
 
-		utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+		utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
+		validatorClient, err := GetValidatorClient(ctx, createLogger("txval"), tSettings)
 		if err != nil {
 			return err
 		}
 
-		blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "subtreevalidation")
+		blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "subtreevalidation")
 		if err != nil {
 			return err
 		}
 
-		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, tSettings, "subtreevalidation"+"."+tSettings.ClientName)
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(createLogger("kcs"), tSettings, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
-		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, tSettings, "subtreevalidation"+"."+tSettings.ClientName)
+		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(createLogger("kctm"), tSettings, "subtreevalidation"+"."+tSettings.ClientName)
 		if err != nil {
 			return err
 		}
 
 		subtreeValidationService, err := subtreevalidation.New(ctx,
-			logger.New("stval"),
+			createLogger("stval"),
 			tSettings,
 			subtreeStore,
 			txStore,
@@ -673,38 +763,38 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// blockValidation
 	if startBlockValidation {
 		if tSettings.BlockValidation.GRPCListenAddress != "" {
-			subtreeStore, err := GetSubtreeStore(logger, tSettings)
+			subtreeStore, err := GetSubtreeStore(createLogger("subtrees"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			txStore, err := GetTxStore(logger)
+			txStore, err := GetTxStore(createLogger("txs"))
 			if err != nil {
 				return err
 			}
 
-			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
+			validatorClient, err := GetValidatorClient(ctx, createLogger("txval"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "blockvalidation")
+			blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockvalidation")
 			if err != nil {
 				return err
 			}
 
-			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, tSettings, "blockvalidation"+"."+tSettings.ClientName)
+			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(createLogger("kcb"), tSettings, "blockvalidation"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}
 
 			if err = sm.AddService("Block Validation", blockvalidation.New(
-				logger.New("bval"),
+				createLogger("bval"),
 				tSettings,
 				subtreeStore,
 				txStore,
@@ -721,33 +811,33 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// validator
 	if startValidator {
 		if tSettings.Validator.GRPCListenAddress != "" {
-			utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+			utxoStore, err := GetUtxoStore(ctx, createLogger("utxos"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "validator")
+			blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "validator")
 			if err != nil {
 				return err
 			}
 
-			consumerClient, err := getKafkaTxConsumerGroup(logger, "validator"+"."+tSettings.ClientName)
+			consumerClient, err := getKafkaTxConsumerGroup(createLogger("kctx"), "validator"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}
 
-			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger, tSettings)
+			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, createLogger("kctm"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger, tSettings)
+			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, createLogger("kctr"), tSettings)
 			if err != nil {
 				return err
 			}
 
 			if err = sm.AddService("Validator", validator.NewServer(
-				logger.New("validator"),
+				createLogger("validator"),
 				tSettings,
 				utxoStore,
 				blockchainClient,
@@ -763,28 +853,28 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// propagation
 	if startPropagation {
 		if tSettings.Propagation.GRPCListenAddress != "" {
-			txStore, err := GetTxStore(logger)
+			txStore, err := GetTxStore(createLogger("txs"))
 			if err != nil {
 				return err
 			}
 
-			validatorClient, err := GetValidatorClient(ctx, logger, tSettings)
+			validatorClient, err := GetValidatorClient(ctx, createLogger("txval"), tSettings)
 			if err != nil {
 				return err
 			}
 
-			blockchainClient, err := GetBlockchainClient(ctx, logger, tSettings, "propagation")
+			blockchainClient, err := GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "propagation")
 			if err != nil {
 				return err
 			}
 
-			validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, logger)
+			validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, createLogger("kctx"))
 			if err != nil {
 				return err
 			}
 
 			if err = sm.AddService("PropagationServer", propagation.New(
-				logger.New("prop"),
+				createLogger("prop"),
 				tSettings,
 				txStore,
 				validatorClient,
@@ -842,7 +932,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 		}
 
 		if err = sm.AddService("Legacy", legacy.New(
-			logger.New("legacy"),
+			createLogger("legacy"),
 			tSettings,
 			blockchainClient,
 			validatorClient,

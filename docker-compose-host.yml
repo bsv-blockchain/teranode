@@ -25,6 +25,7 @@ x-aerospike-base: &aerospike-base
 services:
 
   teranode-builder:
+    container_name: teranode-builder
     image: teranode:latest
     network_mode: "host"
     build:
@@ -326,8 +327,8 @@ services:
       - ./data/aerospike3/data:/opt/aerospike/data
 
   aerospike-exporter-1:
-    image: aerospike/aerospike-prometheus-exporter:latest
     container_name: aerospike-exporter-1
+    image: aerospike/aerospike-prometheus-exporter:latest
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3100"
@@ -336,8 +337,8 @@ services:
     network_mode: "host"
 
   aerospike-exporter-2:
-    image: aerospike/aerospike-prometheus-exporter:latest
     container_name: aerospike-exporter-2
+    image: aerospike/aerospike-prometheus-exporter:latest
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3200"
@@ -346,8 +347,8 @@ services:
     network_mode: "host"
 
   aerospike-exporter-3:
-    image: aerospike/aerospike-prometheus-exporter:latest
     container_name: aerospike-exporter-3
+    image: aerospike/aerospike-prometheus-exporter:latest
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3300"

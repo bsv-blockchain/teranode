@@ -46,11 +46,13 @@ type ServiceManager struct {
 
 // NewServiceManager creates a new service manager or returns the existing instance
 func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
-	once.Do(func() {
-		instance = initServiceManager(ctx, logger)
-	})
+	// once.Do(func() {
+	// 	instance = initServiceManager(ctx, logger)
+	// })
 
-	return instance
+	// return instance
+
+	return initServiceManager(ctx, logger)
 }
 
 // initServiceManager initializes a new ServiceManager instance
@@ -76,10 +78,12 @@ func initServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceMana
 		sm.cancelFunc()
 	}()
 
-	http.HandleFunc("/services", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	once.Do(func() {
+		http.HandleFunc("/services", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 
-		_ = json.NewEncoder(w).Encode(GetListenerInfos())
+			_ = json.NewEncoder(w).Encode(GetListenerInfos())
+		})
 	})
 
 	return sm

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,15 +42,14 @@ func GetFreePort() (int, error) {
 
 	// Try up to 3 times to get a free port
 	for attempts := 0; attempts < 3; attempts++ {
-		addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+		addr, err := net.ResolveTCPAddr("tcp", "localhost:0") // :0 means use any available port
 		if err != nil {
 			return 0, err
 		}
 
 		l, err := net.ListenTCP("tcp", addr)
 		if err != nil {
-			// Wait briefly before retry
-			time.Sleep(100 * time.Millisecond)
+			// start over, this port isn't available
 			continue
 		}
 
@@ -61,15 +61,25 @@ func GetFreePort() (int, error) {
 			return 0, err
 		}
 
-		// Small delay to ensure port is released
-		time.Sleep(100 * time.Millisecond)
+		// Actively check if the port is free by attempting to dial it
+		if err := waitForPortRelease(port, 10*time.Millisecond, 1*time.Second); err != nil {
+			continue
+		}
 
 		// Verify the port is actually free
 		testListener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
 			continue
 		}
-		testListener.Close()
+		err = testListener.Close()
+		if err != nil {
+			return 0, err
+		}
+
+		// Check again after verification close
+		if err := waitForPortRelease(port, 10*time.Millisecond, 1*time.Second); err != nil {
+			continue
+		}
 
 		return port, nil
 	}
@@ -141,7 +151,7 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 
 	var testContainer *TestContainerWrapper
 	var err error
-	
+
 	// Retry up to 3 times with random delays to reduce port conflicts
 	for attempt := 0; attempt < 3; attempt++ {
 		// Add random delay to reduce chance of simultaneous port allocation
@@ -150,7 +160,7 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 			t.Logf("Retrying container setup after delay of %v (attempt %d)", delay, attempt+1)
 			time.Sleep(delay)
 		}
-		
+
 		// Try to create and start the container
 		func() {
 			defer func() {
@@ -158,20 +168,20 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 					t.Logf("Recovered from panic in container setup (attempt %d): %v", attempt+1, r)
 				}
 			}()
-			
+
 			testContainer, err = RunContainer(ctx)
 			if err != nil {
 				t.Logf("Failed to create container on attempt %d: %v", attempt+1, err)
 				return
 			}
 		}()
-		
+
 		// If successful, break out of retry loop
 		if testContainer != nil {
 			break
 		}
 	}
-	
+
 	// If all attempts failed, skip the test
 	if testContainer == nil {
 		t.Skip("Failed to create test container after 3 attempts, likely due to port conflicts")
@@ -657,6 +667,7 @@ This test is to ensure that when a consumer is restarted, it will resume from th
 and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
+
 	logger := ulogger.NewZeroLogger("test")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -796,7 +807,7 @@ func TestKafkaConsumerNoReplay(t *testing.T) {
 		// We expect this to find msg3 and msg4
 		// If it were to replay, it would find msg1 and msg2 again
 		receivedMessages := consumeMessages(t, ctx, logger, kafkaURL, groupID, 2)
-		
+
 		// When running in parallel, sometimes a single message may be received.
 		// Since we're just testing that we don't replay old messages (msg1, msg2),
 		// let's just verify we don't receive those specific messages
@@ -877,7 +888,7 @@ func Test3Containers(t *testing.T) {
 	// Create containers with retry logic
 	var kafkaContainer1, kafkaContainer2, kafkaContainer3 *GenericTestContainerWrapper
 	var err error
-	
+
 	// Attempt to create the first container with retries
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -885,51 +896,51 @@ func Test3Containers(t *testing.T) {
 			t.Logf("Retrying container 1 setup after delay of %v (attempt %d)", delay, attempt+1)
 			time.Sleep(delay)
 		}
-		
+
 		kafkaContainer1, err = RunTestContainer(ctx)
 		if err == nil {
 			break
 		}
 		t.Logf("Failed to create container 1 on attempt %d: %v", attempt+1, err)
 	}
-	
+
 	// Skip test if first container failed to start
 	if kafkaContainer1 == nil {
 		t.Skip("Failed to create first test container after 3 attempts, likely due to port conflicts")
 		return
 	}
-	
+
 	// Attempt to create the second container with retries
 	for attempt := 0; attempt < 3; attempt++ {
 		delay := time.Duration(100+time.Now().Nanosecond()%500) * time.Millisecond
 		time.Sleep(delay) // Always add delay between container creations
-		
+
 		kafkaContainer2, err = RunTestContainer(ctx)
 		if err == nil {
 			break
 		}
 		t.Logf("Failed to create container 2 on attempt %d: %v", attempt+1, err)
 	}
-	
+
 	// Skip test if second container failed to start
 	if kafkaContainer2 == nil {
 		_ = kafkaContainer1.CleanUp() // Clean up first container
 		t.Skip("Failed to create second test container after 3 attempts, likely due to port conflicts")
 		return
 	}
-	
+
 	// Attempt to create the third container with retries
 	for attempt := 0; attempt < 3; attempt++ {
 		delay := time.Duration(100+time.Now().Nanosecond()%500) * time.Millisecond
 		time.Sleep(delay) // Always add delay between container creations
-		
+
 		kafkaContainer3, err = RunTestContainer(ctx)
 		if err == nil {
 			break
 		}
 		t.Logf("Failed to create container 3 on attempt %d: %v", attempt+1, err)
 	}
-	
+
 	// Skip test if third container failed to start
 	if kafkaContainer3 == nil {
 		_ = kafkaContainer1.CleanUp() // Clean up first container
@@ -948,4 +959,24 @@ func Test3Containers(t *testing.T) {
 		_ = kafkaContainer2.CleanUp()
 		_ = kafkaContainer3.CleanUp()
 	})
+}
+
+func waitForPortRelease(port int, retryDelay, maxWait time.Duration) error {
+	start := time.Now()
+	for time.Since(start) < maxWait {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 10*time.Millisecond)
+		if err != nil {
+			// If connection is refused, the port is free
+			if strings.Contains(err.Error(), "connection refused") {
+				return nil
+			}
+			// Other errors might be transient, wait briefly before retrying
+			time.Sleep(retryDelay)
+			continue
+		}
+		// If connection succeeds, port is still in use, close it and wait
+		conn.Close()
+		time.Sleep(retryDelay)
+	}
+	return fmt.Errorf("port %d not released within %v", port, maxWait)
 }

@@ -16,6 +16,7 @@ x-aerospike-base: &aerospike-base
 services:
 
   teranode-builder:
+    container_name: teranode-builder
     image: teranode:latest
     network_mode: "host"
     build:
@@ -25,6 +26,7 @@ services:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
     entrypoint: [ "pwd" ]
+
   jaeger:
     container_name: jaeger
     image: jaegertracing/all-in-one:1.59
@@ -74,8 +76,6 @@ services:
 
   teranode-1:
     <<: *teranode-base
-    # profiles:
-    #   - skip-teranode
     container_name: teranode-1
     depends_on:
       postgres:
@@ -124,6 +124,7 @@ services:
       - ./data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
       - ./data/teranode2/external:/app/data/teranode2/external
       - ./wait.sh:/app/wait.sh
+      
   teranode-3:
     <<: *teranode-base
     container_name: teranode-3
@@ -148,6 +149,7 @@ services:
       - ./data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
       - ./data/teranode3/external:/app/data/teranode3/external
       - ./wait.sh:/app/wait.sh
+
   aerospike-1:
     container_name: aerospike-1
     <<: *aerospike-base

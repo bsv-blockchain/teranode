@@ -175,11 +175,12 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	if v.httpServer != nil {
 		g.Go(func() error {
 			err := v.httpServer.Start(ctx, v.httpAddr)
-			if err != nil {
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				v.logger.Errorf("[Asset] error in http server: %v", err)
+				return err
 			}
 
-			return err
+			return nil
 		})
 	}
 

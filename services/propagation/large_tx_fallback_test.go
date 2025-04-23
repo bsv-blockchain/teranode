@@ -23,9 +23,11 @@ type MockKafkaProducer struct {
 	MessageSizeLimit  int
 }
 
-func (m *MockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {}
-func (m *MockKafkaProducer) Stop() error                                       { return nil }
-func (m *MockKafkaProducer) BrokersURL() []string                              { return []string{} }
+func (m *MockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {
+}
+
+func (m *MockKafkaProducer) Stop() error          { return nil }
+func (m *MockKafkaProducer) BrokersURL() []string { return []string{} }
 func (m *MockKafkaProducer) Publish(msg *kafka.Message) {
 	m.PublishedMessages = append(m.PublishedMessages, msg)
 }

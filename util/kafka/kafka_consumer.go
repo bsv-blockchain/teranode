@@ -15,9 +15,12 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	inmemorykafka "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/ordishs/go-utils"
 )
+
+const memoryScheme = "memory"
 
 // KafkaMessage wraps sarama.ConsumerMessage to provide additional functionality.
 type KafkaMessage struct {
@@ -151,7 +154,28 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		return nil, errors.NewConfigurationError("group ID is not set", nil)
 	}
 
-	cfg.Logger.Infof("Starting %d Kafka consumer(s) for %s topic", cfg.ConsumerCount, cfg.Topic)
+	cfg.Logger.Infof("Starting %d Kafka consumer(s) for topic %s in group %s", cfg.ConsumerCount, cfg.Topic, cfg.ConsumerGroupID)
+
+	var consumerGroup sarama.ConsumerGroup
+
+	if cfg.URL.Scheme == memoryScheme {
+		// --- Use the in-memory implementation ---
+		broker := inmemorykafka.GetSharedBroker() // Get the shared broker instance
+		// Create the InMemoryConsumerGroup which implements sarama.ConsumerGroup
+		consumerGroup = inmemorykafka.NewInMemoryConsumerGroup(broker, cfg.Topic, cfg.ConsumerGroupID)
+		cfg.Logger.Infof("Using in-memory Kafka consumer group")
+		// No error expected from mock creation here, unless topic/group were invalid (checked above)
+
+		cfg.ConsumerCount = 1 // in-memory implementation only supports 1 consumer
+
+		return &KafkaConsumerGroup{
+			Config:        cfg,
+			ConsumerGroup: consumerGroup,
+		}, nil
+	}
+
+	// --- Use the real Sarama implementation ---
+	var err error
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
@@ -176,17 +200,15 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		_ = clusterAdmin.Close()
 	}(clusterAdmin)
 
-	consumerGroup, err := sarama.NewConsumerGroup(cfg.BrokersURL, cfg.ConsumerGroupID, config)
+	consumerGroup, err = sarama.NewConsumerGroup(cfg.BrokersURL, cfg.ConsumerGroupID, config)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to create Kafka consumer group for %s", cfg.Topic, err)
 	}
 
-	client := &KafkaConsumerGroup{
+	return &KafkaConsumerGroup{
 		Config:        cfg,
 		ConsumerGroup: consumerGroup,
-	}
-
-	return client, nil
+	}, nil
 }
 
 // ConsumerOption represents an option for configuring the consumer behavior

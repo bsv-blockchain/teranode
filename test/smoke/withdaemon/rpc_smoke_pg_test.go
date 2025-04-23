@@ -7,13 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
-	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	postgres "github.com/bitcoin-sv/teranode/test/util/postgres"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
@@ -39,33 +38,26 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 		}
 	})
 
+	// Update the PostgreSQL connection settings with the dynamic port
 	gocore.Config().Set("POSTGRES_PORT", pg.Port)
 
-	kafkaContainer, err := testkafka.RunTestContainer(ctx)
-	require.NoError(t, err)
+	pgStore := fmt.Sprintf("postgres://teranode:teranode@localhost:%s/teranode?expiration=5m", pg.Port)
 
-	t.Cleanup(func() {
-		_ = kafkaContainer.CleanUp()
-	})
-
-	gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
-
-	// Create custom settings with the PostgreSQL container's dynamic port
-	customSettings := settings.NewSettings("dev.system.test.postgres")
-	// Update the PostgreSQL connection settings with the dynamic port
-	customSettings.PostgresCheckAddress = fmt.Sprintf("%s:%s", pg.Host, pg.Port)
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		KillTeranode:     true,
-		SettingsOverride: customSettings,
+		EnableRPC: true,
+		SettingsOverrideFunc: func(tSettings *settings.Settings) {
+			url, err := url.Parse(pgStore)
+			require.NoError(t, err)
+			tSettings.BlockChain.StoreURL = url
+			tSettings.Coinbase.Store = url
+			tSettings.UtxoStore.UtxoStore = url
+		},
 	})
 
-	t.Cleanup(func() {
-		td.Stop()
-	})
+	defer td.Stop(t)
 
 	// set run state
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
 	// Generate initial blocks
@@ -272,14 +264,14 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	t.Skip("Test is disabled")
+
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		KillTeranode:     true,
-		SettingsOverride: settings.NewSettings("dev.system.test"),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	t.Cleanup(func() {
-		td.Stop()
+		td.Stop(t)
 	})
 
 	// set run state

@@ -18,15 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldHandleFreeze	(t *testing.T) {
+func TestShouldHandleFreeze(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:              true,
-		KillTeranode:           true,
-		SettingsContextOverride: "dev.system.test",
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	t.Cleanup(func() {
-		td.Stop()
+		td.Stop(t)
 	})
 
 	// set run state
@@ -132,5 +131,5 @@ func TestShouldHandleFreeze	(t *testing.T) {
 	assert.True(t, blFound, "TX not found in the blockstore")
 
 	// freeze the tx
-	
+
 }

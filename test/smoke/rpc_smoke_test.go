@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -24,24 +23,21 @@ import (
 
 func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:              true,
-		KillTeranode:           true,
-		SettingsContextOverride: "dev.system.test",
+		EnableRPC: true,
+		// KillTeranode:            true,
+		// EnableFullLogging:       true,
+		SettingsContext: "dev.system.test",
 	})
 
-	defer td.Stop()
+	defer func() {
+		td.Stop(t)
+	}()
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
-	// Generate initial blocks in smaller batches
-	for i := 0; i < 5; i++ {
-		_, err = td.CallRPC("generate", []interface{}{20})
-		require.NoError(t, err)
-		time.Sleep(1 * time.Second) // Allow time for block processing
-	}
-	_, err = td.CallRPC("generate", []interface{}{1}) // Final block to reach 101
+	_, err = td.CallRPC("generate", []any{101})
 	require.NoError(t, err)
 
 	tSettings := td.Settings
@@ -85,7 +81,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -96,17 +92,8 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC("generate", []any{101})
 	require.NoError(t, err, "Failed to generate blocks")
-
-	t.Logf("Resp: %s", resp)
-
-	// Generate remaining blocks in smaller batches
-	for i := 0; i < 5; i++ {
-		_, err = td.CallRPC("generate", []interface{}{20})
-		require.NoError(t, err)
-		time.Sleep(1 * time.Second) // Allow time for block processing
-	}
 
 	t.Logf("Resp: %s", resp)
 
@@ -142,7 +129,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	assert.True(t, blFound, "TX not found in the blockstore")
 
-	resp, err = td.CallRPC("getblockchaininfo", []interface{}{})
+	resp, err = td.CallRPC("getblockchaininfo", []any{})
 	require.NoError(t, err)
 
 	var blockchainInfo helper.BlockchainInfo
@@ -169,7 +156,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	assert.Nil(t, blockchainInfo.Error)
 	assert.Nil(t, blockchainInfo.ID)
 
-	resp, err = td.CallRPC("getinfo", []interface{}{})
+	resp, err = td.CallRPC("getinfo", []any{})
 	require.NoError(t, err)
 
 	var getInfo helper.GetInfo
@@ -194,7 +181,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	var getDifficulty helper.GetDifficultyResponse
 
-	resp, err = td.CallRPC("getdifficulty", []interface{}{})
+	resp, err = td.CallRPC("getdifficulty", []any{})
 
 	require.NoError(t, err)
 
@@ -204,7 +191,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	t.Logf("getDifficulty: %+v", getDifficulty)
 	assert.Equal(t, float64(4.6565423739069247e-10), getDifficulty.Result)
 
-	resp, err = td.CallRPC("getblockhash", []interface{}{202})
+	resp, err = td.CallRPC("getblockhash", []any{202})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	var getBlockHash helper.GetBlockHashResponse
@@ -216,7 +203,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	t.Logf("%s", resp)
 
-	resp, err = td.CallRPC("getblockbyheight", []interface{}{102})
+	resp, err = td.CallRPC("getblockbyheight", []any{102})
 	require.NoError(t, err, "Failed to get block by height")
 
 	var getBlockByHeightResp helper.GetBlockByHeightResponse
@@ -248,12 +235,11 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	t.Skip("Test is disabled")
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		KillTeranode:     true,
-		SettingsOverride: settings.NewSettings("dev.system.test"),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -313,12 +299,11 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 
 func TestShouldRejectOversizedTx(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:              true,
-		KillTeranode:           true,
-		SettingsContextOverride: "dev.system.test.txsizetest",
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test.txsizetest",
 	})
 
-	defer td.Stop()
+	defer td.Stop(t)
 
 	tSettings := td.Settings
 
@@ -335,6 +320,8 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 
 	// Create a transaction that exceeds MaxTxSizePolicy by adding many outputs
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+	block101, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
 	require.NoError(t, err)
 
 	coinbaseTx := block1.CoinbaseTx
@@ -369,7 +356,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	// Plus 8 bytes for the satoshi amount
 	// So each output is roughly 42 bytes
 	// We'll create enough outputs to exceed MaxTxSizePolicy
-	numOutputs := (maxTxSize / 34) + 1000 // Add extra outputs to ensure we exceed the limit
+	numOutputs := (maxTxSize / 34) + 1000                     // Add extra outputs to ensure we exceed the limit
 	satoshisPerOutput := output.Satoshis / uint64(numOutputs) //nolint:gosec
 
 	t.Logf("Creating transaction with %d outputs to exceed MaxTxSizePolicy of %d bytes", numOutputs, maxTxSize)
@@ -388,20 +375,24 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	// Try to send the oversized transaction
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
-	
+
 	// The transaction should be rejected for being too large
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxTxSizePolicy")
 	require.Contains(t, err.Error(), "transaction size in bytes is greater than max tx size policy", "Expected error message to indicate transaction size policy violation")
+
+	//now try add a block with the transaction
+	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
+	require.NoError(t, err)
 }
 
 func TestShouldRejectOversizedScript(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:              true,
-		KillTeranode:           true,
-		SettingsContextOverride: "dev.system.test.oversizedscripttest",
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test.oversizedscripttest",
 	})
 
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -417,6 +408,8 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	// Create a transaction with an oversized script
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
+	block101, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	require.NoError(t, err)
 
 	coinbaseTx := block1.CoinbaseTx
 	output := coinbaseTx.Outputs[0]
@@ -425,7 +418,6 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	require.NoError(t, err)
 
-	
 	utxo := &bt.UTXO{
 		TxIDHash:      coinbaseTx.TxIDChainHash(),
 		Vout:          uint32(0),
@@ -465,8 +457,13 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	// Try to send the transaction with oversized script
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
-	
+
 	// The transaction should be rejected for having a script that's too large
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxScriptSizePolicy")
 	require.Contains(t, err.Error(), "Script is too big", "Expected error message to indicate script size violation")
+
+	//now try add a block with the transaction
+	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
+	require.NoError(t, err)
 }

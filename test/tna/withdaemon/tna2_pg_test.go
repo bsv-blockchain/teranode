@@ -4,19 +4,53 @@ package tna
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/test/util/postgres"
 	utils "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSingleTransactionPropagationWithUtxoPostgres(t *testing.T) {
 	ctx := context.Background()
 
-	td := utils.SetupPostgresTestDaemon(t, ctx, "single-tx")
+	pg, errPsql := postgres.RunPostgresTestContainer(ctx, "fairtx")
+	require.NoError(t, errPsql)
+
+	t.Cleanup(func() {
+		if err := pg.Terminate(ctx); err != nil {
+			t.Fatalf("failed to terminate postgres container: %v", err)
+		}
+	})
+
+	gocore.Config().Set("POSTGRES_PORT", pg.Port)
+
+	pgStore := fmt.Sprintf("postgres://teranode:teranode@localhost:%s/teranode?expiration=5m", pg.Port)
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC: true,
+		SettingsOverrideFunc: func(tSettings *settings.Settings) {
+			url, err := url.Parse(pgStore)
+			require.NoError(t, err)
+			tSettings.BlockChain.StoreURL = url
+			tSettings.Coinbase.Store = url
+			tSettings.UtxoStore.UtxoStore = url
+		},
+	})
+
+	defer td.Stop(t)
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test-tna2")
+	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC("generate", []any{101})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)

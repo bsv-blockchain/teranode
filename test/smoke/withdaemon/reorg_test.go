@@ -3,154 +3,226 @@
 package smoke
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"encoding/hex"
+
 	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/wif"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/require"
 )
 
 var (
+	testLock sync.Mutex
 	// DEBUG DEBUG DEBUG
-	blockWait = 30 * time.Second
+	blockWait = 20 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
-	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../../docker-compose-host.yml",
-	})
-	require.NoError(t, err)
+	testLock.Lock()
+	defer testLock.Unlock()
 
-	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
-	_, err = node2.CallRPC(t, "generate", []interface{}{101})
-	require.NoError(t, err)
+	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
+	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
 
-	// tc.StopNode(t, "teranode-1")
-
-	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        true,
-		EnableValidator:  true,
-		KillTeranode:     true,
-		SettingsOverride: settings.NewSettings("docker.host.teranode1"),
+	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC: true,
+		EnableP2P: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2",
 	})
 
-	t.Cleanup(func() {
-		td.Stop()
+	defer node2.Stop(t)
+
+	_, err := node2.CallRPC("generate", []any{1})
+	require.NoError(t, err)
+
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:         true,
+		EnableP2P:         true,
+		SkipRemoveDataDir: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1",
 	})
 
-	// set run state
-	err = td.BlockchainClient.Run(td.Ctx, "test")
-	require.NoError(t, err)
+	defer node1.Stop(t)
 
-	block101, err := node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 101)
+	// wait for node1 to catchup to block 1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1, blockWait)
 	require.NoError(t, err)
-
-	td.WaitForBlockHeight(t, block101, blockWait, true)
 
 	// generate 1 block on node1
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = node1.CallRPC("generate", []any{1})
 	require.NoError(t, err)
 
-	// verify blockheight on node1
-	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
+	// verify block height on node1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 2, blockWait)
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Second)
-	_, err = node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 102)
+	// verify block height on node2
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 2, blockWait)
 	require.NoError(t, err)
-
-	// assert.Equal(t, block102Node1.Header.Hash(), block102Node2.Header.Hash())
 }
 
-func TestMoveDownMoveUp(t *testing.T) {
-	// t.Skip("Test is disabled")
-	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../docker-compose-host.yml",
-	})
-	// Add cleanup for test container at the start
-	t.Cleanup(func() {
-		if tc != nil {
-			tc.Compose.Down(tc.Ctx)
-		}
-	})
-	require.NoError(t, err)
+func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
 
-	tc.StopNode(t, "teranode-1")
+	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
+	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
 
-	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
-	_, err = node2.CallRPC(t, "generate", []interface{}{300})
-	require.NoError(t, err)
-
-	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        false,
-		EnableValidator:  true,
-		SettingsOverride: settings.NewSettings("docker.host.teranode1"),
+	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:         true,
+		EnableP2P:         true,
+		EnableValidator:   true,
+		EnableFullLogging: true,
+		SettingsContext:   "docker.host.teranode2",
 	})
 
-	blockgen, err := td.CallRPC("generate", []interface{}{200})
-	t.Logf("blockgen: %s", blockgen)
+	// mine 3 blocks on node2
+	_, err := node2.CallRPC("generate", []any{300})
 	require.NoError(t, err)
 
-	block200, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 200)
-	t.Logf("block200: %s", block200.Header.Hash())
-	require.NoError(t, err)
+	// stop node 2 so that it doesn't sync with node 1
+	node2.Stop(t)
 
-	td.WaitForBlockHeight(t, block200, blockWait, true)
-
-	td.Stop()
-	td.ResetServiceManagerContext(t)
-
-	td2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+	// mine 2 blocks on node1
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsOverride:  settings.NewSettings("docker.host.teranode1"),
+		SettingsContext:   "docker.host.teranode1",
 	})
 
-	time.Sleep(10 * time.Second)
+	// // set run state
+	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
+	// require.NoError(t, err)
 
-	// verify blockheight on node1
-	_, err = td2.BlockchainClient.GetBlockByHeight(td2.Ctx, 300)
+	_, err = node1.CallRPC("generate", []any{200})
 	require.NoError(t, err)
 
-	// create a mining candidate and test that the previous hash is the tip of the block 300 // TNC2
-
-	// Add cleanup for td2
-	t.Cleanup(func() {
-		if td2 != nil {
-			td2.Stop()
-		}
+	// restart node 2 (which is at height 3)
+	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:         true,
+		EnableP2P:         true,
+		EnableValidator:   true,
+		SkipRemoveDataDir: true,
+		SettingsContext:   "docker.host.teranode2",
 	})
+
+	_, err = node2.CallRPC("generate", []any{1})
+	require.NoError(t, err)
+
+	defer func() {
+		node1.Stop(t)
+		node2.Stop(t)
+	}()
+
+	// verify blockheight on node2
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
+	require.NoError(t, err)
+
+	// verify blockheight on node1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 300, blockWait)
+	require.NoError(t, err)
+}
+
+func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
+	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
+	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
+
+	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode2",
+	})
+
+	// mine 3 blocks on node2
+	_, err := node2.CallRPC("generate", []any{300})
+	require.NoError(t, err)
+
+	// stop node 2 so that it doesn't sync with node 1
+	node2.Stop(t)
+
+	// mine 2 blocks on node1
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:         true,
+		EnableP2P:         true,
+		EnableValidator:   true,
+		SkipRemoveDataDir: true,
+		SettingsContext:   "docker.host.teranode1",
+	})
+
+	// // set run state
+	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
+	// require.NoError(t, err)
+
+	_, err = node1.CallRPC("generate", []any{200})
+	require.NoError(t, err)
+
+	// restart node 2 (which is at height 3)
+	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:         true,
+		EnableP2P:         true,
+		EnableValidator:   true,
+		SkipRemoveDataDir: true,
+		SettingsContext:   "docker.host.teranode2",
+	})
+
+	defer func() {
+		node1.Stop(t)
+		node2.Stop(t)
+	}()
+
+	// verify blockheight on node2
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
+	require.NoError(t, err)
+
+	// verify blockheight on node1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 300, blockWait)
+	require.NoError(t, err)
 }
 
 func TestTDRestart(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
+	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
+	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
+
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1",
 	})
 
-	err := td.BlockchainClient.Run(td.Ctx, "test")
-	require.NoError(t, err)
+	// err := td.BlockchainClient.Run(td.Ctx, "test")
+	// require.NoError(t, err)
 
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err := td.CallRPC("generate", []any{1})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
-	td.Stop()
-
-	// time.Sleep(10 * time.Second)
+	td.Stop(t)
 
 	td.ResetServiceManagerContext(t)
 
@@ -159,6 +231,7 @@ func TestTDRestart(t *testing.T) {
 		EnableP2P:         false,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
+		SettingsContext:   "docker.host.teranode1",
 	})
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
@@ -215,7 +288,7 @@ func TestDynamicSubtreeSize(t *testing.T) {
 	})
 
 	t.Cleanup(func() {
-		td.Stop()
+		td.Stop(t)
 	})
 
 	// Start the blockchain
@@ -275,4 +348,169 @@ func TestDynamicSubtreeSize(t *testing.T) {
 		// // Wait between iterations to allow for subtree size adjustments
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func TestSkipPolicyChecksOnBlockAcceptance(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
+	ctx := context.Background()
+
+	// Start node1 with restrictive policy settings
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1", // This has restrictive MaxTxSizePolicy
+	})
+
+	// Start node2 with default settings (no size restrictions)
+	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode2",
+	})
+
+	defer func() {
+		node1.Stop(t)
+		node2.Stop(t)
+	}()
+
+	// Generate initial blocks to get coinbase funds
+	_, err := node1.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Wait for node1 to sync up to block 101
+	err = helper.WaitForNodeBlockHeight(ctx, node1.BlockchainClient, 101, blockWait)
+	require.NoError(t, err)
+
+	// Create a transaction that exceeds node1's MaxTxSizePolicy
+	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+	coinbasePrivKey := node2.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	// Create an oversized transaction
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// Add many outputs to make the transaction exceed MaxTxSizePolicy of node1
+	maxTxSize := node1.Settings.Policy.MaxTxSizePolicy
+	numOutputs := (maxTxSize / 34) + 1000 // Add extra outputs to ensure we exceed the limit
+	satoshisPerOutput := output.Satoshis / uint64(numOutputs)
+
+	t.Logf("Creating transaction with %d outputs to exceed MaxTxSizePolicy of %d bytes", numOutputs, maxTxSize)
+
+	for i := 0; i < numOutputs; i++ {
+		err = newTx.AddP2PKHOutputFromAddress(address.AddressString, satoshisPerOutput)
+		require.NoError(t, err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+
+	// Try to send the oversized transaction to node1 - should fail
+	_, err = node1.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	require.Error(t, err, "Expected node1 to reject oversized transaction")
+	require.Contains(t, err.Error(), "transaction size in bytes is greater than max tx size policy",
+		"Expected error message to indicate transaction size policy violation")
+
+	// Send the same transaction to node2 - should succeed
+	// resp, err := node2.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	// require.NoError(t, err, "Expected node2 to accept the transaction")
+	// t.Logf("Transaction accepted by node2: %s", resp)
+
+	// Mine a block on node2 containing the oversized transaction
+	_, err = node2.CallRPC("generate", []interface{}{1})
+	require.NoError(t, err)
+
+	// Wait for node1 to receive and accept the block despite the transaction violating its policy
+	err = helper.WaitForNodeBlockHeight(ctx, node1.BlockchainClient, 102, blockWait)
+	require.NoError(t, err)
+
+	// // Verify that node1 has the transaction in its block
+	// block102, err := node1.BlockchainClient.GetBlockByHeight(ctx, 102)
+	// require.NoError(t, err)
+
+	// // Check if the transaction is in the block's subtrees
+	// err = block102.GetAndValidateSubtrees(ctx, node1.Logger, node1.SubtreeStore, nil)
+	// require.NoError(t, err)
+
+	// err = block102.CheckMerkleRoot(ctx)
+	// require.NoError(t, err)
+
+	// fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
+	// 	return block102.SubTreesFromBytes(subtreeHash[:])
+	// }
+
+	// subtree, err := block102.GetSubtrees(ctx, node1.Logger, node1.SubtreeStore, fallbackGetFunc)
+	// require.NoError(t, err)
+
+	// txFound := false
+	// for i := 0; i < len(subtree); i++ {
+	// 	st := subtree[i]
+	// 	for _, node := range st.Nodes {
+	// 		if node.Hash.String() == newTx.TxIDChainHash().String() {
+	// 			txFound = true
+	// 			break
+	// 		}
+	// 	}
+	// }
+
+	// assert.True(t, txFound, "Transaction should be found in node1's block despite violating its policy")
+}
+
+func TestInvalidBlock(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
+	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
+	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
+
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		SettingsContext: "docker.host.teranode1",
+	})
+
+	time.Sleep(1 * time.Second)
+
+	_, err := node1.CallRPC("generate", []any{3})
+	require.NoError(t, err)
+
+	node1BestBlockHeader, node1BestBlockHeaderMeta, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), node1BestBlockHeaderMeta.Height)
+
+	// Invalidate best block 3
+	err = node1.BlockchainClient.InvalidateBlock(t.Context(), node1BestBlockHeader.Hash())
+	require.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	// Best block should be 2
+	node1BestBlockHeaderNew, node1BestBlockHeaderMetaNew, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.NotEqual(t, node1BestBlockHeader.Hash(), node1BestBlockHeaderNew.Hash())
+	require.Equal(t, node1BestBlockHeaderMetaNew.Height, uint32(2))
 }

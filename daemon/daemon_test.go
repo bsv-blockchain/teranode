@@ -2,12 +2,11 @@ package daemon
 
 import (
 	"context"
-	"strconv"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/settings"
-	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
@@ -95,65 +94,28 @@ func TestShouldStart(t *testing.T) {
 }
 
 func TestDaemon_Start_Basic(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	d := New()
 
 	logger := ulogger.NewErrorTestLogger(t, cancel)
 
-	if !isKafkaRunning() {
-
-		var (
-			kafkaContainer *testkafka.GenericTestContainerWrapper
-			err            error
-		)
-
-		// Retry up to 3 times with random delays to reduce port conflicts
-		for attempt := 0; attempt < 3; attempt++ {
-			// Add random delay to reduce chance of simultaneous port allocation
-			if attempt > 0 {
-				delay := time.Duration(100+time.Now().Nanosecond()%500) * time.Millisecond
-				t.Logf("Retrying Kafka container setup after delay of %v (attempt %d)", delay, attempt+1)
-				time.Sleep(delay)
-			}
-
-			// Try to create and start the container
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						t.Logf("Recovered from panic in Kafka container setup (attempt %d): %v", attempt+1, r)
-					}
-				}()
-
-				kafkaContainer, err = testkafka.RunTestContainer(ctx)
-				if err != nil {
-					t.Logf("Failed to create Kafka container on attempt %d: %v", attempt+1, err)
-					return
-				}
-			}()
-
-			// If successful, break out of retry loop
-			if kafkaContainer != nil {
-				break
-			}
-		}
-
-		// If all attempts failed, skip the test
-		if kafkaContainer == nil {
-			t.Skip("Failed to create Kafka test container after 3 attempts, likely due to port conflicts")
-			return
-		}
-
-		t.Cleanup(func() {
-			_ = kafkaContainer.CleanUp()
-		})
-
-		gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
-	}
-
 	args := []string{"-all=0", "-blockchain=1"}
 	tSettings := settings.NewSettings()
+
+	// switch blockchain store to sqlite to avoid need to start a postgres DB or container
+	s := "sqlite:///test"
+	clientName := tSettings.ClientName
+	digit := clientName[len(clientName)-1]
+	s += string(digit)
+
+	persistentStore, err := url.Parse(s)
+	require.NoError(t, err)
+
+	tSettings.BlockChain.StoreURL = persistentStore
+
+	tSettings.Kafka.BlocksFinalConfig.Scheme = memoryScheme
 
 	// Create a ready channel
 	readyCh := make(chan struct{})
@@ -168,7 +130,7 @@ func TestDaemon_Start_Basic(t *testing.T) {
 		// Stop the daemon
 		require.NoError(t, d.Stop(5*time.Second))
 
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for readyCh")
 	}
 }

@@ -176,7 +176,7 @@ func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer func() {
-		td.Stop()
+		td.Stop(t)
 	}()
 
 	// 0 -> 1 ... 101 -> 102a (*)
@@ -248,7 +248,7 @@ func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 func testDoubleSpendInSubsequentBlock(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, _, txB0, block102, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// Step 1: Create and validate block with double spend transaction
 	_, block103 := td.CreateTestBlock(t, block102, 10301, txB0)
@@ -273,7 +273,7 @@ func testMarkAsConflictingMultipleSameBlock(t *testing.T, utxoStore string) {
 func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, coinbaseTx1, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// 0 -> 1 ... 101 -> 102a
 
@@ -323,7 +323,7 @@ func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// 0 -> 1 ... 101 -> 102a
 
@@ -401,7 +401,7 @@ func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 func testDoubleSpendFork(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// Create chain A transactions
 	txA1 := td.CreateTransaction(t, txA0)
@@ -552,7 +552,7 @@ func createFork(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block,
 func testTripleForkedChain(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// Create chain A transactions
 	txA1 := td.CreateTransaction(t, txA0)
@@ -674,7 +674,7 @@ func testNonConflictingTxReorg(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, txX0 := setupDoubleSpendTest(t, utxoStore)
 	defer func() {
-		td.Stop()
+		td.Stop(t)
 	}()
 
 	txregistry.AddTag(txA0, "txA0")
@@ -760,7 +760,7 @@ func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, txX0 := setupDoubleSpendTest(t, utxoStore)
 	defer func() {
-		td.Stop()
+		td.Stop(t)
 	}()
 
 	// 0 -> 1 ... 101 -> 102a (*)
@@ -860,7 +860,7 @@ func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {
 func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
-	defer td.Stop()
+	defer td.Stop(t)
 
 	// Create chain A transactions
 	txA1 := td.CreateTransaction(t, txA0)
@@ -1016,7 +1016,7 @@ func testSingleDoubleSpendFrozenTx(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
 	defer func() {
-		td.Stop()
+		td.Stop(t)
 	}()
 
 	// freeze utxos of txA0

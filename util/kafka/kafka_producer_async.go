@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	inmemorykafka "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
 	"github.com/bitcoin-sv/teranode/util/retry"
 )
 
@@ -129,6 +130,26 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
+	if cfg.URL.Scheme == memoryScheme {
+		// --- Use the in-memory implementation ---
+		broker := inmemorykafka.GetSharedBroker() // Use alias 'imk'
+		// Use a reasonable default buffer size for the mock async producer, or take from config if available
+		bufferSize := 256                                                      // Default buffer size for the publish channel
+		producer := inmemorykafka.NewInMemoryAsyncProducer(broker, bufferSize) // Use alias 'imk'
+
+		cfg.Logger.Infof("Using in-memory Kafka async producer")
+		// No error expected from mock creation
+
+		client := &KafkaAsyncProducer{
+			Producer: producer,
+			Config:   cfg,
+		}
+
+		return client, nil
+	}
+
+	// --- Use the real Sarama implementation ---
+
 	config := sarama.NewConfig()
 	config.Producer.Flush.Bytes = cfg.FlushBytes
 	config.Producer.Flush.Messages = cfg.FlushMessages
@@ -221,6 +242,10 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			wg.Done()
 
 			for msgBytes := range c.publishChannel {
+				if c.closed.Load() {
+					break
+				}
+
 				var key sarama.ByteEncoder
 				if msgBytes.Key != nil {
 					key = sarama.ByteEncoder(msgBytes.Key)
@@ -269,6 +294,10 @@ func (c *KafkaAsyncProducer) Stop() error {
 	}
 
 	c.closed.Store(true)
+
+	for len(c.publishChannel) > 0 {
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	if err := c.Producer.Close(); err != nil {
 		c.closed.Store(false)

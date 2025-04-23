@@ -1266,7 +1266,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	for {
 		select {
 		case <-timeoutElapsed:
-			return errors.NewError("health check failed for port %d after timeout: %v", port, err)
+			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 		default:
 			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
 			if err != nil {

@@ -35,7 +35,7 @@ func init() {
 
 // InitDashboard initializes the dashboard with settings
 func InitDashboard(settings *settings.Settings) {
-	authHandler = NewAuthHandler(settings)
+	authHandler = NewAuthHandler(logger, settings)
 }
 
 func AppHandler(c echo.Context) error {

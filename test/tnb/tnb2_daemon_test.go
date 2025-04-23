@@ -32,15 +32,14 @@ func TestUtxoStore(t *testing.T) {
 	settingsNode1.Validator.UseLocalValidator = false
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:        true,
-		EnableP2P:        true,
-		EnableValidator:  true,
-		KillTeranode:     true,
-		SettingsOverride: settingsNode1,
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1",
 	})
 
 	t.Cleanup(func() {
-		td.Stop()
+		td.Stop(t)
 	})
 
 	td.CallRPC("generate", []interface{}{101})

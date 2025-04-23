@@ -14,20 +14,15 @@ import (
 
 const cookieName = "auth"
 
-var authLogger ulogger.Logger
-
-func init() {
-	authLogger = ulogger.New("authHandler")
-}
-
 // AuthHandler handles authentication for the dashboard UI
 type AuthHandler struct {
+	logger   ulogger.Logger
 	settings *settings.Settings
 	authsha  [sha256.Size]byte
 }
 
 // NewAuthHandler creates a new authentication handler
-func NewAuthHandler(settings *settings.Settings) *AuthHandler {
+func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHandler {
 	var authsha [sha256.Size]byte
 
 	rpcUser := settings.RPC.RPCUser
@@ -39,13 +34,14 @@ func NewAuthHandler(settings *settings.Settings) *AuthHandler {
 		authsha = sha256.Sum256([]byte(auth))
 
 		// Debug log to help troubleshoot
-		authLogger.Infof("Auth initialized with user: %s", rpcUser)
+		logger.Infof("Auth initialized with user: %s", rpcUser)
 	} else {
-		authLogger.Warnf("RPC authentication not configured properly. User: %s, Pass: %s",
+		logger.Warnf("RPC authentication not configured properly. User: %s, Pass: %s",
 			rpcUser != "", rpcPass != "")
 	}
 
 	return &AuthHandler{
+		logger:   logger,
 		settings: settings,
 		authsha:  authsha,
 	}
@@ -55,7 +51,7 @@ func NewAuthHandler(settings *settings.Settings) *AuthHandler {
 func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	// If no auth is configured, allow all requests
 	if h.settings.RPC.RPCUser == "" || h.settings.RPC.RPCPass == "" {
-		authLogger.Infof("No auth configured, allowing request")
+		h.logger.Infof("No auth configured, allowing request")
 		return true
 	}
 
@@ -65,7 +61,7 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 		// Check for auth in cookie
 		cookie, err := r.Cookie(cookieName)
 		if err != nil || cookie.Value == "" {
-			authLogger.Debugf("No auth header or cookie found")
+			h.logger.Debugf("No auth header or cookie found")
 			return false
 		}
 
@@ -74,7 +70,7 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 
 	// Validate the auth header
 	if !strings.HasPrefix(authHeader, "Basic ") {
-		authLogger.Debugf("Auth header doesn't have Basic prefix")
+		h.logger.Debugf("Auth header doesn't have Basic prefix")
 		return false
 	}
 
@@ -87,14 +83,14 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 
 	decodedCreds, err := base64.StdEncoding.DecodeString(encodedCreds)
 	if err != nil {
-		authLogger.Debugf("Failed to decode auth header: %v", err)
+		h.logger.Debugf("Failed to decode auth header: %v", err)
 		return false
 	}
 
 	// Split username and password
 	parts := strings.SplitN(string(decodedCreds), ":", 2)
 	if len(parts) != 2 {
-		authLogger.Debugf("Invalid auth format")
+		h.logger.Debugf("Invalid auth format")
 		return false
 	}
 
@@ -103,7 +99,7 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 
 	// Direct credential comparison
 	if username == rpcUser && password == rpcPass {
-		authLogger.Debugf("Direct credential match successful")
+		h.logger.Debugf("Direct credential match successful")
 		return true
 	}
 
@@ -116,9 +112,9 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 		expectedAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", rpcUser, rpcPass)))
 		expectedHash := sha256.Sum256([]byte(expectedAuth))
 
-		authLogger.Debugf("Auth validation failed. Got: %x, Expected: %x", authsha, expectedHash)
-		authLogger.Debugf("Username comparison: '%s' vs '%s'", username, rpcUser)
-		authLogger.Debugf("Password comparison: '%s' vs '%s'", password, rpcPass)
+		h.logger.Debugf("Auth validation failed. Got: %x, Expected: %x", authsha, expectedHash)
+		h.logger.Debugf("Username comparison: '%s' vs '%s'", username, rpcUser)
+		h.logger.Debugf("Password comparison: '%s' vs '%s'", password, rpcPass)
 	}
 
 	return isValid
@@ -126,7 +122,7 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 
 // LoginHandler handles login requests
 func (h *AuthHandler) LoginHandler(c echo.Context) error {
-	authLogger.Infof("Login attempt received")
+	h.logger.Infof("Login attempt received")
 
 	// Check if this is a form submission
 	username := c.FormValue("username")
@@ -134,7 +130,7 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 
 	if username != "" && password != "" {
 		// Form-based authentication
-		authLogger.Debugf("Form-based login attempt for user: %s", username)
+		h.logger.Debugf("Form-based login attempt for user: %s", username)
 
 		// Check if credentials match
 		if username == h.settings.RPC.RPCUser && password == h.settings.RPC.RPCPass {
@@ -152,14 +148,14 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 			cookie.MaxAge = 86400 // 24 hours
 			c.SetCookie(cookie)
 
-			authLogger.Infof("Form-based login successful, cookie set: %s", cookie.Name)
+			h.logger.Infof("Form-based login successful, cookie set: %s", cookie.Name)
 
 			return c.JSON(http.StatusOK, map[string]interface{}{
 				"success": true,
 			})
 		}
 
-		authLogger.Infof("Form-based login failed")
+		h.logger.Infof("Form-based login failed")
 
 		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 			"success": false,
@@ -181,14 +177,14 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		cookie.MaxAge = 86400 // 24 hours
 		c.SetCookie(cookie)
 
-		authLogger.Infof("Login successful, cookie set: %s", cookie.Name)
+		h.logger.Infof("Login successful, cookie set: %s", cookie.Name)
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"success": true,
 		})
 	}
 
-	authLogger.Infof("Login failed")
+	h.logger.Infof("Login failed")
 
 	return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 		"success": false,
@@ -214,30 +210,30 @@ func (h *AuthHandler) LogoutHandler(c echo.Context) error {
 
 // CheckAuthHandler checks if the user is authenticated
 func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
-	authLogger.Debugf("Auth check request received")
+	h.logger.Debugf("Auth check request received")
 
 	// Log all cookies for debugging
 	for _, cookie := range c.Cookies() {
-		authLogger.Debugf("Cookie found: %s = %s", cookie.Name, cookie.Value)
+		h.logger.Debugf("Cookie found: %s = %s", cookie.Name, cookie.Value)
 	}
 
 	// Log auth header if present
 	authHeader := c.Request().Header.Get("Authorization")
 	if authHeader != "" {
-		authLogger.Debugf("Auth header found: %s", authHeader[:10]+"...")
+		h.logger.Debugf("Auth header found: %s", authHeader[:10]+"...")
 	} else {
-		authLogger.Debugf("No auth header found")
+		h.logger.Debugf("No auth header found")
 	}
 
 	if h.CheckAuth(c.Request()) {
-		authLogger.Debugf("Auth check successful")
+		h.logger.Debugf("Auth check successful")
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"authenticated": true,
 		})
 	}
 
-	authLogger.Debugf("Auth check failed")
+	h.logger.Debugf("Auth check failed")
 
 	return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 		"authenticated": false,

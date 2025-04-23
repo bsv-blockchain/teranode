@@ -5,11 +5,13 @@ package doublespendtest
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/teranode/settings"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
@@ -19,7 +21,11 @@ import (
 
 func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		UtxoStoreOverride: utxoStoreOverride,
+		SettingsOverrideFunc: func(tSettings *settings.Settings) {
+			url, err := url.Parse(utxoStoreOverride)
+			require.NoError(t, err)
+			tSettings.UtxoStore.UtxoStore = url
+		},
 	})
 
 	// Set the FSM state to RUNNING...

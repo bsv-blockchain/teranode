@@ -36,15 +36,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// Various topic name variables used for P2P communication
-var (
-	blockTopicName      string // Topic name for block-related messages
-	bestBlockTopicName  string // Topic name for best block messages
-	subtreeTopicName    string // Topic name for subtree messages
-	miningOnTopicName   string // Topic name for mining-on messages
-	rejectedTxTopicName string // Topic name for rejected transaction messages
-)
-
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 )
@@ -68,6 +59,11 @@ type Server struct {
 	banChan                       chan BanEvent             // Channel for ban events
 	bestBlockMessageReceived      atomic.Bool               // Flag to indicate if best block message has been processed
 	gCtx                          context.Context
+	blockTopicName                string
+	subtreeTopicName              string
+	bestBlockTopicName            string
+	miningOnTopicName             string
+	rejectedTxTopicName           string
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -135,12 +131,6 @@ func NewServer(
 	usePrivateDht := tSettings.P2P.DHTUsePrivate
 	optimiseRetries := tSettings.P2P.OptimiseRetries
 
-	blockTopicName = fmt.Sprintf("%s-%s", topicPrefix, btn)
-	subtreeTopicName = fmt.Sprintf("%s-%s", topicPrefix, stn)
-	bestBlockTopicName = fmt.Sprintf("%s-%s", topicPrefix, bbtn)
-	miningOnTopicName = fmt.Sprintf("%s-%s", topicPrefix, miningOntn)
-	rejectedTxTopicName = fmt.Sprintf("%s-%s", topicPrefix, rtn)
-
 	staticPeers := tSettings.P2P.StaticPeers
 	privateKey := tSettings.P2P.PrivateKey
 
@@ -176,6 +166,11 @@ func NewServer(
 		blocksKafkaProducerClient:     blocksKafkaProducerClient,
 		bestBlockMessageReceived:      atomic.Bool{},
 		gCtx:                          ctx,
+		blockTopicName:                fmt.Sprintf("%s-%s", topicPrefix, btn),
+		subtreeTopicName:              fmt.Sprintf("%s-%s", topicPrefix, stn),
+		bestBlockTopicName:            fmt.Sprintf("%s-%s", topicPrefix, bbtn),
+		miningOnTopicName:             fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
+		rejectedTxTopicName:           fmt.Sprintf("%s-%s", topicPrefix, rtn),
 	}
 
 	return p2pServer, nil
@@ -278,7 +273,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		s.logger.Debugf("[Start] publishing rejectedTxMessage")
 
-		if err := s.P2PNode.Publish(ctx, rejectedTxTopicName, msgBytes); err != nil {
+		if err := s.P2PNode.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[Start] publish error: %v", err)
 		}
 
@@ -314,9 +309,13 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
 
 	go func() {
-		err := s.StartHTTP(ctx)
-		if err != nil {
-			s.logger.Errorf("[Start] error starting http server: %s", err)
+		if err := s.StartHTTP(ctx); err != nil {
+			if err == http.ErrServerClosed {
+				s.logger.Infof("http server shutdown")
+			} else {
+				s.logger.Errorf("failed to start http server: %v", err)
+			}
+
 			return
 		}
 	}()
@@ -324,20 +323,20 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	err = s.P2PNode.Start(
 		ctx,
 		s.receiveBestBlockStreamHandler,
-		bestBlockTopicName,
-		blockTopicName,
-		subtreeTopicName,
-		miningOnTopicName,
-		rejectedTxTopicName,
+		s.bestBlockTopicName,
+		s.blockTopicName,
+		s.subtreeTopicName,
+		s.miningOnTopicName,
+		s.rejectedTxTopicName,
 	)
 	if err != nil {
 		return errors.NewServiceError("error starting p2p node", err)
 	}
 
-	_ = s.P2PNode.SetTopicHandler(ctx, bestBlockTopicName, s.handleBestBlockTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, blockTopicName, s.handleBlockTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, subtreeTopicName, s.handleSubtreeTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, miningOnTopicName, s.handleMiningOnTopic)
+	_ = s.P2PNode.SetTopicHandler(ctx, s.bestBlockTopicName, s.handleBestBlockTopic)
+	_ = s.P2PNode.SetTopicHandler(ctx, s.blockTopicName, s.handleBlockTopic)
+	_ = s.P2PNode.SetTopicHandler(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
+	_ = s.P2PNode.SetTopicHandler(ctx, s.miningOnTopicName, s.handleMiningOnTopic)
 
 	go s.blockchainSubscriptionListener(ctx)
 
@@ -387,9 +386,9 @@ func (s *Server) sendBestBlockMessage(ctx context.Context) {
 					return
 				}
 
-				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] publishing best block request message %s on topic %s", string(msgBytes), bestBlockTopicName)
+				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] publishing best block request message %s on topic %s", string(msgBytes), s.bestBlockTopicName)
 
-				if err := s.P2PNode.Publish(ctx, bestBlockTopicName, msgBytes); err != nil {
+				if err := s.P2PNode.Publish(ctx, s.bestBlockTopicName, msgBytes); err != nil {
 					s.logger.Errorf("[sendBestBlockMessage][p2p-handshake] publish error: %v", err)
 				}
 
@@ -498,7 +497,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					continue
 				}
 
-				if err := s.P2PNode.Publish(ctx, blockTopicName, msgBytes); err != nil {
+				if err := s.P2PNode.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
 					s.logger.Errorf("[blockchainSubscriptionListener] blockMessage - publish error: %v", err)
 				}
 			case model.NotificationType_MiningOn:
@@ -527,7 +526,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				s.logger.Debugf("P2P publishing miningOnMessage")
 
-				if err := s.P2PNode.Publish(ctx, miningOnTopicName, msgBytes); err != nil {
+				if err := s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
 					s.logger.Errorf("[blockchainSubscriptionListener] miningOnMessage - publish error: %v", err)
 				}
 			case model.NotificationType_Subtree:
@@ -545,7 +544,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 					continue
 				}
 
-				if err := s.P2PNode.Publish(ctx, subtreeTopicName, msgBytes); err != nil {
+				if err := s.P2PNode.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
 					s.logger.Errorf("[blockchainSubscriptionListener] subtreeMessage - publish error: %v", err)
 				}
 			}
@@ -603,13 +602,35 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Infof("[Stop] Stopping P2P service")
 
+	var errs []error
+
+	// Stop the underlying P2P node
+	if s.P2PNode != nil {
+		if err := s.P2PNode.Stop(ctx); err != nil {
+			s.logger.Errorf("[Stop] failed to stop P2P node: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
 	// close the kafka consumer gracefully
-	if err := s.rejectedTxKafkaConsumerClient.Close(); err != nil {
-		s.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	if s.rejectedTxKafkaConsumerClient != nil {
+		if err := s.rejectedTxKafkaConsumerClient.Close(); err != nil {
+			s.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+			errs = append(errs, err)
+		}
 	}
 
 	if s.e != nil {
-		return s.e.Shutdown(ctx)
+		if err := s.e.Shutdown(ctx); err != nil {
+			s.logger.Errorf("[Stop] failed to shutdown Echo server: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		// Combine errors if multiple occurred
+		// This simple approach just returns the first error, consider a multi-error type if needed
+		return errs[0]
 	}
 
 	return nil
@@ -618,78 +639,68 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string) {
 	var (
 		bestBlockMessage BestBlockMessage
-		pid              peer.ID
-		bh               *model.BlockHeader
-		bhMeta           *model.BlockHeaderMeta
-		blockMessage     BlockMessage
-		msgBytes         []byte
+		err              error
 	)
 
-	if from == s.P2PNode.HostID().String() {
-		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from self %s", from)
-
-		return
-	}
-
-	// is it from a banned peer
-	if s.banList.IsBanned(from) {
-		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from banned peer %s", from)
-
-		return
-	}
-
-	// decode request
-	bestBlockMessage = BestBlockMessage{}
-
-	err := json.Unmarshal(m, &bestBlockMessage)
+	// Decode the incoming message first
+	err = json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
 		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json unmarshal error: %v", err)
-
 		return
 	}
 
-	pid, err = peer.Decode(bestBlockMessage.PeerID)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding peerId: %v", err)
-
+	// Check if the message is from self
+	if bestBlockMessage.PeerID == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from self %s", bestBlockMessage.PeerID)
 		return
 	}
 
+	// Check if the peer is banned
+	if s.banList.IsBanned(bestBlockMessage.PeerID) {
+		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from banned peer %s", bestBlockMessage.PeerID)
+		return
+	}
+
+	// Log using the PeerID from the message after successful decode
 	s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] got p2p best block notification from %s", bestBlockMessage.PeerID)
 
 	// get best block from blockchain service
-	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
+	// This should only be reached if the message is valid and from an allowed, non-self peer
+	bh, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
-
 		return
 	}
 
 	if bh == nil {
 		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
-
 		return
 	}
 
-	blockMessage = BlockMessage{
+	blockMessage := BlockMessage{
 		Hash:       bh.Hash().String(),
 		Height:     bhMeta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PNode.HostID().String(),
 	}
 
-	msgBytes, err = json.Marshal(blockMessage)
+	msgBytes, err := json.Marshal(blockMessage)
 	if err != nil {
 		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json marshal error: %v", err)
-
 		return
 	}
 
-	// send best block to the requester
-	err = s.P2PNode.SendToPeer(ctx, pid, msgBytes)
+	// Decode the 'from' peer ID string just before sending the response
+	requesterPID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding requester peerId '%s': %v", from, err)
+		return
+	}
+
+	// send best block to the requester using the decoded peer.ID
+	err = s.P2PNode.SendToPeer(ctx, requesterPID, msgBytes)
 	if err != nil {
 		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
-
 		return
 	}
 }
