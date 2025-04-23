@@ -251,3 +251,22 @@ jobs:
 
       # - name: Publish Test Summary Results
       #   run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
+
+  run-script-verifier-tests:
+    runs-on: teranode-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Run Script Verifier Tests
+        run: |
+          go clean -testcache
+          go test -v -run "Test_ScriptVerificationBDKLargeTx" -tags test_validator ./test/services/validator/ScriptVerifier_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: false

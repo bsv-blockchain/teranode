@@ -1,4 +1,4 @@
-//go:build test_all || test_services || test_validator
+//go:build test_nightly || test_services || test_validator
 
 package validator
 
