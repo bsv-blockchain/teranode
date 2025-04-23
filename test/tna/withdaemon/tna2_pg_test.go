@@ -86,4 +86,33 @@ func TestMultipleTransactionsPropagationWithUtxoPostgres(t *testing.T) {
 	}
 }
 
-// TO DO: Concurrent TXs
+func TestTestConcurrentTransactionsPropagationWithUtxoPostgres(t *testing.T) {
+	ctx := context.Background()
+
+	td := utils.SetupPostgresTestDaemon(t, ctx, "concurrent-txs")
+
+	// Generate initial blocks
+	_, err := td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Send transactions concurrently
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+	parenTx := block1.CoinbaseTx
+	_, sentTxHashes, err := td.CreateAndSendTxsConcurrently(t, parenTx)
+
+	require.NoError(t, err)
+
+	// Check if the tx is into the UTXOStore
+	_, errTxRes := td.UtxoStore.Get(ctx, sentTxHashes[0])
+
+	require.NoError(t, errTxRes)
+
+	err = td.BlockAssemblyClient.RemoveTx(ctx, sentTxHashes[0])
+
+	if err == nil {
+		t.Logf("Test passed, concurrent tx propagation success")
+	} else {
+		t.Fatalf("Test failed")
+	}
+}

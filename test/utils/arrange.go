@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
+	testkafka "github.com/bitcoin-sv/teranode/test/util/kafka"
 	postgres "github.com/bitcoin-sv/teranode/test/util/postgres"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/util/retry"
@@ -192,6 +194,17 @@ func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName st
 		}
 	})
 
+	gocore.Config().Set("POSTGRES_PORT", pg.Port)
+
+	kafkaContainer, err := testkafka.RunTestContainer(ctx)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = kafkaContainer.CleanUp()
+	})
+
+	gocore.Config().Set("KAFKA_PORT", strconv.Itoa(kafkaContainer.KafkaPort))
+
 	// Create custom settings with the PostgreSQL container's dynamic port
 	customSettings := settings.NewSettings("dev.system.test.postgres")
 	// Update the PostgreSQL connection settings with the dynamic port
@@ -207,7 +220,7 @@ func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName st
 	})
 
 	// set run state
-	err := td.BlockchainClient.Run(td.Ctx, "test-tna2")
+	err = td.BlockchainClient.Run(td.Ctx, "test-tna2")
 	require.NoError(t, err)
 
 	return td
