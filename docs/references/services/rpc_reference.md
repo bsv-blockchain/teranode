@@ -1,4 +1,4 @@
-# RPC Server Reference Documentation
+# RPC Service Reference Documentation
 
 
 ## Index
@@ -39,11 +39,13 @@
     - [isbanned](#isbanned)
     - [reconsiderblock](#reconsiderblock)
     - [setban](#setban)
+    - [stop](#stop)
+    - [version](#version)
     - [freeze](#freeze)
     - [unfreeze](#unfreeze)
     - [reassign](#reassign)
-    - [stop](#stop)
-    - [version](#version)
+    - [generatetoaddress](#generatetoaddress)
+    - [getrawtransaction](#getrawtransaction)
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
@@ -56,7 +58,7 @@
 
 ## Overview
 
-The RPC Server provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections.
+The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections.
 
 ## Types
 
@@ -96,7 +98,7 @@ type RPCServer struct {
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Server.
+Creates a new instance of the RPC Service.
 
 ## Methods
 
@@ -150,7 +152,7 @@ Handles reading and responding to RPC messages.
 
 ## RPC Handlers
 
-The RPC Server implements various handlers for Bitcoin-related commands. Some key handlers include:
+The RPC Service implements various handlers for Bitcoin-related commands. Some key handlers include:
 
 - `handleGetBlock`: Retrieves block information
 - `handleGetBlockHash`: Gets the hash of a block at a specific height
@@ -162,7 +164,7 @@ The RPC Server implements various handlers for Bitcoin-related commands. Some ke
 
 ## Configuration
 
-The RPC Server uses various configuration values, including:
+The RPC Service uses various configuration values, including:
 
 - `rpc_user` and `rpc_pass`: Credentials for RPC authentication
 - `rpc_limit_user` and `rpc_limit_pass`: Credentials for limited RPC access
@@ -1135,6 +1137,110 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
 }
 ```
 
+### generatetoaddress
+
+Mines blocks immediately to a specified address (for testing only).
+
+**Parameters:**
+1. `nblocks` (numeric, required) - Number of blocks to generate
+2. `address` (string, required) - The address to send the newly generated bitcoin to
+3. `maxtries` (numeric, optional) - Maximum number of iterations to try
+
+**Returns:**
+- `array` - hashes of blocks generated
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "generatetoaddress",
+    "params": [1, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000000]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": [
+        "36252b5852a5921bdfca8701f936b39edeb1f8c39fffe73b0d8437921401f9af"
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### getrawtransaction
+
+Returns raw transaction data for a specific transaction.
+
+**Parameters:**
+1. `txid` (string, required) - The transaction id
+2. `verbose` (boolean, optional, default=false) - If false, returns a string that is serialized, hex-encoded data for the transaction. If true, returns a JSON object with transaction information.
+
+**Returns:**
+- If verbose=false: `string` - Serialized, hex-encoded data for the transaction
+- If verbose=true: `object` - A JSON object with transaction information
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getrawtransaction",
+    "params": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        true
+    ]
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": {
+        "hex": "0200000001abcd1234...00000000",
+        "txid": "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        "hash": "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        "size": 225,
+        "version": 2,
+        "locktime": 0,
+        "vin": [
+            {
+                "txid": "efgh5678...",
+                "vout": 0,
+                "scriptSig": {
+                    "asm": "...",
+                    "hex": "..."
+                },
+                "sequence": 4294967295
+            }
+        ],
+        "vout": [
+            {
+                "value": 0.01000000,
+                "n": 0,
+                "scriptPubKey": {
+                    "asm": "OP_DUP OP_HASH160 hash OP_EQUALVERIFY OP_CHECKSIG",
+                    "hex": "76a914hash88ac",
+                    "reqSigs": 1,
+                    "type": "pubkeyhash",
+                    "addresses": [
+                        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+                    ]
+                }
+            }
+        ],
+        "blockhash": "0000000000000000000b9d2ec5a352ecba0592946514a92f14319dc2cf8127f0",
+        "confirmations": 1024,
+        "time": 1570747519,
+        "blocktime": 1570747519
+    },
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ## Unimplemented RPC Commands
 
 The following commands are recognized by the RPC server but are not currently implemented:
@@ -1210,3 +1316,8 @@ The command handling system is designed to be extensible. New RPC commands can b
 - The server enforces a maximum number of concurrent clients to prevent resource exhaustion.
 - It supports TLS for secure communications (when configured).
 - Authentication is required for most operations, with a distinction between admin and limited-access users.
+
+
+# Related Documents
+
+- [RPC API Docs](https://bitcoin-sv.github.io/teranode/references/wallet-toolbox/open-rpc/)

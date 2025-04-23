@@ -25,7 +25,6 @@
 - [Additional Resources](#additional-resources)
 
 ----
-----
 
 ## Tutorials
 
