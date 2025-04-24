@@ -386,7 +386,7 @@ func (s *Server) sendBestBlockMessage(ctx context.Context) {
 					return
 				}
 
-				if len(s.P2PNode.ConnectedPeers()) == 0 {
+				if len(s.P2PNode.CurrentlyConnectedPeers()) == 0 {
 					time.Sleep(5 * time.Second)
 					continue
 				}

@@ -50,6 +50,7 @@ type P2PNodeI interface {
 	// Peer management methods
 	HostID() peer.ID
 	ConnectedPeers() []PeerInfo
+	CurrentlyConnectedPeers() []PeerInfo
 	DisconnectPeer(ctx context.Context, peerID peer.ID) error
 	SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
 
@@ -1013,6 +1014,24 @@ type PeerInfo struct {
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
+	// Get all connected peers from the network
+	peerIDs := s.host.Network().Peerstore().Peers()
+
+	// Create a slice with zero initial length but with capacity for all peers
+	peers := make([]PeerInfo, 0, len(peerIDs))
+
+	// Add each peer to the slice
+	for _, peerID := range peerIDs {
+		peers = append(peers, PeerInfo{
+			ID:    peerID,
+			Addrs: s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+		})
+	}
+
+	return peers
+}
+
+func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 	// Get all connected peers from the network
 	peerIDs := s.host.Network().Peers()
 

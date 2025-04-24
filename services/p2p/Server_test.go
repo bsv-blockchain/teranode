@@ -106,6 +106,16 @@ func (m *MockServerP2PNode) ConnectedPeers() []PeerInfo {
 	return args.Get(0).([]PeerInfo)
 }
 
+// CurrentlyConnectedPeers mocks the CurrentlyConnectedPeers method
+func (m *MockServerP2PNode) CurrentlyConnectedPeers() []PeerInfo {
+	// args := m.Called()
+	// return args.Get(0).([]PeerInfo)
+	peers := []PeerInfo{}
+	peers = append(peers, PeerInfo{})
+
+	return peers
+}
+
 // DisconnectPeer mocks the DisconnectPeer method
 func (m *MockServerP2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 	args := m.Called(ctx, peerID)
