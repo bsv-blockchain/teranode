@@ -343,6 +343,17 @@ func createTopic(admin sarama.ClusterAdmin, cfg KafkaProducerConfig) error {
 
 	if err != nil {
 		if errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			err = admin.AlterConfig(sarama.TopicResource, cfg.Topic, map[string]*string{
+				"retention.ms":        &cfg.RetentionPeriodMillis,
+				"delete.retention.ms": &cfg.RetentionPeriodMillis,
+				"segment.ms":          &cfg.RetentionPeriodMillis,
+				"segment.bytes":       &cfg.SegmentBytes,
+			}, false)
+
+			if err != nil {
+				return errors.NewProcessingError("unable to alter topic config", err)
+			}
+
 			return nil
 		}
 
