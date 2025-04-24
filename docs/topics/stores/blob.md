@@ -2,24 +2,26 @@
 
 ## Index
 
-1. [Description](#1-description)
-2. [Architecture](#2-architecture)
-3. [Technology](#3-technology)
+- [🗂️ Blob Server](#️-blob-server)
+  - [Index](#index)
+  - [1. Description](#1-description)
+  - [2. Architecture](#2-architecture)
+  - [3. Technology](#3-technology)
     - [3.1 Overview](#31-overview)
     - [3.2 Store Options](#32-store-options)
-4. [Data Model](#4-data-model)
-5. [Use Cases](#5-use-cases)
+  - [4. Data Model](#4-data-model)
+  - [5. Use Cases](#5-use-cases)
     - [5.1. Asset Server (HTTP): Get Transactions](#51-asset-server-http-get-transactions)
     - [5.2. Asset Server (HTTP): Get Subtrees](#52-asset-server-http-get-subtrees)
     - [5.3. Block Assembly](#53-block-assembly)
     - [5.4. Block Validation](#54-block-validation)
     - [5.5 Propagation: TXStore Set()](#55-propagation-txstore-set)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [Locally Running the store](#7-locally-running-the-store)
-8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+  - [7. Locally Running the store](#7-locally-running-the-store)
+  - [8. Configuration options (settings flags)](#8-configuration-options-settings-flags)
     - [8.1. TX Store Configuration](#81-tx-store-configuration)
     - [8.2. SubTree Store Configuration](#82-subtree-store-configuration)
-9. [Other Resources](#9-other-resources)
+  - [9. Other Resources](#9-other-resources)
 
 
 ## 1. Description
@@ -140,8 +142,6 @@ The Blob Server supports various backends, each suited to different storage requ
 
 - **Local TTL**: Provides local Time-to-Live (TTL) functionality for managing data expiration.
 
-- **Lustre**: Implements storage using the Lustre distributed file system. [Lustre Official](http://lustre.org/)
-
 - **Memory**: In-memory storage for temporary and fast data access.
 
 - **Null**: A no-operation store for testing or disabling storage features.
@@ -214,9 +214,6 @@ gRPC endpoints:
 │   └── http.go                 # HTTP specific functionality.
 ├── localttl                    # Local Time-to-Live functionality.
 │   └── localttl.go             # Local TTL handling.
-├── lustre                      # Lustre filesystem implementation.
-│   ├── lustre.go               # Lustre specific functionality.
-│   └── lustre_test.go          # Test cases for Lustre functions.
 ├── memory                      # In-memory implementation.
 │   └── memory.go               # In-memory data handling.
 ├── null                        # Null implementation (no-op).
@@ -273,11 +270,6 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
 - **Amazon S3 with Local TTL Store**
   ```plaintext
   subtreestore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&localTTLStore=file&localTTLStorePath=/data/subtreestore-ttl
-  ```
-
-- **Lustre with S3 Backend**
-  ```plaintext
-  subtreestore.mainnet2=lustre://s3.${regionName}.amazonaws.com/teranode-${clientName}-block-store?region=${regionName}&localDir=data/subtreestore&localPersist=s3
   ```
 
 - **File System with Local TTL Store**

@@ -36,7 +36,7 @@ func TestNewBlockHandler(t *testing.T) {
 }
 
 // setupBlockHandlerTest creates a test environment for block handler tests
-func setupBlockHandlerTest(t *testing.T, requestBody string) (*BlockHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
+func setupBlockHandlerTest(_ *testing.T, requestBody string) (*BlockHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
 	mockClient := &blockchain.Mock{}
 	logger := ulogger.TestLogger{}
 	handler := NewBlockHandler(mockClient, logger)

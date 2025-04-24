@@ -84,7 +84,8 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			LuaPackage,
 			"setConflicting",
 			aerospike.NewValue(setValue),
-			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
+			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
+			aerospike.NewValue(s.blockHeightRetention),
 		))
 
 		for _, input := range tx.Inputs {

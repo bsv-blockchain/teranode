@@ -20,7 +20,7 @@ import (
 // MockBlockchainClient is already defined in block_handler_test.go, so we don't need to redefine it here
 
 // setupFSMHandlerTest creates a test environment for FSM handler tests
-func setupFSMHandlerTest(t *testing.T, requestBody string) (*FSMHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
+func setupFSMHandlerTest(_ *testing.T, requestBody string) (*FSMHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
 	// Create a new Echo instance
 	e := echo.New()
 

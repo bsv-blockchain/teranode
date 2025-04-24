@@ -183,7 +183,7 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 		result.Data = data
 
-		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			return c.JSONPretty(200, result, "  ")

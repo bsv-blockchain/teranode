@@ -77,9 +77,9 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 		"2f6b52de3d7c88ac00000000")
 	require.NoError(t, err)
 
-	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode?expiration=1s")
-	// storeUrl, err := url.Parse("sqlite:///test?expiration=1s")
-	storeURL, err := url.Parse("sqlite:///test?expiration=1s")
+	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode?block_retention=1")
+	// storeUrl, err := url.Parse("sqlite:///test?block_retention=1")
+	storeURL, err := url.Parse("sqlite:///test?block_retention=1")
 
 	require.NoError(t, err)
 
@@ -412,8 +412,7 @@ func TestCreateCoinbase(t *testing.T) {
 }
 
 func TestTombstoneAfterSpend(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store, tx := setup(ctx, t)
 
@@ -425,9 +424,10 @@ func TestTombstoneAfterSpend(t *testing.T) {
 	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
-	time.Sleep(1100 * time.Millisecond)
+	err = store.SetBlockHeight(1)
+	require.NoError(t, err)
 
-	err = deleteTombstoned(store.db)
+	err = store.deleteTombstoned(store.db)
 	require.NoError(t, err)
 
 	_, err = store.Get(ctx, tx.TxIDChainHash())
@@ -436,8 +436,7 @@ func TestTombstoneAfterSpend(t *testing.T) {
 }
 
 func TestTombstoneAfterUnspend(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	store, tx := setup(ctx, t)
 
@@ -462,9 +461,10 @@ func TestTombstoneAfterUnspend(t *testing.T) {
 	err = store.Unspend(ctx, []*utxo.Spend{spend0})
 	require.NoError(t, err)
 
-	time.Sleep(1100 * time.Millisecond)
+	err = store.SetBlockHeight(1)
+	require.NoError(t, err)
 
-	err = deleteTombstoned(store.db)
+	err = store.deleteTombstoned(store.db)
 	require.NoError(t, err)
 
 	_, err = store.Get(ctx, tx.TxIDChainHash())
@@ -472,7 +472,7 @@ func TestTombstoneAfterUnspend(t *testing.T) {
 }
 
 func Test_SmokeTests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("sql store", func(t *testing.T) {
 		db, _ := setup(ctx, t)
@@ -569,7 +569,7 @@ func TestSetTTL(t *testing.T) {
 	err = store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&transactionID)
 	require.NoError(t, err)
 
-	err = store.db.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	err = store.db.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
 	assert.Nil(t, tombstoneMillis)
@@ -581,10 +581,10 @@ func TestSetTTL(t *testing.T) {
 		_ = txn.Rollback()
 	}()
 
-	err = store.setTTL(ctx, txn, transactionID)
+	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
 
-	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
 	assert.Nil(t, tombstoneMillis)
@@ -593,10 +593,10 @@ func TestSetTTL(t *testing.T) {
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = 1 WHERE transaction_id = $1", transactionID)
 	require.NoError(t, err)
 
-	err = store.setTTL(ctx, txn, transactionID)
+	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
 
-	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
 	assert.NotNil(t, tombstoneMillis)
@@ -605,10 +605,10 @@ func TestSetTTL(t *testing.T) {
 	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
 	require.NoError(t, err)
 
-	err = store.setTTL(ctx, txn, transactionID)
+	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
 
-	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
 	assert.Nil(t, tombstoneMillis)
@@ -617,10 +617,10 @@ func TestSetTTL(t *testing.T) {
 	_, err = txn.ExecContext(ctx, "UPDATE transactions SET conflicting = true WHERE id = $1", transactionID)
 	require.NoError(t, err)
 
-	err = store.setTTL(ctx, txn, transactionID)
+	err = store.setDAH(ctx, txn, transactionID)
 	require.NoError(t, err)
 
-	err = txn.QueryRowContext(ctx, "SELECT tombstone_millis FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
+	err = txn.QueryRowContext(ctx, "SELECT delete_at_height FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&tombstoneMillis)
 	require.NoError(t, err)
 
 	assert.NotNil(t, tombstoneMillis)

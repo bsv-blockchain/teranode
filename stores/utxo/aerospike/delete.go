@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -105,7 +105,7 @@ import (
 //   - prometheusUtxoMapDelete: Incremented on successful deletion
 //   - prometheusUtxoMapErrors: Incremented on deletion errors
 func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
-	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {

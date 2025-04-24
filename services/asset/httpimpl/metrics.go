@@ -12,32 +12,32 @@ import (
 // Prometheus metrics variables for tracking various API operations.
 // Each metric is a counter vector with "function" and "operation" labels.
 var (
-	// prometheusAssetHttpGetTransaction tracks individual transaction retrievals
-	prometheusAssetHttpGetTransaction *prometheus.CounterVec
+	// prometheusAssetHTTPGetTransaction tracks individual transaction retrievals
+	prometheusAssetHTTPGetTransaction *prometheus.CounterVec
 
-	// prometheusAssetHttpGetTransactions tracks batch transaction retrievals
-	prometheusAssetHttpGetTransactions *prometheus.CounterVec
+	// prometheusAssetHTTPGetTransactions tracks batch transaction retrievals
+	prometheusAssetHTTPGetTransactions *prometheus.CounterVec
 
-	// prometheusAssetHttpGetSubtree tracks subtree retrievals
-	prometheusAssetHttpGetSubtree *prometheus.CounterVec
+	// prometheusAssetHTTPGetSubtree tracks subtree retrievals
+	prometheusAssetHTTPGetSubtree *prometheus.CounterVec
 
-	// prometheusAssetHttpGetBlockHeader tracks block header retrievals
-	prometheusAssetHttpGetBlockHeader *prometheus.CounterVec
+	// prometheusAssetHTTPGetBlockHeader tracks block header retrievals
+	prometheusAssetHTTPGetBlockHeader *prometheus.CounterVec
 
-	// prometheusAssetHttpGetBestBlockHeader tracks best block header retrievals
-	prometheusAssetHttpGetBestBlockHeader *prometheus.CounterVec
+	// prometheusAssetHTTPGetBestBlockHeader tracks best block header retrievals
+	prometheusAssetHTTPGetBestBlockHeader *prometheus.CounterVec
 
-	// prometheusAssetHttpGetBlock tracks block retrievals
-	prometheusAssetHttpGetBlock *prometheus.CounterVec
+	// prometheusAssetHTTPGetBlock tracks block retrievals
+	prometheusAssetHTTPGetBlock *prometheus.CounterVec
 
-	// prometheusAssetHttpGetBlockLegacy tracks legacy format block retrievals
-	prometheusAssetHttpGetBlockLegacy *prometheus.CounterVec
+	// prometheusAssetHTTPGetBlockLegacy tracks legacy format block retrievals
+	prometheusAssetHTTPGetBlockLegacy *prometheus.CounterVec
 
-	// prometheusAssetHttpGetLastNBlocks tracks multiple block retrievals
-	prometheusAssetHttpGetLastNBlocks *prometheus.CounterVec
+	// prometheusAssetHTTPGetLastNBlocks tracks multiple block retrievals
+	prometheusAssetHTTPGetLastNBlocks *prometheus.CounterVec
 
-	// prometheusAssetHttpGetUTXO tracks UTXO retrievals
-	prometheusAssetHttpGetUTXO *prometheus.CounterVec
+	// prometheusAssetHTTPGetUTXO tracks UTXO retrievals
+	prometheusAssetHTTPGetUTXO *prometheus.CounterVec
 )
 
 // prometheusMetricsInitOnce ensures metrics are initialized exactly once
@@ -78,7 +78,7 @@ func initPrometheusMetrics() {
 //   - http_get_last_n_blocks: Multiple block retrievals
 //   - http_get_utxo: UTXO retrievals
 func _initPrometheusMetrics() {
-	prometheusAssetHttpGetTransaction = promauto.NewCounterVec(
+	prometheusAssetHTTPGetTransaction = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -91,7 +91,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetTransactions = promauto.NewCounterVec(
+	prometheusAssetHTTPGetTransactions = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -104,7 +104,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetSubtree = promauto.NewCounterVec(
+	prometheusAssetHTTPGetSubtree = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -117,7 +117,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetBlockHeader = promauto.NewCounterVec(
+	prometheusAssetHTTPGetBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -130,7 +130,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetLastNBlocks = promauto.NewCounterVec(
+	prometheusAssetHTTPGetLastNBlocks = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -143,7 +143,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetBestBlockHeader = promauto.NewCounterVec(
+	prometheusAssetHTTPGetBestBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -156,7 +156,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetBlock = promauto.NewCounterVec(
+	prometheusAssetHTTPGetBlock = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -169,7 +169,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetBlockLegacy = promauto.NewCounterVec(
+	prometheusAssetHTTPGetBlockLegacy = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",
@@ -182,7 +182,7 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusAssetHttpGetUTXO = promauto.NewCounterVec(
+	prometheusAssetHTTPGetUTXO = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "asset",

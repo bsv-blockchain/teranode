@@ -168,7 +168,7 @@ type BlockAssemblySettings struct {
 	GRPCListenAddress                   string
 	GRPCMaxRetries                      int
 	GRPCRetryBackoff                    time.Duration
-	LocalTTLCache                       string
+	LocalDAHCache                       string
 	MaxBlockReorgCatchup                int
 	MaxBlockReorgRollback               int
 	MoveBackBlockConcurrency            int
@@ -177,7 +177,7 @@ type BlockAssemblySettings struct {
 	SendBatchTimeout                    int
 	SubtreeProcessorBatcherSize         int
 	SubtreeProcessorConcurrentReads     int
-	SubtreeTTL                          time.Duration
+	SubtreeBlockRetention               uint32
 	NewSubtreeChanBuffer                int
 	SubtreeRetryChanBuffer              int
 	SubmitMiningSolutionWaitForResponse bool
@@ -210,8 +210,8 @@ type BlockValidationSettings struct {
 	ProcessTxMetaUsingStoreMissingTxThreshold int
 	SkipCheckParentMined                      bool
 	SubtreeFoundChConcurrency                 int
-	SubtreeTTL                                time.Duration
-	SubtreeTTLConcurrency                     int
+	SubtreeBlockRetention                     uint32
+	SubtreeDAHConcurrency                     int
 	SubtreeValidationAbandonThreshold         int
 	ValidateBlockSubtreesConcurrency          int
 	ValidationMaxRetries                      int
@@ -272,8 +272,8 @@ type UtxoStoreSettings struct {
 	UtxoBatchSize                    int
 	IncrementBatcherSize             int
 	IncrementBatcherDurationMillis   int
-	SetTTLBatcherSize                int
-	SetTTLBatcherDurationMillis      int
+	SetDAHBatcherSize                int
+	SetDAHBatcherDurationMillis      int
 	UnspendableBatcherSize           int
 	UnspendableBatcherDurationMillis int
 	GetBatcherSize                   int
@@ -365,8 +365,8 @@ type SubtreeValidationSettings struct {
 	ProcessTxMetaUsingStoreConcurrency        int
 	ProcessTxMetaUsingStoreMissingTxThreshold int
 	SubtreeFoundChConcurrency                 int
-	SubtreeTTL                                time.Duration
-	SubtreeTTLConcurrency                     int
+	SubtreeBlockRetention                     uint32
+	SubtreeDAHConcurrency                     int
 	SubtreeValidationTimeout                  int
 	SubtreeValidationAbandonThreshold         int
 	TxMetaCacheEnabled                        bool

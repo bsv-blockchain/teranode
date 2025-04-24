@@ -289,17 +289,17 @@ func TestBatcher_UnsupportedOperations(t *testing.T) {
 		}
 	})
 
-	t.Run("SetTTL", func(t *testing.T) {
-		err := batcher.SetTTL(context.Background(), []byte("key"), time.Hour)
+	t.Run("SetDAH", func(t *testing.T) {
+		err := batcher.SetDAH(context.Background(), []byte("key"), 1)
 		if err == nil {
-			t.Error("expected error for unsupported SetTTL operation")
+			t.Error("expected error for unsupported SetDAH operation")
 		}
 	})
 
-	t.Run("GetTTL", func(t *testing.T) {
-		_, err := batcher.GetTTL(context.Background(), []byte("key"))
+	t.Run("GetDAH", func(t *testing.T) {
+		_, err := batcher.GetDAH(context.Background(), []byte("key"))
 		if err == nil {
-			t.Error("expected error for unsupported GetTTL operation")
+			t.Error("expected error for unsupported GetDAH operation")
 		}
 	})
 

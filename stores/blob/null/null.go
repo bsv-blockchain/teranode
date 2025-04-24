@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -40,11 +39,11 @@ func (n *Null) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOptio
 	return nil
 }
 
-func (n *Null) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
+func (n *Null) SetDAH(_ context.Context, _ []byte, _ uint32, opts ...options.FileOption) error {
 	return nil
 }
 
-func (n *Null) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+func (n *Null) GetDAH(_ context.Context, _ []byte, opts ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 

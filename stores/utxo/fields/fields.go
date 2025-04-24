@@ -30,6 +30,7 @@ const (
 	BlockHeights        FieldName = "blockHeights"
 	SubtreeIdxs         FieldName = "subtreeIdxs"
 	Reassignments       FieldName = "reassignments"
+	DeleteAtHeight      FieldName = "deleteAtHeight"
 )
 
 func (f FieldName) String() string {

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -118,8 +117,8 @@ func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, opts ...optio
 	return io.NopCloser(bytes.NewReader([]byte{})), nil
 }
 
-// GetTTL implements a mock method for blob.Store interface
-func (s *MockTxStore) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+// GetDAH implements a mock method for blob.Store interface
+func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 
@@ -139,8 +138,8 @@ func (s *MockTxStore) SetFromReader(ctx context.Context, key []byte, reader io.R
 	return nil
 }
 
-// SetTTL implements a mock method for blob.Store interface
-func (s *MockTxStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error {
+// SetDAH implements a mock method for blob.Store interface
+func (s *MockTxStore) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
 	// Just return success for the mock
 	return nil
 }

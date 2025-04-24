@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/bitcoin-sv/teranode/errors"
@@ -625,22 +624,22 @@ func TestS3_TTL(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 
-	t.Run("GetTTL always returns 0", func(t *testing.T) {
-		ttl, err := s3Store.GetTTL(ctx, key)
+	t.Run("GetDAH always returns 0", func(t *testing.T) {
+		dah, err := s3Store.GetDAH(ctx, key)
 
 		assert.NoError(t, err)
-		assert.Equal(t, time.Duration(0), ttl)
+		assert.Equal(t, uint32(0), dah)
 	})
 
 	t.Run("SetTTL is no-op", func(t *testing.T) {
-		err := s3Store.SetTTL(ctx, key, time.Hour)
+		err := s3Store.SetDAH(ctx, key, 1)
 
 		assert.NoError(t, err)
 
-		// Verify GetTTL still returns 0
-		ttl, err := s3Store.GetTTL(ctx, key)
+		// Verify GetDAH still returns 0
+		dah, err := s3Store.GetDAH(ctx, key)
 		assert.NoError(t, err)
-		assert.Equal(t, time.Duration(0), ttl)
+		assert.Equal(t, uint32(0), dah)
 	})
 }
 

@@ -96,12 +96,26 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.handleSet(w, r, opts...)
 	case http.MethodPatch:
-		s.handleSetTTL(w, r, opts...)
+		s.handleSetDAH(w, r, opts...)
 	case http.MethodDelete:
 		s.handleDelete(w, r, opts...)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *HTTPBlobServer) setCurrentBlockHeight(height uint32) error {
+	store, ok := s.store.(interface {
+		SetCurrentBlockHeight(height uint32)
+	})
+
+	if !ok {
+		return errors.NewStorageError("[HTTPBlobServer] store does not support SetCurrentBlockHeight", nil)
+	}
+
+	store.SetCurrentBlockHeight(height)
+
+	return nil
 }
 
 // handleHealth processes health check requests.
@@ -267,23 +281,23 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	w.WriteHeader(http.StatusCreated)
 }
 
-// handleSetTTL processes TTL setting requests.
-func (s *HTTPBlobServer) handleSetTTL(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
+// handleSetDAH processes DAH setting requests.
+func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	ttlStr := r.URL.Query().Get("ttl")
+	dahStr := r.URL.Query().Get("dah")
 
-	ttl, err := time.ParseDuration(ttlStr)
+	dah, err := strconv.Atoi(dahStr)
 	if err != nil {
-		http.Error(w, "Invalid TTL", http.StatusBadRequest)
+		http.Error(w, "Invalid DAH", http.StatusBadRequest)
 		return
 	}
 
-	err = s.store.SetTTL(r.Context(), key, ttl, opts...)
+	err = s.store.SetDAH(r.Context(), key, uint32(dah), opts...) // nolint: gosec
 	if err != nil {
 		if err == errors.ErrNotFound {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)

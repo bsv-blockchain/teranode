@@ -18,14 +18,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 		panic(err)
 	}
 
-	blockAssemblySubtreeTTLMinutes := getInt("blockassembly_subtreeTTL", 120, alternativeContext...)
-	blockAssemblySubtreeTTL := time.Duration(blockAssemblySubtreeTTLMinutes) * time.Minute
+	blockAssemblySubtreeBlockRetention := getInt("blockassembly_subtreeBlockRetention", 100, alternativeContext...)
+	blockValidationSubtreeBlockRetention := getInt("blockvalidation_subtreeBlockRetention", 100, alternativeContext...)
 
 	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
-
-	blockValidationSubtreeTTLMinutes := getInt("blockvalidation_subtreeTTL", 120, alternativeContext...)
-	blockValidationSubtreeTTL := time.Duration(blockValidationSubtreeTTLMinutes) * time.Minute
 
 	return &Settings{
 		ServiceName:              getString("SERVICE_NAME", "teranode", alternativeContext...),
@@ -173,7 +170,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:                   getString("blockassembly_grpcListenAddress", ":8085", alternativeContext...),
 			GRPCMaxRetries:                      getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
 			GRPCRetryBackoff:                    getDuration("blockassembly_grpcRetryBackoff", 2*time.Second, alternativeContext...),
-			LocalTTLCache:                       getString("blockassembly_localTTLCache", "", alternativeContext...),
+			LocalDAHCache:                       getString("blockassembly_localDAHCache", "", alternativeContext...),
 			MaxBlockReorgCatchup:                getInt("blockassembly_maxBlockReorgCatchup", 100, alternativeContext...),
 			MaxBlockReorgRollback:               getInt("blockassembly_maxBlockReorgRollback", 100, alternativeContext...),
 			MoveBackBlockConcurrency:            getInt("blockassembly_moveBackBlockConcurrency", 375, alternativeContext...),
@@ -182,7 +179,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SendBatchTimeout:                    getInt("blockassembly_sendBatchTimeout", 2, alternativeContext...),
 			SubtreeProcessorBatcherSize:         getInt("blockassembly_subtreeProcessorBatcherSize", 1000, alternativeContext...),
 			SubtreeProcessorConcurrentReads:     getInt("blockassembly_subtreeProcessorConcurrentReads", 375, alternativeContext...),
-			SubtreeTTL:                          blockAssemblySubtreeTTL,
+			SubtreeBlockRetention:               uint32(blockAssemblySubtreeBlockRetention), //nolint:gosec
 			NewSubtreeChanBuffer:                getInt("blockassembly_newSubtreeChanBuffer", 1_000, alternativeContext...),
 			SubtreeRetryChanBuffer:              getInt("blockassembly_subtreeRetryChanBuffer", 1_000, alternativeContext...),
 			SubmitMiningSolutionWaitForResponse: getBool("blockassembly_SubmitMiningSolution_waitForResponse", true, alternativeContext...),
@@ -227,8 +224,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingStoreMissingTxThreshold: getInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 1, alternativeContext...),
 			SkipCheckParentMined:                      getBool("blockvalidation_skipCheckParentMined", false, alternativeContext...),
 			SubtreeFoundChConcurrency:                 getInt("blockvalidation_subtreeFoundChConcurrency", 1, alternativeContext...),
-			SubtreeTTL:                                blockValidationSubtreeTTL,
-			SubtreeTTLConcurrency:                     getInt("blockvalidation_subtreeTTLConcurrency", 32, alternativeContext...),
+			SubtreeBlockRetention:                     uint32(blockValidationSubtreeBlockRetention), //nolint:gosec
 			SubtreeValidationAbandonThreshold:         getInt("blockvalidation_subtree_validation_abandon_threshold", 1, alternativeContext...),
 			ValidateBlockSubtreesConcurrency:          getInt("blockvalidation_validateBlockSubtreesConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			ValidationMaxRetries:                      getInt("blockvalidation_validation_max_retries", 3, alternativeContext...),
@@ -285,8 +281,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UtxoBatchSize:                    getInt("utxostore_utxoBatchSize", 128, alternativeContext...),
 			IncrementBatcherSize:             getInt("utxostore_incrementBatcherSize", 256, alternativeContext...),
 			IncrementBatcherDurationMillis:   getInt("utxostore_incrementBatcherDurationMillis", 10, alternativeContext...),
-			SetTTLBatcherSize:                getInt("utxostore_setTTLBatcherSize", 256, alternativeContext...),
-			SetTTLBatcherDurationMillis:      getInt("utxostore_setTTLBatcherDurationMillis", 10, alternativeContext...),
+			SetDAHBatcherSize:                getInt("utxostore_setDAHBatcherSize", 256, alternativeContext...),
+			SetDAHBatcherDurationMillis:      getInt("utxostore_setDAHBatcherDurationMillis", 10, alternativeContext...),
 			UnspendableBatcherSize:           getInt("utxostore_unspendableBatcherSize", 256, alternativeContext...),
 			UnspendableBatcherDurationMillis: getInt("utxostore_unspendableBatcherDurationMillis", 10, alternativeContext...),
 			GetBatcherSize:                   getInt("utxostore_getBatcherSize", 1, alternativeContext...),
@@ -366,8 +362,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingStoreConcurrency:        getInt("subtreevalidation_processTxMetaUsingStore_Concurrency", 32, alternativeContext...),
 			ProcessTxMetaUsingStoreMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingStore_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeFoundChConcurrency:                 getInt("subtreevalidation_subtreeFoundChConcurrency", 1, alternativeContext...),
-			SubtreeTTL:                                getDuration("subtreevalidation_subtreeTTLDuration", 120*time.Minute, alternativeContext...),
-			SubtreeTTLConcurrency:                     getInt("subtreevalidation_subtreeTTLConcurrency", 8, alternativeContext...),
+			SubtreeBlockRetention:                     getUint32("subtreevalidation_subtreeBlockRetention", 100),
+			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			SubtreeValidationTimeout:                  getInt("subtreevalidation_subtreeValidationTimeout", 1000, alternativeContext...),
 			SubtreeValidationAbandonThreshold:         getInt("subtreevalidation_subtree_validation_abandon_threshold", 1, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),

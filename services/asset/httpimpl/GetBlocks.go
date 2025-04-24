@@ -124,7 +124,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 	}
 
 	latestBlockHeight := blockMeta.Height
-	fromHeight := latestBlockHeight - uint32(offset)
+	fromHeight := latestBlockHeight - uint32(offset) //nolint:gosec
 
 	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.Request().RemoteAddr, offset, limit, fromHeight)
 
@@ -137,7 +137,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 		}
 	}
 
-	prometheusAssetHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
+	prometheusAssetHTTPGetLastNBlocks.WithLabelValues("OK", "200").Inc()
 
 	response := ExtendedResponse{
 		Data: blocks,

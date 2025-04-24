@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
+	"gotest.tools/assert"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
@@ -136,8 +138,8 @@ func TestFileNewWithInvalidDirectory(t *testing.T) {
 	})
 }
 
-func TestFileLoadTTLs(t *testing.T) {
-	t.Run("load TTLs", func(t *testing.T) {
+func TestFileLoadDAHs(t *testing.T) {
+	t.Run("load DAHs", func(t *testing.T) {
 		// Get a temporary directory
 		tempDir, err := os.MkdirTemp("", "test")
 		require.NoError(t, err)
@@ -146,38 +148,37 @@ func TestFileLoadTTLs(t *testing.T) {
 		key := []byte("key")
 		value := []byte("value")
 
-		ttl := 100 * time.Millisecond
-		ttlInterval := 10 * time.Millisecond
+		dahInterval := 10 * time.Millisecond
 
 		ctx := context.Background()
 
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		f, err := newStore(ulogger.TestLogger{}, u, ttlInterval)
+		f, err := newStore(ulogger.TestLogger{}, u, dahInterval)
 		require.NoError(t, err)
 
-		err = f.Set(ctx, key, value, options.WithTTL(ttl))
+		err = f.Set(ctx, key, value, options.WithDeleteAt(10))
 		require.NoError(t, err)
 
-		err = f.SetTTL(ctx, key, ttl)
+		err = f.SetDAH(ctx, key, 11)
 		require.NoError(t, err)
 
-		var fileTTLs map[string]time.Time
+		var fileDAHs map[string]uint32
 
-		f.fileTTLsMu.Lock()
-		fileTTLs = f.fileTTLs
-		require.Contains(t, fileTTLs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
-		f.fileTTLsMu.Unlock()
+		f.fileDAHsMu.Lock()
+		fileDAHs = f.fileDAHs
+		require.Contains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
+		f.fileDAHsMu.Unlock()
 
-		time.Sleep(ttl * 2)
+		f.SetCurrentBlockHeight(11)
+		f.cleanupExpiredFiles()
 
-		f.fileTTLsMu.Lock()
-		fileTTLs = f.fileTTLs
+		f.fileDAHsMu.Lock()
+		fileDAHs = f.fileDAHs
+		f.fileDAHsMu.Unlock()
 
-		require.NoError(t, err)
-		require.NotContains(t, fileTTLs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
-		f.fileTTLsMu.Unlock()
+		require.NotContains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 
 		err = f.Del(ctx, key)
 		require.Error(t, err)
@@ -329,7 +330,7 @@ func TestFileWithHeader(t *testing.T) {
 		newContent := "New content from reader"
 
 		contentReader := strings.NewReader(newContent)
-		readCloser := readCloser{Reader: contentReader}
+		readCloser := io.NopCloser(contentReader)
 
 		err = f.SetFromReader(context.Background(), key, readCloser)
 		require.NoError(t, err)
@@ -395,7 +396,7 @@ func TestFileWithFooter(t *testing.T) {
 		// Test setting content with footer using SetFromReader
 		newContent := "New content from reader"
 		contentReader := strings.NewReader(newContent)
-		readCloser := readCloser{Reader: contentReader}
+		readCloser := io.NopCloser(contentReader)
 
 		err = f.SetFromReader(context.Background(), key, readCloser)
 		require.NoError(t, err)
@@ -419,15 +420,6 @@ func TestFileWithFooter(t *testing.T) {
 	})
 }
 
-// A simple wrapper to add the Close method to a Reader
-type readCloser struct {
-	io.Reader
-}
-
-func (rc readCloser) Close() error {
-	return nil
-}
-
 func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 	t.Run("set content from reader", func(t *testing.T) {
 		// Get a temporary directory
@@ -446,7 +438,7 @@ func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 		reader := strings.NewReader(content)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := readCloser{Reader: reader}
+		readCloser := io.NopCloser(reader)
 
 		err = f.SetFromReader(context.Background(), key, readCloser)
 		require.NoError(t, err)
@@ -480,7 +472,7 @@ func TestFileGetHead(t *testing.T) {
 		reader := strings.NewReader(content)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := readCloser{Reader: reader}
+		readCloser := io.NopCloser(reader)
 
 		// First, set the content
 		err = f.SetFromReader(context.Background(), key, readCloser)
@@ -512,7 +504,7 @@ func TestFileGetHeadWithHeader(t *testing.T) {
 		reader := strings.NewReader(content)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := readCloser{Reader: reader}
+		readCloser := io.NopCloser(reader)
 
 		// First, set the content
 		err = f.SetFromReader(context.Background(), key, readCloser)
@@ -549,7 +541,7 @@ func TestFileExists(t *testing.T) {
 		require.False(t, exists)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := readCloser{Reader: reader}
+		readCloser := io.NopCloser(reader)
 
 		// Set the content
 		err = f.SetFromReader(context.Background(), key, readCloser)
@@ -562,8 +554,8 @@ func TestFileExists(t *testing.T) {
 	})
 }
 
-func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
-	t.Run("check if TTL remains unchanged when file overwriting disabled using setFromReader", func(t *testing.T) {
+func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
+	t.Run("check if DAH remains unchanged when file overwriting disabled using setFromReader", func(t *testing.T) {
 		// Get a temporary directory
 		tempDir, err := os.MkdirTemp("", "test")
 		require.NoError(t, err)
@@ -585,7 +577,7 @@ func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		require.False(t, exists)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := readCloser{Reader: reader}
+		readCloser := io.NopCloser(reader)
 
 		// Set the content
 		err = f.SetFromReader(context.Background(), key, readCloser)
@@ -596,21 +588,21 @@ func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Set TTL to 0
-		err = f.SetTTL(context.Background(), key, 0)
+		// Set DAH to 0
+		err = f.SetDAH(context.Background(), key, 0)
 		require.NoError(t, err)
 
 		// Set the content again with overwrite disabled
-		err = f.SetFromReader(context.Background(), key, readCloser, options.WithTTL(time.Second), options.WithAllowOverwrite(false))
+		err = f.SetFromReader(context.Background(), key, readCloser, options.WithAllowOverwrite(false))
 		require.Error(t, err)
 
-		// Check the TTL again, should still be 0
-		ttl, err := f.GetTTL(context.Background(), key)
+		// Check the DAH again, should still be 0
+		dah, err := f.GetDAH(context.Background(), key)
 		require.NoError(t, err)
-		require.Equal(t, time.Duration(0), ttl)
+		require.Equal(t, uint32(0), dah)
 	})
 
-	t.Run("check if TTL remains unchanged when file overwriting disabled using Set", func(t *testing.T) {
+	t.Run("check if DAH remains unchanged when file overwriting disabled using Set", func(t *testing.T) {
 		// Get a temporary directory
 		tempDir, err := os.MkdirTemp("", "test")
 		require.NoError(t, err)
@@ -639,18 +631,18 @@ func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Set TTL to 0
-		err = f.SetTTL(context.Background(), key, 0)
+		// Set DAH to 0
+		err = f.SetDAH(context.Background(), key, 0)
 		require.NoError(t, err)
 
 		// Set the content again with overwrite disabled
-		err = f.Set(context.Background(), key, []byte(content), options.WithTTL(time.Second), options.WithAllowOverwrite(false))
+		err = f.Set(context.Background(), key, []byte(content), options.WithAllowOverwrite(false))
 		require.Error(t, err)
 
-		// Check the TTL again, should still be 0
-		ttl, err := f.GetTTL(context.Background(), key)
+		// Check the DAH again, should still be 0
+		dah, err := f.GetDAH(context.Background(), key)
 		require.NoError(t, err)
-		require.Equal(t, time.Duration(0), ttl)
+		require.Equal(t, uint32(0), dah)
 	})
 }
 
@@ -660,7 +652,7 @@ func TestFileSetWithHashPrefix(t *testing.T) {
 	require.Equal(t, "/data/subtreestore", u.Path)
 	require.Equal(t, "2", u.Query().Get("hashPrefix"))
 
-	u, err = url.Parse("null:///?localTTLStore=file&localTTLStorePath=./data/subtreestore-ttl?hashPrefix=2")
+	u, err = url.Parse("null:///?localTTLStore=file&localTTLStorePath=./data/subtreestore-dah?hashPrefix=2")
 	require.NoError(t, err)
 
 	localTTLStoreURL := u.Query().Get("localTTLStorePath")
@@ -706,7 +698,7 @@ func TestFileHealth(t *testing.T) {
 
 	t.Run("non-existent path", func(t *testing.T) {
 		// Setup
-		nonExistentPath := "./path/that/does/not/exist"
+		nonExistentPath := "./not_exist"
 		u, err := url.Parse("file://" + nonExistentPath)
 		require.NoError(t, err)
 
@@ -715,7 +707,14 @@ func TestFileHealth(t *testing.T) {
 
 		// creating a New store will create the folder
 		// so we need to remove it before we test
-		err = os.RemoveAll(nonExistentPath)
+		var path string
+		if u.Host == "." {
+			path = u.Path[1:] // relative path
+		} else {
+			path = u.Path // absolute path
+		}
+
+		err = os.RemoveAll(path)
 		require.NoError(t, err)
 
 		// Test
@@ -1490,10 +1489,10 @@ func TestFileGetHeader(t *testing.T) {
 	})
 }
 
-func TestFileGetAndSetTTL(t *testing.T) {
-	t.Run("get and set TTL", func(t *testing.T) {
+func TestFileGetAndSetDAH(t *testing.T) {
+	t.Run("get and set DAH", func(t *testing.T) {
 		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-ttl")
+		tempDir, err := os.MkdirTemp("", "test-dah")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1503,45 +1502,40 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		key := []byte("ttl-test-key")
+		key := []byte("dah-test-key")
 		content := []byte("test content")
 
-		// Set initial content without TTL
+		// Set initial content without DAH
 		err = f.Set(context.Background(), key, content)
 		require.NoError(t, err)
 
-		// Initially there should be no TTL
-		ttl, err := f.GetTTL(context.Background(), key)
+		// Initially there should be no DAH
+		dah, err := f.GetDAH(context.Background(), key)
 		require.NoError(t, err)
-		require.Zero(t, ttl)
+		require.Zero(t, dah)
 
-		// Set a TTL
-		newTTL := 1 * time.Hour
-		err = f.SetTTL(context.Background(), key, newTTL)
-		require.NoError(t, err)
-
-		// Get and verify TTL
-		ttl, err = f.GetTTL(context.Background(), key)
-		require.NoError(t, err)
-		require.Greater(t, ttl, 59*time.Minute) // Allow for slight timing differences
-		require.LessOrEqual(t, ttl, newTTL)
-
-		// Remove TTL by setting it to 0
-		err = f.SetTTL(context.Background(), key, 0)
+		// Set a DAH
+		newDAH := uint32(10)
+		err = f.SetDAH(context.Background(), key, newDAH)
 		require.NoError(t, err)
 
-		// Add a small delay to ensure TTL is completely removed
-		// This helps with potential file system delays when running in parallel
-		time.Sleep(50 * time.Millisecond)
-
-		// Verify TTL is removed
-		ttl, err = f.GetTTL(context.Background(), key)
+		// Get and verify DAH
+		dah, err = f.GetDAH(context.Background(), key)
 		require.NoError(t, err)
-		require.Zero(t, ttl, "TTL should be zero after setting to 0, but was %v", ttl)
+		require.Equal(t, newDAH, dah)
+
+		// Remove DAH by setting it to 0
+		err = f.SetDAH(context.Background(), key, 0)
+		require.NoError(t, err)
+
+		// Verify DAH is removed
+		dah, err = f.GetDAH(context.Background(), key)
+		require.NoError(t, err)
+		require.Zero(t, dah)
 	})
 
-	t.Run("get TTL for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-nonexistent")
+	t.Run("get DAH for non-existent key", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-nonexistent")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1553,14 +1547,14 @@ func TestFileGetAndSetTTL(t *testing.T) {
 
 		key := []byte("nonexistent-key-1")
 
-		// Try to get TTL for non-existent key
-		_, err = f.GetTTL(context.Background(), key)
+		// Try to get DAH for non-existent key
+		_, err = f.GetDAH(context.Background(), key)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 
-	t.Run("set TTL for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-set-nonexistent")
+	t.Run("set DAH for non-existent key", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-set-nonexistent")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1571,16 +1565,16 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("nonexistent-key-2")
-		newTTL := 1 * time.Hour
+		newDAH := 1 * time.Hour
 
-		// Try to set TTL for non-existent key
-		err = f.SetTTL(context.Background(), key, newTTL)
+		// Try to set DAH for non-existent key
+		err = f.SetDAH(context.Background(), key, uint32(newDAH)) // nolint: gosec
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 
-	t.Run("TTL expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-expiration")
+	t.Run("DAH expiration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-expiration")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1593,9 +1587,9 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		key := []byte("expiring-key")
 		content := []byte("test content")
 
-		// Set content with a short TTL
-		shortTTL := 200 * time.Millisecond
-		err = f.Set(context.Background(), key, content, options.WithTTL(shortTTL))
+		// Set content with a short DAH
+		shortDAH := uint32(200)
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(shortDAH))
 		require.NoError(t, err)
 
 		// Verify content exists initially
@@ -1603,26 +1597,24 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Wait for TTL to expire and cleaner to run
-		time.Sleep(shortTTL)
-
 		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(shortDAH + 1)
+		f.cleanupExpiredFiles()
 
-		// Verify content is removed after TTL expiration
+		// Verify content is removed after DAH expiration
 		exists, err = f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.False(t, exists)
 
-		// Verify TTL file is also removed
+		// Verify DAH file is also removed
 		filename, err := f.options.ConstructFilename(tempDir, key)
 		require.NoError(t, err)
-		_, err = os.Stat(filename + ".ttl")
+		_, err = os.Stat(filename + ".dah")
 		require.True(t, os.IsNotExist(err))
 	})
 
-	t.Run("update TTL before expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update-1")
+	t.Run("update DAH before expiration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-update-1")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1635,49 +1627,38 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		key := []byte("updating-key-1")
 		content := []byte("test content")
 
-		// Set content with initial short TTL
-		initialTTL := 2 * time.Second
-		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(10))
 		require.NoError(t, err)
 
-		// no sleep, run clean and check file is still there
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
 		exists, err := f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Wait for some time but not until expiration
-		time.Sleep(1 * time.Second)
+		dah, err := f.GetDAH(context.Background(), key)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(10), dah)
 
-		// Update TTL
-		newTTL := 3 * time.Second
-		err = f.SetTTL(context.Background(), key, newTTL)
+		// Update DAH
+		newDAH := uint32(100)
+		err = f.SetDAH(context.Background(), key, newDAH)
 		require.NoError(t, err)
 
-		// Verify content still exists after original TTL would have expired
-		time.Sleep(initialTTL - (1 * time.Second))
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(12)
+		f.cleanupExpiredFiles()
 
 		exists, err = f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Wait for new TTL to expire
-		time.Sleep(newTTL)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(100)
+		f.cleanupExpiredFiles()
 
 		exists, err = f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.False(t, exists)
 	})
-	t.Run("set TTL, delete TTL file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update-2")
+	t.Run("set DAH, delete DAH file, no expiration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-update-2")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1690,37 +1671,31 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		key := []byte("updating-key-2")
 		content := []byte("test content")
 
-		// Set initial content with TTL
-		initialTTL := 1 * time.Second
-		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
+		// Set content with initial short DAH
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(101))
 		require.NoError(t, err)
 
-		// no sleep, run clean and check file is still there
+		f.cleanupExpiredFiles()
 
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
 		exists, err := f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// delete ttl file
+		// delete DAH file
 		filename, err := f.options.ConstructFilename(tempDir, key)
 		require.NoError(t, err)
-		err = os.Remove(filename + ".ttl")
+		err = os.Remove(filename + ".dah")
 		require.NoError(t, err)
 
-		// Wait till expiration due
-		time.Sleep(1 * time.Second)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(102)
+		f.cleanupExpiredFiles()
 
 		exists, err = f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.True(t, exists)
 	})
-	t.Run("set TTL, manually change ttl file, no expiration", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-ttl-update-3")
+	t.Run("set DAH, manually change DAH file, no expiration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-dah-update-3")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1733,40 +1708,29 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		key := []byte("updating-key-3")
 		content := []byte("test content")
 
-		// Set content with initial short TTL
-		initialTTL := 1 * time.Second
-		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
+		initialDAH := uint32(200)
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(initialDAH))
 		require.NoError(t, err)
 
-		// change ttl file
+		// change DAH file
 		filename, err := f.options.ConstructFilename(tempDir, key)
 		require.NoError(t, err)
 
-		// try with a future time
-		ttl := time.Now().Add(+1 * time.Hour).Format(time.RFC3339)
-
-		err = os.WriteFile(filename+".ttl", []byte(ttl), 0644) // nolint:gosec
+		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+10), 10)), 0644) // nolint:gosec
 		require.NoError(t, err)
 
-		time.Sleep(initialTTL * 2)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(initialDAH + 9)
+		f.cleanupExpiredFiles()
 
 		exists, err := f.Exists(context.Background(), key)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// try again with a past time
-		ttl = time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
-
-		err = os.WriteFile(filename+".ttl", []byte(ttl), 0644) // nolint:gosec
+		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+5), 10)), 0644) // nolint:gosec
 		require.NoError(t, err)
 
-		time.Sleep(initialTTL * 2)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.cleanupExpiredFiles()
 
 		exists, err = f.Exists(context.Background(), key)
 		require.NoError(t, err)
@@ -1774,7 +1738,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 	})
 }
 
-func TestFileCleanExpiredFiles(t *testing.T) {
+func TestFileCleanupExpiredFiles(t *testing.T) {
 	t.Run("clean expired files with various scenarios", func(t *testing.T) {
 		tempDir, err := os.MkdirTemp("", "test-clean-expired")
 		require.NoError(t, err)
@@ -1790,37 +1754,36 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 		tests := []struct {
 			key       []byte
 			content   []byte
-			ttl       time.Duration
-			modifyTTL bool // If true, modify TTL file after creation
+			dah       uint32
+			modifyDAH bool // If true, modify DAH file after creation
 		}{
 			{
 				key:     []byte("normal-expiring"),
 				content: []byte("normal content"),
-				ttl:     200 * time.Millisecond,
+				dah:     300,
 			},
 			{
-				key:       []byte("modified-ttl"),
-				content:   []byte("content with modified ttl"),
-				ttl:       200 * time.Millisecond,
-				modifyTTL: true,
+				key:       []byte("modified-dah"),
+				content:   []byte("content with modified dah"),
+				dah:       300,
+				modifyDAH: true,
 			},
 		}
 
 		// Set up test files
 		for _, tc := range tests {
-			err := f.Set(context.Background(), tc.key, tc.content, options.WithTTL(tc.ttl))
+			err := f.Set(context.Background(), tc.key, tc.content, options.WithDeleteAt(tc.dah))
 			require.NoError(t, err)
 
-			if tc.modifyTTL {
-				err = f.SetTTL(context.Background(), tc.key, 1*time.Hour)
+			if tc.modifyDAH {
+				err = f.SetDAH(context.Background(), tc.key, tc.dah+100)
 				require.NoError(t, err)
 			}
-
-			time.Sleep(tc.ttl)
 		}
 
 		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(300)
+		f.cleanupExpiredFiles()
 
 		// Verify results
 		for _, tc := range tests {
@@ -1830,24 +1793,24 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 			filename, err := f.options.ConstructFilename(tempDir, tc.key)
 			require.NoError(t, err)
 
-			if tc.modifyTTL {
-				// File with modified (future) TTL should still exist
-				require.True(t, exists, "file with modified TTL should still exist")
+			if tc.modifyDAH {
+				// File with modified (future) DAH should still exist
+				require.True(t, exists, "file with modified DAH should still exist")
 
-				_, err = os.Stat(filename + ".ttl")
-				require.NoError(t, err, "TTL file should still exist")
+				_, err = os.Stat(filename + ".dah")
+				require.NoError(t, err, "DAH file should still exist")
 			} else {
-				// Normal expired and corrupt TTL files should be removed
+				// Normal expired and corrupt DAH files should be removed
 				require.False(t, exists, "expired file should be removed")
 
-				_, err = os.Stat(filename + ".ttl")
-				require.True(t, os.IsNotExist(err), "TTL file should be removed when content file is missing")
+				_, err = os.Stat(filename + ".dah")
+				require.True(t, os.IsNotExist(err), "DAH file should be removed")
 			}
 		}
 	})
 
-	t.Run("concurrent TTL modifications", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-concurrent-ttl")
+	t.Run("concurrent DAH modifications", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-concurrent-dah")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
@@ -1860,11 +1823,11 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 		key := []byte("concurrent-key")
 		content := []byte("concurrent content")
 
-		// Set initial content with TTL
-		err = f.Set(context.Background(), key, content, options.WithTTL(500*time.Millisecond))
+		// Set initial content with DAH
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(600))
 		require.NoError(t, err)
 
-		// Start multiple goroutines to modify TTL
+		// Start multiple goroutines to modify DAH
 		var wg sync.WaitGroup
 
 		for i := 0; i < 5; i++ {
@@ -1874,15 +1837,15 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 				defer wg.Done()
 				time.Sleep(time.Duration(i*50) * time.Millisecond)
 
-				// Alternate between extending and shortening TTL
-				var ttl time.Duration
+				// Alternate between extending and shortening DAH
+				var dah uint32
 				if i%2 == 0 {
-					ttl = 400 * time.Millisecond
+					dah = 400
 				} else {
-					ttl = 200 * time.Millisecond
+					dah = 200
 				}
 
-				err := f.SetTTL(context.Background(), key, ttl)
+				err := f.SetDAH(context.Background(), key, dah)
 				require.NoError(t, err)
 			}(i)
 		}
@@ -1892,17 +1855,18 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 		time.Sleep(400 * time.Millisecond)
 
 		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(600)
+		f.cleanupExpiredFiles()
 
 		// Verify final state
 		exists, err := f.Exists(context.Background(), key)
 		require.NoError(t, err)
-		require.False(t, exists, "file should be removed after TTL expiration")
+		require.False(t, exists, "file should be removed after DAH expiration")
 
 		filename, err := f.options.ConstructFilename(tempDir, key)
 		require.NoError(t, err)
-		_, err = os.Stat(filename + ".ttl")
-		require.True(t, os.IsNotExist(err), "TTL file should be removed")
+		_, err = os.Stat(filename + ".dah")
+		require.True(t, os.IsNotExist(err), "DAH file should be removed")
 	})
 
 	t.Run("cleaner with missing files", func(t *testing.T) {
@@ -1919,23 +1883,23 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 		key := []byte("missing-file")
 		content := []byte("content")
 
-		// Set content with TTL
-		err = f.Set(context.Background(), key, content, options.WithTTL(200*time.Millisecond))
+		// Set content with DAH
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(800))
 		require.NoError(t, err)
 
-		// Manually delete the content file but leave TTL file
+		// Manually delete the content file but leave DAH file
 		filename, err := f.options.ConstructFilename(tempDir, key)
 		require.NoError(t, err)
 		err = os.Remove(filename)
 		require.NoError(t, err)
 
-		time.Sleep(200 * time.Millisecond)
 		// run cleaner - don't wait for cleaner to run automatically
-		cleanExpiredFiles(f)
+		f.SetCurrentBlockHeight(800)
+		f.cleanupExpiredFiles()
 
-		// Verify TTL file is also cleaned up
-		_, err = os.Stat(filename + ".ttl")
-		require.True(t, os.IsNotExist(err), "TTL file should be removed when content file is missing")
+		// Verify DAH file is also cleaned up
+		_, err = os.Stat(filename + ".dah")
+		require.True(t, os.IsNotExist(err), "DAH file should be removed when content file is missing")
 	})
 }
 
@@ -1951,26 +1915,25 @@ func TestFileURLParameters(t *testing.T) {
 		require.Equal(t, -3, f.options.HashPrefix)
 	})
 
-	t.Run("ttlCleanerInterval from URL", func(t *testing.T) {
+	t.Run("dahCleanerInterval from URL", func(t *testing.T) {
 		// Create a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-ttl-cleaner")
+		tempDir, err := os.MkdirTemp("", "test-dah-cleaner")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
-		// Set up test file with TTL
+		// Set up test file with DAH
 		key := []byte("test-key")
 		content := []byte("test content")
-		ttl := 200 * time.Millisecond
 
 		// Create URL with custom ttlCleanerInterval
-		u, err := url.Parse(fmt.Sprintf("file://%s?ttlCleanerInterval=50ms", tempDir))
+		u, err := url.Parse(fmt.Sprintf("file://%s?dahCleanerInterval=50ms", tempDir))
 		require.NoError(t, err)
 
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		// Set content with TTL
-		err = f.Set(context.Background(), key, content, options.WithTTL(ttl))
+		// Set content with DAH
+		err = f.Set(context.Background(), key, content, options.WithDeleteAt(1000))
 		require.NoError(t, err)
 
 		// Verify content exists
@@ -1978,8 +1941,9 @@ func TestFileURLParameters(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// Wait for TTL to expire and cleaner to run
-		time.Sleep(ttl + 100*time.Millisecond)
+		// run cleaner - don't wait for cleaner to run automatically
+		f.SetCurrentBlockHeight(1000)
+		f.cleanupExpiredFiles()
 
 		// Content should be removed due to shorter cleaner interval
 		exists, err = f.Exists(context.Background(), key)
@@ -1987,14 +1951,14 @@ func TestFileURLParameters(t *testing.T) {
 		require.False(t, exists)
 	})
 
-	t.Run("invalid ttlCleanerInterval in URL", func(t *testing.T) {
-		u, err := url.Parse("file://./data/subtreestore?ttlCleanerInterval=invalid")
+	t.Run("invalid dahCleanerInterval in URL", func(t *testing.T) {
+		u, err := url.Parse("file://./data/subtreestore?dahCleanerInterval=invalid")
 		require.NoError(t, err)
 
 		f, err := New(ulogger.TestLogger{}, u)
 		require.Error(t, err)
 		require.Nil(t, f)
-		require.Contains(t, err.Error(), "failed to parse ttlCleanerInterval")
+		require.Contains(t, err.Error(), "failed to parse dahCleanerInterval")
 	})
 
 	t.Run("invalid hashSuffix in URL", func(t *testing.T) {
@@ -2076,7 +2040,7 @@ func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
 	content := []byte("test content")
 
 	// Put a file with checksum
-	err = f.Set(context.Background(), []byte(key), content, options.WithTTL(100*time.Millisecond))
+	err = f.Set(context.Background(), []byte(key), content, options.WithDeleteAt(1))
 	require.NoError(t, err)
 
 	// Construct filename
@@ -2088,11 +2052,9 @@ func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
 	_, err = os.Stat(filename)
 	require.NoError(t, err, "checksum file should exist")
 
-	// Wait for TTL expiry
-	time.Sleep(100 * time.Millisecond)
-
 	// run cleaner - don't wait for cleaner to run automatically
-	cleanExpiredFiles(f)
+	f.SetCurrentBlockHeight(1000)
+	f.cleanupExpiredFiles()
 
 	// Check if the file has expired
 	exists, err := f.Exists(context.Background(), []byte(key))

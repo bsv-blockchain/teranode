@@ -14,7 +14,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage

@@ -75,8 +75,8 @@ type BlockValidation struct {
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
 
-	// subtreeTTL specifies how long subtrees should be retained
-	subtreeTTL time.Duration
+	// subtreeBlockRetention specifies how long subtrees should be retained
+	subtreeBlockRetention uint32
 
 	// txStore handles permanent storage of transactions
 	txStore blob.Store
@@ -161,13 +161,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		settings:                           tSettings,
 		blockchainClient:                   blockchainClient,
 		subtreeStore:                       subtreeStore,
-		subtreeTTL:                         tSettings.BlockValidation.SubtreeTTL,
+		subtreeBlockRetention:              tSettings.BlockValidation.SubtreeBlockRetention,
 		txStore:                            txStore,
 		utxoStore:                          txMetaStore,
 		recentBlocksBloomFilters:           make([]*model.BlockBloomFilter, 0),
 		recentBlocksBloomFiltersExpiration: bloomExpiration,
 		subtreeValidationClient:            subtreeValidationClient,
-		subtreeDeDuplicator:                NewDeDuplicator(tSettings.BlockValidation.SubtreeTTL),
+		subtreeDeDuplicator:                NewDeDuplicator(tSettings.BlockValidation.SubtreeBlockRetention),
 		lastValidatedBlocks:                expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                        expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:                      expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
@@ -307,8 +307,8 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				g.Go(func() error {
 					u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
 
-					if err := u.updateSubtreesTTL(gCtx, block); err != nil {
-						u.logger.Errorf("[BlockValidation:start] failed to update subtrees TTL: %s", err)
+					if err := u.updateSubtreesDAH(gCtx, block); err != nil {
+						u.logger.Errorf("[BlockValidation:start] failed to update subtrees DAH: %s", err)
 					}
 
 					return nil
@@ -948,15 +948,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
 
 	go func() {
-		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
+		u.logger.Infof("[ValidateBlock][%s] updating subtrees DAH", block.Hash().String())
 
-		err := u.updateSubtreesTTL(callerSpan.Ctx, block)
+		err := u.updateSubtreesDAH(callerSpan.Ctx, block)
 		if err != nil {
 			// TODO: what to do here? We have already added the block to the blockchain
-			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%s]", block.Hash().String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
 		}
 
-		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
+		u.logger.Infof("[ValidateBlock][%s] update subtrees DAH DONE", block.Hash().String())
 	}()
 
 	if useOptimisticMining {
@@ -1154,28 +1154,28 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter DONE in %s (%d slices)", block.Hash().String(), time.Since(startTime), len(u.recentBlocksBloomFilters))
 }
 
-// updateSubtreesTTL manages retention periods for block subtrees.
-// It updates TTL values and marks subtrees as properly set in the blockchain.
+// updateSubtreesDAH manages retention periods for block subtrees.
+// It updates the DAH values and marks subtrees as properly set in the blockchain.
 //
 // Parameters:
 //   - ctx: Context for the operation
 //   - block: Block containing subtrees to update
 //
-// Returns an error if TTL updates fail.
-func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesTTL")
+// Returns an error if DAH updates fail.
+func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesDAH")
 	defer deferFn()
 
-	// update the subtree TTLs
+	// update the subtree DAHs
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(u.settings.BlockValidation.SubtreeTTLConcurrency)
+	g.SetLimit(u.settings.BlockValidation.SubtreeDAHConcurrency)
 
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 
 		g.Go(func() error {
-			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
-				return errors.NewStorageError("failed to update subtree TTL", err)
+			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
+				return errors.NewStorageError("failed to update subtree DAH", err)
 			}
 
 			return nil
@@ -1183,7 +1183,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	}
 
 	if err = g.Wait(); err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String(), err)
+		return errors.NewServiceError("[ValidateBlock][%s] failed to update subtree DAH", block.Hash().String(), err)
 	}
 
 	// update block subtrees_set to true

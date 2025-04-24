@@ -27,7 +27,7 @@ func TestServerOperations(t *testing.T) {
 	// Create a logger
 	logger := ulogger.New("blob-server-test")
 
-	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?ttlCleanerInterval=100ms", tempDir))
+	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?dahCleanerInterval=100ms", tempDir))
 	require.NoError(t, err)
 
 	blobServer, err := NewHTTPBlobServer(
@@ -70,14 +70,17 @@ func TestServerOperations(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("SetTTL", func(t *testing.T) {
+	t.Run("SetDAH", func(t *testing.T) {
 		key := []byte("testKey2")
 		value := []byte("testValue2")
 
-		err := client.Set(context.Background(), key, value)
+		err := client.Set(t.Context(), key, value)
 		require.NoError(t, err)
 
-		err = client.SetTTL(context.Background(), key, 1*time.Millisecond)
+		err = client.SetDAH(t.Context(), key, 1)
+		require.NoError(t, err)
+
+		err = blobServer.setCurrentBlockHeight(2)
 		require.NoError(t, err)
 
 		time.Sleep(200 * time.Millisecond)

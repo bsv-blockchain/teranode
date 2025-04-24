@@ -170,11 +170,13 @@ func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 
 			g.Go(func() error {
 				// Get the UTXOHash for this output.
+				//nolint:gosec
 				utxoHash, err := util.UTXOHash(hash, uint32(safeI), safeOutput.LockingScript, safeOutput.Satoshis)
 				if err != nil {
 					return err
 				}
 
+				//nolint:gosec
 				utxoItem := &UTXOItem{
 					Txid:          hash,
 					Vout:          uint32(safeI),
@@ -184,12 +186,14 @@ func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 				}
 
 				// Get the UTXO for this output.
+				//nolint:gosec
 				utxoRes, _ := h.repository.GetUtxo(ctx, &utxo.Spend{
 					UTXOHash: utxoHash,
 					TxID:     tx.TxIDChainHash(),
 					Vout:     uint32(safeI),
 				})
 
+				//nolint:gosec
 				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
 					utxoItem.Status = utxo.Status(utxoRes.Status).String()
 					utxoItem.SpendingTxID = utxoRes.SpendingTxID
@@ -209,7 +213,7 @@ func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("[Asset_http][%s] error getting utxos", hash.String(), err).Error())
 		}
 
-		prometheusAssetHttpGetUTXO.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetUTXO.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case JSON:

@@ -10,8 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/batcher"
 	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/bitcoin-sv/teranode/stores/blob/http"
-	"github.com/bitcoin-sv/teranode/stores/blob/localttl"
-	"github.com/bitcoin-sv/teranode/stores/blob/lustre"
+	"github.com/bitcoin-sv/teranode/stores/blob/localdah"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -20,7 +19,7 @@ import (
 )
 
 // NewStore creates a new blob store based on the provided URL scheme and options.
-// It supports various storage backends including null, memory, file, http, s3, and lustre.
+// It supports various storage backends including null, memory, file, http, and s3.
 // Parameters:
 //   - logger: Logger instance for store operations
 //   - storeURL: URL containing the store configuration
@@ -32,9 +31,9 @@ import (
 func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
 	switch storeURL.Scheme {
 	case "null":
-		// Prevent null stores from using TTL functionality
-		if storeURL.Query().Get("localTTLStore") != "" {
-			return nil, errors.NewStorageError("null store does not support TTL functionality")
+		// Prevent null stores from using DAH functionality
+		if storeURL.Query().Get("localDAHStore") != "" {
+			return nil, errors.NewStorageError("null store does not support DAH functionality")
 		}
 
 		store, err = null.New(logger)
@@ -42,7 +41,7 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 			return nil, errors.NewStorageError("error creating null blob store", err)
 		}
 	case "memory":
-		store = memory.New()
+		store = memory.New(opts...)
 
 	case "file":
 		store, err = file.New(logger, storeURL, opts...)
@@ -59,16 +58,6 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		if err != nil {
 			return nil, errors.NewStorageError("error creating s3 blob store", err)
 		}
-	case "lustre":
-		// storeUrl is an s3 url
-		// lustre://s3.com/teranode?localDir=/data/subtrees&localPersist=s3
-		dir := storeURL.Query().Get("localDir")
-		persistDir := storeURL.Query().Get("localPersist")
-
-		store, err = lustre.New(logger, storeURL, dir, persistDir, opts...)
-		if err != nil {
-			return nil, errors.NewStorageError("error creating lustre blob store", err)
-		}
 	default:
 		return nil, errors.NewStorageError("unknown store type: %s", storeURL.Scheme)
 	}
@@ -80,50 +69,50 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	}
 
-	if storeURL.Query().Get("localTTLStore") != "" {
-		store, err = createTTLStore(storeURL, logger, opts, store)
+	if storeURL.Query().Get("localDAHStore") != "" {
+		store, err = createDAHStore(storeURL, logger, opts, store)
 		if err != nil {
-			return nil, errors.NewStorageError("error creating local TTL blob store", err)
+			return nil, errors.NewStorageError("error creating local DAH blob store", err)
 		}
 	}
 
 	return
 }
 
-// createTTLStore wraps a store with TTL capabilities using a local cache.
+// createDAHStore wraps a store with DAH capabilities using a local cache.
 // Parameters:
-//   - storeURL: URL containing TTL store configuration
-//   - logger: Logger instance for TTL operations
+//   - storeURL: URL containing DAH store configuration
+//   - logger: Logger instance for DAH operations
 //   - opts: Store options
 //   - store: The base store to wrap
 //
 // Returns:
-//   - Store: The TTL-enabled store instance
+//   - Store: The DAH-enabled store instance
 //   - error: Any error that occurred during creation
-func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
-	localTTLStorePath := storeURL.Query().Get("localTTLStorePath")
+func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
+	localDAHStorePath := storeURL.Query().Get("localDAHStorePath")
 
-	if len(localTTLStorePath) == 0 {
-		localTTLStorePath = "/tmp/localTTL"
-	} else if localTTLStorePath[0] != '/' && !strings.HasPrefix(localTTLStorePath, "./") {
-		localTTLStorePath = "./" + localTTLStorePath
+	if len(localDAHStorePath) == 0 {
+		localDAHStorePath = "/tmp/localDAH"
+	} else if localDAHStorePath[0] != '/' && !strings.HasPrefix(localDAHStorePath, "./") {
+		localDAHStorePath = "./" + localDAHStorePath
 	}
 
-	u, err := url.Parse("file://" + localTTLStorePath)
+	u, err := url.Parse("file://" + localDAHStorePath)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to parse localTTLStorePath", err)
+		return nil, errors.NewStorageError("failed to parse localDAHStorePath", err)
 	}
 
-	var ttlStore Store
+	var dahStore Store
 
-	ttlStore, err = file.New(logger, u, opts...)
+	dahStore, err = file.New(logger, u, opts...)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create file store", err)
 	}
 
-	store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
+	store, err = localdah.New(logger.New("localDAH"), dahStore, store)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to create localTTL store", err)
+		return nil, errors.NewStorageError("failed to create localDAH store", err)
 	}
 
 	return store, nil

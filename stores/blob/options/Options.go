@@ -5,22 +5,23 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/ordishs/go-utils"
 )
 
 type Options struct {
-	TTL            *time.Duration
-	Filename       string
-	Extension      string
-	SubDirectory   string
-	HashPrefix     int
-	AllowOverwrite bool
-	Header         []byte
-	Footer         *Footer
-	GenerateSHA256 bool
+	BlockHeightRetention uint32
+	Filename             string
+	Extension            string
+	SubDirectory         string
+	HashPrefix           int
+	AllowOverwrite       bool
+	Header               []byte
+	Footer               *Footer
+	GenerateSHA256       bool
+	PersistSubDir        string
+	LongtermStoreURL     *url.URL
 }
 
 type StoreOption func(*Options)
@@ -46,10 +47,10 @@ func NewFileOptions(opts ...FileOption) *Options {
 	return options
 }
 
-// WithDefaultTTL configures the default TTL for the store.
-func WithDefaultTTL(ttl time.Duration) StoreOption {
+// WithDefaultBlockHeightRetention configures the default block height retention for the store.
+func WithDefaultBlockHeightRetention(blockHeightRetention uint32) StoreOption {
 	return func(s *Options) {
-		s.TTL = &ttl
+		s.BlockHeightRetention = blockHeightRetention
 	}
 }
 
@@ -76,10 +77,10 @@ func WithHashPrefix(length int) StoreOption {
 
 // Per-call options
 
-// WithTTL configures the TTL for the file.
-func WithTTL(ttl time.Duration) FileOption {
+// WithDeleteAt configures the DAH for the file.
+func WithDeleteAt(blockHeightRetention uint32) FileOption {
 	return func(s *Options) {
-		s.TTL = &ttl
+		s.BlockHeightRetention = blockHeightRetention
 	}
 }
 
@@ -123,6 +124,23 @@ func WithFooter(footer *Footer) StoreOption {
 	}
 }
 
+// WithLongtermStorage configures longterm storage options for the store.
+// This enables the three-layer storage functionality (primary local, persistent local, and longterm store, like S3).
+// Parameters:
+//   - persistSubDir: The subdirectory for persistent storage
+//   - longtermStoreURL: The URL for longterm storage (can be nil to disable longterm storage)
+//
+// The idea here is that an external process will handle persisting all items in the persistSubDir
+// to whatever longterm storage is required.  The longtermStoreURL is used to initialize the
+// longterm store client that can access that longterm storage for retrieval operations.
+func WithLongtermStorage(persistSubDir string, longtermStoreURL *url.URL) StoreOption {
+	return func(s *Options) {
+		s.PersistSubDir = persistSubDir
+
+		s.LongtermStoreURL = longtermStoreURL
+	}
+}
+
 // ReplaceExtention replaces the file extension in the given FileOptions.
 // Parameters:
 //   - fileOpts: The FileOptions to replace the extension in.
@@ -153,15 +171,14 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	options := &Options{}
 
 	if storeOpts != nil {
-		if storeOpts.TTL != nil {
-			options.TTL = storeOpts.TTL
-		}
-
+		options.BlockHeightRetention = storeOpts.BlockHeightRetention
 		options.SubDirectory = storeOpts.SubDirectory
 		options.HashPrefix = storeOpts.HashPrefix
 		options.Header = storeOpts.Header
 		options.Footer = storeOpts.Footer
 		options.GenerateSHA256 = storeOpts.GenerateSHA256
+		options.PersistSubDir = storeOpts.PersistSubDir
+		options.LongtermStoreURL = storeOpts.LongtermStoreURL
 	}
 
 	for _, opt := range fileOpts {
@@ -176,8 +193,8 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 	options := NewFileOptions(opts...)
 	query := url.Values{}
 
-	if options.TTL != nil {
-		query.Set("ttl", strconv.FormatInt(int64(*options.TTL), 10))
+	if options.BlockHeightRetention > 0 {
+		query.Set("blockHeightRetention", strconv.FormatUint(uint64(options.BlockHeightRetention), 10))
 	}
 
 	if options.Filename != "" {
@@ -199,9 +216,9 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 func QueryToFileOptions(query url.Values) []FileOption {
 	var opts []FileOption
 
-	if ttlStr := query.Get("ttl"); ttlStr != "" {
-		if ttl, err := strconv.ParseInt(ttlStr, 10, 64); err == nil {
-			opts = append(opts, WithTTL(time.Duration(ttl)*time.Second))
+	if blockHeightRetentionStr := query.Get("blockHeightRetention"); blockHeightRetentionStr != "" {
+		if blockHeightRetention, err := strconv.ParseUint(blockHeightRetentionStr, 10, 32); err == nil {
+			opts = append(opts, WithDeleteAt(uint32(blockHeightRetention)))
 		}
 	}
 
@@ -219,6 +236,7 @@ func QueryToFileOptions(query url.Values) []FileOption {
 
 	return opts
 }
+
 func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error) {
 	var (
 		filename string

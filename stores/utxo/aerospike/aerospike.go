@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -62,6 +62,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -70,6 +71,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -103,35 +105,36 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                context.Context // store the global context for things that run in the background
-	url                *url.URL
-	client             *uaerospike.Client
-	namespace          string
-	setName            string
-	expiration         time.Duration
-	blockHeight        atomic.Uint32
-	medianBlockTime    atomic.Uint32
-	logger             ulogger.Logger
-	settings           *settings.Settings
-	batchID            atomic.Uint64
-	storeBatcher       batcherIfc[BatchStoreItem]
-	getBatcher         batcherIfc[batchGetItem]
-	spendBatcher       batcherIfc[batchSpend]
-	outpointBatcher    batcherIfc[batchOutpoint]
-	incrementBatcher   batcherIfc[batchIncrement]
-	setTTLBatcher      batcherIfc[batchTTL]
-	unspendableBatcher batcherIfc[batchUnspendable]
-	externalStore      blob.Store
-	utxoBatchSize      int
-	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	ctx                  context.Context // store the global context for things that run in the background
+	url                  *url.URL
+	client               *uaerospike.Client
+	namespace            string
+	setName              string
+	blockHeightRetention uint32
+	blockHeight          atomic.Uint32
+	medianBlockTime      atomic.Uint32
+	logger               ulogger.Logger
+	settings             *settings.Settings
+	batchID              atomic.Uint64
+	storeBatcher         batcherIfc[BatchStoreItem]
+	getBatcher           batcherIfc[batchGetItem]
+	spendBatcher         batcherIfc[batchSpend]
+	outpointBatcher      batcherIfc[batchOutpoint]
+	incrementBatcher     batcherIfc[batchIncrement]
+	setDAHBatcher        batcherIfc[batchDAH]
+	unspendableBatcher   batcherIfc[batchUnspendable]
+	externalStore        blob.Store
+	utxoBatchSize        int
+	externalTxCache      *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	cleanupService       *cleanup.Service
 }
 
 // New creates a new Aerospike-based UTXO store.
-// The URL format is: aerospike://host:port/namespace?set=setname&expiration=seconds
+// The URL format is: aerospike://host:port/namespace?set=setname&blockHeightRetention=n
 //
 // URL parameters:
 //   - set: Aerospike set name (default: txmeta)
-//   - expiration: TTL for spent UTXOs in seconds
+//   - blockHeightRetention: Block height retention for spent UTXOs (default 100)
 //   - externalStore: URL for blob storage of large transactions
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, aerospikeURL *url.URL) (*Store, error) {
 	InitPrometheusMetrics()
@@ -152,24 +155,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		log.Fatal("Failed to init placeholder key")
 	}
 
-	expiration := time.Duration(0)
+	blockHeightRetention := uint32(100)
 
-	expirationValue := aerospikeURL.Query().Get("expiration")
-	if expirationValue != "" {
-		expiration, err = time.ParseDuration(expirationValue)
+	blockHeightRetentionValue := aerospikeURL.Query().Get("block_retention")
+	if blockHeightRetentionValue != "" {
+		u64, err := strconv.ParseUint(blockHeightRetentionValue, 10, 32)
 		if err != nil {
-			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
+			return nil, errors.NewInvalidArgumentError("could not parse blockHeightRetention %s", blockHeightRetentionValue, err)
 		}
 
-		if expiration > 0 && expiration < time.Second {
-			return nil, errors.NewInvalidArgumentError("expiration must be at least 1 second")
+		blockHeightRetention = uint32(u64)
+
+		if blockHeightRetention < 1 {
+			return nil, errors.NewInvalidArgumentError("blockHeightRetention must be at least 1")
 		}
 
-		if expiration == 0 {
-			logger.Infof("expiration is set to 0 meaning the default Aerospike TTL setting will be used")
-		} else {
-			logger.Infof("expiration is set to %s (%.0f seconds)", expirationValue, expiration.Seconds())
-		}
+		logger.Infof("blockHeightRetention is set to %d", blockHeightRetention)
 	}
 
 	setName := aerospikeURL.Query().Get("set")
@@ -203,18 +204,35 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	s := &Store{
-		ctx:             ctx,
-		url:             aerospikeURL,
-		client:          client,
-		namespace:       namespace,
-		setName:         setName,
-		expiration:      expiration,
-		logger:          logger,
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		ctx:                  ctx,
+		url:                  aerospikeURL,
+		client:               client,
+		namespace:            namespace,
+		setName:              setName,
+		blockHeightRetention: blockHeightRetention,
+		logger:               logger,
+		settings:             tSettings,
+		externalStore:        externalStore,
+		utxoBatchSize:        utxoBatchSize,
+		externalTxCache:      externalTxCache,
 	}
+
+	cleanupService, err := cleanup.NewService(cleanup.Options{
+		Ctx:            ctx,
+		Logger:         logger,
+		Client:         client,
+		Namespace:      namespace,
+		Set:            setName,
+		MaxJobsHistory: 3,
+		WorkerCount:    2,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s.cleanupService = cleanupService
+
+	s.cleanupService.Start()
 
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
@@ -251,10 +269,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	incrementBatchDuration := time.Duration(incrementBatchDurationStr) * time.Millisecond
 	s.incrementBatcher = batcher.New(incrementBatchSize, incrementBatchDuration, s.sendIncrementBatch, true)
 
-	setTTLBatchSize := tSettings.UtxoStore.SetTTLBatcherSize
-	setTTLBatchDurationStr := tSettings.UtxoStore.SetTTLBatcherDurationMillis
-	setTTLBatchDuration := time.Duration(setTTLBatchDurationStr) * time.Millisecond
-	s.setTTLBatcher = batcher.New(setTTLBatchSize, setTTLBatchDuration, s.sendSetTTLBatch, true)
+	setDAHBatchSize := tSettings.UtxoStore.SetDAHBatcherSize
+	setDAHBatchDurationStr := tSettings.UtxoStore.SetDAHBatcherDurationMillis
+	setDAHBatchDuration := time.Duration(setDAHBatchDurationStr) * time.Millisecond
+	s.setDAHBatcher = batcher.New(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, true)
 
 	unspendableBatcherSize := tSettings.UtxoStore.UnspendableBatcherSize
 	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
@@ -269,6 +287,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
+
+	err := s.cleanupService.UpdateBlockHeight(blockHeight)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

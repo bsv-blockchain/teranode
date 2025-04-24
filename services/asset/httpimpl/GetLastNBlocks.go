@@ -138,7 +138,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		}
 	}
 
-	prometheusAssetHttpGetLastNBlocks.WithLabelValues("OK", "200").Inc()
+	prometheusAssetHTTPGetLastNBlocks.WithLabelValues("OK", "200").Inc()
 
 	return c.JSONPretty(200, blocks, "  ")
 }

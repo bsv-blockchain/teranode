@@ -4,7 +4,6 @@ import (
 	"net/url"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,7 +140,7 @@ func TestNewFileOptions(t *testing.T) {
 	t.Run("Empty options", func(t *testing.T) {
 		opts := NewFileOptions()
 		assert.NotNil(t, opts)
-		assert.Nil(t, opts.TTL)
+		assert.Equal(t, uint32(0), opts.BlockHeightRetention)
 		assert.Empty(t, opts.Filename)
 		assert.Empty(t, opts.Extension)
 		assert.Empty(t, opts.SubDirectory)
@@ -161,16 +160,16 @@ func TestNewFileOptions(t *testing.T) {
 }
 
 func TestTTLOptions(t *testing.T) {
-	duration := 5 * time.Minute
+	bhr := uint32(5)
 
 	t.Run("WithDefaultTTL", func(t *testing.T) {
-		opts := NewStoreOptions(WithDefaultTTL(duration))
-		assert.Equal(t, duration, *opts.TTL)
+		opts := NewStoreOptions(WithDefaultBlockHeightRetention(bhr))
+		assert.Equal(t, bhr, opts.BlockHeightRetention)
 	})
 
 	t.Run("WithTTL", func(t *testing.T) {
-		opts := NewFileOptions(WithTTL(duration))
-		assert.Equal(t, duration, *opts.TTL)
+		opts := NewFileOptions(WithDeleteAt(bhr))
+		assert.Equal(t, bhr, opts.BlockHeightRetention)
 	})
 }
 
@@ -209,9 +208,10 @@ func TestFileOptionsToQuery(t *testing.T) {
 	})
 
 	t.Run("All options", func(t *testing.T) {
-		ttl := 5 * time.Minute
+		bhr := uint32(5)
+
 		opts := []FileOption{
-			WithTTL(ttl),
+			WithDeleteAt(bhr),
 			WithFilename("test.txt"),
 			WithFileExtension("meta"),
 			WithAllowOverwrite(true),
@@ -219,7 +219,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 
 		query := FileOptionsToQuery(opts...)
 
-		assert.Equal(t, "300000000000", query.Get("ttl"))
+		assert.Equal(t, "5", query.Get("blockHeightRetention"))
 		assert.Equal(t, "test.txt", query.Get("filename"))
 		assert.Equal(t, "meta", query.Get("extension"))
 		assert.Equal(t, "true", query.Get("allowOverwrite"))
@@ -235,30 +235,29 @@ func TestQueryToFileOptions(t *testing.T) {
 
 	t.Run("All query parameters", func(t *testing.T) {
 		query := url.Values{
-			"ttl":            []string{"300"},
-			"filename":       []string{"test.txt"},
-			"extension":      []string{"meta"},
-			"allowOverwrite": []string{"true"},
+			"blockHeightRetention": []string{"5"},
+			"filename":             []string{"test.txt"},
+			"extension":            []string{"meta"},
+			"allowOverwrite":       []string{"true"},
 		}
 
 		opts := QueryToFileOptions(query)
 		options := NewFileOptions(opts...)
 
-		expectedTTL := 300 * time.Second
-		assert.Equal(t, expectedTTL, *options.TTL)
+		assert.Equal(t, uint32(5), options.BlockHeightRetention)
 		assert.Equal(t, "test.txt", options.Filename)
 		assert.Equal(t, "meta", options.Extension)
 		assert.True(t, options.AllowOverwrite)
 	})
 
-	t.Run("Invalid TTL", func(t *testing.T) {
+	t.Run("Invalid DAH", func(t *testing.T) {
 		query := url.Values{
-			"ttl": []string{"invalid"},
+			"blockHeightRetention": []string{"invalid"},
 		}
 
 		opts := QueryToFileOptions(query)
 		options := NewFileOptions(opts...)
-		assert.Nil(t, options.TTL)
+		assert.Equal(t, uint32(0), options.BlockHeightRetention)
 	})
 }
 

@@ -502,11 +502,11 @@ func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.R
 	panic(notImplemented)
 }
 
-func (l TestLocalSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
+func (l TestLocalSubtreeStore) SetDAH(_ context.Context, _ []byte, _ uint32, opts ...options.FileOption) error {
 	panic(notImplemented)
 }
 
-func (l TestLocalSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+func (l TestLocalSubtreeStore) GetDAH(_ context.Context, _ []byte, opts ...options.FileOption) (uint32, error) {
 	panic(notImplemented)
 }
 
@@ -558,11 +558,11 @@ func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ []byte, _ ...options.
 	return nil
 }
 
-func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
+func (n *BlobStoreStub) SetDAH(_ context.Context, _ []byte, _ uint32, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *BlobStoreStub) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+func (n *BlobStoreStub) GetDAH(_ context.Context, _ []byte, _ ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 

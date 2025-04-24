@@ -116,7 +116,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			fs.wg.Done()   // Decrement the WaitGroup counter
 		}()
 
-		err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithTTL(0))
+		err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithDeleteAt(0))
 		if err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 			fs.mu.Lock()
@@ -151,7 +151,7 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 
 // Close finalizes the file storage operation and ensures all data is written.
 // It flushes the buffer, closes the writer, waits for the background goroutine to complete,
-// sets the TTL for the file, and creates a SHA256 checksum file.
+// sets the DAH for the file, and creates a SHA256 checksum file.
 // Returns any error encountered during the closing process.
 // It returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
@@ -192,9 +192,9 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		return errors.NewStorageError("Error in reader goroutine", readerErr)
 	}
 
-	// Set TTL to 0 (no expiration) as per the memory about Aerospike TTL usage
-	if err := f.store.SetTTL(ctx, f.key, 0, options.WithFileExtension(f.extension)); err != nil {
-		return errors.NewStorageError("Error setting ttl on additions file", err)
+	// Set DAH to 0 (no expiration) as per the memory about Aerospike DAH usage
+	if err := f.store.SetDAH(ctx, f.key, 0, options.WithFileExtension(f.extension)); err != nil {
+		return errors.NewStorageError("Error setting DAH on additions file", err)
 	}
 
 	if err := f.waitUntilFileIsAvailable(ctx, f.extension); err != nil {
@@ -208,7 +208,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		f.key,
 		[]byte(hashData),
 		options.WithFileExtension(f.extension+".sha256"),
-		options.WithTTL(0),
+		options.WithDeleteAt(0),
 		options.WithAllowOverwrite(true),
 	); err != nil {
 		return errors.NewStorageError("error setting sha256 hash", err)

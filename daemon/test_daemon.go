@@ -686,7 +686,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		subtree.RootHash()[:],
 		subtreeBytes,
 		options.WithFileExtension("subtreeToCheck"),
-		options.WithTTL(120*time.Minute),
+		options.WithDeleteAt(100),
 	)
 	if err != nil {
 		return nil, err
@@ -702,7 +702,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		subtreeData.RootHash()[:],
 		subtreeDataBytes,
 		options.WithFileExtension("subtreeData"),
-		options.WithTTL(120*time.Minute),
+		options.WithDeleteAt(100),
 	)
 	if err != nil {
 		return nil, err

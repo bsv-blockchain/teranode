@@ -165,7 +165,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			headerResponses := make([]*blockHeaderResponse, 0, len(headers))

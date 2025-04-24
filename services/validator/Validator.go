@@ -373,7 +373,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return txMetaData, errors.NewTxConflictingError("[Validate][%s] tx is conflicting", txID, err)
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
-			// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
+			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
 			// blessed. In this case we can just return early.
 			if txMetaData, err = v.utxoStore.Get(setSpan.Ctx, tx.TxIDChainHash()); err == nil {

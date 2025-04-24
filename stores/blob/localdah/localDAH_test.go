@@ -1,11 +1,10 @@
-package localttl
+package localdah
 
 import (
 	"bytes"
 	"context"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -14,23 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupTest creates fresh stores and returns them along with a LocalTTL instance
-func setupTest(t *testing.T, opts ...options.StoreOption) (*LocalTTL, blobStore, blobStore) {
-	ttlStore := memory.New(opts...)
+// setupTest creates fresh stores and returns them along with a LocalDAH instance
+func setupTest(t *testing.T, opts ...options.StoreOption) (*LocalDAH, blobStore, blobStore) {
+	dahStore := memory.New(opts...)
 	blobStore := memory.New(opts...)
-	store, err := New(ulogger.TestLogger{}, ttlStore, blobStore, opts...)
+	store, err := New(ulogger.TestLogger{}, dahStore, blobStore, opts...)
 	require.NoError(t, err)
 
-	return store, ttlStore, blobStore
+	return store, dahStore, blobStore
 }
 
-func TestLocalTTL_Basic(t *testing.T) {
+func TestLocalDAH_Basic(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	t.Run("Set and Get without TTL", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+	t.Run("Set and Get without DAH", func(t *testing.T) {
+		store, dahStore, blobStore := setupTest(t)
 
 		err := store.Set(ctx, key, value)
 		require.NoError(t, err)
@@ -45,26 +44,26 @@ func TestLocalTTL_Basic(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// Verify it's not in the TTL store
-		exists, err = ttlStore.Exists(ctx, key)
+		// Verify it's not in the DAH store
+		exists, err = dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.False(t, exists)
 	})
 
-	t.Run("Set and Get with TTL", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+	t.Run("Set and Get with DAH", func(t *testing.T) {
+		store, dahStore, blobStore := setupTest(t)
 
-		ttl := time.Hour
-		err := store.Set(ctx, key, value, options.WithTTL(ttl))
+		dah := uint32(5)
+		err := store.Set(ctx, key, value, options.WithDeleteAt(dah))
 		require.NoError(t, err)
 
-		// Should be in TTL store (and not blob store since it's a new item with TTL)
+		// Should be in DAH store (and not blob store since it's a new item with DAH)
 		got, err := store.Get(ctx, key)
 		require.NoError(t, err)
 		assert.Equal(t, value, got)
 
-		// Verify it's in TTL store
-		exists, err := ttlStore.Exists(ctx, key)
+		// Verify it's in DAH store
+		exists, err := dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
@@ -75,25 +74,25 @@ func TestLocalTTL_Basic(t *testing.T) {
 	})
 }
 
-func TestLocalTTL_TTLOperations(t *testing.T) {
+func TestLocalDAH_DAHOperations(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	t.Run("Set TTL on existing item", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+	t.Run("Set DAH on existing item", func(t *testing.T) {
+		store, dahStore, blobStore := setupTest(t)
 
-		// First set without TTL
+		// First set without DAH
 		err := store.Set(ctx, key, value)
 		require.NoError(t, err)
 
-		// Now set TTL
-		ttl := time.Hour
-		err = store.SetTTL(ctx, key, ttl)
+		// Now set DAH
+		dah := uint32(5)
+		err = store.SetDAH(ctx, key, dah)
 		require.NoError(t, err)
 
-		// Should be copied to TTL store while remaining in blob store
-		exists, err := ttlStore.Exists(ctx, key)
+		// Should be copied to DAH store while remaining in blob store
+		exists, err := dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
@@ -102,21 +101,21 @@ func TestLocalTTL_TTLOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// Verify TTL
-		gotTTL, err := store.GetTTL(ctx, key)
+		// Verify DAH
+		gotDAH, err := store.GetDAH(ctx, key)
 		require.NoError(t, err)
-		assert.Equal(t, ttl, gotTTL)
+		assert.Equal(t, dah, gotDAH)
 	})
 
-	t.Run("Remove TTL from item", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+	t.Run("Remove DAH from item", func(t *testing.T) {
+		store, dahStore, blobStore := setupTest(t)
 
-		// First set with TTL
-		err := store.Set(ctx, key, value, options.WithTTL(time.Hour))
+		// First set with DAH
+		err := store.Set(ctx, key, value, options.WithDeleteAt(5))
 		require.NoError(t, err)
 
-		// Now remove TTL
-		err = store.SetTTL(ctx, key, 0)
+		// Now remove DAH
+		err = store.SetDAH(ctx, key, 0)
 		require.NoError(t, err)
 
 		// Should still be in blob store
@@ -124,30 +123,30 @@ func TestLocalTTL_TTLOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// Should be removed from TTL store
-		exists, err = ttlStore.Exists(ctx, key)
+		// Should be removed from DAH store
+		exists, err = dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.False(t, exists)
 
-		// Verify no TTL
-		gotTTL, err := store.GetTTL(ctx, key)
+		// Verify no DAH
+		gotDAH, err := store.GetDAH(ctx, key)
 		require.NoError(t, err)
-		assert.Equal(t, time.Duration(0), gotTTL)
+		assert.Equal(t, uint32(0), gotDAH)
 	})
 }
 
-func TestLocalTTL_Delete(t *testing.T) {
+func TestLocalDAH_Delete(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
 
 	t.Run("Delete from both stores", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+		store, dahStore, blobStore := setupTest(t)
 
 		// Set in both stores
 		err := store.Set(ctx, key, value) // blob store
 		require.NoError(t, err)
-		err = store.Set(ctx, append(key, '-', '2'), value, options.WithTTL(time.Hour)) // ttl store only since new with TTL
+		err = store.Set(ctx, append(key, '-', '2'), value, options.WithDeleteAt(5))
 		require.NoError(t, err)
 
 		// Delete
@@ -159,18 +158,18 @@ func TestLocalTTL_Delete(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, exists)
 
-		exists, err = ttlStore.Exists(ctx, key)
+		exists, err = dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.False(t, exists)
 	})
 }
 
-func TestLocalTTL_IoOperations(t *testing.T) {
+func TestLocalDAH_IoOperations(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	t.Run("SetFromReader and GetIoReader without TTL", func(t *testing.T) {
+	t.Run("SetFromReader and GetIoReader without DAH", func(t *testing.T) {
 		store, _, blobStore := setupTest(t)
 
 		reader := io.NopCloser(bytes.NewReader(value))
@@ -191,11 +190,11 @@ func TestLocalTTL_IoOperations(t *testing.T) {
 		assert.True(t, exists)
 	})
 
-	t.Run("SetFromReader and GetIoReader with TTL", func(t *testing.T) {
-		store, ttlStore, blobStore := setupTest(t)
+	t.Run("SetFromReader and GetIoReader with DAH", func(t *testing.T) {
+		store, dahStore, blobStore := setupTest(t)
 
 		reader := io.NopCloser(bytes.NewReader(value))
-		err := store.SetFromReader(ctx, key, reader, options.WithTTL(time.Hour))
+		err := store.SetFromReader(ctx, key, reader, options.WithDeleteAt(5))
 		require.NoError(t, err)
 
 		// Read using GetIoReader
@@ -206,19 +205,19 @@ func TestLocalTTL_IoOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, value, gotValue)
 
-		// Verify it's in TTL store only (new item with TTL)
-		exists, err := ttlStore.Exists(ctx, key)
+		// Verify it's in DAH store only (new item with DAH)
+		exists, err := dahStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// Verify it's not in blob store since it was just created with TTL
+		// Verify it's not in blob store since it was just created with DAH
 		exists, err = blobStore.Exists(ctx, key)
 		require.NoError(t, err)
 		assert.False(t, exists)
 	})
 }
 
-func TestLocalTTL_HeaderFooter(t *testing.T) {
+func TestLocalDAH_HeaderFooter(t *testing.T) {
 	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
@@ -246,7 +245,7 @@ func TestLocalTTL_HeaderFooter(t *testing.T) {
 	})
 }
 
-func TestLocalTTL_Health(t *testing.T) {
+func TestLocalDAH_Health(t *testing.T) {
 	t.Run("Health check", func(t *testing.T) {
 		store, _, _ := setupTest(t)
 

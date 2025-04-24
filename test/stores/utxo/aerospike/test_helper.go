@@ -26,11 +26,11 @@ import (
 )
 
 const (
-	aerospikeHost       = "localhost" // "localhost"
-	aerospikePort       = 3000        // 3800
-	aerospikeNamespace  = "test"      // test
-	aerospikeSet        = "test"      // utxo-test
-	aerospikeExpiration = "1s"
+	aerospikeHost           = "localhost" // "localhost"
+	aerospikePort           = 3000        // 3800
+	aerospikeNamespace      = "test"      // test
+	aerospikeSet            = "test"      // utxo-test
+	aerospikeBlockRetention = 1
 )
 
 var (
@@ -102,7 +102,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-7.2.0.3_1"))
+	container, err := aeroTest.RunContainer(ctx)
 	require.NoError(t, err)
 
 	// go func() {
@@ -137,7 +137,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 	client, aeroErr := uaerospike.NewClient(host, port)
 	require.NoError(t, aeroErr)
 
-	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeExpiration)
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&block_retention=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeBlockRetention)
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
@@ -156,7 +156,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ...*bt.Tx) {
 	tSettings := test.CreateBaseTestSettings()
 
-	policy := util.GetAerospikeWritePolicy(tSettings, 0, aerospike.TTLDontExpire)
+	policy := util.GetAerospikeWritePolicy(tSettings, 0)
 
 	if key != nil {
 		_, err := client.Delete(policy, key)
@@ -184,7 +184,7 @@ func setupStore(_ *testing.T, client *uaerospike.Client) *teranode_aerospike.Sto
 	s.SetExternalStore(memory.New())
 	s.SetNamespace(aerospikeNamespace)
 	s.SetName(aerospikeSet)
-	s.SetExpiration(10)
+	s.SetBlockRetention(10)
 
 	return s
 }

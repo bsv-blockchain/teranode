@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -75,7 +76,7 @@ type Store struct {
 	engine          string
 	blockHeight     atomic.Uint32
 	medianBlockTime atomic.Uint32
-	expiration      time.Duration
+	blockRetention  uint32
 }
 
 // New creates a new SQL-based UTXO store.
@@ -127,14 +128,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		medianBlockTime: atomic.Uint32{},
 	}
 
-	expirationValue := storeURL.Query().Get("expiration") // This is specified in seconds
-	if expirationValue != "" {
-		e, err := time.ParseDuration(expirationValue)
+	blockRetentionValue := storeURL.Query().Get("block_retention")
+	if blockRetentionValue != "" {
+		e, err := strconv.ParseInt(blockRetentionValue, 10, 32)
 		if err != nil {
-			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
+			return nil, errors.NewInvalidArgumentError("could not parse block_retention %s", blockRetentionValue, err)
 		}
 
-		s.expiration = e
+		s.blockRetention = uint32(e) // nolint: gosec
 
 		// // Create a goroutine to remove transactions that are marked with a tombstone time
 		// db2, err := util.InitSQLDB(logger, storeUrl)
@@ -150,7 +151,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 				default:
 					time.Sleep(1 * time.Minute)
 
-					if err := deleteTombstoned(s.db); err != nil {
+					if err := s.deleteTombstoned(s.db); err != nil {
 						logger.Errorf("failed to delete tombstoned transactions: %v", err)
 					}
 				}
@@ -708,7 +709,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			fmt.Printf("ERROR panic in sql Spend: %v\n", recoverErr)
+			s.logger.Errorf("ERROR panic in sql Spend: %v", recoverErr)
 		}
 	}()
 
@@ -878,7 +879,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				continue
 			}
 
-			if err = s.setTTL(ctx, txn, transactionID); err != nil {
+			if err = s.setDAH(ctx, txn, transactionID); err != nil {
 				errorFound = true
 				spend.Err = err
 			}
@@ -898,15 +899,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	return spends, nil
 }
 
-func (s *Store) setTTL(ctx context.Context, txn *sql.Tx, transactionID int) error {
+func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
 	// doing 2 updates is the only thing that works in both postgres and sqlite
-	qSetTTL := `
+	qSetDAH := `
 		UPDATE transactions
-		SET tombstone_millis = $2
+		SET delete_at_height = $2
 		WHERE id = $1
 	`
 
-	if s.expiration > 0 {
+	if s.blockRetention > 0 {
 		// check whether the transaction has any unspent outputs
 		qUnspent := `
 			SELECT count(o.idx), t.conflicting
@@ -918,22 +919,22 @@ func (s *Store) setTTL(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		`
 
 		var (
-			unspent             int
-			conflicting         bool
-			tombstoneTimeOrNull sql.NullInt64
+			unspent              int
+			conflicting          bool
+			deleteAtHeightOrNull sql.NullInt64
 		)
 
 		if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting); err != nil {
-			return errors.NewStorageError("[setTTL] error checking for unspent outputs for %d", transactionID, err)
+			return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
 		}
 
 		if unspent == 0 || conflicting {
 			// Now mark the transaction as tombstoned if there are no more unspent outputs
-			_ = tombstoneTimeOrNull.Scan(time.Now().Add(s.expiration).UnixNano() / 1e6)
+			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.blockRetention))
 		}
 
-		if _, err := txn.ExecContext(ctx, qSetTTL, transactionID, tombstoneTimeOrNull); err != nil {
-			return errors.NewStorageError("[setTTL] error setting tombstone for %d", transactionID, err)
+		if _, err := txn.ExecContext(ctx, qSetDAH, transactionID, deleteAtHeightOrNull); err != nil {
+			return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
 		}
 	}
 
@@ -1003,7 +1004,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 				return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
 			}
 
-			if err = s.setTTL(ctx, txn, transactionID); err != nil {
+			if err = s.setDAH(ctx, txn, transactionID); err != nil {
 				return err
 			}
 
@@ -1311,17 +1312,18 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 // SetConflicting marks a list of transactions as conflicting.
 // It returns a list of spends that are affected by the conflicting status.
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	var tombstoneMillis *int64
+	var deleteAtHeight sql.NullInt64
 
-	if s.expiration > 0 && setValue {
-		// Now mark the transaction as tombstoned if there are no more unspent outputs
-		tombstoneMillisValue := time.Now().Add(s.expiration).UnixNano() / 1e6
-		tombstoneMillis = &tombstoneMillisValue
+	if s.blockRetention > 0 && setValue {
+		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + s.blockRetention)); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	qUpdate := `
-			UPDATE transactions
-			SET conflicting = $2, tombstone_millis = $3
+			UPDATE transactions SET
+			 conflicting = $2
+			,delete_at_height = $3
 			WHERE hash = $1
 			RETURNING id
 		`
@@ -1351,7 +1353,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, err
 		}
 
-		if err = txn.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, tombstoneMillis).Scan(&transactionID); err != nil {
+		if err = txn.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, deleteAtHeight).Scan(&transactionID); err != nil {
 			return nil, nil, errors.NewStorageError("failed to set conflicting flag for %s", conflictingTxHash, err)
 		}
 
@@ -1441,7 +1443,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
-        ,tombstone_millis BIGINT
+        ,delete_at_height BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -1454,9 +1456,9 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create ux_transactions_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS ux_transactions_tombstone_millis ON transactions (tombstone_millis) WHERE tombstone_millis IS NOT NULL;`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS ux_transactions_delete_at_height ON transactions (delete_at_height) WHERE delete_at_height IS NOT NULL;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create ux_transactions_hash index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_transactions_delete_at_height index - [%+v]", err)
 	}
 
 	// The previous transaction hash may exist in this table
@@ -1641,8 +1643,8 @@ func createSqliteSchema(db *usql.DB) error {
 		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
-        ,unspendable        BOOLEAN DEFAULT FALSE NOT NULL
-        ,tombstone_millis BIGINT
+        ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
+        ,delete_at_height BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -1850,10 +1852,10 @@ func createSqliteSchema(db *usql.DB) error {
 }
 
 // deleteTombstoned removes transactions that have passed their expiration time.
-func deleteTombstoned(db *usql.DB) error {
+func (s *Store) deleteTombstoned(db *usql.DB) error {
 	// Delete transactions that have passed their expiration time
 	// this will cascade to inputs, outputs, block_ids and conflicting_children
-	if _, err := db.Exec("DELETE FROM transactions WHERE tombstone_millis < $1", time.Now().UnixNano()/1e6); err != nil {
+	if _, err := db.Exec("DELETE FROM transactions WHERE delete_at_height <= $1", s.blockHeight.Load()); err != nil {
 		return errors.NewStorageError("failed to delete transactions", err)
 	}
 

@@ -102,7 +102,7 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusAssetHttpGetTransaction.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetTransaction.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case JSON:

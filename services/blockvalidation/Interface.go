@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -50,8 +49,8 @@ type Interface interface {
 	// Set stores a key-value pair with optional options.
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
 
-	// SetTTL sets a time-to-live duration for a key.
-	SetTTL(ctx context.Context, key []byte, ttl time.Duration) error
+	// SetDAH sets a delete at height for a key.
+	SetDAH(ctx context.Context, key []byte, dah uint32) error
 
 	// SetTxMeta stores transaction metadata.
 	SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error
@@ -91,7 +90,7 @@ func (mv *MockBlockValidation) Set(ctx context.Context, key []byte, value []byte
 	return nil
 }
 
-func (mv *MockBlockValidation) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (mv *MockBlockValidation) SetDAH(ctx context.Context, key []byte, dah uint32) error {
 	return nil
 }
 

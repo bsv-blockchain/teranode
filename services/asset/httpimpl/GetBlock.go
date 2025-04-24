@@ -132,7 +132,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 		// do this before any output is sent to the client, this adds a signature to the response header
 		_ = h.Sign(c.Response(), block.Header.Hash().CloneBytes())
 
-		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			// get next hash to include in response
@@ -280,7 +280,7 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 		// do this before any output is sent to the client, this adds a signature to the response header
 		_ = h.Sign(c.Response(), hash.CloneBytes())
 
-		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			height := block.Height

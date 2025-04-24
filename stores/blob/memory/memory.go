@@ -13,33 +13,36 @@ import (
 )
 
 type Memory struct {
-	mu         sync.RWMutex
-	headers    map[string][]byte
-	footers    map[string][]byte
-	keys       map[string][]byte
-	blobs      map[string][]byte
-	blobTimes  map[string]time.Time
-	ttls       map[string]time.Duration
-	options    *options.Options
-	Counters   map[string]int
-	countersMu sync.Mutex
+	mu                 sync.RWMutex
+	headers            map[string][]byte
+	footers            map[string][]byte
+	keys               map[string][]byte
+	blobs              map[string][]byte
+	dahs               map[string]uint32
+	options            *options.Options
+	Counters           map[string]int
+	countersMu         sync.Mutex
+	currentBlockHeight uint32
 }
 
 func New(opts ...options.StoreOption) *Memory {
 	m := &Memory{
-		keys:      make(map[string][]byte),
-		blobs:     make(map[string][]byte),
-		blobTimes: make(map[string]time.Time),
-		ttls:      make(map[string]time.Duration),
-		headers:   make(map[string][]byte),
-		footers:   make(map[string][]byte),
-		options:   options.NewStoreOptions(opts...),
-		Counters:  make(map[string]int),
+		keys:     make(map[string][]byte),
+		blobs:    make(map[string][]byte),
+		dahs:     make(map[string]uint32),
+		headers:  make(map[string][]byte),
+		footers:  make(map[string][]byte),
+		options:  options.NewStoreOptions(opts...),
+		Counters: make(map[string]int),
 	}
 
 	go m.ttlCleaner(context.Background(), 1*time.Minute)
 
 	return m
+}
+
+func (m *Memory) SetBlockHeight(blockHeight uint32) {
+	m.currentBlockHeight = blockHeight
 }
 
 func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
@@ -48,25 +51,23 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			cleanExpiredFiles(m)
+			cleanExpiredFiles(m, m.currentBlockHeight)
 		}
 	}
 }
 
-func cleanExpiredFiles(m *Memory) {
+func cleanExpiredFiles(m *Memory, blockHeight uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for key, expiryTime := range m.blobTimes {
-		ttl, ok := m.ttls[key]
-		if !ok {
+	for key, dah := range m.dahs {
+		if dah == 0 {
 			continue
 		}
 
-		if time.Now().After(expiryTime.Add(ttl)) {
+		if dah <= blockHeight {
 			delete(m.blobs, key)
-			delete(m.blobTimes, key)
-			delete(m.ttls, key)
+			delete(m.dahs, key)
 			delete(m.headers, key)
 			delete(m.footers, key)
 		}
@@ -139,7 +140,10 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 
 	m.keys[string(hash)] = []byte{}
 	m.blobs[storeKey] = value
-	m.blobTimes[storeKey] = time.Now()
+
+	if merged.BlockHeightRetention > 0 {
+		m.dahs[storeKey] = m.currentBlockHeight + merged.BlockHeightRetention
+	}
 
 	if merged.Header != nil {
 		m.headers[storeKey] = merged.Header
@@ -154,14 +158,10 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 		m.footers[storeKey] = footer
 	}
 
-	if merged.TTL != nil && *merged.TTL > 0 {
-		m.ttls[storeKey] = *merged.TTL
-	}
-
 	return nil
 }
 
-func (m *Memory) SetTTL(_ context.Context, hash []byte, newTTL time.Duration, opts ...options.FileOption) error {
+func (m *Memory) SetDAH(_ context.Context, hash []byte, newDAH uint32, opts ...options.FileOption) error {
 	merged := options.MergeOptions(m.options, opts)
 
 	storeKey := hashKey(hash, merged)
@@ -169,17 +169,16 @@ func (m *Memory) SetTTL(_ context.Context, hash []byte, newTTL time.Duration, op
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if newTTL > 0 {
-		m.blobTimes[storeKey] = time.Now()
-		m.ttls[storeKey] = newTTL
+	if newDAH > 0 {
+		m.dahs[storeKey] = newDAH
 	} else {
-		delete(m.ttls, storeKey)
+		delete(m.dahs, storeKey)
 	}
 
 	return nil
 }
 
-func (m *Memory) GetTTL(_ context.Context, hash []byte, opts ...options.FileOption) (time.Duration, error) {
+func (m *Memory) GetDAH(_ context.Context, hash []byte, opts ...options.FileOption) (uint32, error) {
 	merged := options.MergeOptions(m.options, opts)
 
 	storeKey := hashKey(hash, merged)
@@ -187,16 +186,12 @@ func (m *Memory) GetTTL(_ context.Context, hash []byte, opts ...options.FileOpti
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if _, ok := m.blobs[storeKey]; !ok {
-		return 0, errors.ErrNotFound
-	}
-
-	ttl, ok := m.ttls[storeKey]
+	dah, ok := m.dahs[storeKey]
 	if !ok {
 		return 0, nil
 	}
 
-	return ttl, nil
+	return dah, nil
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
@@ -283,6 +278,7 @@ func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 
 	delete(m.blobs, storeKey)
 	delete(m.keys, string(hash))
+	delete(m.dahs, storeKey)
 
 	return nil
 }

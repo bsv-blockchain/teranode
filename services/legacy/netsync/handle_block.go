@@ -402,11 +402,13 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 		}
 
+		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+
 		if err = sm.subtreeStore.Set(gCtx,
 			subtree.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension(subtreeFileExtension),
-			options.WithTTL(120*time.Minute),
+			options.WithDeleteAt(dah),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree", subtree.RootHash().String(), err)
 		}
@@ -420,11 +422,13 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 		}
 
+		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+
 		if err = sm.subtreeStore.Set(gCtx,
 			subtreeData.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension("subtreeData"),
-			options.WithTTL(120*time.Minute),
+			options.WithDeleteAt(dah),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree data", subtree.RootHash().String(), err)
 		}
@@ -441,11 +445,13 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 				return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 			}
 
+			dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+
 			if err = sm.subtreeStore.Set(ctx,
 				subtreeData.RootHash()[:],
 				subtreeBytes,
 				options.WithFileExtension("meta"),
-				options.WithTTL(120*time.Minute),
+				options.WithDeleteAt(dah),
 			); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
 			}
@@ -921,7 +927,7 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 
 	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, previousOutputs); err != nil {
 		if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrTxNotFound) {
-			// we could not decorate the transaction. This could be because the parent transaction has been ttl'ed, which
+			// we could not decorate the transaction. This could be because the parent transaction has been DAH'd, which
 			// can only happen if this transaction has been processed. In that case, we can try getting the transaction
 			// itself.
 			txMeta, err := sm.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)

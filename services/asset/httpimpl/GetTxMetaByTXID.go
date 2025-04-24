@@ -20,7 +20,6 @@ type aerospikeRecord struct {
 	Node       string                 `json:"node"`
 	Bins       map[string]interface{} `json:"bins"`
 	Generation uint32                 `json:"generation"`
-	Expiration uint32                 `json:"expiration"`
 }
 
 // GetTxMetaByTxID creates an HTTP handler for retrieving transaction metadata directly
@@ -52,12 +51,12 @@ type aerospikeRecord struct {
 //     "set": "<string>",                // Set name
 //     "node": "<string>",               // Aerospike node name
 //     "bins": {                         // Record data
-//     "tx": "<hex string>",           // Transaction data
+//     "tx": "<hex string>",             // Transaction data
 //     "parentTxHashes": "<hex string>",
 //     // ... other bins
 //     },
 //     "generation": <uint32>,           // Record generation
-//     "expiration": <uint32>            // Record expiration
+//     "deleteAtHeight": <uint32>        // Record deletion height
 //     }
 //
 //  2. HEX (mode = HEX):
@@ -153,7 +152,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
-		prometheusAssetHttpGetUTXO.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetUTXO.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case JSON:
@@ -167,7 +166,6 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 				Node:       response.Node.GetName(),
 				Bins:       response.Bins,
 				Generation: response.Generation,
-				Expiration: response.Expiration,
 			}
 
 			// convert to json using jsoniter, since Bins cannot be marshalled by encoding/json

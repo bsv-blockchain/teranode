@@ -14,7 +14,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -157,11 +157,11 @@ const (
 	// LuaOk indicates successful operation
 	LuaOk LuaReturnValue = "OK"
 
-	// LuaTTLSet indicates TTL was set on the record
-	LuaTTLSet LuaReturnValue = "TTLSET"
+	// LuaDAHSet indicates deleteAtHeight was set on the record
+	LuaDAHSet LuaReturnValue = "DAHSET"
 
-	// LuaTTLUnset indicates TTL was unset on the record
-	LuaTTLUnset LuaReturnValue = "TTLUNSET"
+	// LuaDAHUnset indicates deleteAtHeight was unset on the record
+	LuaDAHUnset LuaReturnValue = "DAHUNSET"
 
 	// LuaSpent indicates UTXO is already spent
 	LuaSpent LuaReturnValue = "SPENT"
@@ -276,8 +276,8 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 //
 //	"OK:[]:ALLSPENT"
 //	"OK:[1,2,3]:ALLSPENT"
-//	"OK:[]:TTLSET:n"
-//	"OK:[3,4]:TTLUNSET:n"
+//	"OK:[]:DAHSET:n"
+//	"OK:[3,4]:DAHUNSET:n"
 //	"SPENT:1234...5678" (where 1234...5678 is a 64-char tx hash)
 //	"ERROR:TX not found"
 //

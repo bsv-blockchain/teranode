@@ -135,6 +135,7 @@ require (
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
+	gotest.tools v2.2.0+incompatible
 )
 
 require (

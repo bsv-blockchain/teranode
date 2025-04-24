@@ -210,10 +210,10 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file does not have a TTL
-		ttl, err := s.GetExternalStore().GetTTL(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		// check that the file does not have a DAH
+		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
-		assert.Equal(t, time.Duration(0), ttl)
+		assert.Equal(t, uint32(0), dah)
 	})
 
 	t.Run("TestStore_StoreTransactionExternally - no utxos", func(t *testing.T) {
@@ -249,10 +249,10 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file has a TTL
-		ttl, err := s.GetExternalStore().GetTTL(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		// check that the file has a DAH
+		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
-		assert.NotEqual(t, time.Duration(0), ttl)
+		assert.NotEqual(t, uint32(0), dah)
 	})
 }
 

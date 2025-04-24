@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
@@ -48,7 +47,7 @@ func setupTestServer() (*httptest.Server, *HTTPStore, error) {
 
 		case "PATCH":
 			// Handle GetTTL request
-			if r.URL.Query().Get("getTTL") == "1" {
+			if r.URL.Query().Get("getDAH") == "1" {
 				w.WriteHeader(http.StatusOK)
 
 				if _, err := w.Write([]byte("300")); err != nil {
@@ -214,7 +213,7 @@ func TestSetTTL(t *testing.T) {
 	}
 	defer server.Close()
 
-	err = store.SetTTL(context.Background(), []byte("test-key"), 5*time.Minute)
+	err = store.SetDAH(context.Background(), []byte("test-key"), 100)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -227,13 +226,13 @@ func TestGetTTL(t *testing.T) {
 	}
 	defer server.Close()
 
-	ttl, err := store.GetTTL(context.Background(), []byte("test-key"))
+	dah, err := store.GetDAH(context.Background(), []byte("test-key"))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if ttl != 300*time.Second {
-		t.Errorf("expected TTL of 300s, got %v", ttl)
+	if dah != 300 {
+		t.Errorf("expected DAH of 300, got %v", dah)
 	}
 }
 

@@ -163,7 +163,7 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			return c.JSONPretty(200, blocks, "  ")

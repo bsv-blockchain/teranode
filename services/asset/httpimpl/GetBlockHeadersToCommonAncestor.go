@@ -160,7 +160,7 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
-		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		return h.formatResponse(c, mode, headers, headerMetas)
 	}

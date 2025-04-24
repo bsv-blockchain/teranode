@@ -515,7 +515,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.settings.BlockAssembly.SubtreeTTL), options.WithFileExtension("meta"))
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithDeleteAt(u.settings.BlockAssembly.SubtreeBlockRetention), options.WithFileExtension("meta"))
 
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 
@@ -544,7 +544,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(ctx,
 		merkleRoot[:],
 		completeSubtreeBytes,
-		options.WithTTL(u.settings.BlockAssembly.SubtreeTTL),
+		options.WithDeleteAt(u.settings.BlockAssembly.SubtreeBlockRetention),
 		options.WithFileExtension("subtree"),
 	)
 

@@ -133,7 +133,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
 			// get subtree is much less efficient than get subtree reader and then only deserializing the nodes
@@ -194,8 +194,8 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 					subtreeData.InputsCount = len(txMeta.Tx.Inputs)
 					subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
-					subtreeData.Size = int(txMeta.SizeInBytes)
-					subtreeData.Fee = int(txMeta.Fee)
+					subtreeData.Size = int(txMeta.SizeInBytes) //nolint:gosec
+					subtreeData.Fee = int(txMeta.Fee)          //nolint:gosec
 				}
 
 				data = append(data, subtreeData)

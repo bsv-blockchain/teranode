@@ -570,13 +570,6 @@ func WithTotalTimeoutWrite(timeout time.Duration) AerospikeWritePolicyOptions {
 	}
 }
 
-// WithExpiration sets the expiration for the Aerospike write policy
-func WithExpiration(timeout uint32) AerospikeWritePolicyOptions {
-	return func(policy *aerospike.WritePolicy) {
-		policy.Expiration = timeout
-	}
-}
-
 // WithSocketTimeoutWrite sets the socket timeout for the Aerospike write policy.
 func WithSocketTimeoutWrite(timeout time.Duration) AerospikeWritePolicyOptions {
 	return func(policy *aerospike.WritePolicy) {
@@ -594,8 +587,8 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied. Used to manage
 // default connection parameters
 // If no options are provided, the policy will use the default values
-func GetAerospikeWritePolicy(tSettings *settings.Settings, generation, expiration uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
-	writePolicy := aerospike.NewWritePolicy(generation, expiration)
+func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
+	writePolicy := aerospike.NewWritePolicy(generation, aerospike.TTLDontExpire)
 
 	if tSettings.Aerospike.UseDefaultPolicies {
 		return writePolicy
@@ -635,14 +628,13 @@ func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolic
 	return batchPolicy
 }
 
-func GetAerospikeBatchWritePolicy(tSettings *settings.Settings, generation, expiration uint32) *aerospike.BatchWritePolicy {
+func GetAerospikeBatchWritePolicy(tSettings *settings.Settings) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 
 	if tSettings.Aerospike.UseDefaultPolicies {
 		return batchWritePolicy
 	}
 
-	batchWritePolicy.Expiration = expiration
 	batchWritePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	return batchWritePolicy

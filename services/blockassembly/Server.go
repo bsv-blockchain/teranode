@@ -239,7 +239,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				if err = ba.subtreeStore.Set(ctx,
 					subtreeRetry.subtreeHash[:],
 					subtreeRetry.subtreeBytes,
-					options.WithTTL(ba.settings.BlockAssembly.SubtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+					options.WithDeleteAt(ba.settings.BlockAssembly.SubtreeBlockRetention), // this sets the DAH for the subtree, it must be updated when a block is mined
 					options.WithFileExtension("subtree"),
 				); err != nil {
 					if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -353,7 +353,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	if err = ba.subtreeStore.Set(ctx,
 		subtree.RootHash()[:],
 		subtreeBytes,
-		options.WithTTL(ba.settings.BlockAssembly.SubtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+		options.WithDeleteAt(ba.settings.BlockAssembly.SubtreeBlockRetention), // this sets the DAH for the subtree, it must be updated when a block is mined
 		options.WithFileExtension("subtree"),
 	); err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -619,7 +619,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 		MiningCandidate: miningCandidate,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
-	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
+	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
 	callerSpan := tracing.DecoupleTracingSpan(ctx, "decouple")
 	defer callerSpan.Finish()
 
@@ -914,25 +914,25 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// and we'll fork unnecessarily
 	ba.blockAssembler.UpdateBestBlock(ctx)
 
-	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeTTL")
+	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeDAH")
 	defer callerSpan.Finish()
 
 	go func() {
-		// TODO what do we do if this fails, the subtrees TTL and tx meta status still needs to be updated
+		// TODO what do we do if this fails, the subtrees DAH and tx meta status still needs to be updated
 		g, gCtx := errgroup.WithContext(callerSpan.Ctx)
 
 		g.Go(func() error {
 			timeStart := time.Now()
 
-			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees TTL", jobID, block.Header.Hash())
+			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees DAH", jobID, block.Header.Hash())
 
-			if err := ba.removeSubtreesTTL(gCtx, block); err != nil {
+			if err := ba.removeSubtreesDAH(gCtx, block); err != nil {
 				// TODO retry
-				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to remove subtrees TTL: %v", jobID, block.Header.Hash(), err)
+				ba.logger.Errorf("[BlockAssembly][%s][%s] failed to remove subtrees DAH: %v", jobID, block.Header.Hash(), err)
 			}
 
-			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees TTL DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
+			ba.logger.Infof("[BlockAssembly][%s][%s] remove subtrees DAH DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
 
 			return nil
 		})
@@ -959,14 +959,14 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
-func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockAssembly:removeSubtreesTTL",
-		tracing.WithHistogram(prometheusBlockAssemblyUpdateSubtreesTTL),
+func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockAssembly:removeSubtrees",
+		tracing.WithHistogram(prometheusBlockAssemblyUpdateSubtreesDAH),
 	)
 	defer deferFn()
 
-	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeTTL")
+	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeDAH")
 	defer callerSpan.Finish()
 
 	g, gCtx := errgroup.WithContext(callerSpan.Ctx)
@@ -974,18 +974,18 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 
 	startTime := time.Now()
 
-	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs", block.Hash().String())
+	ba.logger.Infof("[removeSubtreesDAH][%s] updating subtree DAHs", block.Hash().String())
 
-	// update the subtree TTLs
+	// update the subtree DAHs
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHashBytes := subtreeHash.CloneBytes()
 		subtreeHash := subtreeHash
 
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0, options.WithFileExtension("subtree")); err != nil {
+			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, 0, options.WithFileExtension("subtree")); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
-				ba.logger.Errorf("[removeSubtreesTTL][%s][%s] failed to update subtree TTL: %v", block.Hash().String(), subtreeHash.String(), err)
+				ba.logger.Errorf("[removeSubtreesDAH][%s][%s] failed to update subtree DAH: %v", block.Hash().String(), subtreeHash.String(), err)
 			}
 
 			return nil
@@ -1002,7 +1002,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 			errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err))
 	}
 
-	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs DONE in %s", block.Hash().String(), time.Since(startTime).String())
+	ba.logger.Infof("[removeSubtreesDAH][%s] updating subtree DAHs DONE in %s", block.Hash().String(), time.Since(startTime).String())
 
 	return nil
 }

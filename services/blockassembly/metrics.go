@@ -29,8 +29,8 @@ var (
 	// prometheusBlockAssemblySubmitMiningSolution measures mining solution submission time
 	prometheusBlockAssemblySubmitMiningSolution prometheus.Histogram
 
-	// prometheusBlockAssemblyUpdateSubtreesTTL measures subtree TTL update time
-	prometheusBlockAssemblyUpdateSubtreesTTL prometheus.Histogram
+	// prometheusBlockAssemblyUpdateSubtreesDAH measures subtree DAH update time
+	prometheusBlockAssemblyUpdateSubtreesDAH prometheus.Histogram
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate     prometheus.Counter
@@ -117,12 +117,12 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblyUpdateSubtreesTTL = promauto.NewHistogram(
+	prometheusBlockAssemblyUpdateSubtreesDAH = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
-			Name:      "update_subtrees_ttl",
-			Help:      "Histogram of updating subtrees TTL in the blockassembly service",
+			Name:      "update_subtrees_dah",
+			Help:      "Histogram of updating subtrees DAH in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

@@ -18,8 +18,8 @@ import (
 
 const (
 	blobURLFormat        = "%s/blob/%s?%s"
-	blobURLFormatWithTTL = blobURLFormat + "&ttl=%s"
-	blobURLFormatGetTTL  = blobURLFormat + "&getTTL=1"
+	blobURLFormatWithDAH = blobURLFormat + "&dah=%d"
+	blobURLFormatGetDAH  = blobURLFormat + "&getDAH=1"
 )
 
 type HTTPStore struct {
@@ -168,11 +168,11 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, value io.Read
 	return nil
 }
 
-func (s *HTTPStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error {
+func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
 	query := options.FileOptionsToQuery(opts...)
-	url := fmt.Sprintf(blobURLFormatWithTTL, s.baseURL, encodedKey, query.Encode(), ttl.String())
+	url := fmt.Sprintf(blobURLFormatWithDAH, s.baseURL, encodedKey, query.Encode(), dah)
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
 	if err != nil {
@@ -192,11 +192,11 @@ func (s *HTTPStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, o
 	return nil
 }
 
-func (s *HTTPStore) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
 	query := options.FileOptionsToQuery(opts...)
-	url := fmt.Sprintf(blobURLFormatGetTTL, s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormatGetDAH, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
 	if err != nil {
@@ -214,21 +214,22 @@ func (s *HTTPStore) GetTTL(ctx context.Context, key []byte, opts ...options.File
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetTTL failed with status code %d", resp.StatusCode), nil)
+		return 0, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetDAH failed with status code %d", resp.StatusCode), nil)
 	}
 
-	ttl, err := io.ReadAll(resp.Body)
+	dah, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to read response body", err)
+		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to read response body", err)
 	}
 
-	// Parse the TTL from the response body, the ttl will be a string representation of an int
-	ttlInt, err := strconv.Atoi(string(ttl))
+	// Parse the DAH from the response body, the dah will be a string representation of an int
+	dahInt, err := strconv.Atoi(string(dah))
 	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to parse response body int", err)
+		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to parse response body int", err)
 	}
 
-	return time.Duration(ttlInt) * time.Second, nil
+	// nolint: gosec
+	return uint32(dahInt), nil
 }
 
 func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {

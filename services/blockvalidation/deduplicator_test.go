@@ -25,13 +25,13 @@ func TestDeDuplicatorDeduplicate(t *testing.T) {
 		d := NewDeDuplicator(2)
 		ctx := context.Background()
 
-		_, err := d.DeDuplicate(ctx, chainhash.Hash{}, fn)
+		_, err := d.DeDuplicate(ctx, chainhash.Hash{}, 0, fn)
 		require.NoError(t, err)
 
-		_, err = d.DeDuplicate(ctx, chainhash.Hash{}, fn)
+		_, err = d.DeDuplicate(ctx, chainhash.Hash{}, 0, fn)
 		require.NoError(t, err)
 
-		_, err = d.DeDuplicate(ctx, chainhash.Hash{}, fn)
+		_, err = d.DeDuplicate(ctx, chainhash.Hash{}, 0, fn)
 		require.NoError(t, err)
 
 		assert.Equal(t, uint32(1), nrCalled.Load())

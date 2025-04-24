@@ -113,7 +113,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
 		}
 
-		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		// sign the response, if the private key is set, ignore error
 		// do this before any output is sent to the client, this adds a signature to the response header

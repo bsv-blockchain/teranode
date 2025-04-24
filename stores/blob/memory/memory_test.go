@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -17,29 +16,25 @@ func TestCleanExpiredFiles(t *testing.T) {
 	testCases := []struct {
 		name     string
 		key      []byte
-		ttl      time.Duration
-		setTime  time.Time
+		dah      uint32
 		expected bool // whether the blob should still exist after cleaning
 	}{
 		{
 			name:     "expired blob",
 			key:      []byte("expired"),
-			ttl:      1 * time.Minute,
-			setTime:  time.Now().Add(-2 * time.Minute), // Set 2 minutes ago
+			dah:      1,
 			expected: false,
 		},
 		{
 			name:     "non-expired blob",
 			key:      []byte("fresh"),
-			ttl:      5 * time.Minute,
-			setTime:  time.Now().Add(-1 * time.Minute), // Set 1 minute ago
+			dah:      2,
 			expected: true,
 		},
 		{
-			name:     "blob without TTL",
-			key:      []byte("no-ttl"),
-			ttl:      0,
-			setTime:  time.Now().Add(-10 * time.Minute),
+			name:     "blob without DAH",
+			key:      []byte("no-dah"),
+			dah:      0,
 			expected: true,
 		},
 	}
@@ -47,19 +42,18 @@ func TestCleanExpiredFiles(t *testing.T) {
 	// Create a new memory store
 	store := New()
 
+	currentHeight := uint32(1)
+	store.SetBlockHeight(currentHeight)
+
 	// Set up test data
 	for _, tc := range testCases {
 		storeKey := hashKey(tc.key, options.NewStoreOptions())
 		store.blobs[storeKey] = []byte("test data")
-		store.blobTimes[storeKey] = tc.setTime
-
-		if tc.ttl > 0 {
-			store.ttls[storeKey] = tc.ttl
-		}
+		store.dahs[storeKey] = tc.dah
 	}
 
-	// Run the cleaner
-	cleanExpiredFiles(store)
+	// Run the cleaner to clean at block height 1
+	cleanExpiredFiles(store, currentHeight)
 
 	// Verify results
 	for _, tc := range testCases {
@@ -73,28 +67,27 @@ func TestCleanExpiredFiles(t *testing.T) {
 			}
 
 			// Verify that associated metadata is also cleaned up
-			_, timeExists := store.blobTimes[storeKey]
-			_, ttlExists := store.ttls[storeKey]
+			_, dahExists := store.dahs[storeKey]
 			_, headerExists := store.headers[storeKey]
 			_, footerExists := store.footers[storeKey]
 
 			if exists {
-				// If blob should exist, its metadata should also exist (if it had TTL)
-				if tc.ttl > 0 && !ttlExists {
-					t.Errorf("case %s: TTL was cleaned up but blob exists", tc.name)
+				// If blob should exist, its metadata should also exist (if it had DAH)
+				if tc.dah > 0 && !dahExists {
+					t.Errorf("case %s: DAH was cleaned up but blob exists", tc.name)
 				}
 
-				if !timeExists {
+				if !dahExists {
 					t.Errorf("case %s: timestamp was cleaned up but blob exists", tc.name)
 				}
 			} else {
 				// If blob shouldn't exist, its metadata should be cleaned up
-				if timeExists {
+				if dahExists {
 					t.Errorf("case %s: timestamp exists but blob was cleaned", tc.name)
 				}
 
-				if ttlExists {
-					t.Errorf("case %s: TTL exists but blob was cleaned", tc.name)
+				if dahExists {
+					t.Errorf("case %s: DAH exists but blob was cleaned", tc.name)
 				}
 
 				if headerExists {
@@ -184,40 +177,40 @@ func TestMemory_TTLOperations(t *testing.T) {
 	store := New()
 	key := []byte("test-key")
 	value := []byte("test-value")
-	ttl := 5 * time.Minute
+	dah := uint32(5)
 
-	// Set with TTL
-	err := store.Set(context.Background(), key, value, options.WithTTL(ttl))
+	// Set with DAH
+	err := store.Set(context.Background(), key, value, options.WithDeleteAt(dah))
 	if err != nil {
 		t.Errorf("unexpected error on Set: %v", err)
 	}
 
-	// Get TTL
-	retrievedTTL, err := store.GetTTL(context.Background(), key)
+	// Get DAH
+	retrievedDAH, err := store.GetDAH(context.Background(), key)
 	if err != nil {
-		t.Errorf("unexpected error on GetTTL: %v", err)
+		t.Errorf("unexpected error on GetDAH: %v", err)
 	}
 
-	if retrievedTTL != ttl {
-		t.Errorf("expected TTL %v, got %v", ttl, retrievedTTL)
+	if retrievedDAH != dah {
+		t.Errorf("expected DAH %v, got %v", dah, retrievedDAH)
 	}
 
-	// Update TTL
-	newTTL := 10 * time.Minute
+	// Update DAH
+	newDAH := uint32(10)
 
-	err = store.SetTTL(context.Background(), key, newTTL)
+	err = store.SetDAH(context.Background(), key, newDAH)
 	if err != nil {
-		t.Errorf("unexpected error on SetTTL: %v", err)
+		t.Errorf("unexpected error on SetDAH: %v", err)
 	}
 
-	// Verify updated TTL
-	retrievedTTL, err = store.GetTTL(context.Background(), key)
+	// Verify updated DAH
+	retrievedDAH, err = store.GetDAH(context.Background(), key)
 	if err != nil {
-		t.Errorf("unexpected error on GetTTL: %v", err)
+		t.Errorf("unexpected error on GetDAH: %v", err)
 	}
 
-	if retrievedTTL != newTTL {
-		t.Errorf("expected TTL %v, got %v", newTTL, retrievedTTL)
+	if retrievedDAH != newDAH {
+		t.Errorf("expected DAH %v, got %v", newDAH, retrievedDAH)
 	}
 }
 

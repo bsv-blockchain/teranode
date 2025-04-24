@@ -262,8 +262,8 @@ func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainh
 			ID:        metasMap[*child.Hash()].ID,
 			Miner:     metasMap[*child.Hash()].Miner,
 			Height:    metasMap[*child.Hash()].Height,
-			TxCount:   uint32(metasMap[*child.Hash()].TxCount),
-			Size:      uint32(metasMap[*child.Hash()].SizeInBytes),
+			TxCount:   uint32(metasMap[*child.Hash()].TxCount),     //nolint:gosec
+			Size:      uint32(metasMap[*child.Hash()].SizeInBytes), //nolint:gosec
 			BlockTime: metasMap[*child.Hash()].BlockTime,
 			Timestamp: metasMap[*child.Hash()].Timestamp,
 			Link: forksLink{

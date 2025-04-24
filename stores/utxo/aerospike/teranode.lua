@@ -17,8 +17,8 @@ local MSG_SPENT = "SPENT:"
 
 local SIGNAL_ALL_SPENT = ":ALLSPENT"
 local SIGNAL_NOT_ALL_SPENT = ":NOTALLSPENT"
-local SIGNAL_TTL_SET = ":TTLSET:"
-local SIGNAL_TTL_UNSET = ":TTLUNSET:"
+local SIGNAL_DELETE_AT_HEIGHT_SET = ":DAHSET:"
+local SIGNAL_DELETE_AT_HEIGHT_UNSET = ":DAHUNSET:"
 
 -- Error message constants
 local ERR_TX_NOT_FOUND = "ERROR:TX not found"
@@ -138,7 +138,7 @@ end
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- currentBlockHeight number - the current block height
--- ttl number - the time-to-live for the UTXO record
+-- blockHeightRetention number - the retention period for the UTXO record
 --                           _
 --  ___ _ __   ___ _ __   __| |
 -- / __| '_ \ / _ \ '_ \ / _` |
@@ -146,7 +146,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
+function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
     -- Create a single spend item for spendMulti
     local spend = map()
     spend['offset'] = offset
@@ -156,7 +156,7 @@ function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUns
     local spends = list()
     list.append(spends, spend)
 
-    return spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
+    return spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
 end
 
 --                           _ __  __       _ _   _ 
@@ -166,7 +166,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|_|  |_|\__,_|_|\__|_|
 --     |_|                                          
 --
-function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, ttl)
+function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
     
     if not ignoreConflicting then
@@ -244,7 +244,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
     -- Update the record with the new utxos
     rec['utxos'] = utxos
 
-    local signal = setTTL(rec, ttl)
+    local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -253,7 +253,7 @@ end
 
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
 -- blockID number - the block ID
--- ttl number - the time-to-live for the UTXO record
+-- currentBlockHeight number - the current block height
 --           ____                       _
 --  _   _ _ __ / ___| _ __   ___ _ __   __| |
 -- | | | | '_ \\___ \| '_ \ / _ \ '_ \ / _` |
@@ -261,7 +261,7 @@ end
 --  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
 --                   |_|
 --
-function unspend(rec, offset, utxoHash)
+function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     local utxos = rec['utxos']
@@ -272,7 +272,6 @@ function unspend(rec, offset, utxoHash)
     local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
         if err then return err end
 
-    local oldTtl = record.ttl(rec)
 
     local signal = ""
 
@@ -288,7 +287,7 @@ function unspend(rec, offset, utxoHash)
         rec['spentUtxos'] = spentUtxos - 1
     end
 
-    local signal = setTTL(rec, ttl)
+    local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -296,7 +295,7 @@ function unspend(rec, offset, utxoHash)
 end
 
 --
-function setMined(rec, blockID, blockHeight, subtreeIdx, ttl)
+function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     -- Check if the bin exists; if not, initialize it as an empty list
@@ -328,7 +327,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, ttl)
         rec['unspendable'] = false
     end
 
-    local signal = setTTL(rec, ttl)
+    local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     -- Update the record to save changes
     aerospike:update(rec)
@@ -489,7 +488,7 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
 
     rec['utxoSpendableIn'][offset] = blockHeight + spendableAfter
 
-    -- Ensure record is not TTL'd when all UTXOs are spent
+    -- Ensure record is not DAH'd when all UTXOs are spent
     rec['recordUtxos'] = rec['recordUtxos'] + 1
 
     aerospike:update(rec)
@@ -497,31 +496,33 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
     return MSG_OK .. signal
 end
 
--- Function to set the Time-To-Live (TTL) for a record
+-- Function to set the deleteAtHeight for a record
 -- Parameters:
 --   rec: table - The record to update
---   ttl: number - The TTL value to set (in seconds)
+--   currentBlockHeight: number - The current block height
+--   blockHeightRetention: number - The number of blocks to retain the record for
 -- Returns:
 --   string - A signal indicating the action taken
---           _  _____ _____ _     
---  ___  ___| ||_   _|_   _| |    
--- / __|/ _ \ __|| |   | | | |    
--- \__ \  __/ |_ | |   | | | |___ 
--- |___/\___|\__||_|   |_| |_____|
---                               
-function setTTL(rec, ttl)
-    -- Check if all the UTXOs are spent and set the TTL, but only for transactions that have been in at least one block
+
+--           _   ____       _      _          _   _   _   _      _       _     _   
+--  ___  ___| |_|  _ \  ___| | ___| |_ ___   / \ | |_| | | | ___(_) __ _| |__ | |_ 
+-- / __|/ _ \ __| | | |/ _ \ |/ _ \ __/ _ \ / _ \| __| |_| |/ _ \ |/ _` | '_ \| __|
+-- \__ \  __/ |_| |_| |  __/ |  __/ ||  __// ___ \ |_|  _  |  __/ | (_| | | | | |_ 
+-- |___/\___|\__|____/ \___|_|\___|\__\___/_/   \_\__|_| |_|\___|_|\__, |_| |_|\__|
+--                                                                 |___/           
+function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    -- Check if all the UTXOs are spent and set the deleteAtHeight, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
     local totalExtraRecs = rec['totalExtraRecs']
     local spentExtraRecs = rec['spentExtraRecs']
-    local oldTtl = record.ttl(rec)
+    local existingDeleteAtHeight = rec['deleteAtHeight']
             
     if rec["conflicting"] then
-        if oldTtl <= 0 then
-            -- Set the TTL for the record
-            record.set_ttl(rec, ttl)
+        if not existingDeleteAtHeight then
+            -- Set the deleteAtHeight for the record
+            rec['deleteAtHeight'] = currentBlockHeight + blockHeightRetention
             if rec['external'] then
-                return SIGNAL_TTL_SET .. totalExtraRecs
+                return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
         
@@ -541,22 +542,22 @@ function setTTL(rec, ttl)
         spentExtraRecs = 0
     end
 
-    -- This is a master record: only set TTL if totalExtraRecs equals spentExtraRecs and blockIDs has at least one item and all UTXOs are spent
+    -- This is a master record: only set deleteAtHeight if totalExtraRecs equals spentExtraRecs and blockIDs has at least one item and all UTXOs are spent
     if totalExtraRecs == spentExtraRecs and blockIDs and list.size(blockIDs) > 0 and rec['spentUtxos'] == rec['recordUtxos'] then
-        if oldTtl <= 0 then
-            -- Set the TTL for the record
-            record.set_ttl(rec, ttl)
+        if existingDeleteAtHeight == nil then
+            -- Set the deleteAtHeight for the record
+            rec['deleteAtHeight'] = currentBlockHeight + blockHeightRetention
             if rec['external'] then
-                return SIGNAL_TTL_SET .. totalExtraRecs
+                return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
     else
-        -- Remove any existing TTL by setting it to -1 (never expire)
-        if oldTtl > 0 then
-            record.set_ttl(rec, -1)
+        -- Remove any existing deleteAtHeight
+        if existingDeleteAtHeight then
+            rec['deleteAtHeight'] = nil
            
             if rec['external'] then
-                return SIGNAL_TTL_UNSET .. totalExtraRecs
+                return SIGNAL_DELETE_AT_HEIGHT_UNSET .. totalExtraRecs
             end
         end
     end
@@ -568,22 +569,23 @@ end
 -- Parameters:
 --   rec: table - The record to update
 --   setValue: boolean - The value to set for the 'conflicting' field
---   ttl: number - The TTL value to set (in seconds)
+--   currentBlockHeight: number - The current block height
+--   blockHeightRetention: number - The retention period for the UTXO record
 -- Returns:
 --   string - A signal indicating the action taken
 --          _    ____             __ _ _      _   _
 -- ___  ___| |_ / ___|___  _ __  / _| (_) ___| |_(_)_ __   __ _
 --/ __|/ _ \ __| |   / _ \| '_ \| |_| | |/ __| __| | '_ \ / _` |
---\__ \  __/ |_ |__| (_) | | | |  _| | | (__| |_| | | | | (_| |
+--\__ \  __/  |_ |__| (_) | | | |  _| | | (__| |_| | | | | (_| |
 --|___/\___|\__|\____\___/|_| |_|_| |_|_|\___|\__|_|_| |_|\__, |
 --                                                        |___/
 --
-function setConflicting(rec, setValue, ttl)
+function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     rec['conflicting'] = setValue
 
-    local signal = setTTL(rec, ttl)
+    local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -594,7 +596,6 @@ end
 -- Parameters:
 --   rec: table - The record to update
 --   setValue: boolean - The value to set for the 'conflicting' field
---   ttl: number - The TTL value to set (in seconds)
 -- Returns:
 --   string - A signal indicating the action taken
 --           _   _   _                                _       _     _
@@ -608,7 +609,7 @@ function setUnspendable(rec, setValue)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     local oldUnspendable = rec['unspendable']
-    local oldTtl = record.ttl(rec)
+    local existingDeleteAtHeight = rec['deleteAtHeight']
     local totalExtraRecs = rec['totalExtraRecs']
 
     if totalExtraRecs == nil then
@@ -622,9 +623,9 @@ function setUnspendable(rec, setValue)
     rec['unspendable'] = setValue
 
     if rec['unspendable'] then
-        -- Remove any existing TTL by setting it to -1 (never expire)
-        if oldTtl > 0 then
-            record.set_ttl(rec, -1)
+        -- Remove any existing deleteAtHeight
+        if existingDeleteAtHeight then
+            rec['deleteAtHeight'] = nil
         end
     end
 
@@ -634,14 +635,14 @@ function setUnspendable(rec, setValue)
 end
 
 
--- Increment the number of records and set TTL if necessary
+-- Increment the number of records and set deleteAtHeight if necessary
 --  _                                          _   
 -- (_)_ __   ___ _ __ ___ _ __ ___   ___ _ __ | |_ 
 -- | | '_ \ / __| '__/ _ \ '_ ` _ \ / _ \ '_ \| __|
 -- | | | | | (__| | |  __/ | | | | |  __/ | | | |_ 
 -- |_|_| |_|\___|_|  \___|_| |_| |_|\___|_| |_|\__|
 --                                                 
-function incrementSpentExtraRecs(rec, inc, ttl)
+function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     local totalExtraRecs = rec['totalExtraRecs']
@@ -666,9 +667,64 @@ function incrementSpentExtraRecs(rec, inc, ttl)
 
     rec['spentExtraRecs'] = spentExtraRecs
 
-    local signal = setTTL(rec, ttl)
+    local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
     return MSG_OK .. signal
+end
+
+
+-- deleteExpired is a UDF that deletes a record
+--
+-- Parameters:
+--   rec: table - The record to delete
+-- Returns:
+--   boolean - true if record was deleted, false otherwise
+--
+-- Usage:
+--   deleteExpired(rec)
+
+--      _      _      _       _____            _              _ 
+--   __| | ___| | ___| |_ ___| ____|_  ___ __ (_)_ __ ___  __| |
+--  / _` |/ _ \ |/ _ \ __/ _ \  _| \ \/ / '_ \| | '__/ _ \/ _` |
+-- | (_| |  __/ |  __/ ||  __/ |___ >  <| |_) | | | |  __/ (_| |
+--  \__,_|\___|_|\___|\__\___|_____/_/\_\ .__/|_|_|  \___|\__,_|
+--                              |_|                                
+
+local function deleteExpired(rec)
+    -- Check if record exists
+    if not aerospike:exists(rec) then
+        return false  -- Skip non-existent records
+    end
+    
+    -- Delete the record
+    aerospike:remove(rec)
+    
+    -- Return true to indicate record was deleted
+    return true
+end
+
+-- deleteScan is a background scan UDF that accepts
+-- a stream of records and deletes them using the map function
+--
+-- Parameters:
+--   stream: table - A stream of records to process
+--   currentBlockHeight: number - The current block height
+-- Returns:
+--   table - A stream of records that were deleted
+-- Usage:
+--   deleteScan(stream, currentBlockHeight)
+
+--      _      _      _       ____                  
+--   __| | ___| | ___| |_ ___/ ___|  ___ __ _ _ __  
+--  / _` |/ _ \ |/ _ \ __/ _ \___ \ / __/ _` | '_ \ 
+-- | (_| |  __/ |  __/ ||  __/___) | (_| (_| | | | |
+--  \__,_|\___|_|\___|\__\___|____/ \___\__,_|_| |_|
+--                                               
+function deleteScan(stream, currentBlockHeight)
+    return stream : filter(function(rec)
+        local deleteAtHeight = rec['deleteAtHeight']
+        return deleteAtHeight and deleteAtHeight <= currentBlockHeight
+    end) : map(deleteExpired)
 end

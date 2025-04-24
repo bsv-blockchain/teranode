@@ -24,7 +24,7 @@ type ConcurrentBlob[K chainhash.Hash] struct {
 }
 
 // NewConcurrentBlob creates a new ConcurrentBlob instance
-// blobStore is the blob store to use for caching the blobs. Set a default TTL on the store to have the blobs expire.
+// blobStore is the blob store to use for caching the blobs. Set a default DAH on the store to have the blobs expire.
 // options is a list of file options to use when storing the blobs.
 func NewConcurrentBlob[K chainhash.Hash](blobStore Store, options ...blob_options.FileOption) *ConcurrentBlob[K] {
 	return &ConcurrentBlob[K]{

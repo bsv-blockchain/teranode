@@ -2689,7 +2689,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		tempStore:            tempStore,
 		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
 			tempStore,
-			blob_options.WithTTL(90*time.Minute),
+			blob_options.WithDeleteAt(10),
 			blob_options.WithFileExtension("msgBlock"),
 			blob_options.WithSubDirectory("blocks"),
 			blob_options.WithAllowOverwrite(true),

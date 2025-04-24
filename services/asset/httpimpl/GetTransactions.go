@@ -135,7 +135,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			return err
 		}
 
-		prometheusAssetHttpGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))
+		prometheusAssetHTTPGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))
 
 		h.logger.Infof("[GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
 

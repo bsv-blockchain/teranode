@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -59,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +68,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -76,7 +78,7 @@ import (
 )
 
 // Spend operations in the Aerospike UTXO store handle spending UTXOs through
-// batched Lua operations with automatic TTL management and error handling.
+// batched Lua operations with automatic DAH management and error handling.
 //
 // # Architecture
 //
@@ -84,7 +86,7 @@ import (
 //   1. Batch collection of spend requests
 //   2. Grouping of spends by transaction
 //   3. Atomic Lua scripts for spending
-//   4. TTL management for cleanup
+//   4. DAH management for cleanup
 //   5. External storage synchronization
 //
 // # Main Types
@@ -104,11 +106,11 @@ type batchIncrement struct {
 	res       chan incrementSpentRecordsRes // Result channel
 }
 
-type batchTTL struct {
-	txID     *chainhash.Hash // Transaction hash
-	childIdx uint32          // Child record index
-	ttl      uint32          // TTL duration
-	errCh    chan error      // Error Result channel
+type batchDAH struct {
+	txID           *chainhash.Hash // Transaction hash
+	childIdx       uint32          // Child record index
+	deleteAtHeight uint32          // DeleteAtHeight (0 = no delete)
+	errCh          chan error      // Error Result channel
 }
 
 // Spend marks UTXOs as spent in a batch operation.
@@ -192,7 +194,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				mu.Lock()
 				exists := txAlreadyExists
 				mu.Unlock()
-				// the parent transaction was not found, this can happen when the parent tx has been ttl'd and removed from
+				// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 				// the utxo store. We can check whether the tx already exists, which means it has been validated and
 				// blessed. In this case we can just return early.
 				if exists {
@@ -278,7 +280,7 @@ type keyIgnoreUnspendable struct {
 //  2. Creates batch UDF operations
 //  3. Executes Lua scripts
 //  4. Handles responses and errors
-//  5. Manages TTL settings
+//  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start := time.Now()
@@ -381,7 +383,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreUnspendable),
 			aerospike.NewValue(thisBlockHeight),
-			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
+			aerospike.NewValue(s.blockHeightRetention),
 		))
 
 		batchRecordKeys = append(batchRecordKeys, batchKey)
@@ -441,21 +443,21 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 								errs = errors.Join(errs, err)
 							}
 
-						case LuaTTLSet:
-							if err := s.SetTTLForChildRecords(txID, res.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+						case LuaDAHSet:
+							if err := s.SetDAHForChildRecords(txID, res.ChildCount, thisBlockHeight+s.blockHeightRetention); err != nil {
 								errs = errors.Join(errs, err)
 							}
 
-							if err := s.setTTLExternalTransaction(ctx, txID, s.expiration); err != nil {
+							if err := s.setDAHExternalTransaction(ctx, txID, thisBlockHeight+s.blockHeightRetention); err != nil {
 								errs = errors.Join(errs, err)
 							}
 
-						case LuaTTLUnset:
-							if err := s.SetTTLForChildRecords(txID, res.ChildCount, aerospike.TTLDontExpire); err != nil {
+						case LuaDAHUnset:
+							if err := s.SetDAHForChildRecords(txID, res.ChildCount, aerospike.TTLDontExpire); err != nil {
 								errs = errors.Join(errs, err)
 							}
 
-							if err := s.setTTLExternalTransaction(ctx, txID, 0); err != nil {
+							if err := s.setDAHExternalTransaction(ctx, txID, 0); err != nil {
 								errs = errors.Join(errs, err)
 							}
 						}
@@ -531,25 +533,25 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
-// SetTTLForChildRecords sets TTL for all child records of a transaction
-func (s *Store) SetTTLForChildRecords(txID *chainhash.Hash, childCount int, expiration uint32) error {
+// SetDAHForChildRecords sets DAH for all child records of a transaction
+func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah uint32) error {
 	errs := make([]error, childCount)
 
 	for i := uint32(0); i < uint32(childCount); i++ { //nolint: gosec
 		errCh := make(chan error)
 
 		go func() {
-			s.setTTLBatcher.Put(&batchTTL{
-				txID:     txID,
-				childIdx: i + 1, // We want to set TTL for child record i+1
-				ttl:      expiration,
-				errCh:    errCh,
+			s.setDAHBatcher.Put(&batchDAH{
+				txID:           txID,
+				childIdx:       i + 1, // We want to set DAH for child record i+1
+				deleteAtHeight: dah,
+				errCh:          errCh,
 			})
 		}()
 
 		errs[i] = <-errCh
 		if errs[i] != nil {
-			s.logger.Errorf("[setTTLForChildRecords][%s] failed to set TTL for child record %d: %v", txID.String(), i, errs[i])
+			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, errs[i])
 		}
 	}
 
@@ -563,7 +565,7 @@ func (s *Store) SetTTLForChildRecords(txID *chainhash.Hash, childCount int, expi
 	}
 
 	if errorsFound {
-		return errors.NewStorageError("[setTTLForChildRecords][%s] failed to set TTL for one or more child records", txID.String())
+		return errors.NewStorageError("[setDAHForChildRecords][%s] failed to set DAH for one or more child records", txID.String())
 	}
 
 	return nil
@@ -571,12 +573,8 @@ func (s *Store) SetTTLForChildRecords(txID *chainhash.Hash, childCount int, expi
 
 // handleSpentRecords manages cleanup when all UTXOs in a transaction are spent:
 //  1. Decrements record count for pagination
-//  2. Sets TTL for cleanup
-
-// handleSpentRecords manages cleanup when all UTXOs in a transaction are spent:
-//  1. Decrements record count for pagination
-//  2. Sets TTL for cleanup
-//  3. Updates external storage TTL
+//  2. Sets DAH for cleanup
+//  3. Updates external storage DAH
 
 func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, increment int) error {
 	res, err := s.IncrementSpentRecords(txID, increment) // This is a batch operation
@@ -590,21 +588,24 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 			s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to parse LUA return value: %v", txID.String(), err)
 		} else if ret.ReturnValue == LuaOk {
 			switch ret.Signal {
-			case LuaTTLSet:
-				if err := s.SetTTLForChildRecords(txID, ret.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+			case LuaDAHSet:
+				thisBlockHeight := s.blockHeight.Load()
+				dah := thisBlockHeight + s.blockHeightRetention
+
+				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, dah); err != nil {
 					return err
 				}
 
-				if err := s.setTTLExternalTransaction(ctx, txID, s.expiration); err != nil {
+				if err := s.setDAHExternalTransaction(ctx, txID, dah); err != nil {
 					return err
 				}
 
-			case LuaTTLUnset:
-				if err := s.SetTTLForChildRecords(txID, ret.ChildCount, aerospike.TTLDontExpire); err != nil {
+			case LuaDAHUnset:
+				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, 0); err != nil {
 					return err
 				}
 
-				if err := s.setTTLExternalTransaction(ctx, txID, 0); err != nil {
+				if err := s.setDAHExternalTransaction(ctx, txID, 0); err != nil {
 					return err
 				}
 			}
@@ -614,28 +615,28 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 	return nil
 }
 
-func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.Hash, newTTL time.Duration) error {
-	if err := s.externalStore.SetTTL(ctx,
+func (s *Store) setDAHExternalTransaction(ctx context.Context, txid *chainhash.Hash, newDAH uint32) error {
+	if err := s.externalStore.SetDAH(ctx,
 		txid[:],
-		newTTL,
+		newDAH,
 		options.WithFileExtension("tx"),
 	); err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			// did not find the tx, try the outputs
-			if err := s.externalStore.SetTTL(ctx,
+			if err := s.externalStore.SetDAH(ctx,
 				txid[:],
-				newTTL,
+				newDAH,
 				options.WithFileExtension("outputs"),
 			); err != nil {
-				return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s TTL for external transaction outputs",
+				return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s DAH for external transaction outputs",
 					txid,
-					ttlOperation(newTTL),
+					dahOperation(newDAH),
 					err)
 			}
 		} else {
-			return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s TTL for external transaction",
+			return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s DAH for external transaction",
 				txid,
-				ttlOperation(newTTL),
+				dahOperation(newDAH),
 				err)
 		}
 	}
@@ -643,9 +644,9 @@ func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.H
 	return nil
 }
 
-func ttlOperation(ttl time.Duration) string {
-	if ttl > 0 {
-		return "set"
+func dahOperation(dah uint32) string {
+	if dah > 0 {
+		return fmt.Sprintf("set at %d", dah)
 	}
 
 	return "unset"
@@ -683,6 +684,8 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	// Create a batch of records to read, with a max size of the batch
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
 
+	currentBlockHeight := s.blockHeight.Load()
+
 	// Create a batch of records to read from the txHashes
 	for _, item := range batch {
 		aeroKey, err := aerospike.NewKey(s.namespace, s.setName, item.txID[:])
@@ -697,7 +700,8 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(item.increment),
-			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
+			aerospike.NewIntegerValue(int(currentBlockHeight)),
+			aerospike.NewValue(s.blockHeightRetention),
 		))
 	}
 
@@ -752,7 +756,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	}
 }
 
-func (s *Store) sendSetTTLBatch(batch []*batchTTL) {
+func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 	var err error
 
 	// Create batch records with individual TTLs
@@ -763,27 +767,24 @@ func (s *Store) sendSetTTLBatch(batch []*batchTTL) {
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
-			s.logger.Errorf("[SetTTLBatch][%s] failed to create key for pagination record %d: %v", b.txID.String(), b.childIdx, err)
+			s.logger.Errorf("[SetDAHBatch][%s] failed to create key for pagination record %d: %v", b.txID.String(), b.childIdx, err)
 			continue
 		}
 
-		var batchWritePolicy *aerospike.BatchWritePolicy
+		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 
-		if b.ttl > 0 {
-			batchWritePolicy = util.GetAerospikeBatchWritePolicy(s.settings, 0, b.ttl)
+		if b.deleteAtHeight > 0 {
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), b.deleteAtHeight)))
 		} else {
-			batchWritePolicy = util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
 		}
-
-		// Create a BatchWrite with TouchOperation
-		batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.TouchOp())
 	}
 
 	// Execute batch operation
 	err = s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords)
 	if err != nil {
 		for _, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SetTTLBatch][%s] failed to set TTL", err)
+			bItem.errCh <- errors.NewStorageError("[SetDAHBatch][%s] failed to set DAH", err)
 		}
 
 		return

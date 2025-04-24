@@ -438,7 +438,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 	)
 	defer deferFn()
 
-	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
+	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
@@ -467,7 +467,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 // This reader can be used to iterate through all UTXOs deleted (spent) in the block.
 // Returns a ReadCloser interface and any error encountered.
 func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
-	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
+	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}

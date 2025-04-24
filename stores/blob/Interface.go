@@ -4,13 +4,12 @@ package blob
 import (
 	"context"
 	"io"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
 // Store defines the interface for blob storage operations. It provides methods for
-// storing, retrieving, and managing blob data with support for TTL and various options.
+// storing, retrieving, and managing blob data with support for DAH and various options.
 type Store interface {
 	// Health checks the health status of the blob store.
 	// Parameters:
@@ -83,25 +82,25 @@ type Store interface {
 	//   - error: Any error that occurred during storage
 	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
 
-	// SetTTL sets the time-to-live for a blob.
+	// SetDAH sets the delete at height for a blob.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
-	//   - ttl: The time-to-live duration
+	//   - dah: The delete at height
 	//   - opts: Optional file options
 	// Returns:
-	//   - error: Any error that occurred during TTL setting
-	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
+	//   - error: Any error that occurred during DAH setting
+	SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error
 
-	// GetTTL retrieves the remaining time-to-live for a blob.
+	// GetDAH retrieves the remaining time-to-live for a blob.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
 	//   - opts: Optional file options
 	// Returns:
-	//   - time.Duration: The remaining TTL
+	//   - uint32: The delete at height value
 	//   - error: Any error that occurred during retrieval
-	GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error)
+	GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error)
 
 	// Del deletes a blob from the store.
 	// Parameters:

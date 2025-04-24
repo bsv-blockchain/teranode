@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -58,8 +58,6 @@
 package aerospike
 
 import (
-	"time"
-
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/util"
@@ -128,9 +126,9 @@ func (s *Store) GetExternalStore() blob.Store {
 	return s.externalStore
 }
 
-// SetExpiration was implemented to facilitate testing
-func (s *Store) SetExpiration(v time.Duration) {
-	s.expiration = v
+// SetBlockRetention sets the blockHeightRetention for the store
+func (s *Store) SetBlockRetention(v uint32) {
+	s.blockHeightRetention = v
 }
 
 // SetStoreBatcher was implemented to facilitate testing

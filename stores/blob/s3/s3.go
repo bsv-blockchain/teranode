@@ -42,9 +42,9 @@ var (
 )
 
 /**
-* Used in Lustre store to retrieve old files.
+* Used in longterm storage to retrieve old files.
 * Used in Aerospike store for large transactions in production.
-* TTL managed by S3.
+* TTL managed by S3. // TODO DAH
 * SetTTL is not implemented meaning you cannot manually expire a file.
  */
 func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S3, error) {
@@ -214,10 +214,11 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		Body:   bytes.NewReader(buf.Bytes()),
 	}
 
-	if merged.TTL != nil && *merged.TTL > 0 {
-		expires := time.Now().Add(*merged.TTL)
-		uploadInput.Expires = &expires
-	}
+	// if merged.BlockHeightRetention > 0 {
+	// TODO DAH
+	// expires := time.Now().Add(time.Duration(*merged.BlockHeightRetention))
+	// uploadInput.Expires = &expires
+	// }
 
 	if _, err := g.client.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
@@ -275,10 +276,11 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Expires
 
-	if merged.TTL != nil && *merged.TTL > 0 {
-		expires := time.Now().Add(*merged.TTL)
-		uploadInput.Expires = &expires
-	}
+	// if merged.BlockHeightRetention > 0 {
+	// TODO DAH
+	// expires := merged.BlockHeightRetention))
+	// uploadInput.Expires = &expires
+	// }
 
 	if _, err := g.client.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
@@ -290,26 +292,26 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	return nil
 }
 
-func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error {
+func (g *S3) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
+		gocore.NewStat("prop_store_s3", true).NewStat("SetDAH").AddTime(start)
 	}()
 
-	traceSpan := tracing.Start(ctx, "s3:SetTTL")
+	traceSpan := tracing.Start(ctx, "s3:SetDAH")
 	defer traceSpan.Finish()
 
 	// TODO implement
 	return nil
 }
 
-func (g *S3) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+func (g *S3) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetTTL").AddTime(start)
+		gocore.NewStat("prop_store_s3", true).NewStat("GetDAH").AddTime(start)
 	}()
 
-	traceSpan := tracing.Start(ctx, "s3:GetTTL")
+	traceSpan := tracing.Start(ctx, "s3:GetDAH")
 	defer traceSpan.Finish()
 
 	// TODO implement

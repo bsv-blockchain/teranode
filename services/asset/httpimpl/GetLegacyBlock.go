@@ -71,15 +71,15 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 		r, err := h.repository.GetLegacyBlockReader(ctx, hash, wireBlock)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
+				prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
-				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+				prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
 
-		prometheusAssetHttpGetBlockLegacy.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
 		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
 	}
@@ -125,17 +125,17 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 		r, err := h.repository.GetLegacyBlockReader(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
+				prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
 
 				return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("block not found", err).Error())
 			} else {
-				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+				prometheusAssetHTTPGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
 
 				return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting block", err).Error())
 			}
 		}
 
-		prometheusAssetHttpGetBlockLegacy.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockLegacy.WithLabelValues("OK", "200").Inc()
 
 		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
 	}

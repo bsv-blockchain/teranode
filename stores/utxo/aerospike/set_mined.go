@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -78,7 +78,7 @@ import (
 // For each transaction:
 //  1. Creates a batch UDF operation to update the block reference
 //  2. Executes all updates in a single batch operation
-//  3. Handles TTL settings for record expiration
+//  3. Handles DAH settings for record expiration
 //  4. Tracks metrics for successful and failed updates
 //
 // The operation is idempotent and handles cases where:
@@ -128,9 +128,8 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	// math.MaxUint32 - 1 does not update expiration of the record
-	policy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontUpdate)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
 
@@ -150,7 +149,8 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 			aerospike.NewValue(minedBlockInfo.BlockID),
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
 			aerospike.NewValue(minedBlockInfo.SubtreeIdx),
-			aerospike.NewValue(uint32(s.expiration.Seconds())), // ttl
+			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
+			aerospike.NewValue(s.blockHeightRetention),
 		)
 	}
 
@@ -196,21 +196,21 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 									errs = errors.Join(errs, err)
 								}
 
-							case LuaTTLSet:
-								if err := s.SetTTLForChildRecords(hashes[idx], res.ChildCount, uint32(s.expiration.Seconds())); err != nil {
+							case LuaDAHSet:
+								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, s.blockHeightRetention); err != nil {
 									errs = errors.Join(errs, err)
 								}
 
-								if err := s.setTTLExternalTransaction(ctx, hashes[idx], s.expiration); err != nil {
+								if err := s.setDAHExternalTransaction(ctx, hashes[idx], s.blockHeightRetention); err != nil {
 									errs = errors.Join(errs, err)
 								}
 
-							case LuaTTLUnset:
-								if err := s.SetTTLForChildRecords(hashes[idx], res.ChildCount, aerospike.TTLDontExpire); err != nil {
+							case LuaDAHUnset:
+								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, 0); err != nil {
 									errs = errors.Join(errs, err)
 								}
 
-								if err := s.setTTLExternalTransaction(ctx, hashes[idx], 0); err != nil {
+								if err := s.setDAHExternalTransaction(ctx, hashes[idx], 0); err != nil {
 									errs = errors.Join(errs, err)
 								}
 							}

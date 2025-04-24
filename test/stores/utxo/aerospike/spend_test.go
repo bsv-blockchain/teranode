@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"testing"
-	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
@@ -130,10 +129,10 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// check that the TTL is not set on the external store
-		ttl, err := store.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		// check that the DAH is not set on the external store
+		dah, err := store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
-		require.Equal(t, time.Duration(0), ttl)
+		require.Equal(t, uint32(0), dah)
 
 		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(0))
 		mainRecordKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
@@ -144,14 +143,14 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// give the db time to update the main record
-		time.Sleep(100 * time.Millisecond)
+		// time.Sleep(100 * time.Millisecond)
 
 		// get totalExtraRecs from main record
 		resp, err = client.Get(nil, mainRecordKey)
 		require.NoError(t, err)
 
-		// assert that the record is not yet marked for TTL
-		assert.Equal(t, resp.Expiration, uint32(aerospike.TTLDontExpire)) // expiration has not been set
+		// assert that the record is not yet marked for DAH
+		assert.Nil(t, resp.Bins[fields.DeleteAtHeight.String()])
 		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
@@ -159,15 +158,18 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
+		resp, err = client.Get(nil, mainRecordKey)
+		require.NoError(t, err)
+
 		// main record check
-		assert.Greater(t, resp.Expiration, uint32(0)) // expiration has been set
+		assert.Greater(t, resp.Bins[fields.DeleteAtHeight.String()], 0)
 		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
-		// check the external file ttl has been set
-		ttl, err = store.GetExternalStore().GetTTL(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		// check the external file DAH has been set
+		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
-		assert.Greater(t, ttl, time.Duration(0))
+		assert.Greater(t, dah, uint32(0))
 	})
 }
 
@@ -238,7 +240,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 0, resp.Bins[fields.SpentExtraRecs.String()])
 	})
 
-	t.Run("Increment spentExtraRecs - set TTL", func(t *testing.T) {
+	t.Run("Increment spentExtraRecs - set DAH", func(t *testing.T) {
 		txID := tx.TxIDChainHash()
 
 		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
@@ -307,7 +309,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		ret, err = store.ParseLuaReturnValue(r)
 		require.NoError(t, err)
 		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue("TTLSET"), ret.Signal)
+		assert.Equal(t, teranode_aerospike.LuaReturnValue("DAHSET"), ret.Signal)
 	})
 
 	t.Run("Increment totalExtraRecs - multi", func(t *testing.T) {

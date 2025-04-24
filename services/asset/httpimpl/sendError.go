@@ -74,7 +74,7 @@ func sendError(c echo.Context, status int, code int32, err error) error {
 	}
 
 	e := &errorResponse{
-		Status: int32(status),
+		Status: int32(status), //nolint:gosec
 		Code:   code,
 		Err:    err.Error(),
 	}

@@ -302,7 +302,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					// wait for a response
 					// if we don't then we can't mine initial blocks and run coinbase splitter together
 					// this is because getMiningCandidate would create subtrees in the background and
-					// submitMiningSolution would try to setTTL on something that might not yet exist
+					// submitMiningSolution would try to setDAH on something that might not yet exist
 					<-send.ErrChan
 				}
 

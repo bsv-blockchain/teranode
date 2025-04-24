@@ -270,7 +270,7 @@ func TestFileStorer(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	settings := test.CreateBaseTestSettings()
 
-	url, err := url.Parse("lustre:///?&localDir=./data/blockstore&localPersist=s3")
+	url, err := url.Parse("file://./data/blockstore")
 	require.NoError(t, err)
 
 	blockStore, err := blob.NewStore(logger, url)

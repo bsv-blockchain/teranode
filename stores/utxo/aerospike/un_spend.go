@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -79,7 +79,7 @@ import (
 //   1. Verifies UTXO exists
 //   2. Clears spending transaction ID
 //   3. Updates record counts for pagination
-//   4. Manages external storage TTL
+//   4. Manages external storage DAH
 //   5. Updates metrics
 
 // Unspend reverts spent UTXOs to unspent state.
@@ -152,7 +152,7 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 //   - prometheusUtxoMapReset: Successful unspends
 //   - prometheusUtxoMapErrors: Failed operations
 func (s *Store) unspendLua(spend *utxo.Spend) error {
-	policy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
 	if err != nil {
@@ -172,6 +172,8 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
+		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
+		aerospike.NewValue(s.blockHeightRetention),
 	)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", aErr.Error()).Inc()
@@ -193,11 +195,11 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 	switch res.ReturnValue {
 	case LuaOk:
 		if res.Signal == LuaNotAllSpent {
-			if err := s.SetTTLForChildRecords(spend.TxID, res.ChildCount, aerospike.TTLDontExpire); err != nil {
+			if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, 0); err != nil {
 				return err
 			}
 
-			if err := s.setTTLExternalTransaction(s.ctx, spend.TxID, 0); err != nil {
+			if err := s.setDAHExternalTransaction(s.ctx, spend.TxID, 0); err != nil {
 				return err
 			}
 		}

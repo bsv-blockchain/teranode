@@ -121,7 +121,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
-		prometheusAssetHttpGetBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case BINARY_STREAM:

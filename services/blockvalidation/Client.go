@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
@@ -222,9 +221,9 @@ func (s *Client) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options
 	return errors.NewError("not implemented")
 }
 
-// SetTTL is a placeholder method required by an interface.
+// SetDAH is a placeholder method required by an interface.
 // This operation is not implemented in the client and returns an error if called.
-func (s *Client) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+func (s *Client) SetDAH(_ context.Context, _ []byte, _ uint32) error {
 	return errors.NewError("not implemented")
 }
 

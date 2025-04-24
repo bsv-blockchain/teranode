@@ -16,7 +16,7 @@
 //
 //   - Efficient UTXO lifecycle management (create, spend, unspend)
 //   - Support for batched operations with LUA scripting
-//   - Automatic cleanup of spent UTXOs through TTL
+//   - Automatic cleanup of spent UTXOs through DAH
 //   - Alert system integration for freezing/unfreezing UTXOs
 //   - Metrics tracking via Prometheus
 //   - Support for large transactions through external blob storage
@@ -259,11 +259,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
-
-	batchWritePolicyWithTTL := util.GetAerospikeBatchWritePolicy(s.settings, 0, uint32(s.expiration.Seconds()))
-	batchWritePolicyWithTTL.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
@@ -371,8 +368,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				setOptions := []options.FileOption{options.WithFileExtension("outputs")}
 
 				if !hasUtxos {
-					// add a TTL to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithTTL(s.expiration))
+					// add a DAH to the external file, since there were no spendable utxos in the transaction
+					setOptions = append(setOptions, options.WithDeleteAt(s.blockHeightRetention))
 				}
 
 				if err = s.externalStore.Set(
@@ -398,8 +395,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if !hasUtxos {
-					// add a TTL to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithTTL(s.expiration))
+					// add a DAH to the external file, since there were no spendable utxos in the transaction
+					setOptions = append(setOptions, options.WithDeleteAt(s.blockHeightRetention))
 				}
 
 				// store the tx data externally, it is not in our aerospike record
@@ -426,11 +423,12 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.conflicting {
-			// set the TTL on conflicting records
-			batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicyWithTTL, key, putOps...)
-		} else {
-			batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
+			deleteAt := bItem.blockHeight + s.blockHeightRetention
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin("deleteAtHeight", deleteAt)))
 		}
+
+		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
+
 	}
 
 	batchID := s.batchID.Add(1)
@@ -735,8 +733,8 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	}
 
 	if !hasUtxos {
-		// add a TTL to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithTTL(s.expiration))
+		// add a DAH to the external file, since there were no spendable utxos in the transaction
+		opts = append(opts, options.WithDeleteAt(s.blockHeightRetention))
 	}
 
 	if err := s.externalStore.Set(
@@ -752,7 +750,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	// For all records, set the write policy to CREATE_ONLY
 	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
@@ -840,8 +838,8 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	}
 
 	if !hasUtxos {
-		// add a TTL to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithTTL(s.expiration))
+		// add a DAH to the external file, since there were no spendable utxos in the transaction
+		opts = append(opts, options.WithDeleteAt(s.blockHeightRetention))
 	}
 
 	if err := s.externalStore.Set(
@@ -857,7 +855,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0, aerospike.TTLDontExpire)
+	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]

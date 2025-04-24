@@ -93,7 +93,7 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
-		prometheusAssetHttpGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetBestBlockHeader.WithLabelValues("OK", "200").Inc()
 
 		r := &blockHeaderResponse{
 			BlockHeader: blockHeader,

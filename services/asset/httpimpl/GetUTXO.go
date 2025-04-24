@@ -117,7 +117,7 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("UTXO not found").Error())
 		}
 
-		prometheusAssetHttpGetUTXO.WithLabelValues("OK", "200").Inc()
+		prometheusAssetHTTPGetUTXO.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case BINARY_STREAM:

@@ -1820,7 +1820,7 @@ out:
 						if err := sm.tempStore.SetFromReader(ctx,
 							msg.block.Hash().CloneBytes(),
 							bufferedReader,
-							options.WithTTL(90*time.Minute),
+							options.WithDeleteAt(10),
 							options.WithFileExtension("msgBlock"),
 							options.WithSubDirectory("blocks"),
 							options.WithAllowOverwrite(true),

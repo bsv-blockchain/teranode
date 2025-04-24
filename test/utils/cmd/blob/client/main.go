@@ -119,7 +119,7 @@ func testSetTTL(client *http.HTTPStore) error {
 		return err
 	}
 
-	if err := client.SetTTL(context.Background(), key, 1*time.Millisecond); err != nil {
+	if err := client.SetDAH(context.Background(), key, 1); err != nil {
 		return err
 	}
 

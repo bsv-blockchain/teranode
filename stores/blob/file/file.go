@@ -3,18 +3,20 @@ package file
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -22,25 +24,30 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/go-utils"
-	"golang.org/x/exp/rand"
 )
 
 const checksumExtension = ".sha256"
 
 type File struct {
-	path        string
-	logger      ulogger.Logger
-	options     *options.Options
-	fileTTLs    map[string]time.Time
-	fileTTLsMu  sync.Mutex
-	fileTTLsCtx context.Context
+	path               string
+	logger             ulogger.Logger
+	options            *options.Options
+	fileDAHs           map[string]uint32
+	fileDAHsMu         sync.Mutex
+	fileDAHsCtx        context.Context
+	currentBlockHeight atomic.Uint32
+	persistSubDir      string
+	longtermClient     longtermStore
 }
 
-/*
-* Used for dev environments as replacement for lustre.
-* Has background jobs to clean up TTL.
-* Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
- */
+type longtermStore interface {
+	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+}
+
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	if storeURL == nil {
 		return nil, errors.NewConfigurationError("storeURL is nil")
@@ -74,19 +81,19 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 		opts = append(opts, options.WithSHA256Checksum())
 	}
 
-	if storeURL.Query().Get("ttlCleanerInterval") != "" {
-		ttlCleanerInterval, err := time.ParseDuration(storeURL.Query().Get("ttlCleanerInterval"))
+	if storeURL.Query().Get("dahCleanerInterval") != "" {
+		dahCleanerInterval, err := time.ParseDuration(storeURL.Query().Get("dahCleanerInterval"))
 		if err != nil {
-			return nil, errors.NewStorageError("[File] failed to parse ttlCleanerInterval", err)
+			return nil, errors.NewStorageError("[File] failed to parse dahCleanerInterval", err)
 		}
 
-		return newStore(logger, storeURL, ttlCleanerInterval, opts...)
+		return newStore(logger, storeURL, dahCleanerInterval, opts...)
 	}
 
 	return newStore(logger, storeURL, 1*time.Minute, opts...)
 }
 
-func newStore(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
+func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
 	if storeURL == nil {
@@ -107,7 +114,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.
 		}
 	}
 
-	fileOptions := options.NewStoreOptions(opts...)
+	options := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
 		val, err := strconv.ParseInt(hashPrefix, 10, 64)
@@ -115,7 +122,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
 
-		fileOptions.HashPrefix = int(val)
+		options.HashPrefix = int(val)
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
@@ -124,156 +131,185 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
 
-		fileOptions.HashPrefix = -int(val)
+		options.HashPrefix = -int(val)
 	}
 
-	if len(fileOptions.SubDirectory) > 0 {
-		if err := os.MkdirAll(filepath.Join(path, fileOptions.SubDirectory), 0755); err != nil {
+	if len(options.SubDirectory) > 0 {
+		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
 
 	fileStore := &File{
-		path:        path,
-		logger:      logger,
-		options:     fileOptions,
-		fileTTLs:    make(map[string]time.Time),
-		fileTTLsCtx: context.Background(),
+		path:          path,
+		logger:        logger,
+		options:       options,
+		fileDAHs:      make(map[string]uint32),
+		fileDAHsCtx:   context.Background(),
+		persistSubDir: options.PersistSubDir,
 	}
 
-	// load ttl's in background
-	go func() {
-		if err := fileStore.loadTTLs(); err != nil {
-			fileStore.logger.Warnf("[File] failed to load ttls: %v", err)
+	// Check if longterm storage options are provided
+	if options.PersistSubDir != "" {
+		// Create persistent subdirectory
+		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
+			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)
 		}
-	}()
 
-	go fileStore.ttlCleaner(fileStore.fileTTLsCtx, ttlCleanerInterval)
+		// Initialize longterm storage client if URL is provided
+		if options.LongtermStoreURL != nil {
+			var err error
+
+			fileStore.longtermClient, err = newStore(logger, options.LongtermStoreURL, 0)
+			if err != nil {
+				return nil, errors.NewStorageError("[File] failed to create longterm client", err)
+			}
+		}
+	}
+
+	if dahCleanerInterval != 0 {
+		// load dah's in background
+		go func() {
+			if err := fileStore.loadDAHs(); err != nil {
+				fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
+			}
+		}()
+
+		// start the dah cleaner
+		go fileStore.dahCleaner(fileStore.fileDAHsCtx, dahCleanerInterval)
+	}
 
 	return fileStore, nil
 }
 
-func (s *File) loadTTLs() error {
-	s.logger.Infof("[File] Loading file TTLs: %s", s.path)
+func (s *File) SetCurrentBlockHeight(height uint32) {
+	s.currentBlockHeight.Store(height)
+}
 
-	// get all files in the directory that end with .ttl
-	files, err := findFilesByExtension(s.path, ".ttl")
+func (s *File) loadDAHs() error {
+	s.logger.Infof("[File] Loading file DAHs: %s", s.path)
+
+	// get all files in the directory that end with .dah
+	files, err := findFilesByExtension(s.path, ".dah")
 	if err != nil {
-		return errors.NewStorageError("[File] failed to find ttl files", err)
+		return errors.NewStorageError("[File] failed to find DAH files", err)
 	}
 
-	var ttl *time.Time
+	var dah uint32
 
 	for _, fileName := range files {
-		if fileName[len(fileName)-4:] != ".ttl" {
+		if fileName[len(fileName)-4:] != ".dah" {
 			continue
 		}
 
-		ttl, err = s.readTTLFromFile(fileName)
+		dah, err = s.readDAHFromFile(fileName)
 		if err != nil {
 			return err
 		}
 
-		// check whether we actually have a ttl
-		if ttl == nil {
+		// check whether we actually have a dah
+		if dah == 0 {
 			continue
 		}
 
-		s.fileTTLsMu.Lock()
-		s.fileTTLs[fileName[:len(fileName)-4]] = *ttl
-		s.fileTTLsMu.Unlock()
+		s.fileDAHsMu.Lock()
+		s.fileDAHs[fileName[:len(fileName)-4]] = dah
+		s.fileDAHsMu.Unlock()
 	}
 
 	return nil
 }
 
-func (s *File) readTTLFromFile(fileName string) (*time.Time, error) {
-	// read the ttl
-	ttlBytes, err := os.ReadFile(fileName)
+func (s *File) readDAHFromFile(fileName string) (uint32, error) {
+	// read the dah
+	dahBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return 0, nil
 		}
 
-		return nil, errors.NewStorageError("[File] failed to read ttl file", err)
+		return 0, errors.NewStorageError("[File] failed to read DAH file", err)
 	}
 
-	ttl, err := time.Parse(time.RFC3339, string(ttlBytes))
+	dah, err := strconv.ParseUint(string(dahBytes), 10, 32)
 	if err != nil {
-		return nil, errors.NewProcessingError("[File] failed to parse ttl from %s", fileName, err)
+		return 0, errors.NewProcessingError("[File] failed to parse DAH from %s", fileName, err)
 	}
 
-	return &ttl, nil
+	return uint32(dah), nil
 }
 
-func (s *File) ttlCleaner(ctx context.Context, interval time.Duration) {
+func (s *File) dahCleaner(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			cleanExpiredFiles(s)
+			s.cleanupExpiredFiles()
 		}
 	}
 }
 
-func cleanExpiredFiles(s *File) {
-	s.logger.Debugf("[File] Cleaning file TTLs")
+func (s *File) cleanupExpiredFiles() {
+	s.logger.Debugf("[File] Cleaning file DAHs")
 
-	filesToRemove := getExpiredFiles(s)
+	filesToRemove := s.getExpiredFiles()
 	for _, fileName := range filesToRemove {
-		cleanupExpiredFile(s, fileName)
+		s.cleanupExpiredFile(fileName)
 	}
 }
 
-func getExpiredFiles(s *File) []string {
-	s.fileTTLsMu.Lock()
-	filesToRemove := make([]string, 0, len(s.fileTTLs))
+func (s *File) getExpiredFiles() []string {
+	s.fileDAHsMu.Lock()
+	filesToRemove := make([]string, 0, len(s.fileDAHs))
 
-	for fileName, ttl := range s.fileTTLs {
-		if ttl.Before(time.Now()) {
+	currentBlockHeight := s.currentBlockHeight.Load()
+
+	for fileName, dah := range s.fileDAHs {
+		if dah <= currentBlockHeight {
 			filesToRemove = append(filesToRemove, fileName)
 		}
 	}
-	s.fileTTLsMu.Unlock()
+	s.fileDAHsMu.Unlock()
 
 	return filesToRemove
 }
 
-func cleanupExpiredFile(s *File, fileName string) {
-	// check if the ttl file still exists, even if the map says it has expired, another process might have updated it
-	fileTTL, err := s.readTTLFromFile(fileName + ".ttl")
+func (s *File) cleanupExpiredFile(fileName string) {
+	// check if the DAH file still exists, even if the map says it has expired, another process might have updated it
+	dah, err := s.readDAHFromFile(fileName + ".dah")
 	if err != nil {
-		s.logger.Warnf("[File] failed to read ttl from file: %s", fileName+".ttl")
+		s.logger.Warnf("[File] failed to read DAH from file: %s", fileName+".dah")
 		return
 	}
 
-	if fileTTL == nil {
-		removeTTLFromMap(s, fileName)
+	if dah == 0 {
+		s.removeDAHFromMap(fileName)
 		return
 	}
 
-	if !shouldRemoveFile(s, fileName, fileTTL) {
+	if !s.shouldRemoveFile(fileName, dah) {
 		return
 	}
 
-	removeFiles(s, fileName)
-	removeTTLFromMap(s, fileName)
+	s.removeFiles(fileName)
+	s.removeDAHFromMap(fileName)
 }
 
-func shouldRemoveFile(s *File, fileName string, fileTTL *time.Time) bool {
-	now := time.Now()
-	if !fileTTL.Before(now) {
-		// Update the TTL in our map
-		s.fileTTLsMu.Lock()
-		mapTTL := s.fileTTLs[fileName]
-		s.fileTTLs[fileName] = *fileTTL
-		s.fileTTLsMu.Unlock()
+func (s *File) shouldRemoveFile(fileName string, fileDAH uint32) bool {
+	currentBlockHeight := s.currentBlockHeight.Load()
 
-		s.logger.Warnf("[File] ttl file %s has expiry of %s, but map has %s",
-			fileName+".ttl",
-			fileTTL.UTC().Format(time.RFC3339),
-			mapTTL.UTC().Format(time.RFC3339))
+	if fileDAH > currentBlockHeight {
+		// Update the DAH in our map
+		s.fileDAHsMu.Lock()
+		mapDAH := s.fileDAHs[fileName]
+		s.fileDAHs[fileName] = fileDAH
+		s.fileDAHsMu.Unlock()
+
+		s.logger.Warnf("[File] DAH file %s has DAH of %d, but map has %d",
+			fileName+".dah",
+			fileDAH,
+			mapDAH)
 
 		return false
 	}
@@ -281,13 +317,13 @@ func shouldRemoveFile(s *File, fileName string, fileTTL *time.Time) bool {
 	return true
 }
 
-func removeFiles(s *File, fileName string) {
+func (s *File) removeFiles(fileName string) {
 	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
 		s.logger.Warnf("[File] failed to remove file: %s", fileName)
 	}
 
-	if err := os.Remove(fileName + ".ttl"); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
+	if err := os.Remove(fileName + ".dah"); err != nil && !os.IsNotExist(err) {
+		s.logger.Warnf("[File] failed to remove DAH file: %s", fileName+".dah")
 	}
 
 	if err := os.Remove(fileName + checksumExtension); err != nil && !os.IsNotExist(err) {
@@ -295,10 +331,10 @@ func removeFiles(s *File, fileName string) {
 	}
 }
 
-func removeTTLFromMap(s *File, fileName string) {
-	s.fileTTLsMu.Lock()
-	delete(s.fileTTLs, fileName)
-	s.fileTTLsMu.Unlock()
+func (s *File) removeDAHFromMap(fileName string) {
+	s.fileDAHsMu.Lock()
+	delete(s.fileDAHs, fileName)
+	s.fileDAHsMu.Unlock()
 }
 
 func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
@@ -343,8 +379,8 @@ func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
 }
 
 func (s *File) Close(_ context.Context) error {
-	// stop ttl cleaner
-	s.fileTTLsCtx.Done()
+	// stop DAH cleaner
+	s.fileDAHsCtx.Done()
 
 	return nil
 }
@@ -371,11 +407,13 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 		return err
 	}
 
-	if err := s.updateTTL(filename, opts); err != nil {
-		return err
+	// Generate a cryptographically secure random number
+	randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+	if err != nil {
+		return errors.NewStorageError("[File][SetFromReader] failed to generate random number", err)
 	}
 
-	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, randNum)
 
 	// Create the file first
 	file, err := os.Create(tmpFilename)
@@ -495,11 +533,13 @@ func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.
 		return err
 	}
 
-	if err := s.updateTTL(filename, opts); err != nil {
-		return err
+	// Generate a cryptographically secure random number
+	randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
+	if err != nil {
+		return errors.NewStorageError("[File][Set] failed to generate random number", err)
 	}
 
-	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, randNum)
 
 	// Set up writers
 	var buf bytes.Buffer
@@ -561,47 +601,43 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 		return "", err
 	}
 
-	return fileName, nil
-}
+	currentBlockHeight := s.currentBlockHeight.Load()
 
-func (s *File) updateTTL(fileName string, opts []options.FileOption) error {
-	merged := options.MergeOptions(s.options, opts)
-
-	if merged.TTL != nil && *merged.TTL > 0 {
+	if merged.BlockHeightRetention > 0 {
 		// write bytes to file
-		ttl := time.Now().Add(*merged.TTL)
+		dah := currentBlockHeight + merged.BlockHeightRetention
 
-		ttlFilename := fileName + ".ttl"
-		ttlTempFilename := ttlFilename + ".tmp"
+		dahFilename := fileName + ".dah"
+		dahTempFilename := dahFilename + ".tmp"
 
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-		if err := os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return errors.NewStorageError("[File][%s] failed to write ttl to file", fileName, err)
+		if err = os.WriteFile(dahTempFilename, []byte(strconv.FormatUint(uint64(dah), 10)), 0644); err != nil {
+			return "", errors.NewStorageError("[File][%s] failed to write DAH to file", dahTempFilename, err)
 		}
 
-		if err := os.Rename(ttlTempFilename, ttlFilename); err != nil {
-			return errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
+		if err := os.Rename(dahTempFilename, dahFilename); err != nil {
+			return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
 		}
 
-		s.fileTTLsMu.Lock()
-		s.fileTTLs[fileName] = ttl
-		s.fileTTLsMu.Unlock()
+		s.fileDAHsMu.Lock()
+		s.fileDAHs[fileName] = dah
+		s.fileDAHsMu.Unlock()
 	} else {
-		// delete ttl file, if it existed
-		_ = os.Remove(fileName + ".ttl")
+		// delete DAH file, if it existed
+		_ = os.Remove(fileName + ".dah")
 
-		s.fileTTLsMu.Lock()
-		delete(s.fileTTLs, fileName)
-		s.fileTTLsMu.Unlock()
+		s.fileDAHsMu.Lock()
+		delete(s.fileDAHs, fileName)
+		s.fileDAHsMu.Unlock()
 	}
 
-	return nil
+	return fileName, nil
 }
 
 // create a global limiting semaphore for setTTL file operations
 var setTTLFileSemaphore = make(chan struct{}, 256)
 
-func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.FileOption) error {
+func (s *File) SetDAH(_ context.Context, key []byte, newDAH uint32, opts ...options.FileOption) error {
 	// limit the number of concurrent file operations
 	setTTLFileSemaphore <- struct{}{}
 	defer func() {
@@ -615,18 +651,18 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
-	if newTTL == 0 {
-		s.fileTTLsMu.Lock()
-		delete(s.fileTTLs, fileName)
-		s.fileTTLsMu.Unlock()
+	if newDAH == 0 {
+		s.fileDAHsMu.Lock()
+		delete(s.fileDAHs, fileName)
+		s.fileDAHsMu.Unlock()
 
-		// delete the ttl file
-		if err = os.Remove(fileName + ".ttl"); err != nil {
+		// delete the DAH file
+		if err = os.Remove(fileName + ".dah"); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
 
-			return errors.NewStorageError("[File] failed to remove ttl file", err)
+			return errors.NewStorageError("[File][%s] failed to remove DAH file", fileName, err)
 		}
 
 		return nil
@@ -642,28 +678,26 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	}
 
 	// write bytes to file
-	ttl := time.Now().Add(newTTL).UTC()
-
-	ttlFilename := fileName + ".ttl"
-	ttlTempFilename := ttlFilename + ".tmp"
+	dahFilename := fileName + ".dah"
+	dahTempFilename := dahFilename + ".tmp"
 
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-		return errors.NewStorageError("failed to write ttl to file", err)
+	if err = os.WriteFile(dahTempFilename, []byte(strconv.FormatUint(uint64(newDAH), 10)), 0644); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write DAH to file", dahTempFilename, err)
 	}
 
-	if err = os.Rename(ttlTempFilename, ttlFilename); err != nil {
-		return errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
+	if err = os.Rename(dahTempFilename, dahFilename); err != nil {
+		return errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
 	}
 
-	s.fileTTLsMu.Lock()
-	s.fileTTLs[fileName] = ttl
-	s.fileTTLsMu.Unlock()
+	s.fileDAHsMu.Lock()
+	s.fileDAHs[fileName] = newDAH
+	s.fileDAHsMu.Unlock()
 
 	return nil
 }
 
-func (s *File) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+func (s *File) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key)
@@ -671,24 +705,27 @@ func (s *File) GetTTL(ctx context.Context, key []byte, opts ...options.FileOptio
 		return 0, err
 	}
 
+	// Check if the file (not the DAH file) exists
 	exists, err := s.Exists(ctx, key, opts...)
 	if err != nil {
 		return 0, err
 	}
 
+	// If the file doesn't exist, why are we trying to get the DAH?  Return an error
 	if !exists {
 		return 0, errors.ErrNotFound
 	}
 
-	s.fileTTLsMu.Lock()
-	ttl, ok := s.fileTTLs[fileName]
-	s.fileTTLsMu.Unlock()
+	// Get the DAH from the map
+	s.fileDAHsMu.Lock()
+	dah, ok := s.fileDAHs[fileName]
+	s.fileDAHsMu.Unlock()
 
 	if !ok {
 		return 0, nil
 	}
 
-	return time.Until(ttl), nil
+	return dah, nil
 }
 
 func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
@@ -701,18 +738,60 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileO
 
 	f, err := os.Open(fileName)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.ErrNotFound
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file", fileName, err)
 		}
 
-		return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open file", fileName, err)
+		if s.persistSubDir != "" {
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return nil, err
+			}
+
+			f, err = os.Open(persistedFilename)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file in persist directory", persistedFilename, err)
+				}
+
+				if s.longtermClient != nil {
+					fileReader, err := s.longtermClient.GetIoReader(context.Background(), hash, opts...)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return nil, errors.ErrNotFound
+						}
+
+						return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
+					}
+
+					return helper.ReaderWithHeaderAndFooterRemoved(fileReader, merged.Header, merged.Footer)
+				}
+
+				return nil, errors.ErrNotFound
+			}
+		} else {
+			if s.longtermClient != nil {
+				fileReader, err := s.longtermClient.GetIoReader(context.Background(), hash, opts...)
+				if err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						return nil, errors.ErrNotFound
+					}
+
+					return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
+				}
+
+				return helper.ReaderWithHeaderAndFooterRemoved(fileReader, merged.Header, merged.Footer)
+			}
+
+			return nil, errors.ErrNotFound
+		}
 	}
 
 	return helper.ReaderWithHeaderAndFooterRemoved(f, merged.Header, merged.Footer)
 }
 
 func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	s.logger.Debugf("[File] Get: %s", filepath.Base(string(hash)))
 
 	merged := options.MergeOptions(s.options, opts)
 
@@ -723,11 +802,52 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) (
 
 	b, err := os.ReadFile(filename)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.ErrNotFound
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", filename, err)
 		}
 
-		return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", filename, err)
+		// If file not found in primary location, check persistent directory
+		if s.persistSubDir != "" {
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return nil, err
+			}
+
+			b, err = os.ReadFile(persistedFilename)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from persist file", persistedFilename, err)
+				}
+
+				// If longterm client is configured, try to get from longterm storage
+				if s.longtermClient != nil {
+					b, err = s.longtermClient.Get(context.Background(), hash, opts...)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return nil, errors.ErrNotFound
+						}
+
+						return nil, errors.NewStorageError("[File][Get] [%s] unable to open longterm storage file", filename, err)
+					}
+				} else {
+					return nil, errors.ErrNotFound
+				}
+			}
+		} else {
+			// If longterm client is configured but no persist directory, try longterm storage directly
+			if s.longtermClient != nil {
+				b, err = s.longtermClient.Get(context.Background(), hash, opts...)
+				if err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						return nil, errors.ErrNotFound
+					}
+
+					return nil, errors.NewStorageError("[File][Get] [%s] unable to open longterm storage file", filename, err)
+				}
+			} else {
+				return nil, errors.ErrNotFound
+			}
+		}
 	}
 
 	b, err = helper.BytesWithHeadAndFooterRemoved(b, merged.Header, merged.Footer)
@@ -774,7 +894,7 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 }
 
 func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
-	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
+	s.logger.Debugf("[File] Exists: %s", filepath.Base(string(hash)))
 
 	merged := options.MergeOptions(s.options, opts)
 
@@ -785,11 +905,58 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption
 
 	_, err = os.Stat(fileName)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
+		if !os.IsNotExist(err) {
+			return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from file", fileName, err)
 		}
 
-		return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from file", fileName, err)
+		// If file not found in primary location, check persistent directory
+		if s.persistSubDir != "" {
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return false, err
+			}
+
+			_, err = os.Stat(persistedFilename)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from persist file", persistedFilename, err)
+				}
+
+				// If longterm client is configured, check longterm storage
+				if s.longtermClient != nil {
+					exists, err := s.longtermClient.Exists(context.Background(), hash, opts...)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return false, nil
+						}
+
+						return false, errors.NewStorageError("[File][Exists] failed to read data from longterm storage file", err)
+					}
+
+					return exists, nil
+				}
+
+				return false, nil
+			}
+
+			return true, nil
+		} else {
+			// If longterm client is configured but no persist directory, check longterm storage directly
+			if s.longtermClient != nil {
+				exists, err := s.longtermClient.Exists(context.Background(), hash, opts...)
+				if err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						return false, nil
+					}
+
+					return false, errors.NewStorageError("[File][Exists] failed to read data from longterm storage file", err)
+				}
+
+				return exists, nil
+			}
+
+			return false, nil
+		}
 	}
 
 	return true, nil
@@ -805,8 +972,8 @@ func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) e
 		return err
 	}
 
-	// remove ttl file, if exists
-	_ = os.Remove(fileName + ".ttl")
+	// remove DAH file, if exists
+	_ = os.Remove(fileName + ".dah")
 
 	// remove checksum file, if exists
 	_ = os.Remove(fileName + checksumExtension)
@@ -817,7 +984,7 @@ func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) e
 func findFilesByExtension(root, ext string) ([]string, error) {
 	var a []string
 
-	err := filepath.WalkDir(root, func(s string, d fs.DirEntry, e error) error {
+	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
 		if e != nil {
 			return e
 		}
@@ -835,32 +1002,6 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 	return a, nil
 }
 
-func (s *File) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	merged := options.MergeOptions(s.options, opts)
-
-	if merged.Header == nil {
-		return nil, nil
-	}
-
-	fileName, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	f, err := os.Open(fileName)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.ErrNotFound
-		}
-
-		return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open file", fileName, err)
-	}
-
-	defer f.Close()
-
-	return helper.HeaderMetaData(f, len(merged.Header))
-}
-
 func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
 	merged := options.MergeOptions(s.options, opts)
 
@@ -874,15 +1015,99 @@ func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...optio
 	}
 
 	f, err := os.Open(fileName)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.ErrNotFound
-		}
+	if err == nil {
+		defer f.Close()
+		return helper.FooterMetaData(f, merged.Footer)
+	}
 
+	if !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open file", fileName, err)
 	}
 
-	defer f.Close()
+	if s.persistSubDir != "" {
+		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+		if err != nil {
+			return nil, err
+		}
 
-	return helper.FooterMetaData(f, merged.Footer)
+		f, err = os.Open(persistedFilename)
+		if err == nil {
+			defer f.Close()
+			return helper.FooterMetaData(f, merged.Footer)
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open persist file", persistedFilename, err)
+		}
+	}
+
+	if s.longtermClient != nil {
+		b, err := s.longtermClient.GetFooterMetaData(ctx, hash, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open longterm storage file", fileName, err)
+		}
+
+		return b, nil
+	}
+
+	return nil, errors.ErrNotFound
+}
+
+func (s *File) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	if merged.Header == nil {
+		return nil, nil
+	}
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(fileName)
+	if err == nil {
+		defer f.Close()
+		return helper.HeaderMetaData(f, len(merged.Header))
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open file", fileName, err)
+	}
+
+	if s.persistSubDir != "" {
+		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+		if err != nil {
+			return nil, err
+		}
+
+		f, err = os.Open(persistedFilename)
+		if err == nil {
+			defer f.Close()
+			return helper.HeaderMetaData(f, len(merged.Header))
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open persist file", persistedFilename, err)
+		}
+	}
+
+	if s.longtermClient != nil {
+		b, err := s.longtermClient.GetHeader(ctx, hash, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open longterm storage file", fileName, err)
+		}
+
+		return b, nil
+	}
+
+	return nil, errors.ErrNotFound
 }
