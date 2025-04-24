@@ -129,13 +129,16 @@ func createPostgresSchema(db *usql.DB) error {
 		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
         ,mined_set 	    BOOLEAN NOT NULL DEFAULT FALSE
         ,subtrees_set   BOOLEAN NOT NULL DEFAULT FALSE
-        ,peer_id	    VARCHAR(64) NOT NULL
+        ,peer_id	    TEXT NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
 	}
+
+	// change the blocks table peer_id column to TEXT, if it is not already
+	_, _ = db.Exec(`ALTER TABLE blocks ALTER COLUMN peer_id TYPE TEXT;`)
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
@@ -242,7 +245,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
 	    ,mined_set 	    BOOLEAN NOT NULL DEFAULT FALSE
         ,subtrees_set   BOOLEAN NOT NULL DEFAULT FALSE
-     	,peer_id	    VARCHAR(64) NOT NULL
+     	,peer_id	    TEXT NOT NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
