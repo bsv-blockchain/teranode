@@ -226,6 +226,6 @@ test/
 
 ## Other Resources
 
-- [QA Guide & Instructions for Functional Requirement Tests](../../test/README.md)
+- [QA Guide & Instructions for Functional Requirement Tests](../topics/functionalRequirementTests.md)
 - [Understanding The Testing Framework](../topics/understandingTheTestingFramework.md)
 - [Automated Testing How-To](../howto/automatedTestingHowTo.md)
