@@ -322,6 +322,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DHTProtocolID:      getString("p2p_dht_protocol_id", "", alternativeContext...),
 			DHTUsePrivate:      getBool("p2p_dht_use_private", false, alternativeContext...),
 			OptimiseRetries:    getBool("p2p_optimise_retries", false, alternativeContext...),
+			BanThreshold:       getInt("p2p_ban_threshold", 100, alternativeContext...),
+			BanDuration:        getDuration("p2p_ban_duration", 24*time.Hour),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

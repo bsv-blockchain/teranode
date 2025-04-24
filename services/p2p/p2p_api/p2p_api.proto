@@ -74,6 +74,15 @@ message ClearBannedResponse {
     bool ok = 1;
 }
   
+message AddBanScoreRequest {
+    string peer_id = 1;
+    string reason = 2;
+  }
+
+  message AddBanScoreResponse {
+    bool ok = 1;
+  }
+  
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -82,5 +91,6 @@ message ClearBannedResponse {
     rpc IsBanned(IsBannedRequest) returns (IsBannedResponse) {}
     rpc ListBanned(google.protobuf.Empty) returns (ListBannedResponse) {}
     rpc ClearBanned(google.protobuf.Empty) returns (ClearBannedResponse) {}
+    rpc AddBanScore(AddBanScoreRequest) returns (AddBanScoreResponse) {}
   }
   

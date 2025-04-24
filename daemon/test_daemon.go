@@ -456,6 +456,7 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
+
 			found := subtree.HasNode(hash)
 			if found {
 				txFoundMap[hash]++

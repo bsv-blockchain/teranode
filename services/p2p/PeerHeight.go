@@ -48,7 +48,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 		StaticPeers:     staticPeers,
 	}
 
-	peerConnection, err := NewP2PNode(logger, tSettings, config, nil)
+	peerConnection, err := NewP2PNode(context.Background(), logger, tSettings, config, nil)
 	if err != nil {
 		return nil, errors.NewServiceError("[PeerHeight] Error creating P2PNode", err)
 	}

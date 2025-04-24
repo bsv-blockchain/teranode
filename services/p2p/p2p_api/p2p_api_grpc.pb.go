@@ -26,6 +26,7 @@ const (
 	PeerService_IsBanned_FullMethodName    = "/p2p_api.PeerService/IsBanned"
 	PeerService_ListBanned_FullMethodName  = "/p2p_api.PeerService/ListBanned"
 	PeerService_ClearBanned_FullMethodName = "/p2p_api.PeerService/ClearBanned"
+	PeerService_AddBanScore_FullMethodName = "/p2p_api.PeerService/AddBanScore"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -40,6 +41,7 @@ type PeerServiceClient interface {
 	IsBanned(ctx context.Context, in *IsBannedRequest, opts ...grpc.CallOption) (*IsBannedResponse, error)
 	ListBanned(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListBannedResponse, error)
 	ClearBanned(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClearBannedResponse, error)
+	AddBanScore(ctx context.Context, in *AddBanScoreRequest, opts ...grpc.CallOption) (*AddBanScoreResponse, error)
 }
 
 type peerServiceClient struct {
@@ -110,6 +112,16 @@ func (c *peerServiceClient) ClearBanned(ctx context.Context, in *emptypb.Empty, 
 	return out, nil
 }
 
+func (c *peerServiceClient) AddBanScore(ctx context.Context, in *AddBanScoreRequest, opts ...grpc.CallOption) (*AddBanScoreResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddBanScoreResponse)
+	err := c.cc.Invoke(ctx, PeerService_AddBanScore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -122,6 +134,7 @@ type PeerServiceServer interface {
 	IsBanned(context.Context, *IsBannedRequest) (*IsBannedResponse, error)
 	ListBanned(context.Context, *emptypb.Empty) (*ListBannedResponse, error)
 	ClearBanned(context.Context, *emptypb.Empty) (*ClearBannedResponse, error)
+	AddBanScore(context.Context, *AddBanScoreRequest) (*AddBanScoreResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -149,6 +162,9 @@ func (UnimplementedPeerServiceServer) ListBanned(context.Context, *emptypb.Empty
 }
 func (UnimplementedPeerServiceServer) ClearBanned(context.Context, *emptypb.Empty) (*ClearBannedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClearBanned not implemented")
+}
+func (UnimplementedPeerServiceServer) AddBanScore(context.Context, *AddBanScoreRequest) (*AddBanScoreResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddBanScore not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -279,6 +295,24 @@ func _PeerService_ClearBanned_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_AddBanScore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddBanScoreRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).AddBanScore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_AddBanScore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).AddBanScore(ctx, req.(*AddBanScoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -309,6 +343,10 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearBanned",
 			Handler:    _PeerService_ClearBanned_Handler,
+		},
+		{
+			MethodName: "AddBanScore",
+			Handler:    _PeerService_AddBanScore_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

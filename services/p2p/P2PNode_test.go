@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libp2p/go-libp2p"
@@ -28,6 +28,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,7 +100,7 @@ func TestSendToPeer(t *testing.T) {
 			config1.Port = findAvailablePort(t)
 		}
 
-		node1, err = NewP2PNode(logger, tSettings, config1, nil)
+		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
 		if err == nil {
 			break
 		}
@@ -120,7 +121,7 @@ func TestSendToPeer(t *testing.T) {
 			config2.Port = findAvailablePort(t)
 		}
 
-		node2, err = NewP2PNode(logger, tSettings, config2, nil)
+		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
 		if err == nil {
 			break
 		}
@@ -282,12 +283,12 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 		StaticPeers:     []string{},
 	}
 
-	node1, err := NewP2PNode(logger, tSettings, config1, nil)
+	node1, err := NewP2PNode(context.Background(), logger, tSettings, config1, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	node2, err := NewP2PNode(logger, tSettings, config2, nil)
+	node2, err := NewP2PNode(context.Background(), logger, tSettings, config2, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -404,7 +405,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 
 		config1.Port = findAvailablePort(t)
 
-		node1, err = NewP2PNode(logger, tSettings, config1, nil)
+		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
 		if err == nil {
 			break
 		}
@@ -424,7 +425,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 
 		config2.Port = findAvailablePort(t)
 
-		node2, err = NewP2PNode(logger, tSettings, config2, nil)
+		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
 		if err == nil {
 			break
 		}
@@ -555,12 +556,12 @@ func TestSendToTopic(t *testing.T) {
 		StaticPeers:     []string{},
 	}
 
-	node1, err := NewP2PNode(logger, tSettings, config1, nil)
+	node1, err := NewP2PNode(context.Background(), logger, tSettings, config1, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	node2, err := NewP2PNode(logger, tSettings, config2, nil)
+	node2, err := NewP2PNode(context.Background(), logger, tSettings, config2, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -766,7 +767,7 @@ func TestStartStaticPeerConnector(t *testing.T) {
 					config.Port = findAvailablePort(t)
 				}
 
-				node, err = NewP2PNode(logger, tSettings, config, nil)
+				node, err = NewP2PNode(context.Background(), logger, tSettings, config, nil)
 				if err == nil {
 					break
 				}
@@ -871,7 +872,7 @@ func TestInitGossipSub(t *testing.T) {
 					config.Port = findAvailablePort(t)
 				}
 
-				node, err = NewP2PNode(logger, tSettings, config, nil)
+				node, err = NewP2PNode(context.Background(), logger, tSettings, config, nil)
 				if err == nil {
 					break
 				}
@@ -927,6 +928,7 @@ func TestDecodeHexEd25519PrivateKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get raw private key bytes - NOT protobuf-encoded
+	// This matches what decodeHexEd25519PrivateKey expects
 	privBytes, err := priv.Raw()
 	require.NoError(t, err)
 
@@ -1019,7 +1021,7 @@ func TestConnectedPeers(t *testing.T) {
 			config1.Port = findAvailablePort(t)
 		}
 
-		node1, err = NewP2PNode(logger, tSettings, config1, nil)
+		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
 		if err == nil {
 			break
 		}
@@ -1040,7 +1042,7 @@ func TestConnectedPeers(t *testing.T) {
 			config2.Port = findAvailablePort(t)
 		}
 
-		node2, err = NewP2PNode(logger, tSettings, config2, nil)
+		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
 		if err == nil {
 			break
 		}
@@ -1212,7 +1214,7 @@ func TestAtomicMetrics(t *testing.T) {
 		UsePrivateDHT:   false,
 	}
 
-	node, err := NewP2PNode(logger, tSettings, config, nil)
+	node, err := NewP2PNode(context.Background(), logger, tSettings, config, nil)
 	require.NoError(t, err)
 
 	// Test initial values
@@ -1427,7 +1429,7 @@ func TestUsePrivateDHTConfig(t *testing.T) {
 		}
 
 		// We're just testing that the constructor acknowledges the private DHT config
-		_, err := NewP2PNode(logger, tSettings, config, nil)
+		_, err := NewP2PNode(context.Background(), logger, tSettings, config, nil)
 		t.Logf("NewP2PNode with UsePrivateDHT result: %v", err)
 	})
 }
@@ -2277,11 +2279,28 @@ func TestSendToPeerIsolated(t *testing.T) {
 }
 
 func TestGeneratePrivateKey(t *testing.T) {
-	// Create a temporary file path
-	tempFilePath := t.TempDir() + "/test_private_key"
+	// now saves to the state store
+	mockBlockchainClient := &blockchain.Mock{}
+
+	var savedKey []byte
+
+	mockBlockchainClient.On("SetState", mock.Anything, privateKeyKey, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		savedKey = append([]byte(nil), args.Get(2).([]byte)...) // copy
+	})
+
+	mockBlockchainClient.On("GetState", mock.Anything, privateKeyKey).Return(
+		func(args mock.Arguments) ([]byte, error) {
+			key := args.Get(1).(string)
+			if key != privateKeyKey || savedKey == nil {
+				return nil, errors.NewServiceUnavailableError("not found")
+			}
+
+			return append([]byte(nil), savedKey...), nil
+		},
+	)
 
 	// Call the function to generate and save the private key
-	privateKey, err := generatePrivateKey(tempFilePath)
+	privateKey, err := generatePrivateKey(context.Background(), mockBlockchainClient)
 	require.NoError(t, err, "generatePrivateKey should not return an error")
 	require.NotNil(t, privateKey, "privateKey should not be nil")
 
@@ -2289,13 +2308,11 @@ func TestGeneratePrivateKey(t *testing.T) {
 	_, ok := (*privateKey).(*crypto.Ed25519PrivateKey)
 	assert.True(t, ok, "privateKey should be an Ed25519PrivateKey")
 
-	// Verify the key was saved to the file
-	keyBytes, err := os.ReadFile(tempFilePath)
-	require.NoError(t, err, "should be able to read the private key file")
-	require.NotEmpty(t, keyBytes, "private key file should not be empty")
+	// Verify the key was saved to the state store
+	require.NotEmpty(t, savedKey, "private key should not be empty in the state store")
 
-	// Unmarshal the key from the file and compare with the returned key
-	unmarshaledKey, err := crypto.UnmarshalPrivateKey(keyBytes)
+	// Unmarshal the saved key and compare with the returned key
+	unmarshaledKey, err := crypto.UnmarshalPrivateKey(savedKey)
 	require.NoError(t, err, "should be able to unmarshal the private key")
 
 	// Compare the keys - they should match
@@ -2308,10 +2325,6 @@ func TestGeneratePrivateKey(t *testing.T) {
 	// Verify the public key can be derived
 	pubKey := (*privateKey).GetPublic()
 	require.NotNil(t, pubKey, "should be able to derive public key")
-
-	// Clean up - not strictly necessary with t.TempDir() but good practice
-	err = os.Remove(tempFilePath)
-	assert.NoError(t, err, "should be able to remove the temporary file")
 }
 
 func TestPeerDiscoveryFiltering(t *testing.T) {

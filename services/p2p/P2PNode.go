@@ -7,16 +7,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -29,11 +29,13 @@ import (
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-const errorCreatingDhtMessage = "[P2PNode] error creating DHT"
+const (
+	errorCreatingDhtMessage = "[P2PNode] error creating DHT"
+	privateKeyKey           = "p2p.privateKey"
+)
 
 // P2PNodeI defines the interface for P2P node functionality.
 // This interface abstracts the concrete implementation to allow for better testability.
@@ -64,6 +66,8 @@ type P2PNodeI interface {
 	GetProcessName() string
 	UpdateBytesReceived(bytesCount uint64)
 	UpdateLastReceived()
+
+	GetPeerIPs(peerID peer.ID) []string
 }
 
 type P2PNode struct {
@@ -99,7 +103,7 @@ type P2PConfig struct {
 	StaticPeers        []string
 }
 
-func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig, blocksKafkaProducerClient kafka.KafkaAsyncProducerI) (*P2PNode, error) {
+func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig, blockchainClient blockchain.ClientI) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var (
@@ -109,12 +113,10 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 
 	// If no private key is provided in the configuration, attempt to read or generate one
 	if config.PrivateKey == "" {
-		privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
-
-		pk, err = readPrivateKey(privateKeyFilename)
+		pk, err = readPrivateKey(ctx, blockchainClient)
 		if err != nil {
 			// If reading fails, attempt to generate a new private key
-			pk, err = generatePrivateKey(privateKeyFilename)
+			pk, err = generatePrivateKey(ctx, blockchainClient)
 			if err != nil {
 				return nil, errors.NewConfigurationError("[P2PNode] error generating private key", err)
 			}
@@ -148,36 +150,11 @@ func NewP2PNode(logger ulogger.Logger, tSettings *settings.Settings, config P2PC
 		}
 
 		// If advertise addresses are specified, add them to the options
-		if len(config.AdvertiseAddresses) > 0 {
-			advertiseMultiAddresses := []multiaddr.Multiaddr{}
-
-			for _, addr := range config.AdvertiseAddresses {
-				var maddr multiaddr.Multiaddr
-
-				var err error
-
-				// Try to parse as IP address first
-				if net.ParseIP(addr) != nil {
-					// It's a valid IP address
-					maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
-				} else {
-					// Assume it's a DNS name
-					maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", addr, config.Port))
-				}
-
-				if err != nil {
-					logger.Warnf("[P2PNode] invalid advertise address: %s, error: %v", addr, err)
-					continue
-				}
-
-				advertiseMultiAddresses = append(advertiseMultiAddresses, maddr)
-			}
-
-			if len(advertiseMultiAddresses) > 0 {
-				opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-					return advertiseMultiAddresses
-				}))
-			}
+		addrsToAdvertise := buildAdvertiseMultiAddrs(config.AdvertiseAddresses, config.Port)
+		if len(addrsToAdvertise) > 0 {
+			opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+				return addrsToAdvertise
+			}))
 		}
 
 		h, err = libp2p.New(opts...)
@@ -242,37 +219,11 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 	}
 
 	// If advertise addresses are specified, add them to the options
-	if len(config.AdvertiseAddresses) > 0 {
-		advertiseMultiAddresses := []multiaddr.Multiaddr{}
-
-		for _, addr := range config.AdvertiseAddresses {
-			var maddr multiaddr.Multiaddr
-
-			var err error
-
-			// Try to parse as IP address first
-			if net.ParseIP(addr) != nil {
-				// It's a valid IP address
-				maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
-			} else {
-				// Assume it's a DNS name
-				maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", addr, config.Port))
-			}
-
-			if err != nil {
-				// Use fmt.Printf instead of logger since we don't have access to the logger instance here
-				fmt.Printf("[P2PNode] invalid advertise address for private network: %s, error: %v\n", addr, err)
-				continue
-			}
-
-			advertiseMultiAddresses = append(advertiseMultiAddresses, maddr)
-		}
-
-		if len(advertiseMultiAddresses) > 0 {
-			opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-				return advertiseMultiAddresses
-			}))
-		}
+	addrsToAdvertise := buildAdvertiseMultiAddrs(config.AdvertiseAddresses, config.Port)
+	if len(addrsToAdvertise) > 0 {
+		opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			return addrsToAdvertise
+		}))
 	}
 
 	h, err = libp2p.New(opts...)
@@ -281,6 +232,47 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 	}
 
 	return h, nil
+}
+
+// buildAdvertiseMultiAddrs constructs multiaddrs from host strings with optional ports.
+// logs warnings via fmt.Printf.
+func buildAdvertiseMultiAddrs(addrs []string, defaultPort int) []multiaddr.Multiaddr {
+	result := make([]multiaddr.Multiaddr, 0, len(addrs))
+
+	for _, addr := range addrs {
+		hostStr := addr
+		portNum := defaultPort
+
+		if h, p, err := net.SplitHostPort(addr); err == nil {
+			hostStr = h
+
+			if pi, err2 := strconv.Atoi(p); err2 != nil {
+				fmt.Printf("[P2PNode] invalid port in advertise address: %s, error: %v\n", addr, err2)
+				continue
+			} else {
+				portNum = pi
+			}
+		}
+
+		var maddr multiaddr.Multiaddr
+
+		var err error
+
+		if net.ParseIP(hostStr) != nil {
+			maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", hostStr, portNum))
+		} else {
+			maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", hostStr, portNum))
+		}
+
+		if err != nil {
+			fmt.Printf("[P2PNode] invalid advertise address: %s, error: %v\n", addr, err)
+			continue
+		}
+
+		result = append(result, maddr)
+	}
+
+	return result
 }
 
 func (s *P2PNode) startStaticPeerConnector(ctx context.Context) {
@@ -528,7 +520,7 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 	return nil
 }
 
-func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
+func generatePrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
 	// Generate a new key pair
 	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
 	if err != nil {
@@ -539,18 +531,24 @@ func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Save private key to a file
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less
-	err = os.WriteFile(privateKeyFilename, privBytes, 0644)
-	if err != nil {
-		return nil, err
+
+	if blockchainClient != nil {
+		// save the private key to the state store
+		if err := blockchainClient.SetState(ctx, privateKeyKey, privBytes); err != nil {
+			return nil, err
+		}
 	}
 
 	return &priv, nil
 }
-func readPrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
-	// Read private key from a file
-	privBytes, err := os.ReadFile(privateKeyFilename)
+
+func readPrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
+	// Read private key from the state store
+	if blockchainClient == nil {
+		return nil, errors.NewServiceError("error reading private key", nil)
+	}
+
+	privBytes, err := blockchainClient.GetState(ctx, privateKeyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1087,4 +1085,33 @@ func (s *P2PNode) UpdateBytesReceived(bytesCount uint64) {
 
 func (s *P2PNode) UpdateLastReceived() {
 	atomic.StoreInt64(&s.lastRecv, time.Now().Unix())
+}
+
+func (s *P2PNode) GetPeerIPs(peerID peer.ID) []string {
+	var ips []string
+
+	addrs := s.host.Peerstore().Addrs(peerID)
+	for _, addr := range addrs {
+		ip := extractIPFromMultiaddr(addr)
+		if ip != "" {
+			ips = append(ips, ip)
+		}
+	}
+
+	return ips
+}
+
+func extractIPFromMultiaddr(maddr multiaddr.Multiaddr) string {
+	str := maddr.String()
+
+	parts := strings.Split(str, "/")
+	for i, part := range parts {
+		if part == "ip4" || part == "ip6" {
+			if i+1 < len(parts) {
+				return parts[i+1]
+			}
+		}
+	}
+
+	return ""
 }

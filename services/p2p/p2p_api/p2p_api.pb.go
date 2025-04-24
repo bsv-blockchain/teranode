@@ -678,6 +678,102 @@ func (x *ClearBannedResponse) GetOk() bool {
 	return false
 }
 
+type AddBanScoreRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddBanScoreRequest) Reset() {
+	*x = AddBanScoreRequest{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddBanScoreRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddBanScoreRequest) ProtoMessage() {}
+
+func (x *AddBanScoreRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddBanScoreRequest.ProtoReflect.Descriptor instead.
+func (*AddBanScoreRequest) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AddBanScoreRequest) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+func (x *AddBanScoreRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type AddBanScoreResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddBanScoreResponse) Reset() {
+	*x = AddBanScoreResponse{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddBanScoreResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddBanScoreResponse) ProtoMessage() {}
+
+func (x *AddBanScoreResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddBanScoreResponse.ProtoReflect.Descriptor instead.
+func (*AddBanScoreResponse) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AddBanScoreResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 var File_services_p2p_p2p_api_p2p_api_proto protoreflect.FileDescriptor
 
 const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
@@ -736,7 +832,12 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x12ListBannedResponse\x12\x16\n" +
 	"\x06banned\x18\x01 \x03(\tR\x06banned\"%\n" +
 	"\x13ClearBannedResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xa3\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"E\n" +
+	"\x12AddBanScoreRequest\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"%\n" +
+	"\x13AddBanScoreResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xef\x03\n" +
 	"\vPeerService\x12?\n" +
 	"\bGetPeers\x12\x16.google.protobuf.Empty\x1a\x19.p2p_api.GetPeersResponse\"\x00\x12>\n" +
 	"\aBanPeer\x12\x17.p2p_api.BanPeerRequest\x1a\x18.p2p_api.BanPeerResponse\"\x00\x12D\n" +
@@ -744,7 +845,8 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\bIsBanned\x12\x18.p2p_api.IsBannedRequest\x1a\x19.p2p_api.IsBannedResponse\"\x00\x12C\n" +
 	"\n" +
 	"ListBanned\x12\x16.google.protobuf.Empty\x1a\x1b.p2p_api.ListBannedResponse\"\x00\x12E\n" +
-	"\vClearBanned\x12\x16.google.protobuf.Empty\x1a\x1c.p2p_api.ClearBannedResponse\"\x00B\fZ\n" +
+	"\vClearBanned\x12\x16.google.protobuf.Empty\x1a\x1c.p2p_api.ClearBannedResponse\"\x00\x12J\n" +
+	"\vAddBanScore\x12\x1b.p2p_api.AddBanScoreRequest\x1a\x1c.p2p_api.AddBanScoreResponse\"\x00B\fZ\n" +
 	"./;p2p_apib\x06proto3"
 
 var (
@@ -759,7 +861,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP() []byte {
 	return file_services_p2p_p2p_api_p2p_api_proto_rawDescData
 }
 
-var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*Peer)(nil),                // 0: p2p_api.Peer
 	(*GetPeersResponse)(nil),    // 1: p2p_api.GetPeersResponse
@@ -771,24 +873,28 @@ var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*IsBannedResponse)(nil),    // 7: p2p_api.IsBannedResponse
 	(*ListBannedResponse)(nil),  // 8: p2p_api.ListBannedResponse
 	(*ClearBannedResponse)(nil), // 9: p2p_api.ClearBannedResponse
-	(*emptypb.Empty)(nil),       // 10: google.protobuf.Empty
+	(*AddBanScoreRequest)(nil),  // 10: p2p_api.AddBanScoreRequest
+	(*AddBanScoreResponse)(nil), // 11: p2p_api.AddBanScoreResponse
+	(*emptypb.Empty)(nil),       // 12: google.protobuf.Empty
 }
 var file_services_p2p_p2p_api_p2p_api_proto_depIdxs = []int32{
 	0,  // 0: p2p_api.GetPeersResponse.peers:type_name -> p2p_api.Peer
-	10, // 1: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
+	12, // 1: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
 	2,  // 2: p2p_api.PeerService.BanPeer:input_type -> p2p_api.BanPeerRequest
 	4,  // 3: p2p_api.PeerService.UnbanPeer:input_type -> p2p_api.UnbanPeerRequest
 	6,  // 4: p2p_api.PeerService.IsBanned:input_type -> p2p_api.IsBannedRequest
-	10, // 5: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
-	10, // 6: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
-	1,  // 7: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
-	3,  // 8: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
-	5,  // 9: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
-	7,  // 10: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
-	8,  // 11: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
-	9,  // 12: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
-	7,  // [7:13] is the sub-list for method output_type
-	1,  // [1:7] is the sub-list for method input_type
+	12, // 5: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
+	12, // 6: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
+	10, // 7: p2p_api.PeerService.AddBanScore:input_type -> p2p_api.AddBanScoreRequest
+	1,  // 8: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
+	3,  // 9: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
+	5,  // 10: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
+	7,  // 11: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
+	8,  // 12: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
+	9,  // 13: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
+	11, // 14: p2p_api.PeerService.AddBanScore:output_type -> p2p_api.AddBanScoreResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name
@@ -805,7 +911,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_p2p_p2p_api_p2p_api_proto_rawDesc), len(file_services_p2p_p2p_api_p2p_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -318,6 +318,9 @@ type P2PSettings struct {
 	DHTProtocolID   string
 	DHTUsePrivate   bool
 	OptimiseRetries bool
+
+	BanThreshold int
+	BanDuration  time.Duration
 }
 
 type CoinbaseSettings struct {

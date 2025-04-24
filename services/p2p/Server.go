@@ -57,6 +57,7 @@ type Server struct {
 	blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
 	banList                       BanListI                  // List of banned peers
 	banChan                       chan BanEvent             // Channel for ban events
+	banManager                    *PeerBanManager           // Manager for peer banning
 	bestBlockMessageReceived      atomic.Bool               // Flag to indicate if best block message has been processed
 	gCtx                          context.Context
 	blockTopicName                string
@@ -147,20 +148,21 @@ func NewServer(
 		StaticPeers:        staticPeers,
 	}
 
-	p2pNode, err := NewP2PNode(logger, tSettings, config, blocksKafkaProducerClient)
+	p2pNode, err := NewP2PNode(ctx, logger, tSettings, config, blockchainClient)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}
 
 	p2pServer := &Server{
-		P2PNode:                       p2pNode,
-		logger:                        logger,
-		settings:                      tSettings,
-		bitcoinProtocolID:             "teranode/bitcoin/1.0.0",
-		notificationCh:                make(chan *notificationMsg),
-		blockchainClient:              blockchainClient,
-		banList:                       banlist,
-		banChan:                       banChan,
+		P2PNode:           p2pNode,
+		logger:            logger,
+		settings:          tSettings,
+		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
+		notificationCh:    make(chan *notificationMsg),
+		blockchainClient:  blockchainClient,
+		banList:           banlist,
+		banChan:           banChan,
+
 		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
 		subtreeKafkaProducerClient:    subtreeKafkaProducerClient,
 		blocksKafkaProducerClient:     blocksKafkaProducerClient,
@@ -172,6 +174,8 @@ func NewServer(
 		miningOnTopicName:             fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
 		rejectedTxTopicName:           fmt.Sprintf("%s-%s", topicPrefix, rtn),
 	}
+
+	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
 	return p2pServer, nil
 }
@@ -942,6 +946,11 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 	return &p2p_api.ClearBannedResponse{Ok: true}, nil
 }
 
+func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
+	s.banManager.AddScore(req.PeerId, ReasonInvalidSubtree) // todo: add reason dynamically
+	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
+}
+
 // contains checks if a slice of strings contains a specific string.
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
@@ -1067,4 +1076,37 @@ func (s *Server) resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, 
 	}
 
 	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no IP address found in resolved multiaddr %s", dnsAddr))
+}
+
+// myBanEventHandler implements BanEventHandler for the Server.
+type myBanEventHandler struct {
+	server *Server
+}
+
+// Ensure Server implements BanEventHandler
+func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason string) {
+	h.server.logger.Infof("Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
+	// get the ip for the peer id
+	pid, err := peer.Decode(peerID)
+	if err != nil {
+		h.server.logger.Errorf("Failed to decode peer ID %s: %v", peerID, err)
+		return
+	}
+
+	ids := h.server.P2PNode.GetPeerIPs(pid)
+
+	// add to ban list
+	for _, id := range ids {
+		if h.server.banList != nil {
+			if err := h.server.banList.Add(context.Background(), id, until); err != nil {
+				h.server.logger.Errorf("Failed to add peer %s to ban list: %v", id, err)
+			}
+		}
+	}
+
+	if h.server.P2PNode != nil {
+		if err := h.server.P2PNode.DisconnectPeer(context.Background(), pid); err != nil {
+			h.server.logger.Warnf("Failed to disconnect banned peer %s: %v", peerID, err)
+		}
+	}
 }

@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	baseURL         = "http://test.com"
-	shortTimeout    = 50 * time.Millisecond
-	standardTimeout = 500 * time.Millisecond
-	extendedTimeout = time.Second
-	testMessage     = "test message"
+	baseURL           = "http://test.com"
+	shortTimeout      = 50 * time.Millisecond
+	standardTimeout   = 500 * time.Millisecond
+	extendedTimeout   = time.Second
+	testMessage       = "test message"
 	errClientNotAdded = "Client channel not added to clientChannels"
 )
 

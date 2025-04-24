@@ -168,6 +168,12 @@ func (m *MockServerP2PNode) UpdateLastReceived() {
 	m.Called()
 }
 
+// GetPeerIPs mocks the GetPeerIPs method
+func (m *MockServerP2PNode) GetPeerIPs(pid peer.ID) []string {
+	args := m.Called(pid)
+	return args.Get(0).([]string)
+}
+
 // MockBanList is a mock implementation of the BanListI for testing
 type MockBanList struct {
 	mock.Mock
@@ -320,6 +326,7 @@ func TestGetIPFromMultiaddr(t *testing.T) {
 
 				return // Skip further testing as we can't create a valid multiaddr
 			}
+
 			require.NoError(t, err)
 
 			ip, err := s.getIPFromMultiaddr(ctx, maddr)
