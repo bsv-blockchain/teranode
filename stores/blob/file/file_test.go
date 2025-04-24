@@ -653,6 +653,7 @@ func TestFileTTLUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		require.Equal(t, time.Duration(0), ttl)
 	})
 }
+
 func TestFileSetWithHashPrefix(t *testing.T) {
 	u, err := url.Parse("file:///data/subtreestore?hashPrefix=2")
 	require.NoError(t, err)
@@ -904,7 +905,7 @@ func TestWithSHA256Checksum(t *testing.T) {
 			require.Equal(t, tt.data, data)
 
 			// Check SHA256 file
-			sha256Filename := filename + ".sha256"
+			sha256Filename := filename + checksumExtension
 			_, err = os.Stat(sha256Filename)
 
 			if tt.expectSHA256 {
@@ -972,7 +973,7 @@ func TestSetFromReaderWithSHA256(t *testing.T) {
 	require.Equal(t, testData, data)
 
 	// Verify SHA256 file
-	sha256Filename := filename + ".sha256"
+	sha256Filename := filename + checksumExtension
 	hashFileContent, err := os.ReadFile(sha256Filename)
 	require.NoError(t, err)
 
@@ -1032,7 +1033,7 @@ func TestSHA256WithHeaderFooter(t *testing.T) {
 	require.Equal(t, expectedContent, fileContent)
 
 	// Verify SHA256 file
-	sha256Filename := filename + ".sha256"
+	sha256Filename := filename + checksumExtension
 	hashFileContent, err := os.ReadFile(sha256Filename)
 	require.NoError(t, err)
 
@@ -1689,7 +1690,7 @@ func TestFileGetAndSetTTL(t *testing.T) {
 		key := []byte("updating-key-2")
 		content := []byte("test content")
 
-		// Set content with initial short TTL
+		// Set initial content with TTL
 		initialTTL := 1 * time.Second
 		err = f.Set(context.Background(), key, content, options.WithTTL(initialTTL))
 		require.NoError(t, err)
@@ -1840,7 +1841,7 @@ func TestFileCleanExpiredFiles(t *testing.T) {
 				require.False(t, exists, "expired file should be removed")
 
 				_, err = os.Stat(filename + ".ttl")
-				require.True(t, os.IsNotExist(err), "TTL file should be removed")
+				require.True(t, os.IsNotExist(err), "TTL file should be removed when content file is missing")
 			}
 		}
 	})
@@ -2057,4 +2058,85 @@ func TestFileGetNonExistent(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 		require.Nil(t, reader)
 	})
+}
+
+func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
+	// Get a temporary directory
+	tempDir, err := os.MkdirTemp("", "test-checksum-delete-on-ttl-expiry")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u, options.WithSHA256Checksum())
+	require.NoError(t, err)
+
+	key := "test-key-ttl-checksum"
+	content := []byte("test content")
+
+	// Put a file with checksum
+	err = f.Set(context.Background(), []byte(key), content, options.WithTTL(100*time.Millisecond))
+	require.NoError(t, err)
+
+	// Construct filename
+	merged := options.MergeOptions(f.options, []options.FileOption{options.WithFileExtension("sha256")})
+	filename, err := merged.ConstructFilename(tempDir, []byte(key))
+	require.NoError(t, err)
+
+	// Verify the checksum file exists
+	_, err = os.Stat(filename)
+	require.NoError(t, err, "checksum file should exist")
+
+	// Wait for TTL expiry
+	time.Sleep(100 * time.Millisecond)
+
+	// run cleaner - don't wait for cleaner to run automatically
+	cleanExpiredFiles(f)
+
+	// Check if the file has expired
+	exists, err := f.Exists(context.Background(), []byte(key))
+	require.NoError(t, err)
+	require.False(t, exists, "file should be expired due to TTL")
+
+	// Check if checksum file still exists - this is the bug
+	_, err = os.Stat(filename)
+	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file has expired")
+}
+
+func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
+	// Get a temporary directory
+	tempDir, err := os.MkdirTemp("", "test-checksum-delete-on-delete")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u, options.WithSHA256Checksum())
+	require.NoError(t, err)
+
+	key := "test-key-delete-checksum"
+	content := []byte("test content")
+
+	// Put a file with checksum
+	err = f.Set(context.Background(), []byte(key), content)
+	require.NoError(t, err)
+
+	// Construct filename
+	merged := options.MergeOptions(f.options, []options.FileOption{options.WithFileExtension("sha256")})
+	filename, err := merged.ConstructFilename(tempDir, []byte(key))
+	require.NoError(t, err)
+
+	// Verify the checksum file exists
+	_, err = os.Stat(filename)
+	require.NoError(t, err, "checksum file should exist")
+
+	// Delete the file
+	err = f.Del(context.Background(), []byte(key))
+	require.NoError(t, err, "file deletion should succeed")
+
+	// Check if checksum file still exists - this is the bug
+	_, err = os.Stat(filename)
+	require.True(t, os.IsNotExist(err), "Checksum file should be removed when content file is deleted")
 }

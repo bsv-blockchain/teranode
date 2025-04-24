@@ -25,6 +25,8 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+const checksumExtension = ".sha256"
+
 type File struct {
 	path        string
 	logger      ulogger.Logger
@@ -287,6 +289,10 @@ func removeFiles(s *File, fileName string) {
 	if err := os.Remove(fileName + ".ttl"); err != nil && !os.IsNotExist(err) {
 		s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
 	}
+
+	if err := os.Remove(fileName + checksumExtension); err != nil && !os.IsNotExist(err) {
+		s.logger.Warnf("[File] failed to remove checksum file: %s", fileName+checksumExtension)
+	}
 }
 
 func removeTTLFromMap(s *File, fileName string) {
@@ -462,7 +468,7 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 		hasher.Sum(nil),
 		base)
 
-	hashFilename := filename + ".sha256"
+	hashFilename := filename + checksumExtension
 	tmpHashFilename := hashFilename + ".tmp"
 
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
@@ -801,6 +807,9 @@ func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) e
 
 	// remove ttl file, if exists
 	_ = os.Remove(fileName + ".ttl")
+
+	// remove checksum file, if exists
+	_ = os.Remove(fileName + checksumExtension)
 
 	return os.Remove(fileName)
 }
