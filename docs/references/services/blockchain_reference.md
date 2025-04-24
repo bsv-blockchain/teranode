@@ -7,24 +7,24 @@
 ```go
 type Blockchain struct {
     blockchain_api.UnimplementedBlockchainAPIServer
-    addBlockChan                  chan *blockchain_api.AddBlockRequest
-    store                         blockchain_store.Store
-    logger                        ulogger.Logger
-    settings                      *settings.Settings
-    newSubscriptions              chan subscriber
-    deadSubscriptions             chan subscriber
-    subscribers                   map[subscriber]bool
-    subscribersMu                 sync.RWMutex
-    notifications                 chan *blockchain_api.Notification
-    newBlock                      chan struct{}
-    difficulty                    *Difficulty
-    blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI
-    kafkaChan                     chan *kafka.Message
-    stats                         *gocore.Stat
-    finiteStateMachine            *fsm.FSM
-    stateChangeTimestamp          time.Time
-    AppCtx                        context.Context
-    localTestStartState           string
+    addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
+    store                         blockchain_store.Store               // Storage interface for blockchain data
+    logger                        ulogger.Logger                       // Logger instance
+    settings                      *settings.Settings                   // Configuration settings
+    newSubscriptions              chan subscriber                      // Channel for new subscriptions
+    deadSubscriptions             chan subscriber                      // Channel for ended subscriptions
+    subscribers                   map[subscriber]bool                  // Active subscribers map
+    subscribersMu                 sync.RWMutex                         // Mutex for subscribers map
+    notifications                 chan *blockchain_api.Notification    // Channel for notifications
+    newBlock                      chan struct{}                        // Channel signaling new block events
+    difficulty                    *Difficulty                          // Difficulty calculation instance
+    blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI            // Kafka producer for final blocks
+    kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
+    stats                         *gocore.Stat                         // Statistics tracking
+    finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
+    stateChangeTimestamp          time.Time                            // Timestamp of last state change
+    AppCtx                        context.Context                      // Application context
+    localTestStartState           string                               // Initial state for testing
 }
 ```
 
@@ -34,9 +34,9 @@ The `Blockchain` type is the main structure for the blockchain server. It implem
 
 ```go
 type subscriber struct {
-    subscription blockchain_api.BlockchainAPI_SubscribeServer
-    source       string
-    done         chan struct{}
+    subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
+    source       string                                       // Source identifier of the subscription
+    done         chan struct{}                                // Channel to signal when subscription is done
 }
 ```
 
@@ -71,18 +71,18 @@ Performs a gRPC health check on the blockchain server.
 ### Init
 
 ```go
-func (b *Blockchain) Init(_ context.Context) error
+func (b *Blockchain) Init(ctx context.Context) error
 ```
 
-Initializes the blockchain server, setting up the finite state machine.
+Initializes the blockchain server, setting up the finite state machine and restoring the blockchain state from persistent storage.
 
 ### Start
 
 ```go
-func (b *Blockchain) Start(ctx context.Context) error
+func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Starts the blockchain server, setting up Kafka producers, HTTP servers, and gRPC servers.
+Starts the blockchain server, setting up Kafka producers, HTTP servers, and subscription handling. Closes the readyCh channel once the service is ready to process requests.
 
 ### Stop
 

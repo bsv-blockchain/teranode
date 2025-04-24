@@ -6,17 +6,38 @@
 
 ```go
 type BlockAssembly struct {
+    // UnimplementedBlockAssemblyAPIServer provides default implementations for gRPC methods
     blockassembly_api.UnimplementedBlockAssemblyAPIServer
-    blockAssembler        *BlockAssembler
-    logger                ulogger.Logger
-    stats                 *gocore.Stat
-    settings             *settings.Settings
-    blockchainClient      blockchain.ClientI
-    txStore               blob.Store
-    utxoStore             utxostore.Store
-    subtreeStore          blob.Store
-    jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
-    blockSubmissionChan   chan *BlockSubmissionRequest
+
+    // blockAssembler handles the core block assembly logic
+    blockAssembler *BlockAssembler
+
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // stats tracks operational statistics
+    stats *gocore.Stat
+
+    // settings contains configuration parameters
+    settings *settings.Settings
+
+    // blockchainClient interfaces with the blockchain
+    blockchainClient blockchain.ClientI
+
+    // txStore manages transaction storage
+    txStore blob.Store
+
+    // utxoStore manages UTXO storage
+    utxoStore utxostore.Store
+
+    // subtreeStore manages subtree storage
+    subtreeStore blob.Store
+
+    // jobStore caches mining jobs with TTL
+    jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+
+    // blockSubmissionChan handles block submission requests
+    blockSubmissionChan chan *BlockSubmissionRequest
 }
 ```
 
@@ -26,27 +47,68 @@ The `BlockAssembly` type is the main structure for the block assembly service. I
 
 ```go
 type BlockAssembler struct {
-    logger                 ulogger.Logger
-    settings               *settings.Settings
-    utxoStore              utxo.Store
-    subtreeStore           blob.Store
-    blockchainClient       blockchain.ClientI
-    subtreeProcessor       *subtreeprocessor.SubtreeProcessor
-    miningCandidateCh      chan chan *miningCandidateResponse
-    bestBlockHeader        atomic.Pointer[model.BlockHeader]
-    bestBlockHeight        atomic.Uint32
-    currentChain           []*model.BlockHeader
-    currentChainMapIDs     map[uint32]struct{}
-    currentChainMapMu      sync.RWMutex
+    // logger provides logging functionality for the assembler
+    logger ulogger.Logger
+
+    // stats tracks operational statistics for monitoring and debugging
+    stats *gocore.Stat
+
+    // settings contains configuration parameters for block assembly
+    settings *settings.Settings
+
+    // utxoStore manages the UTXO set storage and retrieval
+    utxoStore utxo.Store
+
+    // subtreeStore manages persistent storage of transaction subtrees
+    subtreeStore blob.Store
+
+    // blockchainClient interfaces with the blockchain for network operations
+    blockchainClient blockchain.ClientI
+
+    // subtreeProcessor handles the processing and organization of transaction subtrees
+    subtreeProcessor *subtreeprocessor.SubtreeProcessor
+
+    // miningCandidateCh coordinates requests for mining candidates
+    miningCandidateCh chan chan *miningCandidateResponse
+
+    // bestBlockHeader atomically stores the current best block header
+    bestBlockHeader atomic.Pointer[model.BlockHeader]
+
+    // bestBlockHeight atomically stores the current best block height
+    bestBlockHeight atomic.Uint32
+
+    // currentChain stores the current blockchain state
+    currentChain []*model.BlockHeader
+
+    // currentChainMap maps block hashes to their heights
+    currentChainMap map[chainhash.Hash]uint32
+
+    // currentChainMapIDs tracks block IDs in the current chain
+    currentChainMapIDs map[uint32]struct{}
+
+    // currentChainMapMu protects access to chain maps
+    currentChainMapMu sync.RWMutex
+
+    // blockchainSubscriptionCh receives blockchain notifications
     blockchainSubscriptionCh chan *blockchain.Notification
-    chainParams            *chaincfg.Params
-    difficultyAdjustment   bool
-    currentDifficulty      *model.NBit
-    defaultMiningNBits     *model.NBit
-    resetCh                chan struct{}
-    resetWaitCount         atomic.Int32
-    resetWaitTime          atomic.Int32
-    currentRunningState    atomic.Value
+
+    // currentDifficulty stores the current mining difficulty target
+    currentDifficulty atomic.Pointer[model.NBit]
+
+    // defaultMiningNBits stores the default mining difficulty
+    defaultMiningNBits *model.NBit
+
+    // resetCh handles reset requests for the assembler
+    resetCh chan struct{}
+
+    // resetWaitCount tracks the number of blocks to wait after reset
+    resetWaitCount atomic.Int32
+
+    // resetWaitDuration tracks the time to wait after reset
+    resetWaitDuration atomic.Int32
+
+    // currentRunningState tracks the current operational state
+    currentRunningState atomic.Value
 }
 ```
 
@@ -106,7 +168,7 @@ The `LockFreeQueue` type represents a lock-free FIFO queue for managing transact
 func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, utxoStore utxostore.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI) *BlockAssembly
 ```
 
-Creates a new instance of the `BlockAssembly` service.
+Creates a new instance of the `BlockAssembly` service with the specified dependencies and initializes Prometheus metrics.
 
 #### Health
 
@@ -114,7 +176,7 @@ Creates a new instance of the `BlockAssembly` service.
 func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the block assembly service.
+Performs health checks on the block assembly service. If checkLiveness is true, only performs basic liveness checks. Otherwise, performs readiness checks on all dependencies: BlockchainClient, FSM, SubtreeStore, TxStore, and UTXOStore.
 
 #### HealthGRPC
 
@@ -130,15 +192,15 @@ Performs a gRPC health check on the block assembly service.
 func (ba *BlockAssembly) Init(ctx context.Context) (err error)
 ```
 
-Initializes the block assembly service.
+Initializes the block assembly service by creating a BlockAssembler instance, subscribing to blockchain notifications, and preparing for transaction processing.
 
 #### Start
 
 ```go
-func (ba *BlockAssembly) Start(ctx context.Context) (err error)
+func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 ```
 
-Starts the block assembly service.
+Starts the block assembly service, launches concurrent processing routines, and begins listening for blockchain notifications. The readyCh channel is closed once the service is ready to receive requests.
 
 #### Stop
 
@@ -146,7 +208,7 @@ Starts the block assembly service.
 func (ba *BlockAssembly) Stop(_ context.Context) error
 ```
 
-Stops the block assembly service.
+Gracefully shuts down the BlockAssembly service, stopping all internal processes and cleaning up resources.
 
 #### AddTx
 
@@ -175,10 +237,10 @@ Adds a batch of transactions to the block assembly process.
 #### GetMiningCandidate
 
 ```go
-func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error)
+func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassembly_api.GetMiningCandidateRequest) (*model.MiningCandidate, error)
 ```
 
-Retrieves a mining candidate for block assembly.
+Retrieves a candidate block for mining, containing all necessary information for miners to begin the mining process.
 
 #### SubmitMiningSolution
 
@@ -186,8 +248,7 @@ Retrieves a mining candidate for block assembly.
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error)
 ```
 
-Submits a mining solution for a block.
-
+Processes a mining solution submission. It validates the solution, creates a block, and adds it to the blockchain.
 
 #### DeDuplicateBlockAssembly
 

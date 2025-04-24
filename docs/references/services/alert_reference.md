@@ -6,15 +6,38 @@
 
 ```go
 type Server struct {
-alert_api.UnimplementedAlertAPIServer
-logger              ulogger.Logger
-settings           *settings.Settings
-stats              *gocore.Stat
-blockchainClient   blockchain.ClientI
-utxoStore          utxo.Store
-blockassemblyClient *blockassembly.Client
-appConfig          *config.Config
-p2pServer          *p2p.Server
+    // UnimplementedAlertAPIServer is embedded for forward compatibility with the alert API
+    alert_api.UnimplementedAlertAPIServer
+
+    // logger handles all logging operations
+    logger ulogger.Logger
+
+    // settings contains the server configuration settings
+    settings *settings.Settings
+
+    // stats tracks server statistics
+    stats *gocore.Stat
+
+    // blockchainClient provides access to blockchain operations
+    blockchainClient blockchain.ClientI
+
+    // peerClient provides access to peer operations
+    peerClient peer.ClientI
+
+    // p2pClient provides access to p2p operations
+    p2pClient p2pservice.ClientI
+
+    // utxoStore manages UTXO operations
+    utxoStore utxo.Store
+
+    // blockassemblyClient handles block assembly operations
+    blockassemblyClient *blockassembly.Client
+
+    // appConfig contains alert system specific configuration
+    appConfig *config.Config
+
+    // p2pServer manages peer-to-peer communication
+    p2pServer *p2p.Server
 }
 ```
 
@@ -24,10 +47,26 @@ The `Server` type is the main structure for the Alert Service. It implements the
 
 ```go
 type Node struct {
-    logger              ulogger.Logger
-    blockchainClient    blockchain.ClientI
-    utxoStore           utxo.Store
+    // logger handles logging operations
+    logger ulogger.Logger
+
+    // blockchainClient provides access to blockchain operations
+    blockchainClient blockchain.ClientI
+
+    // utxoStore manages UTXO operations
+    utxoStore utxo.Store
+
+    // blockassemblyClient handles block assembly operations
     blockassemblyClient *blockassembly.Client
+
+    // peerClient handles peer operations
+    peerClient peer.ClientI
+
+    // p2pClient handles p2p operations
+    p2pClient p2p.ClientI
+
+    // settings contains node configuration
+    settings *settings.Settings
 }
 ```
 
@@ -40,7 +79,7 @@ The `Node` type represents a node in the network and provides methods for intera
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with the specified dependencies and initializes Prometheus metrics.
@@ -78,7 +117,7 @@ Initializes the Alert Service by loading configuration. Returns a configuration 
 #### Start
 
 ```go
-func (s *Server) Start(ctx context.Context) (err error)
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 ```
 
 Starts the Alert Service by:
@@ -100,7 +139,7 @@ Gracefully stops the Alert Service by closing all configurations and shutting do
 #### NewNodeConfig
 
 ```go
-func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client) config.NodeInterface
+func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface
 ```
 
 Creates a new instance of the `Node` with the specified dependencies.
@@ -138,7 +177,7 @@ func (n *Node) BanPeer(ctx context.Context, peer string) error
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error
 ```
 
-Methods for managing peer bans. Currently placeholder implementations.
+Methods for managing peer bans. BanPeer adds the peer's IP address to the ban list for both p2p and legacy peers for a duration of 100 years. UnbanPeer removes the peer from the ban list.
 
 #### Consensus Management
 

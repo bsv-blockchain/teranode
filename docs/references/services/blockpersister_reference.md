@@ -84,20 +84,23 @@ Initializes the Block Persister Service and Prometheus metrics.
 
 #### Start
 ```go
-func (u *Server) Start(ctx context.Context) error
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 Starts the Block Persister Service, including:
 - HTTP blob store server (if configured)
 - Block processing loop
 - State management
+- Signaling readiness through readyCh channel
 
 
 #### Stop
 
 ```go
-go func (u *Server) Stop(ctx context.Context) error
+func (u *Server) Stop(_ context.Context) error
 ```
+
+Gracefully shuts down the server.
 
 ### Block Processing
 

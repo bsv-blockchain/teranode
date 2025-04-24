@@ -6,37 +6,37 @@
 
 ```go
 type Server struct {
-   logger              ulogger.Logger
-   settings           *settings.Settings
-   utxoStore          utxo.Store
-   txStore            blob.Store
-   subtreeStore       blob.Store
-   blockPersisterStore blob.Store
-   httpAddr           string
-   httpServer         *httpimpl.HTTP
-   centrifugeAddr     string
-   centrifugeServer   *centrifuge_impl.Centrifuge
-   blockchainClient   blockchain.ClientI
+    logger              ulogger.Logger
+    settings            *settings.Settings
+    utxoStore           utxo.Store
+    txStore             blob.Store
+    subtreeStore        blob.Store
+    blockPersisterStore blob.Store
+    httpAddr            string
+    httpServer          *httpimpl.HTTP
+    centrifugeAddr      string
+    centrifugeServer    *centrifuge_impl.Centrifuge
+    blockchainClient    blockchain.ClientI
 }
 ```
 
-The `Server` type is the main structure for the Asset Service. It contains various components for managing stores, HTTP and Centrifuge servers, and blockchain interactions.
+The `Server` type is the main structure for the Asset Service. It coordinates between different storage backends and provides both HTTP and Centrifuge interfaces for accessing blockchain data.
 
 ### Repository
 
 ```go
 type Repository struct {
-   logger              ulogger.Logger
-   settings            *settings.Settings
-   UtxoStore           utxo.Store
-   TxStore             blob.Store
-   SubtreeStore        blob.Store
-   BlockPersisterStore blob.Store
-   BlockchainClient    blockchain.ClientI
+    logger              ulogger.Logger
+    settings            *settings.Settings
+    UtxoStore           utxo.Store
+    TxStore             blob.Store
+    SubtreeStore        blob.Store
+    BlockPersisterStore blob.Store
+    BlockchainClient    blockchain.ClientI
 }
 ```
 
-The `Repository` type provides methods for interacting with various data stores and services.
+The `Repository` type provides access to blockchain data storage and retrieval operations. It implements the necessary interfaces to interact with various data stores and blockchain clients.
 
 ### HTTP
 
@@ -62,7 +62,7 @@ The `HTTP` type represents the HTTP server for the Asset Service.
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
 ```
 
-Creates a new instance of the `Server`.
+Creates a new instance of the `Server` with the provided dependencies. It initializes the server with necessary stores and clients for handling blockchain data.
 
 #### Health
 
@@ -70,7 +70,7 @@ Creates a new instance of the `Server`.
 func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the Asset Service.
+Performs health checks on the server and its dependencies. It supports both liveness and readiness checks based on the checkLiveness parameter.
 
 #### Init
 
@@ -78,15 +78,15 @@ Performs health checks on the Asset Service.
 func (v *Server) Init(ctx context.Context) (err error)
 ```
 
-Initializes the Asset Service.
+Initializes the server by setting up HTTP and Centrifuge endpoints. It configures the necessary components based on the provided configuration.
 
 #### Start
 
 ```go
-func (v *Server) Start(ctx context.Context) error
+func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Starts the Asset Service.
+Starts the Asset Service, launching HTTP and Centrifuge servers if configured. It also handles FSM state restoration if required. The readyCh channel is closed when the service is ready to receive requests.
 
 #### Stop
 
@@ -94,7 +94,7 @@ Starts the Asset Service.
 func (v *Server) Stop(ctx context.Context) error
 ```
 
-Stops the Asset Service.
+Gracefully shuts down the server and its components, including HTTP and Centrifuge servers.
 
 ### Repository
 
@@ -104,7 +104,7 @@ Stops the Asset Service.
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
 ```
 
-Creates a new instance of the `Repository`.
+Creates a new instance of the `Repository` with the provided dependencies. It initializes connections to various data stores for blockchain data access.
 
 #### GetTransaction
 

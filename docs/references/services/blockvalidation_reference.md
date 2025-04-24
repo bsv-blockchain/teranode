@@ -6,21 +6,61 @@
 
 ```go
 type Server struct {
+    // UnimplementedBlockValidationAPIServer provides default implementations of gRPC methods
     blockvalidation_api.UnimplementedBlockValidationAPIServer
-    logger               ulogger.Logger
-    settings            *settings.Settings
-    blockchainClient    blockchain.ClientI
-    subtreeStore        blob.Store
-    txStore             blob.Store
-    utxoStore           utxo.Store
-    validatorClient     validator.Interface
-    blockFoundCh        chan processBlockFound
-    catchupCh           chan processBlockCatchup
-    blockValidation     *BlockValidation
-    SetTxMetaQ          *util.LockFreeQ[[][]byte]
-    kafkaConsumerClient kafka.KafkaConsumerGroupI
+
+    // logger provides structured logging with contextual information
+    logger                ulogger.Logger
+
+    // settings contains operational parameters for block validation,
+    // including timeouts, concurrency limits, and feature flags
+    settings             *settings.Settings
+
+    // blockchainClient provides access to the blockchain state and operations
+    // like block storage, header retrieval, and chain reorganization
+    blockchainClient     blockchain.ClientI
+
+    // subtreeStore provides persistent storage for block subtrees,
+    // enabling efficient block organization and validation
+    subtreeStore         blob.Store
+
+    // txStore handles permanent storage of individual transactions,
+    // allowing retrieval of historical transaction data
+    txStore              blob.Store
+
+    // utxoStore manages the Unspent Transaction Output (UTXO) set,
+    // tracking available outputs for transaction validation
+    utxoStore            utxo.Store
+
+    // validatorClient handles transaction validation operations,
+    // ensuring each transaction follows network rules
+    validatorClient      validator.Interface
+
+    // blockFoundCh receives notifications of newly discovered blocks
+    // that need validation. This channel buffers requests when high load occurs.
+    blockFoundCh         chan processBlockFound
+
+    // catchupCh handles blocks that need processing during chain catchup operations.
+    // This channel is used when the node falls behind the chain tip.
+    catchupCh            chan processBlockCatchup
+
+    // blockValidation contains the core validation logic and state
+    blockValidation      *BlockValidation
+
+    // SetTxMetaQ provides a lock-free queue for handling transaction metadata
+    // operations asynchronously
+    SetTxMetaQ           *util.LockFreeQ[[][]byte]
+
+    // kafkaConsumerClient handles subscription to and consumption of
+    // Kafka messages for distributed coordination
+    kafkaConsumerClient  kafka.KafkaConsumerGroupI
+
+    // processSubtreeNotify caches subtree processing state to prevent duplicate
+    // processing of the same subtree from multiple miners
     processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
-    stats               *gocore.Stat
+
+    // stats tracks operational metrics for monitoring and troubleshooting
+    stats                *gocore.Stat
 }
 ```
 
@@ -30,27 +70,77 @@ The `Server` type is the main structure for the Block Validation Service. It imp
 
 ```go
 type BlockValidation struct {
+    // logger provides structured logging capabilities
     logger                             ulogger.Logger
+
+    // settings contains operational parameters and feature flags
     settings                           *settings.Settings
+
+    // blockchainClient interfaces with the blockchain for operations
     blockchainClient                   blockchain.ClientI
+
+    // subtreeStore provides persistent storage for block subtrees
     subtreeStore                       blob.Store
+
+    // subtreeTTL specifies how long subtrees should be retained
     subtreeTTL                         time.Duration
+
+    // txStore handles permanent storage of transactions
     txStore                            blob.Store
+
+    // utxoStore manages the UTXO set for transaction validation
     utxoStore                          utxo.Store
+
+    // recentBlocksBloomFilters maintains bloom filters for recent blocks
     recentBlocksBloomFilters           []*model.BlockBloomFilter
+
+    // recentBlocksBloomFiltersMu protects concurrent access to bloom filters
     recentBlocksBloomFiltersMu         sync.Mutex
+
+    // recentBlocksBloomFiltersExpiration defines bloom filter retention period
     recentBlocksBloomFiltersExpiration time.Duration
+
+    // validatorClient handles transaction validation operations
     validatorClient                    validator.Interface
-    subtreeValidationClient            subtreevalidation.Interface
-    subtreeDeDuplicator                *deduplicator.DeDuplicator
-    lastValidatedBlocks                *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
-    blockExists                        *expiringmap.ExpiringMap[chainhash.Hash, bool]
-    subtreeExists                      *expiringmap.ExpiringMap[chainhash.Hash, bool]
-    subtreeCount                       atomic.Int32
-    blockHashesCurrentlyValidated      *util.SwissMap
-    blockBloomFiltersBeingCreated      *util.SwissMap
-    bloomFilterStats                   *model.BloomStats
-    stats                              *gocore.Stat
+
+    // subtreeValidationClient manages subtree validation processes
+    subtreeValidationClient           subtreevalidation.Interface
+
+    // subtreeDeDuplicator prevents duplicate processing of subtrees
+    subtreeDeDuplicator              *DeDuplicator
+
+    // lastValidatedBlocks caches recently validated blocks
+    lastValidatedBlocks              *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
+
+    // blockExists tracks validated block hashes
+    blockExists                       *expiringmap.ExpiringMap[chainhash.Hash, bool]
+
+    // subtreeExists tracks validated subtree hashes
+    subtreeExists                     *expiringmap.ExpiringMap[chainhash.Hash, bool]
+
+    // subtreeCount tracks the number of subtrees being processed
+    subtreeCount                      atomic.Int32
+
+    // blockHashesCurrentlyValidated tracks blocks in validation process
+    blockHashesCurrentlyValidated    *util.SwissMap
+
+    // blockBloomFiltersBeingCreated tracks bloom filters being generated
+    blockBloomFiltersBeingCreated    *util.SwissMap
+
+    // bloomFilterStats collects statistics about bloom filter operations
+    bloomFilterStats                 *model.BloomStats
+
+    // setMinedChan receives block hashes that need to be marked as mined
+    setMinedChan                     chan *chainhash.Hash
+
+    // revalidateBlockChan receives blocks that need revalidation
+    revalidateBlockChan              chan revalidateBlockData
+
+    // stats tracks operational metrics for monitoring
+    stats                            *gocore.Stat
+
+    // lastUsedBaseURL stores the most recent source URL used for retrievals
+    lastUsedBaseURL                  string
 }
 ```
 
@@ -79,10 +169,43 @@ Performs comprehensive health checks:
 - Liveness checks when checkLiveness is true
 - Dependency checks including:
     - Kafka broker status
-    - Blockchain client health
+    - Blockchain client
     - FSM state
-    - Store availability
-    - UTXO store status
+    - Subtree store
+    - Transaction store
+    - UTXO store
+
+#### Init
+```go
+func (u *Server) Init(ctx context.Context) (err error)
+```
+
+Initializes the Block Validation Service:
+- Creates subtree validation client
+- Configures UTXO store and expiration settings
+- Initializes the BlockValidation instance
+- Starts background processors for transaction metadata
+- Sets up communication channels
+
+#### Start
+```go
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
+```
+
+Starts the Block Validation Service:
+- Waits for blockchain FSM to transition from IDLE state
+- Starts Kafka consumer for blocks
+- Initializes and starts the gRPC server
+- Signals readiness through readyCh channel
+
+#### Stop
+```go
+func (u *Server) Stop(_ context.Context) error
+```
+
+Gracefully shuts down the Block Validation Service:
+- Stops the subtree notification cache
+- Closes the Kafka consumer
 
 #### HealthGRPC
 ```go
