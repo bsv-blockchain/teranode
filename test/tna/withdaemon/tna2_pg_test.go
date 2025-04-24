@@ -120,7 +120,7 @@ func TestMultipleTransactionsPropagationWithUtxoPostgres(t *testing.T) {
 	}
 }
 
-func TestTestConcurrentTransactionsPropagationWithUtxoPostgres(t *testing.T) {
+func TestConcurrentTransactionsPropagationWithUtxoPostgres(t *testing.T) {
 	ctx := context.Background()
 
 	td := utils.SetupPostgresTestDaemon(t, ctx, "concurrent-txs")
