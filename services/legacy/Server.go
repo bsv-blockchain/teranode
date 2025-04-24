@@ -4,8 +4,10 @@ package legacy
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
@@ -117,10 +119,9 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	}
 
 	// Add readiness checks here. Include dependency checks.
-	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 8)
+	checks := make([]health.Check, 0, 10)
 
 	if s.blockchainClient != nil {
 		checks = append(checks, health.Check{Name: "BlockchainClient", Check: s.blockchainClient.Health})
@@ -150,6 +151,47 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	if s.blockAssemblyClient != nil {
 		checks = append(checks, health.Check{Name: "BlockAssembly", Check: s.blockAssemblyClient.Health})
 	}
+
+	// Add custom check for peer connection
+	checks = append(checks, health.Check{
+		Name: "PeerConnection",
+		Check: func(ctx context.Context, checkLiveness bool) (int, string, error) {
+			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
+			if err != nil {
+				return http.StatusServiceUnavailable, "Failed to get peers for health check", err
+			}
+			peers := peersResp.GetPeers()
+			if len(peers) == 0 {
+				return http.StatusServiceUnavailable, "No connected peers", nil
+			}
+			return http.StatusOK, fmt.Sprintf("Connected to %d peers", len(peers)), nil
+		},
+	})
+
+	// Add custom check for recent peer activity
+	checks = append(checks, health.Check{
+		Name: "PeerActivity",
+		Check: func(ctx context.Context, checkLiveness bool) (int, string, error) {
+			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
+			if err != nil {
+				return http.StatusServiceUnavailable, "Failed to get peers for activity check", err
+			}
+			peers := peersResp.GetPeers()
+			currentTime := time.Now().Unix()
+			recentActivityThreshold := currentTime - 120 // 2 minutes in seconds
+			hasRecentActivity := false
+			for _, p := range peers {
+				if p.GetLastRecv() >= recentActivityThreshold {
+					hasRecentActivity = true
+					break
+				}
+			}
+			if !hasRecentActivity {
+				return http.StatusServiceUnavailable, "No peer activity in the last 2 minutes", nil
+			}
+			return http.StatusOK, "Recent peer activity detected", nil
+		},
+	})
 
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
@@ -318,6 +360,40 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 	return nil
 }
 
+// logPeerStats periodically logs statistics about connected peers.
+// It runs every minute until the provided context is canceled.
+func (s *Server) logPeerStats(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("[Legacy Server] Stopping peer statistics logging")
+			return
+		case <-time.After(time.Minute):
+			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
+			if err != nil {
+				s.logger.Errorf("[Legacy Server] Failed to get peers for stats: %v", err)
+				continue
+			}
+
+			peers := peersResp.GetPeers()
+
+			for _, p := range peers {
+				lastSendElapsed := time.Since(time.Unix(p.GetLastSend(), 0))
+				lastRecvElapsed := time.Since(time.Unix(p.GetLastRecv(), 0))
+				s.logger.Infof("[Legacy Server] Peer %s (ID: %d) - Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
+					p.GetAddr(), p.GetId(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
+			}
+
+			state, err := s.blockchainClient.GetFSMCurrentState(context.Background())
+			if err != nil {
+				s.logger.Debugf("Peer stats - Connected: %d, Current FSM State: unknown, error: %v", len(peers), err)
+			} else {
+				s.logger.Debugf("Peer stats - Connected: %d, Current FSM State: %v", len(peers), state)
+			}
+		}
+	}
+}
+
 // Start begins the server operation, including starting the internal server
 // and gRPC service. It returns an error if the server fails to start.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
@@ -335,6 +411,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	go s.server.Start()
 	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
+
+	// Start periodic peer statistics logging
+	go s.logPeerStats(ctx)
+	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "legacy", s.settings.Legacy.GRPCListenAddress, func(server *grpc.Server) {

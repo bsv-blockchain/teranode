@@ -386,6 +386,11 @@ func (s *Server) sendBestBlockMessage(ctx context.Context) {
 					return
 				}
 
+				if len(s.P2PNode.ConnectedPeers()) == 0 {
+					time.Sleep(5 * time.Second)
+					continue
+				}
+
 				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] publishing best block request message %s on topic %s", string(msgBytes), s.bestBlockTopicName)
 
 				if err := s.P2PNode.Publish(ctx, s.bestBlockTopicName, msgBytes); err != nil {

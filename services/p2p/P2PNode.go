@@ -1013,8 +1013,8 @@ type PeerInfo struct {
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
-	// Get all peers from the peerstore
-	peerIDs := s.host.Network().Peerstore().Peers()
+	// Get all connected peers from the network
+	peerIDs := s.host.Network().Peers()
 
 	// Create a slice with zero initial length but with capacity for all peers
 	peers := make([]PeerInfo, 0, len(peerIDs))
