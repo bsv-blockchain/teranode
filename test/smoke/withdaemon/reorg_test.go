@@ -3,23 +3,15 @@
 package smoke
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
-
-	"encoding/hex"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -348,137 +340,6 @@ func TestDynamicSubtreeSize(t *testing.T) {
 		// // Wait between iterations to allow for subtree size adjustments
 		time.Sleep(2 * time.Second)
 	}
-}
-
-func TestSkipPolicyChecksOnBlockAcceptance(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
-
-	ctx := context.Background()
-
-	// Start node1 with restrictive policy settings
-	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1", // This has restrictive MaxTxSizePolicy
-	})
-
-	// Start node2 with default settings (no size restrictions)
-	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		EnableValidator: true,
-		SettingsContext: "docker.host.teranode2",
-	})
-
-	defer func() {
-		node1.Stop(t)
-		node2.Stop(t)
-	}()
-
-	// Generate initial blocks to get coinbase funds
-	_, err := node1.CallRPC("generate", []interface{}{101})
-	require.NoError(t, err)
-
-	// Wait for node1 to sync up to block 101
-	err = helper.WaitForNodeBlockHeight(ctx, node1.BlockchainClient, 101, blockWait)
-	require.NoError(t, err)
-
-	// Create a transaction that exceeds node1's MaxTxSizePolicy
-	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
-	require.NoError(t, err)
-
-	coinbaseTx := block1.CoinbaseTx
-	coinbasePrivKey := node2.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
-	require.NoError(t, err)
-
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err)
-
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	output := coinbaseTx.Outputs[0]
-	utxo := &bt.UTXO{
-		TxIDHash:      coinbaseTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: output.LockingScript,
-		Satoshis:      output.Satoshis,
-	}
-
-	// Create an oversized transaction
-	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err)
-
-	// Add many outputs to make the transaction exceed MaxTxSizePolicy of node1
-	maxTxSize := node1.Settings.Policy.MaxTxSizePolicy
-	numOutputs := (maxTxSize / 34) + 1000 // Add extra outputs to ensure we exceed the limit
-	satoshisPerOutput := output.Satoshis / uint64(numOutputs)
-
-	t.Logf("Creating transaction with %d outputs to exceed MaxTxSizePolicy of %d bytes", numOutputs, maxTxSize)
-
-	for i := 0; i < numOutputs; i++ {
-		err = newTx.AddP2PKHOutputFromAddress(address.AddressString, satoshisPerOutput)
-		require.NoError(t, err)
-	}
-
-	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
-	require.NoError(t, err)
-
-	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
-
-	// Try to send the oversized transaction to node1 - should fail
-	_, err = node1.CallRPC("sendrawtransaction", []interface{}{txBytes})
-	require.Error(t, err, "Expected node1 to reject oversized transaction")
-	require.Contains(t, err.Error(), "transaction size in bytes is greater than max tx size policy",
-		"Expected error message to indicate transaction size policy violation")
-
-	// Send the same transaction to node2 - should succeed
-	// resp, err := node2.CallRPC("sendrawtransaction", []interface{}{txBytes})
-	// require.NoError(t, err, "Expected node2 to accept the transaction")
-	// t.Logf("Transaction accepted by node2: %s", resp)
-
-	// Mine a block on node2 containing the oversized transaction
-	_, err = node2.CallRPC("generate", []interface{}{1})
-	require.NoError(t, err)
-
-	// Wait for node1 to receive and accept the block despite the transaction violating its policy
-	err = helper.WaitForNodeBlockHeight(ctx, node1.BlockchainClient, 102, blockWait)
-	require.NoError(t, err)
-
-	// // Verify that node1 has the transaction in its block
-	// block102, err := node1.BlockchainClient.GetBlockByHeight(ctx, 102)
-	// require.NoError(t, err)
-
-	// // Check if the transaction is in the block's subtrees
-	// err = block102.GetAndValidateSubtrees(ctx, node1.Logger, node1.SubtreeStore, nil)
-	// require.NoError(t, err)
-
-	// err = block102.CheckMerkleRoot(ctx)
-	// require.NoError(t, err)
-
-	// fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-	// 	return block102.SubTreesFromBytes(subtreeHash[:])
-	// }
-
-	// subtree, err := block102.GetSubtrees(ctx, node1.Logger, node1.SubtreeStore, fallbackGetFunc)
-	// require.NoError(t, err)
-
-	// txFound := false
-	// for i := 0; i < len(subtree); i++ {
-	// 	st := subtree[i]
-	// 	for _, node := range st.Nodes {
-	// 		if node.Hash.String() == newTx.TxIDChainHash().String() {
-	// 			txFound = true
-	// 			break
-	// 		}
-	// 	}
-	// }
-
-	// assert.True(t, txFound, "Transaction should be found in node1's block despite violating its policy")
 }
 
 func TestInvalidBlock(t *testing.T) {

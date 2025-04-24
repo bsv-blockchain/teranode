@@ -1079,3 +1079,8 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx
 
 	return transactions, txHashes, nil
 }
+
+func (td *TestDaemon) GetPrivateKey(t *testing.T) *bec.PrivateKey {
+	privKey := td.privKey
+	return privKey
+}

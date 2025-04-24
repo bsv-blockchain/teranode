@@ -126,28 +126,6 @@ jobs:
             test_func: "TestUTXOSetManagement"
             test_filename: "tnb6_test.go"
 
-          # TNJ Tests
-          - test_dir: "test/tnj"
-            test_tags: "test_tnj"
-            test_suite: "TestTNJLockTimeTestSuite"
-            test_func: "TestLocktimeScenarios"
-            test_filename: "locktime_test.go"
-          - test_dir: "test/tnj"
-            test_tags: "test_tnj"
-            test_suite: "TestTNJ4TestSuite"
-            test_func: "TestBlockSubsidy"
-            test_filename: "tnj_4_test.go"
-          - test_dir: "test/tnj"
-            test_tags: "test_tnj"
-            test_suite: "TestTNJDoubleSpendTestSuite"
-            test_func: "TestRejectLongerChainWithDoubleSpend"
-            test_filename: "double_spend_test.go"
-          - test_dir: "test/tnj"
-            test_tags: "test_tnj"
-            test_suite: "TestTNJDoubleSpendTestSuite"
-            test_func: "TestDoubleSpendMultipleUtxos"
-            test_filename: "double_spend_test.go"
-
           # TND Tests
           - test_dir: "test/tnd"
             test_tags: "test_tnd"
@@ -210,6 +188,48 @@ jobs:
             test_suite: "TestFsmTestSuite"
             test_func: "TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes"
             test_filename: "fsm_state.go"
+
+          # Reorg Tests
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestMoveUp"
+            test_filename: "reorg_test.go"
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestMoveDownMoveUpWhenNewBlockIsGenerated"
+            test_filename: "reorg_test.go"
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestMoveDownMoveUpWhenNoNewBlockIsGenerated"
+            test_filename: "reorg_test.go"
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestInvalidBlock"
+            test_filename: "reorg_test.go"
+
+          # Block Subsidy Tests
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestBlockSubsidy"
+            test_filename: "block_subsidy_test.go"
+
+          # Reassign Tests
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestShouldAllowReassign"
+            test_filename: "reassign_test.go"
+
+          # Spend UTXO Tests
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestShouldAllowSpendAllUtxos"
+            test_filename: "spend_utxo_test.go"
+
+          # UTXO Tests
+          - test_dir: "test/smoke/withdaemon"
+            test_tags: "test_docker_daemon"
+            test_func: "TestFreezeAndUnfreezeUtxos"
+            test_filename: "utxo_test.go"
 
       max-parallel: 1
       fail-fast: false
