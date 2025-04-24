@@ -346,7 +346,7 @@ func TestServer_processBlockFound(t *testing.T) {
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
 
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
-	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, time.Duration(2)*time.Second)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
 	require.NoError(t, err)
@@ -419,7 +419,7 @@ func TestServer_catchup(t *testing.T) {
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
 			utxoStore:        utxoStore,
 		}
 
@@ -486,7 +486,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
 			utxoStore:        utxoStore,
 		}
 
@@ -534,7 +534,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
 		}
 
 		block := createTestBlock(t)
@@ -561,7 +561,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
 		}
 
 		// Create a chain of test blocks

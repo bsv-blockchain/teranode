@@ -154,7 +154,7 @@ type BlockValidation struct {
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
+	txStore blob.Store, txMetaStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	bv := &BlockValidation{
 		logger:                             logger,
@@ -166,7 +166,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		utxoStore:                          txMetaStore,
 		recentBlocksBloomFilters:           make([]*model.BlockBloomFilter, 0),
 		recentBlocksBloomFiltersExpiration: bloomExpiration,
-		validatorClient:                    validatorClient,
 		subtreeValidationClient:            subtreeValidationClient,
 		subtreeDeDuplicator:                NewDeDuplicator(tSettings.BlockValidation.SubtreeTTL),
 		lastValidatedBlocks:                expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),

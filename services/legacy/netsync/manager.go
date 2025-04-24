@@ -1297,7 +1297,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 	// Build up a getdata request for the list of blocks the headers
 	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
 	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) //nolint:gosec
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {

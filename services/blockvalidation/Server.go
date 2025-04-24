@@ -113,10 +113,6 @@ type Server struct {
 	// tracking available outputs for transaction validation
 	utxoStore utxo.Store
 
-	// validatorClient handles transaction validation operations,
-	// ensuring each transaction follows network rules
-	validatorClient validator.Interface
-
 	// blockFoundCh receives notifications of newly discovered blocks
 	// that need validation. This channel buffers requests when high load occurs.
 	blockFoundCh chan processBlockFound
@@ -178,7 +174,6 @@ func New(
 		blockchainClient:     blockchainClient,
 		txStore:              txStore,
 		utxoStore:            utxoStore,
-		validatorClient:      validatorClient,
 		blockFoundCh:         make(chan processBlockFound, tSettings.BlockValidation.BlockFoundChBufferSize),
 		catchupCh:            make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
@@ -299,7 +294,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, expiration)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient, expiration)
 
 	go u.processSubtreeNotify.Start()
 
