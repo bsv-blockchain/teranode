@@ -744,12 +744,19 @@ func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 
 // updateSyncPeer picks a new peer to sync from.
 func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
-	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v",
+	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v, headers-first mode: %v",
 		sm.syncPeerState.getLastBlockTime(),
-		sm.syncPeerState.getViolations())
+		sm.syncPeerState.getViolations(),
+		sm.headersFirstMode)
 
 	// Only disconnect if we have a valid sync peer
 	if sm.syncPeer != nil {
+		// Log current sync state before disconnecting
+		if sm.headersFirstMode {
+			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
+				sm.headerList.Len(), sm.startHeader != nil)
+		}
+
 		sm.syncPeer.SetSyncPeer(false)
 		sm.syncPeer.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
 	}
@@ -768,9 +775,13 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		return // add return to prevent continuing with invalid height
 	}
 
 	if sm.headersFirstMode {
+		sm.logger.Infof("Resetting header sync state at height %d with hash %v",
+			bestBlockHeightInt32, bestBlockHeader.Hash())
+
 		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
 	}
 
@@ -1286,7 +1297,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 	// Build up a getdata request for the list of blocks the headers
 	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
 	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len()))
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) //nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {
@@ -1353,6 +1364,32 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	// Nothing to do for an empty headers message.
 	if numHeaders == 0 {
 		return
+	}
+
+	// ensure we have a valid starting point for header validation
+	prevNodeEl := sm.headerList.Back()
+	if prevNodeEl == nil {
+		sm.logger.Warnf("Header list is empty, attempting to recover sync state")
+
+		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+		if err != nil {
+			peer.DisconnectWithWarning(fmt.Sprintf("Failed to get best block header: %v", err))
+			return
+		}
+
+		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		if err != nil {
+			peer.DisconnectWithWarning(fmt.Sprintf("Failed to convert block height: %v", err))
+			return
+		}
+
+		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
+
+		prevNodeEl = sm.headerList.Back()
+		if prevNodeEl == nil {
+			peer.DisconnectWithWarning("Failed to initialize header sync state")
+			return
+		}
 	}
 
 	// Process all the received headers ensuring each one connects to the
