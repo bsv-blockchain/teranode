@@ -233,7 +233,6 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 }
 
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
-	t.Skip("Test is disabled")
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
@@ -241,15 +240,16 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 
 	defer td.Stop(t)
 
+	tSettings := td.Settings
+
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	// CSVHeight is the block height at which the CSV rules are activated including lock time
+	_, err = td.CallRPC("generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
 	require.NoError(t, err)
-
-	tSettings := td.Settings
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
@@ -287,13 +287,25 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
 	require.NoError(t, err)
 
-	newTx.LockTime = 350
+	// When a transaction’s nLockTime is set (e.g., 500 for block height),
+	// nSequence must be less than 0xffffffff for the locktime to be enforced.
+	// Otherwise, the locktime is ignored.
+	newTx.Inputs[0].SequenceNumber = 0x10000005
+	newTx.LockTime = tSettings.ChainCfgParams.CSVHeight + 123
 
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
+	// "code: -8, message: TX rejected:
+	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (49): address localhost:8084
+	//  -> UNKNOWN (0): SERVICE_ERROR (49): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction
+	//  -> UTXO_NON_FINAL (61): [Validate][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] transaction is not final
+	//  -> TX_LOCK_TIME (35): lock time (699) as block height is greater than block height (578)]"
 	require.Error(t, err, "Failed to send new tx with rpc")
+	require.Contains(t, err.Error(), "transaction is not final")
+	require.Contains(t, err.Error(), "TX_LOCK_TIME")
+
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 }
 
@@ -312,7 +324,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC("generate", []any{101})
 	require.NoError(t, err)
 
 	// Get the policy settings to know the max tx size
