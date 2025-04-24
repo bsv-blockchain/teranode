@@ -435,7 +435,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return err
 	}
 
-	hash, err := chainhash.NewHash(kafkaMsg.Hash)
+	hash, err := chainhash.NewHashFromStr(kafkaMsg.Hash)
 	if err != nil {
 		u.logger.Errorf("Failed to parse block hash from message: %v", err)
 		return err

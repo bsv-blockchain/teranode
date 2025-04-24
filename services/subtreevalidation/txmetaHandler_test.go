@@ -197,7 +197,7 @@ func createKafkaMessage(t *testing.T, delete bool, content []byte) *kafka.KafkaM
 	}
 
 	kafkaMsg := &kafkamessage.KafkaTxMetaTopicMessage{
-		TxHash:  hash[:],
+		TxHash:  hash.String(),
 		Action:  action,
 		Content: content,
 	}

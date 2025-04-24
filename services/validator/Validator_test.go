@@ -52,7 +52,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -161,7 +160,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	err = proto.Unmarshal(msg.Value, &kafkaMsg)
 	require.NoError(t, err)
 
-	assert.Equal(t, tx.TxID(), utils.ReverseAndHexEncodeSlice(kafkaMsg.TxHash))
+	assert.Equal(t, tx.TxID(), kafkaMsg.TxHash)
 
 	// check the block assembly store
 	assert.Len(t, blockAssembler.storedTxs, 1)
@@ -283,7 +282,7 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, kafkamessage.KafkaTxMetaActionType_DELETE, m.Action)
-	assert.Equal(t, tx.TxIDChainHash().CloneBytes(), m.TxHash)
+	assert.Equal(t, tx.TxIDChainHash().String(), m.TxHash)
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {

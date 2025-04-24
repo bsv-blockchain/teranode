@@ -28,12 +28,15 @@ func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 		return err
 	}
 
-	hash := chainhash.Hash(m.TxHash)
+	hash, err := chainhash.NewHashFromStr(m.TxHash)
+	if err != nil {
+		return err
+	}
 	delete := m.Action == kafkamessage.KafkaTxMetaActionType_DELETE
 	txMetaBytes := m.Content
 
 	if delete {
-		if err := u.DelTxMetaCache(context.Background(), &hash); err != nil {
+		if err := u.DelTxMetaCache(context.Background(), hash); err != nil {
 			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
 
 			wrappedErr := errors.NewProcessingError("[txmetaHandler][%s] failed to delete tx meta data", hash, err)

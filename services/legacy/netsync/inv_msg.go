@@ -94,7 +94,7 @@ func (sm *SyncManager) newKafkaMessageFromInv(i *wire.MsgInv, peer *peerpkg.Peer
 	for _, invVect := range i.InvList {
 		n.Inv = append(n.Inv, &kafkamessage.Inv{
 			Type: kafkamessage.InvType(invVect.Type), // nolint:gosec
-			Hash: invVect.Hash.CloneBytes(),
+			Hash: invVect.Hash.String(),
 		})
 	}
 
@@ -107,7 +107,7 @@ func (sm *SyncManager) newInvFromKafkaMessage(message *kafkamessage.KafkaInvTopi
 	for _, inv := range message.Inv {
 		invType := wire.InvType(inv.Type) //nolint:gosec
 
-		hash, err := chainhash.NewHash(inv.Hash)
+		hash, err := chainhash.NewHashFromStr(inv.Hash)
 		if err != nil {
 			return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse inv hash from message", err)
 		}

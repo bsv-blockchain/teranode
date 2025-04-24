@@ -2365,7 +2365,7 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to unmarshal kafka message", err)
 		}
 
-		hash, err := chainhash.NewHash(kafkaMsg.TxHash)
+		hash, err := chainhash.NewHashFromStr(kafkaMsg.TxHash)
 		if err != nil {
 			sm.logger.Errorf("Failed to parse tx hash from message: %v", err)
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx hash from message", err)

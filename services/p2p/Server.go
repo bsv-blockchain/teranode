@@ -254,7 +254,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return err
 		}
 
-		hash, err := chainhash.NewHash(m.TxHash)
+		hash, err := chainhash.NewHashFromStr(m.TxHash)
 		if err != nil {
 			s.logger.Errorf("[Start] error getting chainhash from string %s: %v", m.TxHash, err)
 			return err
@@ -762,7 +762,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
 		msg := &kafkamessage.KafkaBlockTopicMessage{
-			Hash: hash.CloneBytes(),
+			Hash: hash.String(),
 			URL:  blockMessage.DataHubURL,
 		}
 
@@ -822,7 +822,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
-			Hash: hash.CloneBytes(),
+			Hash: hash.String(),
 			URL:  subtreeMessage.DataHubURL,
 		}
 

@@ -121,7 +121,7 @@ func (InvType) EnumDescriptor() ([]byte, []int) {
 
 type KafkaBlockTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	Hash          string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	URL           string                 `protobuf:"bytes,2,opt,name=URL,proto3" json:"URL,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -157,11 +157,11 @@ func (*KafkaBlockTopicMessage) Descriptor() ([]byte, []int) {
 	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *KafkaBlockTopicMessage) GetHash() []byte {
+func (x *KafkaBlockTopicMessage) GetHash() string {
 	if x != nil {
 		return x.Hash
 	}
-	return nil
+	return ""
 }
 
 func (x *KafkaBlockTopicMessage) GetURL() string {
@@ -173,7 +173,7 @@ func (x *KafkaBlockTopicMessage) GetURL() string {
 
 type KafkaSubtreeTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	Hash          string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	URL           string                 `protobuf:"bytes,2,opt,name=URL,proto3" json:"URL,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -209,11 +209,11 @@ func (*KafkaSubtreeTopicMessage) Descriptor() ([]byte, []int) {
 	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *KafkaSubtreeTopicMessage) GetHash() []byte {
+func (x *KafkaSubtreeTopicMessage) GetHash() string {
 	if x != nil {
 		return x.Hash
 	}
-	return nil
+	return ""
 }
 
 func (x *KafkaSubtreeTopicMessage) GetURL() string {
@@ -353,7 +353,7 @@ func (x *KafkaTxValidationOptions) GetCreateConflicting() bool {
 
 type KafkaRejectedTxTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TxHash        []byte                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"`
+	TxHash        string                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"`
 	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -389,11 +389,11 @@ func (*KafkaRejectedTxTopicMessage) Descriptor() ([]byte, []int) {
 	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *KafkaRejectedTxTopicMessage) GetTxHash() []byte {
+func (x *KafkaRejectedTxTopicMessage) GetTxHash() string {
 	if x != nil {
 		return x.TxHash
 	}
-	return nil
+	return ""
 }
 
 func (x *KafkaRejectedTxTopicMessage) GetReason() string {
@@ -405,7 +405,7 @@ func (x *KafkaRejectedTxTopicMessage) GetReason() string {
 
 type KafkaTxMetaTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TxHash        []byte                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"`
+	TxHash        string                 `protobuf:"bytes,1,opt,name=txHash,proto3" json:"txHash,omitempty"`
 	Action        KafkaTxMetaActionType  `protobuf:"varint,2,opt,name=action,proto3,enum=kafkamessage.KafkaTxMetaActionType" json:"action,omitempty"`
 	Content       []byte                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -442,11 +442,11 @@ func (*KafkaTxMetaTopicMessage) Descriptor() ([]byte, []int) {
 	return file_util_kafka_kafka_message_kafka_messages_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *KafkaTxMetaTopicMessage) GetTxHash() []byte {
+func (x *KafkaTxMetaTopicMessage) GetTxHash() string {
 	if x != nil {
 		return x.TxHash
 	}
-	return nil
+	return ""
 }
 
 func (x *KafkaTxMetaTopicMessage) GetAction() KafkaTxMetaActionType {
@@ -518,7 +518,7 @@ func (x *KafkaInvTopicMessage) GetInv() []*Inv {
 type Inv struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          InvType                `protobuf:"varint,1,opt,name=type,proto3,enum=kafkamessage.InvType" json:"type,omitempty"`
-	Hash          []byte                 `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
+	Hash          string                 `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -560,11 +560,11 @@ func (x *Inv) GetType() InvType {
 	return InvType_Error
 }
 
-func (x *Inv) GetHash() []byte {
+func (x *Inv) GetHash() string {
 	if x != nil {
 		return x.Hash
 	}
-	return nil
+	return ""
 }
 
 type KafkaBlocksFinalTopicMessage struct {
@@ -657,10 +657,10 @@ const file_util_kafka_kafka_message_kafka_messages_proto_rawDesc = "" +
 	"\n" +
 	"-util/kafka/kafka_message/kafka_messages.proto\x12\fkafkamessage\">\n" +
 	"\x16KafkaBlockTopicMessage\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x10\n" +
+	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x10\n" +
 	"\x03URL\x18\x02 \x01(\tR\x03URL\"@\n" +
 	"\x18KafkaSubtreeTopicMessage\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x10\n" +
+	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x10\n" +
 	"\x03URL\x18\x02 \x01(\tR\x03URL\"\x89\x01\n" +
 	"\x1dKafkaTxValidationTopicMessage\x12\x0e\n" +
 	"\x02tx\x18\x01 \x01(\fR\x02tx\x12\x16\n" +
@@ -672,10 +672,10 @@ const file_util_kafka_kafka_message_kafka_messages_proto_rawDesc = "" +
 	"\x10skipPolicyChecks\x18\x03 \x01(\bR\x10skipPolicyChecks\x12,\n" +
 	"\x11createConflicting\x18\x04 \x01(\bR\x11createConflicting\"M\n" +
 	"\x1bKafkaRejectedTxTopicMessage\x12\x16\n" +
-	"\x06txHash\x18\x01 \x01(\fR\x06txHash\x12\x16\n" +
+	"\x06txHash\x18\x01 \x01(\tR\x06txHash\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x88\x01\n" +
 	"\x17KafkaTxMetaTopicMessage\x12\x16\n" +
-	"\x06txHash\x18\x01 \x01(\fR\x06txHash\x12;\n" +
+	"\x06txHash\x18\x01 \x01(\tR\x06txHash\x12;\n" +
 	"\x06action\x18\x02 \x01(\x0e2#.kafkamessage.KafkaTxMetaActionTypeR\x06action\x12\x18\n" +
 	"\acontent\x18\x03 \x01(\fR\acontent\"]\n" +
 	"\x14KafkaInvTopicMessage\x12 \n" +
@@ -683,7 +683,7 @@ const file_util_kafka_kafka_message_kafka_messages_proto_rawDesc = "" +
 	"\x03inv\x18\x02 \x03(\v2\x11.kafkamessage.InvR\x03inv\"D\n" +
 	"\x03Inv\x12)\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x15.kafkamessage.InvTypeR\x04type\x12\x12\n" +
-	"\x04hash\x18\x02 \x01(\fR\x04hash\"\xe7\x01\n" +
+	"\x04hash\x18\x02 \x01(\tR\x04hash\"\xe7\x01\n" +
 	"\x1cKafkaBlocksFinalTopicMessage\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12+\n" +
 	"\x11transaction_count\x18\x02 \x01(\x04R\x10transactionCount\x12\"\n" +

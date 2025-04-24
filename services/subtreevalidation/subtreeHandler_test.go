@@ -90,7 +90,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: subtreeHash[:],
+							Hash: subtreeHash.String(),
 							URL:  "http://example.com",
 						}
 						data, _ := proto.Marshal(msg)
@@ -122,7 +122,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: []byte("invalid"),
+							Hash: "invalid",
 							URL:  "http://example.com",
 						}
 						data, _ := proto.Marshal(msg)
@@ -138,7 +138,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: make([]byte, 32),
+							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf",
 							URL:  "://invalid",
 						}
 						data, _ := proto.Marshal(msg)
@@ -154,7 +154,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: make([]byte, 32),
+							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcae",
 							URL:  "http://example.com",
 						}
 						data, _ := proto.Marshal(msg)
@@ -175,7 +175,7 @@ func TestSubtreesHandler(t *testing.T) {
 				ConsumerMessage: sarama.ConsumerMessage{
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: make([]byte, 32),
+							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcafd",
 							URL:  "http://example.com",
 						}
 						data, _ := proto.Marshal(msg)

@@ -5,12 +5,12 @@ option go_package = "./;kafkamessage";
 package kafkamessage;
 
 message KafkaBlockTopicMessage {
-  bytes hash = 1;
+  string hash = 1;
   string URL = 2;
 }
 
 message KafkaSubtreeTopicMessage {
-  bytes hash = 1;
+  string hash = 1;
   string URL = 2;
 }
 
@@ -28,7 +28,7 @@ message KafkaTxValidationOptions {
 }
 
 message KafkaRejectedTxTopicMessage {
-  bytes txHash = 1;
+  string txHash = 1;
   string reason = 2;
 }
 
@@ -38,7 +38,7 @@ enum KafkaTxMetaActionType {
 }
 
 message KafkaTxMetaTopicMessage {
-  bytes txHash = 1;
+  string txHash = 1;
   KafkaTxMetaActionType action = 2;
   bytes content = 3;
 }
@@ -50,7 +50,7 @@ message KafkaInvTopicMessage {
 
 message Inv {
   InvType type = 1;
-  bytes hash = 2;
+  string hash = 2;
 }
 
 enum InvType {

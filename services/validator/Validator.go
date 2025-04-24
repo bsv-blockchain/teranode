@@ -216,7 +216,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 				startKafka := time.Now()
 
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{
-					TxHash: tx.TxIDChainHash().CloneBytes(),
+					TxHash: tx.TxIDChainHash().String(),
 					Reason: err.Error(),
 				}
 
@@ -575,7 +575,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 		startKafka := time.Now()
 
 		m := &kafkamessage.KafkaTxMetaTopicMessage{
-			TxHash: txHash.CloneBytes(),
+			TxHash: txHash.String(),
 			Action: kafkamessage.KafkaTxMetaActionType_DELETE,
 		}
 
@@ -629,7 +629,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	}
 
 	value, err := proto.Marshal(&kafkamessage.KafkaTxMetaTopicMessage{
-		TxHash:  txHash[:],
+		TxHash:  txHash.String(),
 		Action:  kafkamessage.KafkaTxMetaActionType_ADD,
 		Content: metaBytes,
 	})
