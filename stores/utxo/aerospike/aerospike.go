@@ -288,9 +288,11 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
 
-	err := s.cleanupService.UpdateBlockHeight(blockHeight)
-	if err != nil {
-		return err
+	if blockHeight > 0 {
+		err := s.cleanupService.UpdateBlockHeight(blockHeight)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
