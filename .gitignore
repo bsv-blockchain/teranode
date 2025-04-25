@@ -8,6 +8,8 @@ data/
 *.pprof
 *.out
 .idea/
+.vscode/
+.cursorrules
 keyfile.json
 bitcoin-data/
 ids-20.txt
