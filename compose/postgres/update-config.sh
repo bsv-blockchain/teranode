@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+# Used by docker-compose to update postgresql.conf
+
 # Directly modify the postgresql.conf to adjust max_connections
 echo "max_connections = '1000'" >> /var/lib/postgresql/data/postgresql.conf
 echo "lock_timeout = '0'" >> /var/lib/postgresql/data/postgresql.conf

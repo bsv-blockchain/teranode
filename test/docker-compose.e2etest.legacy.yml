@@ -43,7 +43,7 @@ services:
     ports:
       - "7432:5432"
     volumes:
-      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../compose/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/test/${TEST_ID:-default}/postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
@@ -101,7 +101,7 @@ services:
     ports:
       - "13100:13100"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-1/data:/opt/aerospike/data
 
   aerospike-2:
@@ -110,7 +110,7 @@ services:
     ports:
       - "13200:13200"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-2/data:/opt/aerospike/data
 
   aerospike-3:
@@ -119,7 +119,7 @@ services:
     ports:
       - "13300:13300"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/${TEST_ID:-default}/aerospike-3/data:/opt/aerospike/data
 
   svnode1:

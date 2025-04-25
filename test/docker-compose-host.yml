@@ -54,8 +54,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     volumes:
-      - ../deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
-      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../compose/postgres/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ../compose/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/postgres:/var/lib/postgresql/data
     restart: on-failure
 
@@ -154,7 +154,7 @@ services:
     container_name: aerospike-1
     <<: *aerospike-base
     volumes:
-      - ../deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-1.conf:/etc/aerospike.conf
       - ./data/aerospike1/logs:/var/log/aerospike
       - ./data/aerospike1/data:/opt/aerospike/data
 
@@ -162,7 +162,7 @@ services:
     container_name: aerospike-2
     <<: *aerospike-base
     volumes:
-      - ../deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-2.conf:/etc/aerospike.conf
       - ./data/aerospike2/logs:/var/log/aerospike
       - ./data/aerospike2/data:/opt/aerospike/data
 
@@ -170,6 +170,6 @@ services:
     container_name: aerospike-3
     <<: *aerospike-base
     volumes:
-      - ../deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-3.conf:/etc/aerospike.conf
       - ./data/aerospike3/logs:/var/log/aerospike
       - ./data/aerospike3/data:/opt/aerospike/data

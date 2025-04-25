@@ -34,7 +34,7 @@ WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/teranode-cli ./teranode-cli
 # COPY --from=0 /app/blaster.run ./blaster.run
-COPY --from=0 /app/wait.sh /app/wait.sh
+COPY --from=0 /app/compose/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
 FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
@@ -42,7 +42,7 @@ WORKDIR /app
 COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/teranode-cli ./teranode-cli
 # COPY --from=0 /app/blaster.run ./blaster.run
-COPY --from=0 /app/wait.sh /app/wait.sh
+COPY --from=0 /app/compose/wait.sh /app/wait.sh
 
 ENV TARGETARCH=${TARGETARCH}
 ENV TARGETOS=${TARGETOS}
@@ -67,7 +67,7 @@ WORKDIR /app
 COPY --from=0 /app/settings_local.conf .
 # COPY --from=0 /app/certs /app/certs
 COPY --from=0 /app/settings.conf .
-COPY --from=0 /app/wait.sh ./wait.sh
+COPY --from=0 /app/compose/wait.sh ./wait.sh
 RUN chmod +x ./wait.sh
 
 # RUN ln -s teranode.run chainintegrity.run

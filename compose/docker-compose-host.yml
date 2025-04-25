@@ -29,7 +29,7 @@ services:
     image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
     network_mode: "host"
     build:
-      context: .
+      context: ..
       dockerfile: local.Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
@@ -52,9 +52,9 @@ services:
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     volumes:
-      - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
-      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../data/postgres:/var/lib/postgresql/data
     restart: on-failure
 
   kafka-shared:
@@ -105,12 +105,12 @@ services:
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode1/txstore:/app/data/teranode1/txstore
-      - ./data/teranode1/subtreestore:/app/data/teranode1/subtreestore
-      - ./data/teranode1/blockstore:/app/data/teranode1/blockstore
-      - ./data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
-      - ./data/teranode1/external:/app/data/teranode1/external
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode1/txstore:/app/data/teranode1/txstore
+      - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
+      - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
+      - ../data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
+      - ../data/teranode1/external:/app/data/teranode1/external
       - ./wait.sh:/app/wait.sh
 
   teranode-2:
@@ -130,12 +130,12 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode2/txstore:/app/data/teranode2/txstore
-      - ./data/teranode2/subtreestore:/app/data/teranode2/subtreestore
-      - ./data/teranode2/blockstore:/app/data/teranode2/blockstore
-      - ./data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
-      - ./data/teranode2/external:/app/data/teranode2/external
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode2/txstore:/app/data/teranode2/txstore
+      - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
+      - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
+      - ../data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
+      - ../data/teranode2/external:/app/data/teranode2/external
       - ./wait.sh:/app/wait.sh
 
   teranode-3:
@@ -155,12 +155,12 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/teranode3/txstore:/app/data/teranode3/txstore
-      - ./data/teranode3/subtreestore:/app/data/teranode3/subtreestore
-      - ./data/teranode3/blockstore:/app/data/teranode3/blockstore
-      - ./data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
-      - ./data/teranode3/external:/app/data/teranode3/external
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode3/txstore:/app/data/teranode3/txstore
+      - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
+      - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
+      - ../data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
+      - ../data/teranode3/external:/app/data/teranode3/external
       - ./wait.sh:/app/wait.sh
   miner-1:
     <<: *teranode-commands-base
@@ -173,8 +173,8 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode1"
     command: [ "miner", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "19292" ]
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner1:/app/data
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/miner1:/app/data
     restart: unless-stopped
 
   miner-2:
@@ -188,8 +188,8 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode2"
     command: [ "miner", "-coinbase-addr", "1Hh6nxmJrk4jyiJRxodAK32A9EXM8dx6F3", "-coinbase-sig", "/teranode2/", "-rpcport", "29292" ]
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner2:/app/data
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/miner2:/app/data
     restart: unless-stopped
 
   miner-3:
@@ -203,8 +203,8 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode3"
     command: [ "miner", "-coinbase-addr", "16Uy8VwEKAkEmH7RVtCjqyv6L6RfyvkJM2", "-coinbase-sig", "/teranode3/", "-rpcport", "39292" ]
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/miner3:/app/data
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/miner3:/app/data
     restart: unless-stopped
 
   coinbase-1:
@@ -219,8 +219,8 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
       profilerAddr: "localhost:17092"
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/coinbase1:/app/data
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/coinbase1:/app/data
 
   tx-blaster-1:
     <<: *teranode-coinbase-base
@@ -237,9 +237,9 @@ services:
     entrypoint: ["./blaster.run"]
     command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/txblaster1:/app/data
-      # - ./data/txblaster.log:/app/data/txblaster.log
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/txblaster1:/app/data
+      # - ../data/txblaster.log:/app/data/txblaster.log
 
   prometheus-1:
     container_name: prometheus-1
@@ -250,7 +250,7 @@ services:
       - '--web.listen-address=:19090'
       - '--config.file=/etc/prometheus/prometheus.yml'
     volumes:
-      - ./deploy/dev/prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -261,7 +261,7 @@ services:
       - '--web.listen-address=:29090'
       - '--config.file=/etc/prometheus/prometheus.yml'
     volumes:
-      - ./deploy/dev/prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -272,17 +272,17 @@ services:
       - '--web.listen-address=:39090'
       - '--config.file=/etc/prometheus/prometheus.yml'
     volumes:
-      - ./deploy/dev/prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
     image: grafana/grafana:latest
     network_mode: "host"
     volumes:
-      - ./deploy/dev/grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
-      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+      - ./grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/grafana.db:/var/lib/grafana
     depends_on:
       - prometheus-1
       - prometheus-2
@@ -292,25 +292,25 @@ services:
     container_name: aerospike-1
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
-      - ./data/aerospike1/logs:/var/log/aerospike
-      - ./data/aerospike1/data:/opt/aerospike/data
+      - ./aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ../data/aerospike1/logs:/var/log/aerospike
+      - ../data/aerospike1/data:/opt/aerospike/data
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
-      - ./data/aerospike2/logs:/var/log/aerospike
-      - ./data/aerospike2/data:/opt/aerospike/data
+      - ./aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ../data/aerospike2/logs:/var/log/aerospike
+      - ../data/aerospike2/data:/opt/aerospike/data
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
-      - ./data/aerospike3/logs:/var/log/aerospike
-      - ./data/aerospike3/data:/opt/aerospike/data
+      - ./aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ../data/aerospike3/logs:/var/log/aerospike
+      - ../data/aerospike3/data:/opt/aerospike/data
 
   aerospike-exporter-1:
     container_name: aerospike-exporter-1

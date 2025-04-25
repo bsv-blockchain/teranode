@@ -1,3 +1,13 @@
+#!/bin/bash
+
+# Get the directory of the script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Get the project root (parent of scripts directory)
+PROJECT_ROOT="$( dirname "$SCRIPT_DIR" )"
+
+# Change to project root to ensure consistent paths
+cd "$PROJECT_ROOT"
+
 TAGS="testtxmetacache,test_all"
 
 SETTINGS_CONTEXT=test \

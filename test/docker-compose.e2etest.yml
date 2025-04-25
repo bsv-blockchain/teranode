@@ -49,7 +49,7 @@ services:
     expose:
       - "5432"
     volumes:
-      - ../scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../compose/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - data-postgres:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
@@ -109,7 +109,7 @@ services:
     expose:
       - "13100"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf:ro
+      - ../compose/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf:ro
       - data-aerospike1:/opt/aerospike/data
 
   aerospike-2:
@@ -120,7 +120,7 @@ services:
     expose:
       - "13200"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf:ro
+      - ../compose/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf:ro
       - data-aerospike2:/opt/aerospike/data
 
   aerospike-3:
@@ -131,7 +131,7 @@ services:
     expose:
       - "13300"
     volumes:
-      - ../deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf:ro
+      - ../compose/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf:ro
       - data-aerospike3:/opt/aerospike/data
 
   teranode1:
