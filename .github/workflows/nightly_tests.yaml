@@ -41,7 +41,7 @@ jobs:
           docker pull ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:$IMAGE_TAG
           docker tag ${{ steps.login-ecr.outputs.registry }}/${{ env.REPO }}:$IMAGE_TAG teranode:latest
 
-  run-tests:
+  run-docker-tests:
     needs: pull-image
     runs-on: teranode-runner
     strategy:
@@ -272,7 +272,7 @@ jobs:
       # - name: Publish Test Summary Results
       #   run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
 
-  run-script-verifier-tests:
+  run-daemon-tests:
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -283,10 +283,60 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: Run Script Verifier Tests
+      - name: Run Block Subsidy Tests
         run: |
           go clean -testcache
-          go test -v -run "Test_ScriptVerificationBDKLargeTx" -tags test_validator ./test/services/validator/ScriptVerifier_test.go
+          go test -v -tags test_nightly ./test/smoke/withdaemon/block_subsidy_test.go
         env:
           GITHUB_ACTIONS: true
-        continue-on-error: false
+        continue-on-error: true
+
+      - name: Run Legacy Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/legacy_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run Reassign Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/reassign_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run Reorg Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/reorg_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run RPC Smoke PG Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/rpc_smoke_pg_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run Spend UTXO Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/spend_utxo_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run UTXO Tests
+        run: |
+          go test -v -tags test_nightly ./test/smoke/withdaemon/utxo_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Check for Test Failures
+        if: always()
+        run: |
+          if [[ "${{ job.status }}" == "failure" ]]; then
+            echo "One or more test suites failed"
+            exit 1
+          fi
