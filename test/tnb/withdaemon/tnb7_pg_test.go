@@ -20,10 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUnspentTransactionOutputsWithPostgres(t *testing.T) {
+func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 	ctx := context.Background()
 
-	td := utils.SetupPostgresTestDaemon(t, ctx, "unspent-txs")
+	td := utils.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
 
 	// Generate initial blocks
 	_, err := td.CallRPC("generate", []interface{}{101})
@@ -77,20 +77,19 @@ func TestUnspentTransactionOutputsWithPostgres(t *testing.T) {
 	require.NoError(t, errTxRes, "Failed to get utxo")
 
 	if utxos.Tx != nil {
-		for i, out := range utxos.Tx.Outputs {
-			t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", i, out.Satoshis, *out.LockingScript)
-			utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), out, uint32(i))
-			spend := &utxo.Spend{
-				TxID:     tx.TxIDChainHash(),
-				Vout:     uint32(i),
-				UTXOHash: utxoHash,
-			}
-			spendStatus, err := td.UtxoStore.GetSpend(ctx, spend)
-			require.NoError(t, err)
-			t.Logf("UTXO #%d spend status: %+v\n", i, spendStatus)
-			require.Equal(t, spendStatus.Status, 0)
-			require.Nil(t, spendStatus.SpendingTxID)
+		spentCoinbaseOutput := utxos.Tx.Outputs[0]
+		t.Logf("UTXO #%d: Value=%d Satoshis, Script=%x\n", 0, spentCoinbaseOutput.Satoshis, *spentCoinbaseOutput.LockingScript)
+		utxoHash, _ := util.UTXOHashFromOutput(coinbaseTx.TxIDChainHash(), spentCoinbaseOutput, uint32(0))
+		spend := &utxo.Spend{
+			TxID:     coinbaseTx.TxIDChainHash(),
+			Vout:     uint32(0),
+			UTXOHash: utxoHash,
 		}
+		spendStatus, err := td.UtxoStore.GetSpend(ctx, spend)
+		t.Logf("UTXO #%d spend status: %+v\n", 0, spendStatus)
+		require.Equal(t, spendStatus.Status, 1)
+		require.Equal(t, spendStatus.SpendingTxID, tx.TxIDChainHash())
+		require.NoError(t, err)
 	} else {
 		t.Logf("No tx found into meta.Data")
 	}
