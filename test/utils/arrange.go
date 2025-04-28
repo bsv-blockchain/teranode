@@ -208,7 +208,9 @@ func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName st
 		},
 	})
 
-	defer td.Stop(t)
+	t.Cleanup(func() {
+		td.Stop(t)
+	})
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test-tna2")
