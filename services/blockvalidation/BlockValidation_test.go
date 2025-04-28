@@ -349,7 +349,8 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
@@ -468,7 +469,8 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
@@ -561,7 +563,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -653,7 +656,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -762,7 +766,8 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.Error(t, err)
@@ -878,7 +883,8 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	// When: The last block in the chain is validated
 	start := time.Now()
@@ -1002,7 +1008,9 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 	// Create block validation instance
 	tSettings.BlockValidation.OptimisticMining = false
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	// Test valid merkle root
 	err = blockValidation.ValidateBlock(context.Background(), validBlock, "http://localhost:8000", model.NewBloomStats())
@@ -1057,7 +1065,6 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 // - Proper validation of retrieved transactions
 // - Integration of validated transactions into the transaction store
 // - Completion of block validation after resolving missing transactions
-
 func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -1219,7 +1226,8 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Create block validation instance with optimistic mining disabled
 	tSettings.BlockValidation.OptimisticMining = false
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient, time.Duration(0))
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	// Test block validation - it should request the missing transaction
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -1304,6 +1312,8 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 			require.NoError(t, err)
 
+			tSettings.BlockValidation.BloomFilterRetentionSize = uint32(1)
+
 			// Create block validator with 10 minute bloom filter expiration
 			blockValidator := NewBlockValidation(
 				ctx, // Use the context with cancel
@@ -1314,7 +1324,6 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 				txStore,
 				txMetaStore,
 				subtreeValidationClient,
-				10*time.Minute,
 			)
 
 			// Create a valid block header

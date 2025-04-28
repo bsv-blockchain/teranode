@@ -37,6 +37,12 @@ func getUint32(key string, defaultValue uint32, alternativeContext ...string) ui
 	return value
 }
 
+func getUint64(key string, defaultValue uint64, alternativeContext ...string) uint64 {
+	value, _ := gocore.Config(alternativeContext...).GetUint64(key, defaultValue)
+
+	return value
+}
+
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
 	value, _, _ := gocore.Config(alternativeContext...).GetURL(key, defaultValue)
 

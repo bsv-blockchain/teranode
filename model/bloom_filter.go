@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -13,6 +14,34 @@ type BlockBloomFilter struct {
 	Filter       *blobloom.Filter
 	BlockHash    *chainhash.Hash
 	CreationTime time.Time
+	BlockHeight  uint32
+}
+
+func (bbf *BlockBloomFilter) Serialize() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	_, err := blobloom.Dump(buf, bbf.Filter, "filter")
+
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (bbf *BlockBloomFilter) Deserialize(data []byte) error {
+	buf := bytes.NewBuffer(data)
+
+	l, err := blobloom.NewLoader(buf)
+	if err != nil {
+		return err
+	}
+
+	bbf.Filter, err = l.Load(bbf.Filter)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type BloomStats struct {

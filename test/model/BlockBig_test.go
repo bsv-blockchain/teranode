@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/model"
 	teranode_model "github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -279,10 +281,17 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 
 	defer pprof.StopCPUProfile()
 
+	bbf := &model.BlockBloomFilter{
+		CreationTime: time.Now(),
+		BlockHash:    block.Hash(),
+	}
+
 	timeStart := time.Now()
 	bloomFilter, err := block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore)
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(timeStart))
+
+	bbf.Filter = bloomFilter
 
 	f, _ = os.Create("mem.prof")
 
@@ -290,10 +299,10 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 
 	_ = pprof.WriteHeapProfile(f)
 
-	require.NotNil(t, bloomFilter)
+	require.NotNil(t, bbf.Filter)
 
-	assert.Equal(t, true, bloomFilter.Has(0))
-	assert.Equal(t, false, bloomFilter.Has(1))
+	assert.Equal(t, true, bbf.Filter.Has(0))
+	assert.Equal(t, false, bbf.Filter.Has(1))
 
 	// check all txids are in bloom filter
 	for idx, subtree := range block.SubtreeSlices {
@@ -303,14 +312,59 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 			}
 
 			n64 := binary.BigEndian.Uint64(node.Hash[:])
-			assert.Equal(t, true, bloomFilter.Has(n64))
+			assert.Equal(t, true, bbf.Filter.Has(n64))
 		}
 	}
 
 	// random negative check
-	assert.Equal(t, false, bloomFilter.Has(1231422))
-	assert.Equal(t, false, bloomFilter.Has(5453456356))
-	assert.Equal(t, false, bloomFilter.Has(4556873583))
+	assert.Equal(t, false, bbf.Filter.Has(1231422))
+	assert.Equal(t, false, bbf.Filter.Has(5453456356))
+	assert.Equal(t, false, bbf.Filter.Has(4556873583))
+
+	// store the bloom filter to the subtreestore
+
+	// Serialize the bloom filter
+	bloomFilterBytes, err := bbf.Serialize()
+	require.NoError(t, err)
+	require.NotNil(t, bloomFilterBytes)
+
+	//record the bloom filter in the subtreestore
+	err = subtreeStore.Set(context.Background(), block.Hash()[:], bloomFilterBytes, options.WithFileExtension("bloomfilter"))
+	require.NoError(t, err)
+
+	// get the bloom filter from the subtreestore
+	retrievedBloomFilterBytes, err := subtreeStore.Get(context.Background(), block.Hash()[:], options.WithFileExtension("bloomfilter"))
+	require.NoError(t, err)
+
+	fmt.Println("retrievedBloomFilterBytes Length: ", len(retrievedBloomFilterBytes))
+
+	createdBbf := &model.BlockBloomFilter{
+		CreationTime: time.Now(),
+		BlockHash:    block.Hash(),
+	}
+
+	err = createdBbf.Deserialize(bloomFilterBytes)
+	require.NoError(t, err)
+
+	assert.Equal(t, true, createdBbf.Filter.Has(0))
+	assert.Equal(t, false, createdBbf.Filter.Has(1))
+
+	// check all txids are in bloom filter
+	for idx, subtree := range block.SubtreeSlices {
+		for nodeIdx, node := range subtree.Nodes {
+			if idx == 0 && nodeIdx == 0 {
+				continue
+			}
+
+			n64 := binary.BigEndian.Uint64(node.Hash[:])
+			assert.Equal(t, true, createdBbf.Filter.Has(n64))
+		}
+	}
+
+	// random negative check
+	assert.Equal(t, false, createdBbf.Filter.Has(1231422))
+	assert.Equal(t, false, createdBbf.Filter.Has(5453456356))
+	assert.Equal(t, false, createdBbf.Filter.Has(4556873583))
 }
 
 func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {

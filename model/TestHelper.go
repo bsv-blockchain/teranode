@@ -40,6 +40,7 @@ var (
 )
 
 const CoinbaseHex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+const notImplemented = "not implemented"
 
 func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtreeStore, generateNewTestData bool) (*Block, error) {
 	// create test dir of not exists
@@ -446,12 +447,14 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 }
 
 type TestLocalSubtreeStore struct {
-	Files map[chainhash.Hash]int
+	Files    map[chainhash.Hash]int
+	FileData map[string][]byte // For bloom filters and other non-subtree data
 }
 
 func NewLocalSubtreeStore() *TestLocalSubtreeStore {
 	return &TestLocalSubtreeStore{
-		Files: make(map[chainhash.Hash]int),
+		Files:    make(map[chainhash.Hash]int),
+		FileData: make(map[string][]byte),
 	}
 }
 
@@ -459,22 +462,66 @@ func (l TestLocalSubtreeStore) Health(_ context.Context, _ bool) (int, string, e
 	return 0, "", nil
 }
 
-func (l TestLocalSubtreeStore) Exists(_ context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+	if len(key) == 0 {
+		return false, errors.NewProcessingError("key cannot be empty")
+	}
+
+	// Parse options
+	var opt options.Options
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	// Check if it exists in the FileData map
+	keyString := string(key)
+	if opt.Extension != "" {
+		keyString = keyString + "." + opt.Extension
+	}
+
+	if l.FileData != nil {
+		if _, ok := l.FileData[keyString]; ok {
+			return true, nil
+		}
+	}
+
+	// Check if it exists in the Files map
 	_, ok := l.Files[chainhash.Hash(key)]
 	return ok, nil
 }
 
-func (l TestLocalSubtreeStore) Get(_ context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	if len(key) == 0 {
+		return nil, errors.NewProcessingError("key cannot be empty")
+	}
+
+	// Parse options
+	var opt options.Options
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	// Try to find the data in the FileData map first (for bloom filters and other data)
+	keyString := string(key)
+	if opt.Extension != "" {
+		keyString = keyString + "." + opt.Extension
+	}
+
+	if l.FileData != nil {
+		if data, ok := l.FileData[keyString]; ok {
+			return data, nil
+		}
+	}
+
+	// If not found in FileData, use the original subtree lookup logic
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
 	}
-
 	subtreeBytes, err := os.ReadFile(fmt.Sprintf(TestFileNameTemplate, file))
 	if err != nil {
 		return nil, err
 	}
-
 	return subtreeBytes, nil
 }
 
@@ -492,10 +539,33 @@ func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, opts .
 	return subtreeFile, nil
 }
 
-const notImplemented = "not implemented"
+func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+	if len(key) == 0 {
+		return errors.NewProcessingError("key cannot be empty")
+	}
 
-func (l TestLocalSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
-	panic(notImplemented)
+	// Create a map for storing bloom filters and other data if it doesn't exist
+	if l.FileData == nil {
+		l.FileData = make(map[string][]byte)
+	}
+
+	// Parse options
+	var opt options.Options
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	// Create a storage key based on the hash and extension
+	keyString := string(key)
+	if opt.Extension != "" {
+		keyString = keyString + "." + opt.Extension
+	}
+
+	// Store the data in memory
+	l.FileData[keyString] = make([]byte, len(value))
+	copy(l.FileData[keyString], value)
+
+	return nil
 }
 
 func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {

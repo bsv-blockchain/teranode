@@ -29,7 +29,7 @@ require (
 	github.com/dolthub/swiss v0.2.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/greatroar/blobloom v0.7.2
+	github.com/greatroar/blobloom v0.8.0
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.1
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/jarcoal/httpmock v1.3.1

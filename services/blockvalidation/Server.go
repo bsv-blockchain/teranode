@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -269,32 +268,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
-	var expiration time.Duration
-
-	expirationStr := storeURL.Query().Get("expiration")
-
-	if expirationStr != "" {
-		expirationVal, err := strconv.ParseUint(expirationStr, 10, 64)
-		if err == nil {
-			expirationInt64, err := util.SafeUint64ToInt64(expirationVal)
-			if err != nil {
-				return err
-			}
-
-			// We have a valid expiration value, so we can use it. We assume it is in seconds.
-			expiration = time.Duration(expirationInt64) * time.Second
-		} else {
-			// We do not have a valid expiration value, so we see if we can parse it as a duration.
-			d, err := time.ParseDuration(expirationStr)
-			if err != nil {
-				return errors.NewConfigurationError("could not parse expiration %s", expirationStr, err)
-			}
-
-			expiration = d
-		}
-	}
-
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient, expiration)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
 
 	go u.processSubtreeNotify.Start()
 

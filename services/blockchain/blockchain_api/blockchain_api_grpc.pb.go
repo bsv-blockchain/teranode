@@ -65,7 +65,6 @@ const (
 	BlockchainAPI_CatchUpBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
 	BlockchainAPI_LegacySync_FullMethodName                          = "/blockchain_api.BlockchainAPI/LegacySync"
 	BlockchainAPI_Idle_FullMethodName                                = "/blockchain_api.BlockchainAPI/Idle"
-	BlockchainAPI_GetFSMState_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetFSMState"
 	BlockchainAPI_GetBlockLocator_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockLocator"
 	BlockchainAPI_LocateBlockHeaders_FullMethodName                  = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
 	BlockchainAPI_GetBestHeightAndTime_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
@@ -161,8 +160,6 @@ type BlockchainAPIClient interface {
 	LegacySync(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Idle marks the service as idle.
 	Idle(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// GetFSMState retrieves the FSM state.
-	GetFSMState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetBlockLocator retrieves a block locator for chain synchronization.
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
 	// LocateBlockHeaders finds block headers using a locator.
@@ -608,16 +605,6 @@ func (c *blockchainAPIClient) Idle(ctx context.Context, in *emptypb.Empty, opts 
 	return out, nil
 }
 
-func (c *blockchainAPIClient) GetFSMState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetFSMStateResponse)
-	err := c.cc.Invoke(ctx, BlockchainAPI_GetFSMState_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockchainAPIClient) GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockLocatorResponse)
@@ -738,8 +725,6 @@ type BlockchainAPIServer interface {
 	LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	// Idle marks the service as idle.
 	Idle(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	// GetFSMState retrieves the FSM state.
-	GetFSMState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	// GetBlockLocator retrieves a block locator for chain synchronization.
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
 	// LocateBlockHeaders finds block headers using a locator.
@@ -881,9 +866,6 @@ func (UnimplementedBlockchainAPIServer) LegacySync(context.Context, *emptypb.Emp
 }
 func (UnimplementedBlockchainAPIServer) Idle(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Idle not implemented")
-}
-func (UnimplementedBlockchainAPIServer) GetFSMState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetFSMState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
@@ -1664,24 +1646,6 @@ func _BlockchainAPI_Idle_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_GetFSMState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).GetFSMState(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_GetFSMState_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).GetFSMState(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockchainAPI_GetBlockLocator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBlockLocatorRequest)
 	if err := dec(in); err != nil {
@@ -1906,10 +1870,6 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Idle",
 			Handler:    _BlockchainAPI_Idle_Handler,
-		},
-		{
-			MethodName: "GetFSMState",
-			Handler:    _BlockchainAPI_GetFSMState_Handler,
 		},
 		{
 			MethodName: "GetBlockLocator",

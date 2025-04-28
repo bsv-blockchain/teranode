@@ -138,9 +138,6 @@ service BlockchainAPI {
   // Idle marks the service as idle.
   rpc Idle(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
-  // GetFSMState retrieves the FSM state.
-  rpc GetFSMState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
-
   // Legacy sync methods
 
   // GetBlockLocator retrieves a block locator for chain synchronization.

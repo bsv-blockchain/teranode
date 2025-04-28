@@ -318,7 +318,7 @@ func TestBlockHeadersN(t *testing.T) {
 	assert.Equal(t, catchupBlockHeaders[997].String(), batches[1].hash.String())
 }
 
-func TestServer_processBlockFound(t *testing.T) {
+func Test_Server_processBlockFound(t *testing.T) {
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings()
@@ -345,8 +345,11 @@ func TestServer_processBlockFound(t *testing.T) {
 
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
 
+	subtreeStore := memory.New()
+	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(1)
+
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
-	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, nil, txStore, utxoStore, nil, time.Duration(2)*time.Second)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
 	require.NoError(t, err)
@@ -415,11 +418,13 @@ func TestServer_catchup(t *testing.T) {
 		utxoStore := utxostore.New(ulogger.TestLogger{})
 		_ = utxoStore.SetBlockHeight(200)
 
+		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+
 		server := &Server{
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:        utxoStore,
 		}
 
@@ -482,11 +487,13 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
+		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+
 		server := &Server{
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:        utxoStore,
 		}
 
@@ -530,11 +537,13 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
+		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+
 		server := &Server{
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
 		}
 
 		block := createTestBlock(t)
@@ -557,11 +566,12 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
+		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
 		server := &Server{
 			logger:           logger,
 			settings:         settings,
 			blockchainClient: mockBlockchainClient,
-			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil, 0),
+			blockValidation:  NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
 		}
 
 		// Create a chain of test blocks
