@@ -600,30 +600,27 @@ func Test_checkSecretMining(t *testing.T) {
 		_ = utxoStore.SetBlockHeight(110)
 
 		blockchainClient := &blockchain.Mock{}
-		blockBytes, err := hex.DecodeString("0000002006226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f1633819a69afbd7ce1f1a01c3b786fcbb023274f3b15172b24feadd4c80e6c6a8b491267ffff7f20040000000102000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
-		require.NoError(t, err)
 
 		server := New(ulogger.TestLogger{}, settings, nil, nil, utxoStore, nil, blockchainClient, nil)
 
-		block, err := model.NewBlockFromBytes(blockBytes, nil)
-		require.NoError(t, err)
+		blockHeader := &model.BlockHeader{}
+		blockMeta := &model.BlockHeaderMeta{Height: 110}
 
-		block.Height = 110 // same height as utxo store
-		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+		blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockMeta, nil).Once()
 
 		secretMining, err := server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		require.NoError(t, err)
 		assert.False(t, secretMining)
 
-		block.Height = 120 // 10 blocks ahead
-		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+		blockMeta.Height = 120 // 10 blocks ahead
+		blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockMeta, nil).Once()
 
 		secretMining, err = server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		require.NoError(t, err)
 		assert.False(t, secretMining)
 
-		block.Height = 99 // 11 blocks old
-		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+		blockMeta.Height = 99 // 11 blocks old
+		blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockMeta, nil).Once()
 
 		secretMining, err = server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		require.NoError(t, err)

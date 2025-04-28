@@ -239,12 +239,18 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 
 	header, err := model.NewBlockHeaderFromBytes(resp.Header)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewProcessingError("[Blockchain:GetBlock][%s] error parsing block header from bytes", blockHash.String(), err)
 	}
 
-	coinbaseTx, err := bt.NewTxFromBytes(resp.CoinbaseTx)
-	if err != nil {
-		return nil, err
+	var coinbaseTx *bt.Tx
+
+	if len(resp.CoinbaseTx) > 0 {
+		coinbaseTx, err = bt.NewTxFromBytes(resp.CoinbaseTx)
+		if err != nil {
+			return nil, errors.NewProcessingError("[Blockchain:GetBlock][%s] error parsing coinbase tx from bytes", blockHash.String(), err)
+		}
+	} else {
+		c.logger.Warnf("[Blockchain:GetBlock][%s] coinbase tx is empty for block", blockHash.String())
 	}
 
 	subtreeHashes := make([]*chainhash.Hash, 0, len(resp.SubtreeHashes))
@@ -252,7 +258,7 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 	for _, subtreeHash := range resp.SubtreeHashes {
 		hash, err := chainhash.NewHash(subtreeHash)
 		if err != nil {
-			return nil, err
+			return nil, errors.NewProcessingError("[Blockchain:GetBlock][%s] error parsing subtree hash from bytes", blockHash.String(), err)
 		}
 
 		subtreeHashes = append(subtreeHashes, hash)
