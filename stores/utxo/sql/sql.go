@@ -48,7 +48,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -76,7 +75,6 @@ type Store struct {
 	engine          string
 	blockHeight     atomic.Uint32
 	medianBlockTime atomic.Uint32
-	blockRetention  uint32
 }
 
 // New creates a new SQL-based UTXO store.
@@ -128,21 +126,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		medianBlockTime: atomic.Uint32{},
 	}
 
-	blockRetentionValue := storeURL.Query().Get("block_retention")
-	if blockRetentionValue != "" {
-		e, err := strconv.ParseInt(blockRetentionValue, 10, 32)
-		if err != nil {
-			return nil, errors.NewInvalidArgumentError("could not parse block_retention %s", blockRetentionValue, err)
-		}
-
-		s.blockRetention = uint32(e) // nolint: gosec
-
+	if tSettings.UtxoStore.BlockHeightRetention > 0 {
 		// // Create a goroutine to remove transactions that are marked with a tombstone time
 		// db2, err := util.InitSQLDB(logger, storeUrl)
 		// if err != nil {
 		// 	return nil, errors.NewStorageError("failed to init sql db", err)
 		// }
-
 		go func() {
 			for {
 				select {
@@ -907,7 +896,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		WHERE id = $1
 	`
 
-	if s.blockRetention > 0 {
+	if s.settings.UtxoStore.BlockHeightRetention > 0 {
 		// check whether the transaction has any unspent outputs
 		qUnspent := `
 			SELECT count(o.idx), t.conflicting
@@ -930,7 +919,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 		if unspent == 0 || conflicting {
 			// Now mark the transaction as tombstoned if there are no more unspent outputs
-			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.blockRetention))
+			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.settings.UtxoStore.BlockHeightRetention))
 		}
 
 		if _, err := txn.ExecContext(ctx, qSetDAH, transactionID, deleteAtHeightOrNull); err != nil {
@@ -1314,8 +1303,8 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var deleteAtHeight sql.NullInt64
 
-	if s.blockRetention > 0 && setValue {
-		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + s.blockRetention)); err != nil {
+	if s.settings.UtxoStore.BlockHeightRetention > 0 && setValue {
+		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + s.settings.UtxoStore.BlockHeightRetention)); err != nil {
 			return nil, nil, err
 		}
 	}

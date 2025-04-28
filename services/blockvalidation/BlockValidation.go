@@ -75,8 +75,8 @@ type BlockValidation struct {
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
 
-	// subtreeBlockRetention specifies how long subtrees should be retained
-	subtreeBlockRetention uint32
+	// subtreeBlockHeightRetention specifies how long subtrees should be retained
+	subtreeBlockHeightRetention uint32
 
 	// txStore handles permanent storage of transactions
 	txStore blob.Store
@@ -161,13 +161,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		settings:                      tSettings,
 		blockchainClient:              blockchainClient,
 		subtreeStore:                  subtreeStore,
-		subtreeBlockRetention:         tSettings.BlockValidation.SubtreeBlockRetention,
+		subtreeBlockHeightRetention:   tSettings.BlockValidation.SubtreeBlockHeightRetention,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		recentBlocksBloomFilters:      make(map[chainhash.Hash]*model.BlockBloomFilter),
 		bloomFilterRetentionSize:      tSettings.BlockValidation.BloomFilterRetentionSize,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(tSettings.BlockValidation.SubtreeBlockRetention),
+		subtreeDeDuplicator:           NewDeDuplicator(tSettings.BlockValidation.SubtreeBlockHeightRetention),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes

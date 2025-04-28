@@ -11,7 +11,8 @@ import (
 )
 
 type Options struct {
-	BlockHeightRetention uint32
+	BlockHeightRetention uint32 // This is the block height retention for the store (StoreOption)
+	DAH                  uint32 // This is the delete at height for a file (FileOption)
 	Filename             string
 	Extension            string
 	SubDirectory         string
@@ -78,9 +79,9 @@ func WithHashPrefix(length int) StoreOption {
 // Per-call options
 
 // WithDeleteAt configures the DAH for the file.
-func WithDeleteAt(blockHeightRetention uint32) FileOption {
+func WithDeleteAt(dah uint32) FileOption {
 	return func(s *Options) {
-		s.BlockHeightRetention = blockHeightRetention
+		s.DAH = dah
 	}
 }
 
@@ -193,8 +194,8 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 	options := NewFileOptions(opts...)
 	query := url.Values{}
 
-	if options.BlockHeightRetention > 0 {
-		query.Set("blockHeightRetention", strconv.FormatUint(uint64(options.BlockHeightRetention), 10))
+	if options.DAH > 0 {
+		query.Set("dah", strconv.FormatUint(uint64(options.DAH), 10))
 	}
 
 	if options.Filename != "" {

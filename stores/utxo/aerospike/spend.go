@@ -383,7 +383,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreUnspendable),
 			aerospike.NewValue(thisBlockHeight),
-			aerospike.NewValue(s.blockHeightRetention),
+			aerospike.NewValue(s.settings.UtxoStore.BlockHeightRetention),
 		))
 
 		batchRecordKeys = append(batchRecordKeys, batchKey)
@@ -444,11 +444,11 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							}
 
 						case LuaDAHSet:
-							if err := s.SetDAHForChildRecords(txID, res.ChildCount, thisBlockHeight+s.blockHeightRetention); err != nil {
+							if err := s.SetDAHForChildRecords(txID, res.ChildCount, thisBlockHeight+s.settings.UtxoStore.BlockHeightRetention); err != nil {
 								errs = errors.Join(errs, err)
 							}
 
-							if err := s.setDAHExternalTransaction(ctx, txID, thisBlockHeight+s.blockHeightRetention); err != nil {
+							if err := s.setDAHExternalTransaction(ctx, txID, thisBlockHeight+s.settings.UtxoStore.BlockHeightRetention); err != nil {
 								errs = errors.Join(errs, err)
 							}
 
@@ -590,7 +590,7 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 			switch ret.Signal {
 			case LuaDAHSet:
 				thisBlockHeight := s.blockHeight.Load()
-				dah := thisBlockHeight + s.blockHeightRetention
+				dah := thisBlockHeight + s.settings.UtxoStore.BlockHeightRetention
 
 				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, dah); err != nil {
 					return err
@@ -701,7 +701,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, LuaPackage, "incrementSpentExtraRecs",
 			aerospike.NewIntegerValue(item.increment),
 			aerospike.NewIntegerValue(int(currentBlockHeight)),
-			aerospike.NewValue(s.blockHeightRetention),
+			aerospike.NewValue(s.settings.UtxoStore.BlockHeightRetention),
 		))
 	}
 

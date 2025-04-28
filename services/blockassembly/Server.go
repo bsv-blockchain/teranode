@@ -236,10 +236,12 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				ba.logger.Infof("Stopping subtree retry processor")
 				return
 			case subtreeRetry := <-subtreeRetryChan:
+				dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.BlockAssembly.SubtreeBlockHeightRetention
+
 				if err = ba.subtreeStore.Set(ctx,
 					subtreeRetry.subtreeHash[:],
 					subtreeRetry.subtreeBytes,
-					options.WithDeleteAt(ba.settings.BlockAssembly.SubtreeBlockRetention), // this sets the DAH for the subtree, it must be updated when a block is mined
+					options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
 					options.WithFileExtension("subtree"),
 				); err != nil {
 					if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -353,7 +355,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	if err = ba.subtreeStore.Set(ctx,
 		subtree.RootHash()[:],
 		subtreeBytes,
-		options.WithDeleteAt(ba.settings.BlockAssembly.SubtreeBlockRetention), // this sets the DAH for the subtree, it must be updated when a block is mined
+		options.WithDeleteAt(ba.settings.BlockAssembly.SubtreeBlockHeightRetention), // this sets the DAH for the subtree, it must be updated when a block is mined
 		options.WithFileExtension("subtree"),
 	); err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {

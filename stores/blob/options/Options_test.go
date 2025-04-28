@@ -167,9 +167,9 @@ func TestTTLOptions(t *testing.T) {
 		assert.Equal(t, bhr, opts.BlockHeightRetention)
 	})
 
-	t.Run("WithTTL", func(t *testing.T) {
+	t.Run("WithDAH", func(t *testing.T) {
 		opts := NewFileOptions(WithDeleteAt(bhr))
-		assert.Equal(t, bhr, opts.BlockHeightRetention)
+		assert.Equal(t, bhr, opts.DAH)
 	})
 }
 
@@ -219,7 +219,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 
 		query := FileOptionsToQuery(opts...)
 
-		assert.Equal(t, "5", query.Get("blockHeightRetention"))
+		assert.Equal(t, "5", query.Get("dah"))
 		assert.Equal(t, "test.txt", query.Get("filename"))
 		assert.Equal(t, "meta", query.Get("extension"))
 		assert.Equal(t, "true", query.Get("allowOverwrite"))
@@ -244,7 +244,7 @@ func TestQueryToFileOptions(t *testing.T) {
 		opts := QueryToFileOptions(query)
 		options := NewFileOptions(opts...)
 
-		assert.Equal(t, uint32(5), options.BlockHeightRetention)
+		assert.Equal(t, uint32(5), options.DAH)
 		assert.Equal(t, "test.txt", options.Filename)
 		assert.Equal(t, "meta", options.Extension)
 		assert.True(t, options.AllowOverwrite)
@@ -252,12 +252,12 @@ func TestQueryToFileOptions(t *testing.T) {
 
 	t.Run("Invalid DAH", func(t *testing.T) {
 		query := url.Values{
-			"blockHeightRetention": []string{"invalid"},
+			"dah": []string{"invalid"},
 		}
 
 		opts := QueryToFileOptions(query)
 		options := NewFileOptions(opts...)
-		assert.Equal(t, uint32(0), options.BlockHeightRetention)
+		assert.Equal(t, uint32(0), options.DAH)
 	})
 }
 

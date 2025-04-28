@@ -16,16 +16,16 @@ type entry struct {
 }
 
 type DeDuplicator struct {
-	mu             sync.Mutex
-	blockRetention uint32
-	cache          map[chainhash.Hash]*entry
+	mu                   sync.Mutex
+	blockHeightRetention uint32
+	cache                map[chainhash.Hash]*entry
 }
 
-func NewDeDuplicator(blockRetention uint32) *DeDuplicator {
+func NewDeDuplicator(blockHeightRetention uint32) *DeDuplicator {
 	return &DeDuplicator{
-		mu:             sync.Mutex{},
-		blockRetention: blockRetention,
-		cache:          make(map[chainhash.Hash]*entry),
+		mu:                   sync.Mutex{},
+		blockHeightRetention: blockHeightRetention,
+		cache:                make(map[chainhash.Hash]*entry),
 	}
 }
 
@@ -57,7 +57,7 @@ func (u *DeDuplicator) DeDuplicate(ctx context.Context, key chainhash.Hash, curr
 
 	u.cache[key] = &entry{
 		cond:     cond,
-		deleteAt: currentBlockHeight + u.blockRetention,
+		deleteAt: currentBlockHeight + u.blockHeightRetention,
 	}
 
 	u.mu.Unlock()

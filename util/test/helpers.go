@@ -8,6 +8,7 @@ import (
 func CreateBaseTestSettings() *settings.Settings {
 	settings := settings.NewSettings()
 	settings.ChainCfgParams = &chaincfg.RegressionNetParams
+	settings.UtxoStore.BlockHeightRetention = 1
 
 	return settings
 }

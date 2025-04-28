@@ -1,5 +1,5 @@
-.history
-.history/
+
+.history/**
 *.tar.gz
 build/
 data/

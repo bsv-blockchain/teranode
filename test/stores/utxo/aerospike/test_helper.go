@@ -179,12 +179,15 @@ func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ..
 
 func setupStore(_ *testing.T, client *uaerospike.Client) *teranode_aerospike.Store {
 	s := &teranode_aerospike.Store{}
+
+	s.SetSettings(test.CreateBaseTestSettings())
+	s.SetLogger(ulogger.TestLogger{})
 	s.SetUtxoBatchSize(100)
 	s.SetClient(client)
 	s.SetExternalStore(memory.New())
 	s.SetNamespace(aerospikeNamespace)
 	s.SetName(aerospikeSet)
-	s.SetBlockRetention(10)
+	s.SetBlockHeightRetention(10)
 
 	return s
 }

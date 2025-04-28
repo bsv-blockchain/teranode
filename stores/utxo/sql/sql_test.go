@@ -77,9 +77,9 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 		"2f6b52de3d7c88ac00000000")
 	require.NoError(t, err)
 
-	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode?block_retention=1")
-	// storeUrl, err := url.Parse("sqlite:///test?block_retention=1")
-	storeURL, err := url.Parse("sqlitememory:///test?block_retention=1")
+	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode")
+	// storeUrl, err := url.Parse("sqlite:///test")
+	storeURL, err := url.Parse("sqlitememory:///test")
 
 	require.NoError(t, err)
 

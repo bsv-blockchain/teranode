@@ -603,10 +603,13 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 
 	currentBlockHeight := s.currentBlockHeight.Load()
 
-	if merged.BlockHeightRetention > 0 {
-		// write bytes to file
-		dah := currentBlockHeight + merged.BlockHeightRetention
+	dah := merged.DAH
+	if dah == 0 && merged.BlockHeightRetention > 0 {
+		// write DAH to file
+		dah = currentBlockHeight + merged.BlockHeightRetention
+	}
 
+	if dah > 0 {
 		dahFilename := fileName + ".dah"
 		dahTempFilename := dahFilename + ".tmp"
 

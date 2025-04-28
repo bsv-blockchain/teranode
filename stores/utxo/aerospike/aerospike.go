@@ -62,7 +62,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -105,37 +104,34 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                  context.Context // store the global context for things that run in the background
-	url                  *url.URL
-	client               *uaerospike.Client
-	namespace            string
-	setName              string
-	blockHeightRetention uint32
-	blockHeight          atomic.Uint32
-	medianBlockTime      atomic.Uint32
-	logger               ulogger.Logger
-	settings             *settings.Settings
-	batchID              atomic.Uint64
-	storeBatcher         batcherIfc[BatchStoreItem]
-	getBatcher           batcherIfc[batchGetItem]
-	spendBatcher         batcherIfc[batchSpend]
-	outpointBatcher      batcherIfc[batchOutpoint]
-	incrementBatcher     batcherIfc[batchIncrement]
-	setDAHBatcher        batcherIfc[batchDAH]
-	unspendableBatcher   batcherIfc[batchUnspendable]
-	externalStore        blob.Store
-	utxoBatchSize        int
-	externalTxCache      *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	cleanupService       *cleanup.Service
+	ctx                context.Context // store the global context for things that run in the background
+	url                *url.URL
+	client             *uaerospike.Client
+	namespace          string
+	setName            string
+	blockHeight        atomic.Uint32
+	medianBlockTime    atomic.Uint32
+	logger             ulogger.Logger
+	settings           *settings.Settings
+	batchID            atomic.Uint64
+	storeBatcher       batcherIfc[BatchStoreItem]
+	getBatcher         batcherIfc[batchGetItem]
+	spendBatcher       batcherIfc[batchSpend]
+	outpointBatcher    batcherIfc[batchOutpoint]
+	incrementBatcher   batcherIfc[batchIncrement]
+	setDAHBatcher      batcherIfc[batchDAH]
+	unspendableBatcher batcherIfc[batchUnspendable]
+	externalStore      blob.Store
+	utxoBatchSize      int
+	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	cleanupService     *cleanup.Service
 }
 
 // New creates a new Aerospike-based UTXO store.
-// The URL format is: aerospike://host:port/namespace?set=setname&blockHeightRetention=n
-//
+// The URL format is: aerospike://host:port/namespace?set=setname&
 // URL parameters:
 //   - set: Aerospike set name (default: txmeta)
-//   - blockHeightRetention: Block height retention for spent UTXOs (default 100)
-//   - externalStore: URL for blob storage of large transactions
+//   - or blob storage of large transactions
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, aerospikeURL *url.URL) (*Store, error) {
 	InitPrometheusMetrics()
 
@@ -153,24 +149,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	placeholderKey, err = aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
 	if err != nil {
 		log.Fatal("Failed to init placeholder key")
-	}
-
-	blockHeightRetention := uint32(100)
-
-	blockHeightRetentionValue := aerospikeURL.Query().Get("block_retention")
-	if blockHeightRetentionValue != "" {
-		u64, err := strconv.ParseUint(blockHeightRetentionValue, 10, 32)
-		if err != nil {
-			return nil, errors.NewInvalidArgumentError("could not parse blockHeightRetention %s", blockHeightRetentionValue, err)
-		}
-
-		blockHeightRetention = uint32(u64)
-
-		if blockHeightRetention < 1 {
-			return nil, errors.NewInvalidArgumentError("blockHeightRetention must be at least 1")
-		}
-
-		logger.Infof("blockHeightRetention is set to %d", blockHeightRetention)
 	}
 
 	setName := aerospikeURL.Query().Get("set")
@@ -204,17 +182,17 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	s := &Store{
-		ctx:                  ctx,
-		url:                  aerospikeURL,
-		client:               client,
-		namespace:            namespace,
-		setName:              setName,
-		blockHeightRetention: blockHeightRetention,
-		logger:               logger,
-		settings:             tSettings,
-		externalStore:        externalStore,
-		utxoBatchSize:        utxoBatchSize,
-		externalTxCache:      externalTxCache,
+		ctx:       ctx,
+		url:       aerospikeURL,
+		client:    client,
+		namespace: namespace,
+		setName:   setName,
+		logger:    logger,
+
+		settings:        tSettings,
+		externalStore:   externalStore,
+		utxoBatchSize:   utxoBatchSize,
+		externalTxCache: externalTxCache,
 	}
 
 	cleanupService, err := cleanup.NewService(cleanup.Options{
@@ -282,6 +260,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
 	return s, nil
+}
+
+func (s *Store) SetLogger(logger ulogger.Logger) {
+	s.logger = logger
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {

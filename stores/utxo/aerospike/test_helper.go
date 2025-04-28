@@ -126,9 +126,9 @@ func (s *Store) GetExternalStore() blob.Store {
 	return s.externalStore
 }
 
-// SetBlockRetention sets the blockHeightRetention for the store
-func (s *Store) SetBlockRetention(v uint32) {
-	s.blockHeightRetention = v
+// SetBlockHeightRetention sets the blockHeightRetention for the store
+func (s *Store) SetBlockHeightRetention(v uint32) {
+	s.settings.UtxoStore.BlockHeightRetention = v
 }
 
 // SetStoreBatcher was implemented to facilitate testing

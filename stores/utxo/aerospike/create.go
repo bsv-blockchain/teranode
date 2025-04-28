@@ -369,7 +369,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithDeleteAt(s.blockHeightRetention))
+					dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+					setOptions = append(setOptions, options.WithDeleteAt(dah))
 				}
 
 				if err = s.externalStore.Set(
@@ -396,7 +397,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
-					setOptions = append(setOptions, options.WithDeleteAt(s.blockHeightRetention))
+					dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+					setOptions = append(setOptions, options.WithDeleteAt(dah))
 				}
 
 				// store the tx data externally, it is not in our aerospike record
@@ -423,8 +425,8 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.conflicting {
-			deleteAt := bItem.blockHeight + s.blockHeightRetention
-			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin("deleteAtHeight", deleteAt)))
+			dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
 		}
 
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -734,7 +736,8 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithDeleteAt(s.blockHeightRetention))
+		dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+		opts = append(opts, options.WithDeleteAt(dah))
 	}
 
 	if err := s.externalStore.Set(
@@ -839,7 +842,8 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
-		opts = append(opts, options.WithDeleteAt(s.blockHeightRetention))
+		dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+		opts = append(opts, options.WithDeleteAt(dah))
 	}
 
 	if err := s.externalStore.Set(

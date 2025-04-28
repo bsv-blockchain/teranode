@@ -31,30 +31,31 @@ type Settings struct {
 	UsePrometheusGRPCMetrics bool
 	TracingCollectorURL      *url.URL
 
-	ChainCfgParams    *chaincfg.Params
-	Policy            *PolicySettings
-	Kafka             KafkaSettings
-	Aerospike         AerospikeSettings
-	Alert             AlertSettings
-	Asset             AssetSettings
-	Block             BlockSettings
-	BlockAssembly     BlockAssemblySettings
-	BlockChain        BlockChainSettings
-	BlockValidation   BlockValidationSettings
-	Validator         ValidatorSettings
-	Region            RegionSettings
-	Advertising       AdvertisingSettings
-	UtxoStore         UtxoStoreSettings
-	P2P               P2PSettings
-	Coinbase          CoinbaseSettings
-	SubtreeValidation SubtreeValidationSettings
-	Legacy            LegacySettings
-	Propagation       PropagationSettings
-	RPC               RPCSettings
-	Faucet            FaucetSettings
-	Dashboard         DashboardSettings
-	UseOpenTracing    bool
-	UseOtelTracing    bool
+	ChainCfgParams             *chaincfg.Params
+	Policy                     *PolicySettings
+	Kafka                      KafkaSettings
+	Aerospike                  AerospikeSettings
+	Alert                      AlertSettings
+	Asset                      AssetSettings
+	Block                      BlockSettings
+	BlockAssembly              BlockAssemblySettings
+	BlockChain                 BlockChainSettings
+	BlockValidation            BlockValidationSettings
+	Validator                  ValidatorSettings
+	Region                     RegionSettings
+	Advertising                AdvertisingSettings
+	UtxoStore                  UtxoStoreSettings
+	P2P                        P2PSettings
+	Coinbase                   CoinbaseSettings
+	SubtreeValidation          SubtreeValidationSettings
+	Legacy                     LegacySettings
+	Propagation                PropagationSettings
+	RPC                        RPCSettings
+	Faucet                     FaucetSettings
+	Dashboard                  DashboardSettings
+	UseOpenTracing             bool
+	UseOtelTracing             bool
+	GlobalBlockHeightRetention uint32
 }
 
 type DashboardSettings struct {
@@ -177,7 +178,7 @@ type BlockAssemblySettings struct {
 	SendBatchTimeout                    int
 	SubtreeProcessorBatcherSize         int
 	SubtreeProcessorConcurrentReads     int
-	SubtreeBlockRetention               uint32
+	SubtreeBlockHeightRetention         uint32
 	NewSubtreeChanBuffer                int
 	SubtreeRetryChanBuffer              int
 	SubmitMiningSolutionWaitForResponse bool
@@ -210,15 +211,15 @@ type BlockValidationSettings struct {
 	ProcessTxMetaUsingStoreMissingTxThreshold        int
 	SkipCheckParentMined                             bool
 	SubtreeFoundChConcurrency                        int
-	SubtreeBlockRetention                            uint32
+	SubtreeBlockHeightRetention                      uint32
 	SubtreeDAHConcurrency                            int
 	SubtreeValidationAbandonThreshold                int
 	ValidateBlockSubtreesConcurrency                 int
 	ValidationMaxRetries                             int
 	ValidationRetrySleep                             time.Duration
 	OptimisticMining                                 bool
-	ArePreviousBlocksProcessedMaxRetry               int
-	ArePreviousBlocksProcessedRetryBackoffMultiplier int
+	IsParentMinedRetryMaxRetry                       int
+	IsParentMinedRetryBackoffMultiplier              int
 	SubtreeGroupConcurrency                          int
 	BlockFoundChBufferSize                           int
 	CatchupChBufferSize                              int
@@ -230,6 +231,8 @@ type BlockValidationSettings struct {
 	CheckSubtreeFromBlockRetries                     int
 	CheckSubtreeFromBlockRetryBackoffDuration        time.Duration
 	SecretMiningThreshold                            uint32
+	ArePreviousBlocksProcessedMaxRetry               int
+	ArePreviousBlocksProcessedRetryBackoffMultiplier int
 	PreviousBlockHeaderCount                         uint64
 	BloomFilterRetentionSize                         uint32
 }
@@ -263,6 +266,7 @@ type AdvertisingSettings struct {
 
 type UtxoStoreSettings struct {
 	UtxoStore                        *url.URL
+	BlockHeightRetention             uint32
 	OutpointBatcherSize              int
 	OutpointBatcherDurationMillis    int
 	SpendBatcherConcurrency          int
@@ -367,7 +371,7 @@ type SubtreeValidationSettings struct {
 	ProcessTxMetaUsingStoreConcurrency        int
 	ProcessTxMetaUsingStoreMissingTxThreshold int
 	SubtreeFoundChConcurrency                 int
-	SubtreeBlockRetention                     uint32
+	SubtreeBlockHeightRetention               uint32
 	SubtreeDAHConcurrency                     int
 	SubtreeValidationTimeout                  int
 	SubtreeValidationAbandonThreshold         int

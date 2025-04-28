@@ -62,7 +62,7 @@ func (l *LocalDAH) Close(_ context.Context) error {
 func (l *LocalDAH) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	merged := options.MergeOptions(l.options, opts)
 
-	if merged.BlockHeightRetention > 0 {
+	if merged.DAH > 0 || merged.BlockHeightRetention > 0 {
 		// set the value in the DAH store
 		return l.dahStore.SetFromReader(ctx, key, reader, opts...)
 	}
@@ -75,7 +75,7 @@ func (l *LocalDAH) Set(ctx context.Context, key []byte, value []byte, opts ...op
 	// l.logger.Debugf("[localDAH] Set called %v\n%s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack(), ctx.Value("stack"))
 	merged := options.MergeOptions(l.options, opts)
 
-	if merged.BlockHeightRetention > 0 {
+	if merged.DAH > 0 || merged.BlockHeightRetention > 0 {
 		// set the value in the DAH store
 		return l.dahStore.Set(ctx, key, value, opts...)
 	}

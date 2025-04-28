@@ -409,7 +409,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 		}
 
-		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockHeightRetention // nolint: gosec
 
 		if err = sm.subtreeStore.Set(gCtx,
 			subtree.RootHash()[:],
@@ -429,7 +429,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 		}
 
-		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+		dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockHeightRetention // nolint: gosec
 
 		if err = sm.subtreeStore.Set(gCtx,
 			subtreeData.RootHash()[:],
@@ -452,7 +452,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 				return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 			}
 
-			dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockRetention // nolint: gosec
+			dah := uint32(block.Height()) + sm.settings.BlockValidation.SubtreeBlockHeightRetention // nolint: gosec
 
 			if err = sm.subtreeStore.Set(ctx,
 				subtreeData.RootHash()[:],

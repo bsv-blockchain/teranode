@@ -10,7 +10,10 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // Constants for the cleanup service
@@ -21,6 +24,22 @@ const (
 	// DefaultMaxJobsHistory is the default number of jobs to keep in history
 	DefaultMaxJobsHistory = 1000
 )
+
+var (
+	prometheusUtxoCleanupBatch prometheus.Histogram
+)
+
+func init() {
+	prometheusUtxoCleanupBatch = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_cleanup_batch",
+			Help:      "Duration of utxo cleanup batch",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+}
 
 // JobStatus represents the status of a cleanup job
 type JobStatus int32
@@ -339,6 +358,7 @@ func (s *Service) getNextJob() *Job {
 
 // defaultJobProcessor is the default implementation of JobProcessor
 func defaultJobProcessor(s *Service, job *Job, workerID int) {
+
 	s.logger.Infof("Worker %d starting cleanup job for block height %d", workerID, job.BlockHeight)
 
 	// Check if the job has been cancelled
@@ -410,6 +430,8 @@ func defaultJobProcessor(s *Service, job *Job, workerID int) {
 
 	job.setStatus(JobStatusCompleted)
 	job.Ended = time.Now()
+
+	prometheusUtxoCleanupBatch.Observe(float64(time.Since(job.Started).Microseconds()) / 1_000_000)
 
 	s.logger.Infof("Worker %d completed cleanup job for block height %d in %v", workerID, job.BlockHeight, job.Ended.Sub(job.Started))
 }

@@ -141,9 +141,12 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	m.keys[string(hash)] = []byte{}
 	m.blobs[storeKey] = value
 
-	if merged.BlockHeightRetention > 0 {
-		m.dahs[storeKey] = m.currentBlockHeight + merged.BlockHeightRetention
+	dah := merged.DAH
+	if dah == 0 && merged.BlockHeightRetention > 0 {
+		dah = m.currentBlockHeight + merged.BlockHeightRetention
 	}
+
+	m.dahs[storeKey] = dah
 
 	if merged.Header != nil {
 		m.headers[storeKey] = merged.Header

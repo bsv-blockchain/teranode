@@ -173,7 +173,7 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-		aerospike.NewValue(s.blockHeightRetention),
+		aerospike.NewValue(s.settings.UtxoStore.BlockHeightRetention),
 	)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", aErr.Error()).Inc()
