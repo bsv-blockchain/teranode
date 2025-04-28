@@ -22,6 +22,10 @@ func TestUnspentTransactionOutputsWithPostgres(t *testing.T) {
 
 	td := utils.SetupPostgresTestDaemon(t, ctx, "unspent-txs")
 
+	// Generate initial blocks
+	_, err := td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
 	// Create key pairs for testing
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
