@@ -145,7 +145,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		deferFn(err)
 	}()
 
-	// check that block assembly is not more than 100 (chainParams.CoinbaseMaturity) blocks behind
+	// var maxBlocksBehind uint32 = uint32(sm.chainParams.CoinbaseMaturity)
+	var maxBlocksBehind uint32 = 0
+
+	// check that block assembly is not more than maxBlocksBehind blocks behind
 	// this is to make sure all the coinbases have been processed in the block assembly
 	_, err = retry.Retry(ctx, sm.logger, func() (uint32, error) {
 		blockAssemblyStatus, err := sm.blockAssembly.GetBlockAssemblyState(ctx)
@@ -153,7 +156,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			return 0, errors.NewProcessingError("failed to get block assembly state", err)
 		}
 
-		if blockAssemblyStatus.CurrentHeight+uint32(sm.chainParams.CoinbaseMaturity) < blockHeight {
+		if blockAssemblyStatus.CurrentHeight+maxBlocksBehind < blockHeight {
 			return 0, errors.NewProcessingError("block assembly is behind, block height %d, block assembly height %d", blockHeight, blockAssemblyStatus.CurrentHeight)
 		}
 
@@ -164,6 +167,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		retry.WithBackoffMultiplier(2),
 		retry.WithMessage(fmt.Sprintf("[HandleBlockDirect][%s %d] block assembly is behind, retrying", block.Hash().String(), blockHeight)),
 	)
+	if err != nil {
+		// block-assembly is still behind, so we cannot process this block
+		return err
+	}
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
