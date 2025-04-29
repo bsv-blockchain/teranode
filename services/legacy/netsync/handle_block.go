@@ -146,7 +146,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}()
 
 	// var maxBlocksBehind uint32 = uint32(sm.chainParams.CoinbaseMaturity)
-	var maxBlocksBehind uint32 = 0
+	var maxBlocksBehind uint32 = 1
 
 	// check that block assembly is not more than maxBlocksBehind blocks behind
 	// this is to make sure all the coinbases have been processed in the block assembly
@@ -163,7 +163,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return blockAssemblyStatus.CurrentHeight, nil
 	},
 		retry.WithRetryCount(10),
-		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffDurationType(10*time.Millisecond),
 		retry.WithBackoffMultiplier(2),
 		retry.WithMessage(fmt.Sprintf("[HandleBlockDirect][%s %d] block assembly is behind, retrying", block.Hash().String(), blockHeight)),
 	)
