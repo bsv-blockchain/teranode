@@ -71,9 +71,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	testLock.Lock()
 	defer testLock.Unlock()
 
-	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
-	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
@@ -84,6 +81,10 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 
 	// mine 3 blocks on node2
 	_, err := node2.CallRPC("generate", []any{300})
+	require.NoError(t, err)
+
+	// verify blockheight on node2
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
 	require.NoError(t, err)
 
 	// stop node 2 so that it doesn't sync with node 1
@@ -98,11 +99,11 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		SettingsContext:   "docker.host.teranode1",
 	})
 
-	// // set run state
-	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
-	// require.NoError(t, err)
-
 	_, err = node1.CallRPC("generate", []any{200})
+	require.NoError(t, err)
+
+	// verify blockheight on node1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 200, blockWait)
 	require.NoError(t, err)
 
 	// restart node 2 (which is at height 3)
@@ -123,11 +124,11 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	}()
 
 	// verify blockheight on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 301, blockWait)
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 300, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 301, blockWait)
 	require.NoError(t, err)
 }
 
