@@ -1446,23 +1446,26 @@ func WaitForNodesToSync(ctx context.Context, nodes []blockchain.ClientI, timeout
 
 func WaitForNodeBlockHeight(ctx context.Context, blockchainClient blockchain.ClientI, height uint32, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	bestHeight := uint32(0)
 
 	for {
 		if time.Now().After(deadline) {
-			return errors.NewProcessingError("timeout waiting for block height %d", height)
+			return errors.NewProcessingError("timeout waiting for block height %d, best height %d", height, bestHeight)
 		}
 
-		_, err := blockchainClient.GetBlockByHeight(ctx, height)
-
+		_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
-			// time.Sleep(10 * time.Millisecond)
 			time.Sleep(1 * time.Second)
-			// return errors.NewProcessingError("failed to get block by height: %w", err)
+
 			continue
 		}
 
-		break
-	}
+		bestHeight = meta.Height
 
-	return nil
+		if bestHeight >= height {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+	}
 }

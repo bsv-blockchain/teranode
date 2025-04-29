@@ -1021,19 +1021,23 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 }
 
 func (u *Server) checkSecretMining(ctx context.Context, lastCommonAncestorBlockHash *chainhash.Hash) (bool, error) {
+	if u.utxoStore.GetBlockHeight() <= u.settings.BlockValidation.SecretMiningThreshold {
+		return false, nil
+	}
+
 	// check whether we are catching up to very old blocks, while we are ahead
 	// this could mean we are catching up on a secretly mined chain, which we should ignore
-	_, blockMeta, err := u.blockchainClient.GetBlockHeader(ctx, lastCommonAncestorBlockHash)
+	lastCommonAncestorBlock, err := u.blockchainClient.GetBlock(ctx, lastCommonAncestorBlockHash)
 	if err != nil {
 		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block from db %s", lastCommonAncestorBlockHash.String(), err)
 	}
 
-	if blockMeta == nil {
+	if lastCommonAncestorBlock == nil {
 		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block %s", lastCommonAncestorBlockHash.String())
 	}
 
 	// the last common ancestor block should not be more than X blocks behind the current block height in the utxo store
-	if blockMeta.Height < u.utxoStore.GetBlockHeight()-u.settings.BlockValidation.SecretMiningThreshold {
+	if lastCommonAncestorBlock.Height < u.utxoStore.GetBlockHeight()-u.settings.BlockValidation.SecretMiningThreshold {
 		return true, nil
 	}
 

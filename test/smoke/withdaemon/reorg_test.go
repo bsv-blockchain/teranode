@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
@@ -63,7 +64,7 @@ func TestMoveUp(t *testing.T) {
 	require.NoError(t, err)
 
 	// verify block height on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 2, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 101, blockWait)
 	require.NoError(t, err)
 }
 
@@ -72,15 +73,18 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	defer testLock.Unlock()
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		EnableFullLogging: true,
-		SettingsContext:   "docker.host.teranode2",
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
 
 	// mine 3 blocks on node2
-	_, err := node2.CallRPC("generate", []any{300})
+	_, err := node2.CallRPC("generate", []any{3})
 	require.NoError(t, err)
 
 	// verify blockheight on node2
@@ -97,9 +101,16 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
 		SettingsContext:   "docker.host.teranode1",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
+  
+	// // set run state
+	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
+	// require.NoError(t, err)
 
-	_, err = node1.CallRPC("generate", []any{200})
+	_, err = node1.CallRPC("generate", []any{2})
 	require.NoError(t, err)
 
 	// verify blockheight on node1
@@ -113,6 +124,9 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
 		SettingsContext:   "docker.host.teranode2",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
 
 	_, err = node2.CallRPC("generate", []any{1})
@@ -124,11 +138,12 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	}()
 
 	// verify blockheight on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 301, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 4, blockWait)
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 301, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 4, blockWait)
+
 	require.NoError(t, err)
 }
 
@@ -144,10 +159,13 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		SettingsContext: "docker.host.teranode2",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
 
 	// mine 3 blocks on node2
-	_, err := node2.CallRPC("generate", []any{300})
+	_, err := node2.CallRPC("generate", []any{3})
 	require.NoError(t, err)
 
 	// stop node 2 so that it doesn't sync with node 1
@@ -160,13 +178,16 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
 		SettingsContext:   "docker.host.teranode1",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
 
 	// // set run state
 	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
 	// require.NoError(t, err)
 
-	_, err = node1.CallRPC("generate", []any{200})
+	_, err = node1.CallRPC("generate", []any{2})
 	require.NoError(t, err)
 
 	// restart node 2 (which is at height 3)
@@ -176,6 +197,9 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
 		SettingsContext:   "docker.host.teranode2",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.BlockValidation.SecretMiningThreshold = 9999
+		},
 	})
 
 	defer func() {
@@ -184,11 +208,11 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 	}()
 
 	// verify blockheight on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 3, blockWait)
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 300, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 3, blockWait)
 	require.NoError(t, err)
 }
 
