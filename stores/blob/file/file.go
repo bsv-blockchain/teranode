@@ -794,7 +794,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileO
 }
 
 func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	s.logger.Debugf("[File] Get: %s", filepath.Base(string(hash)))
+	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
 
@@ -897,7 +897,7 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 }
 
 func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
-	s.logger.Debugf("[File] Exists: %s", filepath.Base(string(hash)))
+	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
 
