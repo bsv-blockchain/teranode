@@ -1,8 +1,8 @@
-# Legacy Server Reference Documentation
+# Legacy Service Reference Documentation
 
 ## Overview
 
-The Legacy Server provides backward compatibility with legacy Bitcoin peer-to-peer networking protocols. It serves as a bridge between modern Teranode services and older network nodes, enabling seamless communication across different protocol versions. The server integrates with multiple core services including blockchain management, validation, and storage systems to ensure consistent network operation.
+The Legacy Service provides backward compatibility with legacy Bitcoin peer-to-peer networking protocols. It serves as a bridge between modern Teranode services and older network nodes, enabling seamless communication across different protocol versions. The service integrates with multiple core services including blockchain management, validation, and storage systems to ensure consistent network operation.
 
 ## Core Components
 
@@ -132,7 +132,7 @@ This method provides detailed information about connected peers including:
 
 ## Configuration
 
-The Legacy Server uses various configuration values from `gocore.Config()`, including:
+The Legacy Service uses various configuration values from `gocore.Config()`, including:
 
 - `network`: The Bitcoin network to connect to (default: "mainnet")
 - `legacy_listen_addresses`: Addresses to listen on for incoming connections
@@ -142,7 +142,7 @@ The Legacy Server uses various configuration values from `gocore.Config()`, incl
 
 ## Dependencies
 
-The Legacy Server depends on several components:
+The Legacy Service depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
 - `validator.Interface`: Interface for validation operations

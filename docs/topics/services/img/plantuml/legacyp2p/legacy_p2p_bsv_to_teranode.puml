@@ -25,7 +25,10 @@ skinparam participant {
 participant MainNet as mainnet
 participant "P2P Legacy\nOverlay Service" as legacy
 database db
-participant "Teranode" as teranode
+participant "Kafka\n[kafka_blocksConfig topic]" as kafkaBlock
+participant "Teranode Block Validator" as blockValidator
+participant "Kafka\n[subtrees topic]" as kafkaSubtree
+participant "Teranode Subtree Validator" as subtreeValidator
 
 legacy -> mainnet: connect
 
@@ -41,22 +44,30 @@ mainnet -> legacy : OnBlock(peer, msg, bytes)
 
 legacy -> legacy: build subtree and block
 
-legacy -> teranode: BlockFound(ctx, hash, base_url)
+legacy -> kafkaBlock: Publish(hash, base_url)
+note right: Send block notification message \nwith hash and base_url
 
-teranode -> legacy: http://{base_url}/block/hash
+kafkaBlock -> blockValidator: Consume message
 
-legacy --> teranode: block
+blockValidator -> legacy: http://{base_url}/block/hash
 
-teranode -> legacy: http://{base_url}/subtree/hash
+legacy --> blockValidator: block
 
-legacy --> teranode: subtree
+blockValidator -> kafkaSubtree: Publish(hash, baseUrl)
+note right: Send subtree notification message\nwith hash and base_url
+
+kafkaSubtree -> subtreeValidator: Consume message
+
+subtreeValidator -> legacy: http://{base_url}/subtree/hash
+
+legacy --> subtreeValidator: subtree
 
 
 loop each txid
-    teranode -> legacy: http://{base_url}/tx/txid
-    legacy -> teranode: tx(response)
+    subtreeValidator -> legacy: http://{base_url}/tx/txid
+    legacy -> subtreeValidator: tx(response)
 end
 
-left footer "Last Modified On: %date("dd-MMM-yyyy"). © 2024 Bitcoin SV. All rights reserved."
+left footer "Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
 
 @enduml

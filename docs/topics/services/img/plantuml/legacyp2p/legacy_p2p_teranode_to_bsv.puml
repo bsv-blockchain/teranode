@@ -1,0 +1,60 @@
+@startuml overview
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+participant "Teranode Blockchain" as teranode
+database "Subtree Store" as subtreeStore
+participant "P2P Legacy Overlay Service" as legacy
+participant "Sync Manager" as syncManager
+participant "BSV Peers" as bsvpeers
+
+teranode -> legacy: Blockchain Event Notification
+activate legacy
+
+legacy -> syncManager: Forward Notification
+activate syncManager
+
+alt Subtree Notification
+    syncManager -> syncManager: Process Subtree Notification
+
+    syncManager -> subtreeStore: Get Subtree Data
+    subtreeStore --> syncManager: Subtree Data
+
+    loop For each transaction in subtree
+        syncManager -> syncManager: Add to TX Announce Batcher
+    end
+
+    syncManager -> bsvpeers: Announce Transactions
+    bsvpeers -> legacy: Request Transaction Data
+    legacy --> bsvpeers: Transaction Data
+
+    note right of bsvpeers: BSV peers propagate\ntransactions to the network
+
+else Block Notification
+    syncManager -> syncManager: Process Block Notification
+end
+
+deactivate syncManager
+deactivate legacy
+
+left footer "P2P Legacy - Teranode to BSV Communication\n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+
+@enduml

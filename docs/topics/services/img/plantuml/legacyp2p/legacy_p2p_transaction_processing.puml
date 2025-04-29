@@ -1,0 +1,102 @@
+@startuml transaction_process
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam note {
+  BorderColor #999999
+  BackgroundColor #EFEFEF
+}
+
+participant MainNet as mainnet
+participant "P2P Legacy\nOverlay Service" as legacy
+participant "Sync Manager" as syncManager
+database "Orphan Transaction Map" as orphanPool
+participant "Teranode\nValidator Client" as validator
+database "Transaction Memory Pool" as mempool
+database "Signature Cache" as sigCache
+database "UTXO Store" as utxoStore
+
+== Transaction Propagation ==
+
+mainnet -> legacy : OnTx(peer, msg)
+activate legacy
+
+legacy -> legacy : Add to known inventory
+
+legacy -> syncManager : QueueTx(tx, peer, done)
+activate syncManager
+
+syncManager -> syncManager : handleTxMsg(tx)
+
+syncManager -> sigCache : Check for cached signature validation
+sigCache --> syncManager : Signature validation result
+
+alt Signature not in cache
+    syncManager -> utxoStore : Retrieve UTXOs for inputs
+    utxoStore --> syncManager : UTXO data
+
+    syncManager -> validator : ValidateTx(tx, utxos)
+    activate validator
+
+alt Transaction is valid
+    validator --> syncManager : Valid transaction + metadata
+    deactivate validator
+
+    syncManager -> sigCache : Cache signature validation result
+
+    syncManager -> mempool : Add transaction to mempool
+    mempool --> syncManager
+
+    syncManager -> orphanPool : Check for dependent orphans
+    orphanPool --> syncManager : Dependent orphan txs (if any)
+
+    loop For each dependent orphan
+        syncManager -> syncManager : Process orphan transaction
+    end
+
+    syncManager -> legacy : Announce to other peers
+    legacy -> mainnet : Relay transaction to network
+
+else Transaction has missing parent
+    validator --> syncManager : Error: Missing parent
+    deactivate validator
+
+    syncManager -> orphanPool : Store in orphan transaction map
+    note right: Keyed by missing parent txid
+    orphanPool --> syncManager
+
+else Transaction is invalid
+    validator --> syncManager : Error: Validation failed
+    deactivate validator
+
+    syncManager -> syncManager : Add to rejected transactions
+    syncManager -> legacy : Send rejection
+    legacy -> mainnet : PushRejectMsg(tx)
+    note right: Send rejection message to peer
+end
+
+end
+
+deactivate syncManager
+deactivate legacy
+
+left footer "P2P Legacy - Transaction Processing \n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+
+@enduml

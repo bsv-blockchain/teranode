@@ -51,6 +51,6 @@ else is known
     note right of legacy: No action needed, item is known
 end
 
-left footer "Detailed Exchange Overview for Transactions and Blocks\n Last Modified On: %date("dd-MMM-yyyy"). © 2024 Bitcoin SV. All rights reserved."
+left footer "Detailed Exchange Overview for Transactions and Blocks\n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
 
 @enduml

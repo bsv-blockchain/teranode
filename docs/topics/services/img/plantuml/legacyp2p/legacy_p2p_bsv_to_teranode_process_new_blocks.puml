@@ -24,11 +24,12 @@ skinparam participant {
 
 participant MainNet as mainnet
 participant "P2P Legacy\nOverlay Service" as legacy
-database db
-database "Tx Cache" as txCache
-database "Subtree Cache" as subtreeCache
-database "Block Cache" as blockCache
+database "UTXO Store" as utxoStore
+database "Subtree Store" as subtreeStore
+database "Temporary Store\n(ConcurrentBlob)" as tempStore
+participant "Kafka\n[kafka_blocksConfig topic]" as kafkaBlock
 participant "Block Validator\n(Teranode)" as blockValidator
+participant "Kafka\n[subtrees topic]" as kafkaSubtree
 participant "Subtree Validator\n(Teranode)" as subtreeValidator
 
 mainnet -> legacy : OnBlock(peer, msg, bytes)
@@ -44,37 +45,45 @@ legacy -> legacy: add a placeholder coinbase tx\n to the subtree
 
 loop each tx
     legacy -> legacy: add Tx Hash to the Subtree
-    legacy -> txCache: Cache Tx
-    txCache --> legacy
+    legacy -> legacy: Validate tx (local checks and via validator client)
 end
 
-legacy -> subtreeCache: Cache Subtree
-subtreeCache --> legacy
+legacy -> subtreeStore: Store Subtree data
+subtreeStore --> legacy
 
 legacy -> legacy: Build a Teranode block (block, coinbaseTx, subtree)
 
-legacy -> blockCache: Cache Teranode Block
-blockCache --> legacy
+legacy -> tempStore: Store block in ConcurrentBlob with TTL (90 min)
+tempStore --> legacy
 
-legacy -> blockValidator: BlockFound(ctx, hash, base_url)
+legacy -> kafkaBlock: Publish(hash, base_url)
+note right: Send block notification message \nwith hash and base_url
+
+kafkaBlock -> blockValidator: Consume message
 activate blockValidator
 
-blockValidator -> legacy: http://{base_url}/block/hash
+blockValidator -> legacy: HTTP GET request for block data
+note right: Retrieves block from the temporary store
 
-legacy --> blockValidator: block (response)
+legacy --> blockValidator: block data (response)
 
-blockValidator -> subtreeValidator: CheckSubtree(ctx, hash, baseUrl)
+blockValidator -> kafkaSubtree: Publish(hash, baseUrl)
+note right: Send subtree notification message \nwith hash and base_url
 
+kafkaSubtree -> subtreeValidator: Consume message
 activate subtreeValidator
 
-subtreeValidator -> legacy: http://{base_url}/subtree/hash
+subtreeValidator -> legacy: HTTP GET request for subtree data
+note right: Retrieves subtree from the subtree store
 
-legacy --> subtreeValidator: subtree (response)
+legacy --> subtreeValidator: subtree data (response)
 
 
 loop each txid
-    subtreeValidator -> legacy: http://{base_url}/tx/txid
-    legacy --> subtreeValidator: tx (response)
+    subtreeValidator -> legacy: HTTP GET request for transaction data
+    legacy -> tempStore: Retrieve tx if available
+    tempStore --> legacy
+    legacy --> subtreeValidator: tx data (response)
 end
 
 deactivate subtreeValidator
@@ -87,6 +96,6 @@ deactivate legacy
 
 deactivate legacy
 
-left footer "P2P Legacy - Block Processing \n Last Modified On: %date("dd-MMM-yyyy"). © 2024 Bitcoin SV. All rights reserved."
+left footer "P2P Legacy - Block Processing \n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
 
 @enduml
