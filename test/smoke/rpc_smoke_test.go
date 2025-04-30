@@ -287,7 +287,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
 	require.NoError(t, err)
 
-	// When a transaction’s nLockTime is set (e.g., 500 for block height),
+	// When a transaction's nLockTime is set (e.g., 500 for block height),
 	// nSequence must be less than 0xffffffff for the locktime to be enforced.
 	// Otherwise, the locktime is ignored.
 	newTx.Inputs[0].SequenceNumber = 0x10000005
@@ -478,4 +478,157 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
 	require.NoError(t, err)
+}
+
+func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC: true,
+		SettingsContext: "dev.system.test",
+	})
+
+	defer func() {
+		td.Stop(t)
+	}()
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks
+	_, err = td.CallRPC("generate", []any{101})
+	require.NoError(t, err)
+
+	tSettings := td.Settings
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	// Get the coinbase transaction from block 1
+	coinbaseTx := block1.CoinbaseTx
+	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	require.NoError(t, err)
+
+	// Create first recipient's key pair
+	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
+	require.NoError(t, err)
+
+	// Create UTXO from coinbase
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	// Create first transaction (TX1)
+	tx1 := bt.NewTx()
+	err = tx1.FromUTXOs(utxo)
+	require.NoError(t, err)
+
+	// Send 50000 satoshis to address1
+	err = tx1.AddP2PKHOutputFromAddress(address1.AddressString, 50000)
+	require.NoError(t, err)
+
+	// Sign TX1
+	err = tx1.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	require.NoError(t, err)
+
+	t.Logf("Sending TX1 with RPC: %s\n", tx1.TxIDChainHash())
+	tx1Bytes := hex.EncodeToString(tx1.ExtendedBytes())
+
+	// Send TX1
+	resp, err := td.CallRPC("sendrawtransaction", []any{tx1Bytes})
+	require.NoError(t, err, "Failed to send TX1 with rpc")
+	t.Logf("TX1 sent with RPC: %s\n", resp)
+
+	// Wait for transaction to be processed if there's a delay window
+	delay := tSettings.BlockAssembly.DoubleSpendWindow
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+
+	// Generate one block to include TX1
+	_, err = td.CallRPC("generate", []any{1})
+	require.NoError(t, err)
+
+	// Create second recipient's key pair
+	privateKey2, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+	address2, err := bscript.NewAddressFromPublicKey(privateKey2.PubKey(), true)
+	require.NoError(t, err)
+
+	// Create UTXO from TX1
+	utxo2 := &bt.UTXO{
+		TxIDHash:      tx1.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: tx1.Outputs[0].LockingScript,
+		Satoshis:      tx1.Outputs[0].Satoshis,
+	}
+
+	// Create second transaction (TX2)
+	tx2 := bt.NewTx()
+	err = tx2.FromUTXOs(utxo2)
+	require.NoError(t, err)
+
+	// Send 25000 satoshis to address2
+	err = tx2.AddP2PKHOutputFromAddress(address2.AddressString, 25000)
+	require.NoError(t, err)
+
+	// Sign TX2
+	err = tx2.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: privateKey1})
+	require.NoError(t, err)
+
+	t.Logf("Sending TX2 with RPC: %s\n", tx2.TxIDChainHash())
+	tx2Bytes := hex.EncodeToString(tx2.ExtendedBytes())
+
+	// Send TX2
+	resp, err = td.CallRPC("sendrawtransaction", []any{tx2Bytes})
+	require.NoError(t, err, "Failed to send TX2 with rpc")
+	t.Logf("TX2 sent with RPC: %s\n", resp)
+
+	// Wait for transaction to be processed if there's a delay window
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+
+	// Generate one block to include TX2
+	_, err = td.CallRPC("generate", []any{1})
+	require.NoError(t, err)
+
+	// Get the block containing TX2 (should be at height 103)
+	block103, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 103)
+	require.NoError(t, err)
+
+	// Verify block103 contains TX2
+	err = block103.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+	require.NoError(t, err)
+
+	err = block103.CheckMerkleRoot(td.Ctx)
+	require.NoError(t, err)
+
+	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
+		return block103.SubTreesFromBytes(subtreeHash[:])
+	}
+
+	subtree, err := block103.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	require.NoError(t, err)
+
+	tx2Found := false
+	for i := 0; i < len(subtree); i++ {
+		st := subtree[i]
+		for _, node := range st.Nodes {
+			if node.Hash.String() == tx2.TxIDChainHash().String() {
+				tx2Found = true
+				break
+			}
+		}
+	}
+
+	assert.True(t, tx2Found, "TX2 not found in the blockstore")
 }

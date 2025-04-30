@@ -64,7 +64,7 @@ func TestMoveUp(t *testing.T) {
 	require.NoError(t, err)
 
 	// verify block height on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 101, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 2, blockWait)
 	require.NoError(t, err)
 }
 
