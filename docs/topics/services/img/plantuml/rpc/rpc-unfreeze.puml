@@ -1,0 +1,84 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant Client
+participant "RPC Server" as RPC
+participant "UTXO Service" as UTXO
+
+Client -> RPC : UnfreezeCmd(txid, vout)
+activate RPC
+
+RPC -> RPC : Validate TXID and vout
+note right
+  Validation checks:
+  - TXID must be valid hex
+  - vout must be non-negative
+end note
+
+alt Invalid Parameters
+    RPC -> Client : Return error
+    note right
+        Error response:
+        - Code: ErrRPCInvalidParameter
+        - Message: "Invalid TXID or vout"
+    end note
+else Valid Parameters
+    RPC -> UTXO : UnfreezeUTXO(ctx, txid, vout)
+    activate UTXO
+
+    alt UTXO Not Found
+        UTXO --> RPC : Return error
+        RPC -> Client : Return error
+        note right
+            Error response:
+            - Code: ErrRPCInvalidParameter
+            - Message: "UTXO not found"
+        end note
+    else UTXO Not Frozen
+        UTXO --> RPC : Return error
+        RPC -> Client : Return error
+        note right
+            Error response:
+            - Code: ErrRPCInvalidParameter
+            - Message: "UTXO not frozen"
+        end note
+    else Unfreeze Operation Succeeds
+        UTXO --> RPC : Return success
+        RPC -> Client : Return true
+        note right
+            Response fields:
+            - Returns true on success
+
+            Effects:
+            - UTXO unfrozen
+            - UTXO can now be spent
+            - Audit log entry created
+        end note
+    end
+    deactivate UTXO
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

@@ -1,0 +1,101 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant Client
+participant "RPC Server" as RPC
+participant "Transaction Service" as TxService
+participant "Blockchain Service" as Blockchain
+
+Client -> RPC : GetRawTransactionCmd(txid, verbose, blockhash)
+activate RPC
+
+RPC -> RPC : Validate TXID
+note right
+  Validation checks:
+  - TXID must be valid hex
+  - TXID must be 32 bytes (64 hex chars)
+end note
+
+alt Invalid TXID
+    RPC -> Client : Return error
+    note right
+        Error response:
+        - Code: ErrRPCDecodeHexString
+        - Message: "Transaction ID must be a hexadecimal string"
+    end note
+else Valid TXID
+    RPC -> TxService : GetTransaction(ctx, txid, blockhash)
+    activate TxService
+
+    alt Transaction Not Found
+        TxService --> RPC : Return error
+        RPC -> Client : Return error
+        note right
+            Error response:
+            - Code: ErrRPCNoTxInfo
+            - Message: "No information available about transaction"
+        end note
+    else Transaction Found
+        TxService --> RPC : Return transaction data
+        deactivate TxService
+
+        alt verbose = false
+            RPC -> RPC : Encode transaction as hex
+            RPC -> Client : Return hex-encoded transaction
+            note right
+                Response fields:
+                - String containing hex-encoded transaction data
+            end note
+        else verbose = true
+            alt Blockhash provided
+                RPC -> Blockchain : GetBlockByHash(ctx, blockhash)
+                activate Blockchain
+                Blockchain --> RPC : Return block data
+                deactivate Blockchain
+            end
+
+            RPC -> RPC : Format detailed transaction response
+            RPC -> Client : Return detailed transaction info
+            note right
+                Response fields:
+                - hex: Raw transaction data
+                - txid: Transaction ID
+                - hash: Transaction hash
+                - size: Transaction size in bytes
+                - version: Transaction version
+                - locktime: Transaction locktime
+                - vin: Array of transaction inputs
+                - vout: Array of transaction outputs
+                - blockhash: Hash of containing block
+                - confirmations: Number of confirmations
+                - time: Block time
+                - blocktime: Block time in seconds
+            end note
+        end
+    end
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

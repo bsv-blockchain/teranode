@@ -1,0 +1,75 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant Client
+participant "RPC Server" as RPC
+participant "Teranode Daemon" as Daemon
+participant "Service Registry" as Services
+
+Client -> RPC : StopCmd()
+activate RPC
+
+RPC -> RPC : Validate permissions
+note right
+  Validation checks:
+  - Ensure caller has admin privileges
+  - No parameters needed for this command
+end note
+
+RPC -> Client : Return "Teranode server stopping"
+note right
+  Send success response before shutdown
+  to ensure client gets a response
+end note
+
+RPC ->> Daemon : RequestShutdown(ctx)
+activate Daemon
+
+Daemon -> Services : BeginShutdown()
+activate Services
+
+Services -> Services : Shutdown individual services
+note right
+  Orderly shutdown sequence:
+  1. Stop accepting new requests
+  2. Complete pending requests
+  3. Flush data to disk
+  4. Release resources
+end note
+
+Services --> Daemon : Services stopped
+deactivate Services
+
+Daemon -> Daemon : Terminate process
+note right
+  Final cleanup:
+  - Flush logs
+  - Release system resources
+  - Exit with status code 0
+end note
+
+deactivate Daemon
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

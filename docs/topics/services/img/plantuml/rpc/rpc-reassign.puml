@@ -1,0 +1,107 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant Client
+participant "RPC Server" as RPC
+participant "UTXO Service" as UTXO
+participant "Address Validator" as AddrVal
+
+Client -> RPC : ReassignCmd(txid, vout, destination)
+activate RPC
+
+RPC -> RPC : Validate TXID and vout
+note right
+  Validation checks:
+  - TXID must be valid hex
+  - vout must be non-negative
+end note
+
+alt Invalid TXID/vout Parameters
+    RPC -> Client : Return error
+    note right
+        Error response:
+        - Code: ErrRPCInvalidParameter
+        - Message: "Invalid TXID or vout"
+    end note
+else Valid TXID/vout Parameters
+    RPC -> AddrVal : ValidateAddress(destination)
+    activate AddrVal
+
+    alt Invalid Address
+        AddrVal --> RPC : Return error
+        RPC -> Client : Return error
+        note right
+            Error response:
+            - Code: ErrRPCInvalidAddressOrKey
+            - Message: "Invalid destination address"
+        end note
+    else Valid Address
+        AddrVal --> RPC : Return address details
+        deactivate AddrVal
+
+        RPC -> UTXO : GetUTXO(ctx, txid, vout)
+        activate UTXO
+
+        alt UTXO Not Found
+            UTXO --> RPC : Return error
+            RPC -> Client : Return error
+            note right
+                Error response:
+                - Code: ErrRPCNoTxInfo
+                - Message: "UTXO not found"
+            end note
+        else UTXO Found
+            UTXO --> RPC : Return UTXO details
+
+            RPC -> UTXO : ReassignUTXO(ctx, txid, vout, destination)
+
+            alt Reassignment Failed
+                UTXO --> RPC : Return error
+                RPC -> Client : Return error
+                note right
+                    Error response:
+                    - Code: ErrRPCInternalError
+                    - Message: "Failed to reassign UTXO"
+                end note
+            else Reassignment Succeeded
+                UTXO --> RPC : Return success
+                RPC -> Client : Return true
+                note right
+                    Response fields:
+                    - Returns true on success
+
+                    Effects:
+                    - UTXO ownership changed to new address
+                    - Original script replaced with new script
+                    - Audit log entry created
+                end note
+            end
+        end
+        deactivate UTXO
+    end
+end
+
+deactivate RPC
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
