@@ -76,3 +76,39 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	t.Log("Stats, current elements size: ", s.EntriesCount)
 	t.Log("Stats, total elements added: ", s.TotalElementsAdded)
 }
+
+// TestInitTimes measures NewImprovedCache startup across X runs and logs the average per bucket type.
+func TestInitTimes(t *testing.T) {
+	// testing with 256 MB cache
+	const (
+		maxBytes = 256 * 1024 * 1024
+		runs     = 3
+	)
+
+	buckets := []struct {
+		name string
+		typ  BucketType
+	}{
+		{"Unallocated", Unallocated},
+		{"Trimmed", Trimmed},
+		{"Preallocated", Preallocated},
+	}
+
+	for _, bc := range buckets {
+		var total time.Duration
+
+		for i := 0; i < runs; i++ {
+			start := time.Now()
+
+			cache, err := NewImprovedCache(maxBytes, bc.typ)
+			require.NoError(t, err, "init %s iteration %d", bc.name, i)
+
+			total += time.Since(start)
+
+			cache.Reset()
+		}
+
+		avg := total / runs
+		t.Logf("%s average init over %d runs: %v", bc.name, runs, avg)
+	}
+}

@@ -24,7 +24,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -32,7 +32,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
 
 		meta, err := c.Create(ctx, coinbaseTx, 100)
 		require.NoError(t, err)
@@ -47,7 +47,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test set cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
 
 		metaData := &meta.Data{
 			Fee:            100,
@@ -71,7 +71,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger))
+	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger), Unallocated)
 	cache := c.(*TxMetaCache)
 
 	// Pre-generate all hashes
@@ -99,7 +99,7 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 func Benchmark_txMetaCache_Get(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger))
+	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger), Unallocated)
 	cache := c.(*TxMetaCache)
 
 	meta := &meta.Data{

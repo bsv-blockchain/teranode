@@ -294,7 +294,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	ctx := context.Background()
-	c, _ := txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
+	c, _ := txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), txmetacache.Unallocated, 2048)
 	cache := c.(*txmetacache.TxMetaCache)
 	var err error
 

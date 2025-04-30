@@ -55,7 +55,13 @@ const (
 	Trimmed
 )
 
-func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, options ...int) (utxo.Store, error) {
+func NewTxMetaCache(
+	ctx context.Context,
+	logger ulogger.Logger,
+	utxoStore utxo.Store,
+	bucketType BucketType,
+	maxMBOverride ...int,
+) (utxo.Store, error) {
 	if _, ok := utxoStore.(*TxMetaCache); ok {
 		// txMetaStore is a TxMetaCache, this is not allowed
 		return nil, errors.NewServiceError("Cannot use TxMetaCache as the underlying store for TxMetaCache")
@@ -63,13 +69,14 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 
 	initPrometheusMetrics()
 
+	// base size (MB) from config
 	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
-
-	if len(options) > 0 && options[0] > 256 {
-		maxMB = options[0]
+	// override if caller passed one
+	if len(maxMBOverride) > 0 && maxMBOverride[0] > 0 {
+		maxMB = maxMBOverride[0]
 	}
 
-	cache, err := NewImprovedCache(maxMB*1024*1024, Trimmed)
+	cache, err := NewImprovedCache(maxMB*1024*1024, bucketType)
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating cache", err)
 	}

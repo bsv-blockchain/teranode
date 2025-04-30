@@ -45,7 +45,8 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
+	require.NoError(t, err)
 	err = teranode_model.LoadTxMetaIntoMemory()
 	require.NoError(t, err)
 
@@ -96,7 +97,8 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 
 	subtreeStore := teranode_model.NewLocalSubtreeStore()
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
+	require.NoError(t, err)
 	txMetaCache := teranode_model.TestCachedTxMetaStore.(*txmetacache.TxMetaCache)
 
 	// create a slice of random hashes, for the leaves
@@ -387,8 +389,10 @@ func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {
 }
 
 func Test_LoadTxMetaIntoMemory(t *testing.T) {
+	var err error
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated)
+	require.NoError(t, err)
 
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()
@@ -396,7 +400,7 @@ func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	err := teranode_model.LoadTxMetaIntoMemory()
+	err = teranode_model.LoadTxMetaIntoMemory()
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")
@@ -422,7 +426,8 @@ func generateBigBlockTestData(t *testing.T) (*teranode_model.TestLocalSubtreeSto
 	txMetaStore := memory.New(ulogger.TestLogger{})
 
 	teranode_model.TestLoadMetaToMemoryOnce.Do(func() {
-		teranode_model.TestCachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+		teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
+		require.NoError(t, err)
 		err = teranode_model.LoadTxMetaIntoMemory()
 		require.NoError(t, err)
 	})

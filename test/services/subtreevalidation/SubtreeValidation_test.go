@@ -60,7 +60,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
-	if utxoStore, err := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048); err != nil {
+	if utxoStore, err := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 2048); err != nil {
 		subtreeValidation.SetUutxoStore(utxoStore)
 	} else {
 		require.NoError(t, err)
