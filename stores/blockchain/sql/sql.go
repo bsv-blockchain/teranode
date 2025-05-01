@@ -59,9 +59,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		db:            db,
 		engine:        util.SQLEngine(storeURL.Scheme),
 		logger:        logger,
-		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
-		blocksCache:   *NewBlockchainCache(),
+		cacheTTL:      2 * time.Minute,
+		blocksCache:   *NewBlockchainCache(tSettings),
 		chainParams:   tSettings.ChainCfgParams,
 	}
 
@@ -353,13 +353,11 @@ type blockchainCache struct {
 	cacheSize   int
 }
 
-func NewBlockchainCache() *blockchainCache {
-	tSettings := settings.NewSettings()
-
+func NewBlockchainCache(tSettings *settings.Settings) *blockchainCache {
 	cacheSize := tSettings.Block.StoreCacheSize
 
 	return &blockchainCache{
-		enabled:     tSettings.Block.StoreCacheEnabled,
+		enabled:     cacheSize > 0,
 		headers:     make(map[chainhash.Hash]*model.BlockHeader, cacheSize),
 		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, cacheSize),
 		existsCache: make(map[chainhash.Hash]bool, cacheSize),
@@ -435,8 +433,9 @@ func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, b
 		return
 	}
 
-	for i, blockHeader := range blockHeaders {
-		c.addBlockHeader(blockHeader, blockHeaderMetas[i])
+	// Iterate backwards assuming headers are sorted newest first (descending height)
+	for i := len(blockHeaders) - 1; i >= 0; i-- {
+		c.addBlockHeader(blockHeaders[i], blockHeaderMetas[i])
 	}
 }
 func (s *SQL) ResetResponseCache() {
@@ -466,6 +465,7 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	}
 
 	// re-fill the cache with data from the db
+	// these headers are in descending order of height (newest first)
 	s.blocksCache.RebuildBlockchain(blockHeaders, blockHeaderMetas)
 
 	return nil

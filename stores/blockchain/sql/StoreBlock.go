@@ -73,146 +73,130 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	return newBlockID, height, nil
 }
 
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, []byte, error) {
-	var (
-		err                  error
-		previousBlockID      uint64
-		previousChainWork    []byte
-		previousHeight       uint32
-		height               uint32
-		previousBlockInvalid bool
+func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.Hash) (id uint64, chainWork []byte, height uint32, invalid bool, err error) {
+	// Try to get previous block info from cache first
+	prevHeader, prevMeta := s.blocksCache.GetBlockHeader(prevBlockHash)
+	if prevHeader != nil && prevMeta != nil {
+		id = uint64(prevMeta.ID)
+		chainWork = prevMeta.ChainWork
+		height = prevMeta.Height
+		invalid = false // Assuming cache only stores valid chain info implicitly
+
+		return id, chainWork, height, invalid, nil
+	}
+
+	// Fallback to DB if not in cache
+	q := `
+		SELECT
+		 b.id
+		,b.chain_work
+		,b.height
+		,b.invalid
+		FROM blocks b
+		WHERE b.hash = $1
+	`
+	err = s.db.QueryRowContext(ctx, q, prevBlockHash[:]).Scan(
+		&id,
+		&chainWork,
+		&height,
+		&invalid,
 	)
 
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Wrap the error for context
+			return 0, nil, 0, false, errors.NewStorageError("previous block %s not found", prevBlockHash.String(), err)
+		}
+		// Return other DB errors directly
+		return 0, nil, 0, false, err
+	}
+
+	return id, chainWork, height, invalid, nil
+}
+
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, []byte, error) {
 	// Apply options
 	storeBlockOptions := options.StoreBlockOptions{}
 	for _, opt := range opts {
 		opt(&storeBlockOptions)
 	}
 
-	q := `
-		INSERT INTO blocks (
-		 parent_id
-    ,version
-	  ,hash
-	  ,previous_hash
-	  ,merkle_root
-    ,block_time
-    ,n_bits
-    ,nonce
-	  ,height
-    ,chain_work
-		,tx_count
-		,size_in_bytes
-		,subtree_count
-		,subtrees
-		,peer_id
-    ,coinbase_tx
-		,invalid
-		,mined_set
-		,subtrees_set
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
-		RETURNING id
-	`
-
-	var coinbaseTxID string
+	var (
+		coinbaseTxID string
+		q            string
+	)
 
 	if block.CoinbaseTx != nil {
 		coinbaseTxID = block.CoinbaseTx.TxID()
 	}
 
-	if coinbaseTxID == s.chainParams.GenesisBlock.Transactions[0].TxHash().String() {
-		// genesis block
-		previousBlockID = 0
-		previousChainWork = make([]byte, 32)
-		previousHeight = 0
-		height = 0
+	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
+	if err != nil {
+		return 0, 0, nil, err
+	}
 
-		// genesis block has a different insert statement, because it has no parent
+	if genesis {
+		// genesis block
 		q = `
-			INSERT INTO blocks (
-			 id
-			,parent_id
-			,version
-			,hash
-			,previous_hash
-			,merkle_root
-			,block_time
-			,n_bits
-			,nonce
-			,height
-			,chain_work
-			,tx_count
-			,size_in_bytes
-			,subtree_count
-			,subtrees
-			,peer_id
-			,coinbase_tx
-			,invalid
-			,mined_set
-			,subtrees_set
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
-			RETURNING id
+INSERT INTO blocks (
+	id
+	,parent_id
+	,version
+	,hash
+	,previous_hash
+	,merkle_root
+	,block_time
+	,n_bits
+	,nonce
+	,height
+	,chain_work
+	,tx_count
+	,size_in_bytes
+	,subtree_count
+	,subtrees
+	,peer_id
+	,coinbase_tx
+	,invalid
+	,mined_set
+	,subtrees_set
+) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
+RETURNING id
 		`
 	} else {
-		// Get the previous block that this incoming block is on top of to get the height and chain work.
-		qq := `
-			SELECT
-			 b.id
-			,b.chain_work
-			,b.height
-			,b.invalid
-			FROM blocks b
-			WHERE b.hash = $1
-		`
-		if err = s.db.QueryRowContext(ctx, qq, block.Header.HashPrevBlock[:]).Scan(
-			&previousBlockID,
-			&previousChainWork,
-			&previousHeight,
-			&previousBlockInvalid,
-		); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return 0, 0, nil, errors.NewStorageError("error storing block %s as previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
-			}
+		q = `
+INSERT INTO blocks (
+	parent_id
+	,version
+	,hash
+	,previous_hash
+	,merkle_root
+	,block_time
+	,n_bits
+	,nonce
+	,height
+	,chain_work
+	,tx_count
+	,size_in_bytes
+	,subtree_count
+	,subtrees
+	,peer_id
+	,coinbase_tx
+	,invalid
+	,mined_set
+	,subtrees_set
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
+RETURNING id
+`
+	}
 
-			return 0, 0, nil, err
-		}
-
-		height = previousHeight + 1
-
-		if block.CoinbaseTx != nil {
-			// Check that the coinbase transaction includes the correct block height for all
-			// blocks that are version 2 or higher.
-			// BIP34 - Block number 227,835 (timestamp 2013-03-24 15:49:13 GMT) was the last version 1 block.
-			if block.Header.Version > 1 {
-				blockHeight, err := block.ExtractCoinbaseHeight()
-				if err != nil {
-					if height < 227835 {
-						s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
-					} else {
-						return 0, 0, nil, err
-					}
-				}
-
-				if height >= 227835 && blockHeight != height {
-					return 0, 0, nil, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
-				}
-			}
-		}
+	cumulativeChainWorkBytes, err := calculateAndPrepareChainWork(previousChainWork, block)
+	if err != nil {
+		return 0, 0, nil, err // Return error from calculation
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
 		return 0, 0, nil, errors.NewStorageError("failed to get subtree bytes", err)
-	}
-
-	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
-	if err != nil {
-		return 0, 0, nil, errors.NewProcessingError("failed to convert chain work hash", err)
-	}
-
-	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
-	if err != nil {
-		return 0, 0, nil, errors.NewProcessingError("failed to calculate cumulative chain work", err)
 	}
 
 	var coinbaseBytes []byte
@@ -230,7 +214,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.Bits.CloneBytes(),
 		block.Header.Nonce,
 		height,
-		bt.ReverseBytes(cumulativeChainWork.CloneBytes()),
+		cumulativeChainWorkBytes,
 		block.TransactionCount,
 		block.SizeInBytes,
 		len(block.Subtrees),
@@ -242,20 +226,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 		storeBlockOptions.SubtreesSet,
 	)
 	if err != nil {
-		// check whether this is a postgres exists constraint error
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
-			return 0, 0, nil, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
-		}
-
-		// check whether this is a sqlite exists constraint error
-		var sqliteErr *sqlite.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.Code() == SQLITE_CONSTRAINT {
-			return 0, 0, nil, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
-		}
-
-		// otherwise, return the generic error
-		return 0, 0, nil, errors.NewStorageError("failed to store block", err)
+		return 0, 0, nil, s.parseSQLError(err, block)
 	}
 
 	defer rows.Close()
@@ -270,7 +241,113 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 		return 0, 0, nil, errors.NewStorageError("failed to scan new block id", err)
 	}
 
-	return newBlockID, height, cumulativeChainWork.CloneBytes(), nil
+	return newBlockID, height, cumulativeChainWorkBytes, nil
+}
+
+func (*SQL) parseSQLError(err error, block *model.Block) error {
+	// check whether this is a postgres exists constraint error
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
+		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+	}
+
+	// check whether this is a sqlite exists constraint error
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) && (sqliteErr.Code()&0xff) == SQLITE_CONSTRAINT {
+		return errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+	}
+
+	// otherwise, return the generic error
+	return errors.NewStorageError("failed to store block", err)
+}
+
+func (s *SQL) getPreviousBlockData(
+	ctx context.Context,
+	coinbaseTxID string,
+	block *model.Block,
+) (
+	genesis bool,
+	height uint32,
+	previousBlockID uint64,
+	previousChainWork []byte,
+	previousBlockInvalid bool,
+	err error,
+) {
+	if coinbaseTxID == s.chainParams.GenesisBlock.Transactions[0].TxHash().String() {
+		// genesis block
+		genesis = true
+		height = 0
+		previousBlockID = 0
+		previousChainWork = make([]byte, 32)
+	} else {
+		// Handle Non-Genesis Block
+		var previousHeight uint32
+
+		previousBlockID, previousChainWork, previousHeight, previousBlockInvalid, err = s.getPreviousBlockInfo(ctx, *block.Header.HashPrevBlock)
+		if err != nil {
+			// Check specifically for the ErrNoRows error from the database query
+			if errors.Is(err, sql.ErrNoRows) {
+				// Rewrap the error with context about the *current* block being stored
+				return false, 0, 0, nil, false, errors.NewStorageError("error storing block %s: previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
+			}
+			// Return other errors from getPreviousBlockInfo (which might include its own StorageError wrapping)
+			return false, 0, 0, nil, false, err
+		}
+
+		height = previousHeight + 1
+
+		// BIP34 Coinbase Height Validation using the helper function
+		if err := s.validateCoinbaseHeight(block, height); err != nil {
+			return false, 0, 0, nil, false, err
+		}
+	}
+
+	return genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, nil
+}
+
+func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Block) ([]byte, error) {
+	prevChainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWorkBytes))
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to convert previous chain work bytes to hash for block %s: %w", block.Hash().String(), err)
+	}
+
+	cumulativeChainWorkHash, err := getCumulativeChainWork(prevChainWorkHash, block)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to calculate cumulative chain work for block %s: %w", block.Hash().String(), err)
+	}
+
+	cumulativeChainWorkBytes := bt.ReverseBytes(cumulativeChainWorkHash.CloneBytes())
+
+	return cumulativeChainWorkBytes, nil
+}
+
+func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) error {
+	// Check that the coinbase transaction includes the correct block height for all
+	// blocks that are version 2 or higher. BIP34 activation height is 227835.
+	// Also check if CoinbaseTx exists.
+	if block.CoinbaseTx != nil && block.Header.Version > 1 {
+		blockHeight, err := block.ExtractCoinbaseHeight()
+		if err != nil {
+			// Define BIP34 activation height (consider getting from chainParams)
+			bip34ActivationHeight := uint32(227835)
+			if currentHeight < bip34ActivationHeight {
+				// Log warning for pre-BIP34 blocks where extraction might fail legitimately
+				s.logger.Warnf("failed to extract coinbase height for block %s (height %d), pre-BIP34 activation: %v", block.Hash(), currentHeight, err)
+				return nil // Don't fail validation for pre-BIP34 blocks
+			}
+			// Fail for post-BIP34 blocks if extraction fails
+			return errors.NewStorageError("failed to extract coinbase height for block %s (height %d): %w", block.Hash().String(), currentHeight, err)
+		}
+
+		// Define BIP34 activation height again (or use variable from above)
+		bip34ActivationHeight := uint32(227835)
+		// Check height match only if extraction succeeded and after BIP34 activation
+		if currentHeight >= bip34ActivationHeight && blockHeight != currentHeight {
+			return errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d) for block %s", blockHeight, currentHeight, block.Hash().String())
+		}
+	}
+
+	return nil // No validation needed or validation passed
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {

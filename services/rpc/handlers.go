@@ -787,7 +787,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		s.logger.Errorf("error getting best block header: %v", err)
 	}
 
-	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(bestBlockMeta.ChainWork))
+	chainWorkHash, err := chainhash.NewHash(bestBlockMeta.ChainWork)
 	if err != nil {
 		s.logger.Errorf("error creating chain work hash: %v", err)
 	}

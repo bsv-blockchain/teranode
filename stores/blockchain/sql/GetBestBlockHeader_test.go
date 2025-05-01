@@ -56,7 +56,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, uint32(0x671268cf), tip.Timestamp)
 		assert.Equal(t, []byte{0xff, 0xff, 0x7f, 0x20}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(0x1), tip.Nonce)
-		assert.Equal(t, "0600000000000000000000000000000000000000000000000000000000000000", hex.EncodeToString(meta.ChainWork))
+		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000006", hex.EncodeToString(meta.ChainWork))
 	})
 
 	t.Run("multiple tips", func(t *testing.T) {

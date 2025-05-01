@@ -43,6 +43,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.peer_id
 			,b.block_time
 			,b.inserted_at
+			,b.chain_work
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -100,6 +101,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			&blockHeaderMeta.Miner,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
+			&blockHeaderMeta.ChainWork,
 		); err != nil {
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
