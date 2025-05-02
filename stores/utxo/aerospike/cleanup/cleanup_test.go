@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -16,32 +17,92 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
-	logger := ulogger.NewVerboseTestLogger(t)
+var (
+	testClient    *uaerospike.Client
+	testHost      string
+	testPort      int
+	testNamespace = "test"
+	testSet       = "test_cleanup" // Use a distinct set name for this package's tests
+)
+
+// truncateAerospikeSet truncates the test set.
+// It logs warnings instead of failing the test on common truncation errors in test environments.
+func truncateAerospikeSet(t *testing.T, client *uaerospike.Client, namespace, set string) {
+	t.Helper()
+
+	err := client.Truncate(nil, namespace, set, nil)
+	aeroErr, ok := err.(*aerospike.AerospikeError)
+	// Ignore specific non-critical errors often seen in test environments with single-node clusters or first truncates.
+	// TODO: Verify these integer literals against the aerospike client library version's result codes.
+	if err != nil && (!ok || (aeroErr.ResultCode != 2 /* KEY_MISMATCH */ && aeroErr.ResultCode != 11 /* CLUSTER_KEY_MISMATCH */)) {
+		t.Logf("Warning: failed to truncate set %s.%s: %v", namespace, set, err)
+	}
+}
+
+// runTests sets up the Aerospike container, runs the tests, and handles teardown.
+// It returns the exit code for os.Exit in TestMain.
+func runTests(m *testing.M) int {
+	logger := ulogger.New("cleanup_test_setup") // Use basic logger for TestMain setup
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		logger.Errorf("Failed to start Aerospike container: %v", err)
+		return 1
+	}
 
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
+	// Defer termination of the container. This runs after the function returns.
+	defer func() {
+		if err := container.Terminate(ctx); err != nil {
+			logger.Errorf("Failed to terminate Aerospike container: %v", err)
+		}
+	}()
 
 	host, err := container.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		logger.Errorf("Failed to get container host: %v", err)
+		return 1
+	}
+
+	testHost = host
 
 	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		logger.Errorf("Failed to get container port: %v", err)
+		return 1
+	}
 
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
+	testPort = port
+
+	client, err := uaerospike.NewClient(testHost, testPort)
+	if err != nil {
+		logger.Errorf("Failed to connect to Aerospike at %s:%d: %v", testHost, testPort, err)
+		return 1 // Return 1 to indicate setup failure
+	}
+
+	testClient = client
+	// Defer closing the client connection. This runs after the function returns, but before the container termination defer.
+	defer client.Close()
+
+	// Run tests
+	return m.Run()
+}
+
+func TestMain(m *testing.M) {
+	exitCode := runTests(m)
+	os.Exit(exitCode)
+}
+
+func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	// Use shared client from TestMain
+	client := testClient
 
 	opts := Options{
 		Logger:         logger,
 		Client:         client,
-		Namespace:      "test",
-		Set:            "test",
+		Namespace:      testNamespace,
+		Set:            testSet,
 		MaxJobsHistory: 3,
 	}
 
@@ -144,24 +205,11 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 func TestCleanupServiceWithMockProcessor(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	// Create a mock job processor to track job processing
 	var (
@@ -203,8 +251,8 @@ func TestCleanupServiceWithMockProcessor(t *testing.T) {
 	opts := Options{
 		Logger:         logger,
 		Client:         client,
-		Namespace:      "test",
-		Set:            "test",
+		Namespace:      testNamespace,
+		Set:            testSet,
 		MaxJobsHistory: 3,
 		WorkerCount:    1, // Use a single worker for predictable testing
 		jobProcessor:   mockProcessor,
@@ -248,24 +296,11 @@ func TestCleanupServiceWithMockProcessor(t *testing.T) {
 func TestCleanupServiceWithMockProcessorInOptions(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	// Create a mock job processor to track job processing
 	var (
@@ -294,8 +329,8 @@ func TestCleanupServiceWithMockProcessorInOptions(t *testing.T) {
 	opts := Options{
 		Logger:         logger,
 		Client:         client,
-		Namespace:      "test",
-		Set:            "test",
+		Namespace:      testNamespace,
+		Set:            testSet,
 		MaxJobsHistory: 3,
 		WorkerCount:    1, // Use a single worker for predictable testing
 		jobProcessor:   mockProcessor,
@@ -454,30 +489,17 @@ func TestNewServiceValidation(t *testing.T) {
 
 func TestServiceStartStop(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	opts := Options{
 		Logger:      logger,
 		Client:      client,
-		Namespace:   "test",
-		Set:         "test",
+		Namespace:   testNamespace,
+		Set:         testSet,
 		WorkerCount: 2, // Use a small number for faster tests
 	}
 
@@ -520,24 +542,11 @@ func TestServiceStartStop(t *testing.T) {
 
 func TestJobCancellation(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	// Create a processor that blocks until signaled
 	var (
@@ -579,8 +588,8 @@ func TestJobCancellation(t *testing.T) {
 	opts := Options{
 		Logger:       logger,
 		Client:       client,
-		Namespace:    "test",
-		Set:          "test",
+		Namespace:    testNamespace,
+		Set:          testSet,
 		WorkerCount:  1, // Use a single worker for predictable testing
 		jobProcessor: mockProcessor,
 	}
@@ -629,30 +638,17 @@ func TestJobCancellation(t *testing.T) {
 
 func TestGetNextJobWithEmptyJobs(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	opts := Options{
 		Logger:    logger,
 		Client:    client,
-		Namespace: "test",
-		Set:       "test",
+		Namespace: testNamespace,
+		Set:       testSet,
 	}
 
 	service, err := NewService(opts)
@@ -699,30 +695,17 @@ func TestGetNextJobWithEmptyJobs(t *testing.T) {
 
 func TestGetNextJobWithNonPendingJob(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	opts := Options{
 		Logger:    logger,
 		Client:    client,
-		Namespace: "test",
-		Set:       "test",
+		Namespace: testNamespace,
+		Set:       testSet,
 	}
 
 	service, err := NewService(opts)
@@ -744,38 +727,18 @@ func TestGetNextJobWithNonPendingJob(t *testing.T) {
 
 func TestDefaultJobProcessor(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
 
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
-
-	// Create a custom processor that wraps the default one but adds safety checks
-	safeProcessor := func(s *Service, job *Job, workerID int) {
-		// The actual default processor is called by the worker goroutine
-		// We don't need to do anything here as we're just testing the record deletion
-	}
-
 	opts := Options{
-		Logger:       logger,
-		Client:       client,
-		Namespace:    "test",
-		Set:          "test",
-		WorkerCount:  1,
-		jobProcessor: safeProcessor, // Use our safe processor
+		Logger:      logger,
+		Client:      client,
+		Namespace:   testNamespace,
+		Set:         testSet,
+		WorkerCount: 1, // Use a single worker for predictable testing
 	}
 
 	service, err := NewService(opts)
@@ -896,31 +859,18 @@ func TestJobStatuses(t *testing.T) {
 
 func TestDeleteAtHeight(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
-
+	// Use shared client from TestMain
+	client := testClient
 	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
+		truncateAerospikeSet(t, client, testNamespace, testSet)
 	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
 
 	opts := Options{
 		Logger:      logger,
 		Client:      client,
-		Namespace:   "test",
-		Set:         "test",
-		WorkerCount: 1,
+		Namespace:   testNamespace,
+		Set:         testSet,
+		WorkerCount: 1, // Ensure processing happens predictably
 	}
 
 	service, err := NewService(opts)
@@ -1012,7 +962,8 @@ func TestDeleteAtHeight(t *testing.T) {
 
 func TestOptionsSimple(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	client := &uaerospike.Client{} // dummy client
+	// Use a dummy client for simple options validation
+	dummyClient := &uaerospike.Client{}
 
 	t.Run("Default options struct fields", func(t *testing.T) {
 		opts := Options{}
@@ -1029,7 +980,7 @@ func TestOptionsSimple(t *testing.T) {
 		mockProc := func(s *Service, j *Job, wid int) {}
 		opts := Options{
 			Logger:         logger,
-			Client:         client,
+			Client:         dummyClient,
 			Namespace:      "ns",
 			Set:            "set",
 			WorkerCount:    2,
@@ -1037,7 +988,7 @@ func TestOptionsSimple(t *testing.T) {
 			jobProcessor:   mockProc,
 		}
 		assert.Equal(t, logger, opts.Logger)
-		assert.Equal(t, client, opts.Client)
+		assert.Equal(t, dummyClient, opts.Client)
 		assert.Equal(t, "ns", opts.Namespace)
 		assert.Equal(t, "set", opts.Set)
 		assert.Equal(t, 2, opts.WorkerCount)
@@ -1056,12 +1007,13 @@ func TestOptionsSimple(t *testing.T) {
 
 func TestServiceSimple(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	client := &uaerospike.Client{} // dummy client
+	// Use a dummy client for simple service creation tests
+	dummyClient := &uaerospike.Client{}
 
 	t.Run("Service creation with valid options", func(t *testing.T) {
 		opts := Options{
 			Logger:    logger,
-			Client:    client,
+			Client:    dummyClient,
 			Namespace: "ns",
 			Set:       "set",
 		}
@@ -1069,7 +1021,7 @@ func TestServiceSimple(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, service)
 		assert.Equal(t, logger, service.logger)
-		assert.Equal(t, client, service.client)
+		assert.Equal(t, dummyClient, service.client)
 		assert.Equal(t, "ns", service.namespace)
 		assert.Equal(t, "set", service.set)
 		assert.Equal(t, DefaultWorkerCount, service.workerCount)

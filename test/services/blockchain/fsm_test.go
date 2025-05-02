@@ -11,7 +11,6 @@ import (
 	blockchain_service "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
-	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/require"
@@ -21,15 +20,8 @@ import (
 // go test -v -tags test_services_blockchain ./test/...
 
 func Test_GetSetFSMStateFromStore(t *testing.T) {
-	connStr, teardown, err := helper.SetupTestPostgresContainer()
-	require.NoError(t, err)
 
-	defer func() {
-		err := teardown()
-		require.NoError(t, err)
-	}()
-
-	storeURL, err := url.Parse(connStr)
+	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
 	tSettings := &settings.Settings{
