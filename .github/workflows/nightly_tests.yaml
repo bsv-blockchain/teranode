@@ -231,6 +231,36 @@ jobs:
             test_func: "TestFreezeAndUnfreezeUtxos"
             test_filename: "utxo_test.go"
 
+          #TNx postgres tests - tna2 single tx
+          - test_dir: "test/tna/withdaemon"
+            test_tags: "test_tna"
+            test_func: "TestSingleTransactionPropagationWithUtxoPostgres"
+            test_filename: "tna2_pg_test.go"
+
+          #TNx postgres tests - tna2 multiple txs
+          - test_dir: "test/tna/withdaemon"
+            test_tags: "test_tna"
+            test_func: "TestMultipleTransactionsPropagationWithUtxoPostgres"
+            test_filename: "tna2_pg_test.go"
+
+          #TNx postgres tests - tna2 concurrent txs
+          - test_dir: "test/tna/withdaemon"
+            test_tags: "test_tna"
+            test_func: "TestConcurrentTransactionsPropagationWithUtxoPostgres"
+            test_filename: "tna2_pg_test.go"
+
+          #TNx postgres tests - tnb6 
+          - test_dir: "test/tnb/withdaemon"
+            test_tags: "test_tnb"
+            test_func: "TestUnspentTransactionOutputsWithPostgres"
+            test_filename: "tna6_pg_test.go"
+
+          #TNx postgres tests - tnb7 
+          - test_dir: "test/tnb/withdaemon"
+            test_tags: "test_tnb"
+            test_func: "TestValidatedTxShouldSpendInputsWithPostgres"
+            test_filename: "tna7_pg_test.go"
+
       max-parallel: 1
       fail-fast: false
 
