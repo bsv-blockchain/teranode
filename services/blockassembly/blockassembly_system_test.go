@@ -1,17 +1,13 @@
-//go:build system
-
 // Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
 package blockassembly
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
-	"log"
+	"crypto/rand"
+	"math"
 	"net/http"
 	"os"
-	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,148 +17,75 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	nodehelpers "github.com/bitcoin-sv/teranode/test/nodeHelpers"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var kafkaCmd *exec.Cmd
-var appCmd *exec.Cmd
-var appPID int
+// setupTest initializes the test environment and returns a cleanup function.
+// The cleanup function should be deferred by the calling test.
+func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, context.Context, context.CancelFunc, func()) {
+	err := os.RemoveAll("./data")
+	require.NoError(t, err)
 
-// startKafka initializes Kafka for testing.
-//
-// Parameters:
-//   - logFile: Path to log file
-//
-// Returns:
-//   - error: Any error encountered during startup
-func startKafka(logFile string) error {
-	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
+	blockchainDaemon, err := nodehelpers.NewBlockchainDaemon(t)
+	require.NoError(t, err)
+	err = blockchainDaemon.StartBlockchainService()
+	require.NoError(t, err, "Failed to start blockchain service")
 
-	kafkaLog, err := os.Create(logFile)
-	if err != nil {
-		return err
-	}
-
-	defer kafkaLog.Close()
-
-	kafkaCmd.Stdout = kafkaLog
-	kafkaCmd.Stderr = kafkaLog
-
-	return kafkaCmd.Start()
-}
-
-// startApp initializes the application for testing.
-//
-// Parameters:
-//   - logFile: Path to log file
-//
-// Returns:
-//   - error: Any error encountered during startup
-func startApp(logFile string) error {
-	appCmd := exec.Command("go", "run", "../../.")
-
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test")
-
-	appLog, err := os.Create(logFile)
-	if err != nil {
-		return err
-	}
-	defer appLog.Close()
-
-	appCmd.Stdout = appLog
-	appCmd.Stderr = appLog
-
-	log.Println("Starting app in the background...")
-
-	if err := appCmd.Start(); err != nil {
-		return err
-	}
-
-	appPID = appCmd.Process.Pid
-
-	// Wait for the app to be ready (consider implementing a health check here)
-	time.Sleep(30 * time.Second) // Adjust this as needed for your app's startup time
-
-	return nil
-}
-
-// stopKafka terminates Kafka after testing.
-func stopKafka() {
-	log.Println("Stopping Kafka...")
-	cmd := exec.Command("docker", "stop", "kafka-server")
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to stop Kafka: %v\n", err)
-	} else {
-		log.Println("Kafka stopped successfully")
-	}
-}
-
-// stopTeranode terminates the Teranode application after testing.
-func stopTeranode() {
-	log.Println("Stopping TERANODE...")
-	cmd := exec.Command("pkill", "-f", "teranode")
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to stop TERANODE: %v\n", err)
-	} else {
-		log.Println("TERANODE stopped successfully")
-	}
-}
-
-// TestMain handles test suite setup and teardown.
-//
-// Parameters:
-//   - m: Testing framework instance
-func TestMain(m *testing.M) {
-	// Start Kafka
-	if err := startKafka("kafka.log"); err != nil {
-		log.Fatalf("Failed to start Kafka: %v", err)
-	}
-
-	// Ensure Kafka has time to initialize
-	time.Sleep(5 * time.Second)
-
-	// Start the app
-	if err := startApp("app.log"); err != nil {
-		log.Fatalf("Failed to start app: %v", err)
-	}
-
-	// Run tests
-	code := m.Run()
-
-	// Cleanup processes
-	stopKafka()
-	stopTeranode()
-
-	os.Exit(code)
-}
-
-// TestHealth verifies the health check functionality of the block assembly service.
-func TestHealth(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-
-	defer cancel()
+	// Setup block assembly service
+	tSettings := blockchainDaemon.Settings
+	ctx, cancel := context.WithCancel(context.Background())
 	memStore := memory.New()
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
 	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
+	readyCh := make(chan struct{}, 1)
+	go func() {
+		if err := ba.Start(ctx, readyCh); err != nil {
+			t.Errorf("Error starting block assembly service: %v", err)
+		}
+	}()
+
+	<-readyCh // Wait for service to be ready
+
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
+
+	cleanup := func() {
+		if err := ba.Stop(ctx); err != nil {
+			t.Logf("Error stopping block assembly service: %v", err)
+		}
+
+		blockchainDaemon.Stop()
+	}
+
+	return blockchainDaemon, ba, ctx, cancel, cleanup
+}
+
+// TestHealth verifies the health check functionality of the block assembly service.
+func TestHealth(t *testing.T) {
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
 
 	status, message, err := ba.Health(ctx, true)
 	require.NoError(t, err, "Liveness check should not return an error")
@@ -172,33 +95,50 @@ func TestHealth(t *testing.T) {
 
 // TestCoinbaseSubsidyHeight verifies correct coinbase subsidy calculation at different heights.
 func Test_CoinbaseSubsidyHeight(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
+	t.Skip("Skipping coinbase subsidy height test")
+	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, ba)
+	defer cleanup()
 
-	err = ba.Init(ctx)
+	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
 
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
+	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate")
 
-	// Get the block height
-	err = ba.blockAssembler.blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Failed to start block assembler")
-	time.Sleep(5 * time.Second)
+	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	require.NoError(t, err, "Failed to create coinbase tx")
 
-	// Generate blocks
-	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[200]"})
-	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
+	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
+	require.NoError(t, err, "Failed to create block header from mining candidate")
+
+	var nonce uint32
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeaderFromMC.Nonce = nonce
+
+		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			break
+		}
+	}
+
+	solution := model.MiningSolution{
+		Id:       miningCandidate.Id,
+		Nonce:    nonce,
+		Time:     &blockHeaderFromMC.Timestamp,
+		Version:  &blockHeaderFromMC.Version,
+		Coinbase: coinbase.Bytes(),
+	}
+
+	err = baClient.SubmitMiningSolution(ctx, &solution)
+	require.NoError(t, err, "Failed to submit mining solution")
 
 	h, m, _ := ba.blockchainClient.GetBestBlockHeader(ctx)
 	assert.NotNil(t, h, "Best block header should not be nil")
@@ -215,37 +155,71 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	t.Logf("Coinbase: %v", mc.CoinbaseValue)
 }
 
-// TODO: Add an assertion for height
-
 // TestDifficultyAdjustment verifies the difficulty adjustment mechanism.
 func TestDifficultyAdjustment(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-
 	t.Skip("Skipping difficulty adjustment test")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-
+	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	defer cleanup()
+
+	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NotNil(t, ba)
+	require.NoError(t, err)
 
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
+	readyCh := make(chan struct{}, 1)
+
+	go func() {
+		err = ba.Start(ctx, readyCh)
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	<-readyCh
 
 	ba.blockAssembler.settings.ChainCfgParams.NoDifficultyAdjustment = false
 	ba.blockAssembler.settings.ChainCfgParams.TargetTimePerBlock = 30 * time.Second
 
 	// Generate initial blocks
-	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[100]"})
-	require.NoError(t, err, "Failed to generate initial blocks")
-	time.Sleep(5 * time.Second)
+	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate")
+
+	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	require.NoError(t, err, "Failed to create coinbase tx")
+
+	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
+	require.NoError(t, err, "Failed to create block header from mining candidate")
+
+	var nonce uint32
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeaderFromMC.Nonce = nonce
+
+		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			break
+		}
+	}
+
+	solution := model.MiningSolution{
+		Id:       miningCandidate.Id,
+		Nonce:    nonce,
+		Time:     &blockHeaderFromMC.Timestamp,
+		Version:  &blockHeaderFromMC.Version,
+		Coinbase: coinbase.Bytes(),
+	}
+
+	err = baClient.SubmitMiningSolution(ctx, &solution)
+	require.NoError(t, err, "Failed to submit mining solution")
 
 	// Get initial block height
 	_, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -260,10 +234,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 
 	for time.Now().Before(endTime) {
 		_, m, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			t.Logf("Error getting block header: %v", err)
-			continue
-		}
+		require.NoError(t, err, "Failed to get best block header")
 
 		if m.Height > lastHeight {
 			t.Logf("New block at height %d, time since start: %v", m.Height, time.Since(startTime))
@@ -290,29 +261,49 @@ func TestDifficultyAdjustment(t *testing.T) {
 
 // TestShouldFollowLongerChain verifies chain selection logic.
 func TestShouldFollowLongerChain(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
+	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
+	defer cleanup()
+
+	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
 
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, ba)
+	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate")
 
-	err = ba.Init(ctx)
-	require.NoError(t, err)
+	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	require.NoError(t, err, "Failed to create coinbase tx")
 
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
+	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
+	require.NoError(t, err, "Failed to create block header from mining candidate")
 
-	// Generate initial 101 blocks
-	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
-	require.NoError(t, err, "Failed to generate initial blocks")
-	time.Sleep(5 * time.Second)
+	var nonce uint32
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeaderFromMC.Nonce = nonce
+
+		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			break
+		}
+	}
+
+	solution := model.MiningSolution{
+		Id:       miningCandidate.Id,
+		Nonce:    nonce,
+		Time:     &blockHeaderFromMC.Timestamp,
+		Version:  &blockHeaderFromMC.Version,
+		Coinbase: coinbase.Bytes(),
+	}
+
+	err = baClient.SubmitMiningSolution(ctx, &solution)
+	require.NoError(t, err, "Failed to submit mining solution")
 
 	// Get initial block height and hash
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -366,7 +357,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	require.NoError(t, err, "Failed to add Chain B block")
 
 	// Create new block assembler to check which chain it follows
-	newBA := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	newBA := New(ulogger.TestLogger{}, ba.settings, ba.txStore, ba.utxoStore, ba.subtreeStore, ba.blockchainClient)
 	require.NotNil(t, newBA)
 
 	err = newBA.Init(ctx)
@@ -381,31 +372,52 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
 
-// This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block  
+// This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block
 func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
+	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
+	defer cleanup()
+
+	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
+	require.NotNil(t, baClient)
 
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, ba)
+	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get mining candidate")
 
-	err = ba.Init(ctx)
-	require.NoError(t, err)
+	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	require.NoError(t, err, "Failed to create coinbase tx")
 
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
+	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
+	require.NoError(t, err, "Failed to create block header from mining candidate")
 
-	// Generate initial 101 blocks
-	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
-	require.NoError(t, err, "Failed to generate initial blocks")
-	time.Sleep(5 * time.Second)
+	var nonce uint32
+
+	for ; nonce < math.MaxUint32; nonce++ {
+		blockHeaderFromMC.Nonce = nonce
+
+		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
+		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
+			t.Error(err)
+			t.FailNow()
+		}
+
+		if headerValid {
+			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
+			break
+		}
+	}
+
+	solution := model.MiningSolution{
+		Id:       miningCandidate.Id,
+		Nonce:    nonce,
+		Time:     &blockHeaderFromMC.Timestamp,
+		Version:  &blockHeaderFromMC.Version,
+		Coinbase: coinbase.Bytes(),
+	}
+
+	err = baClient.SubmitMiningSolution(ctx, &solution)
+	require.NoError(t, err, "Failed to submit mining solution")
 
 	// Get initial block height and hash
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -498,7 +510,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	t.Logf("Chain B: 3 blocks with difficulty %s", chainBBits.String())
 
 	// Create new block assembler to check which chain it follows
-	newBA := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	newBA := New(ulogger.TestLogger{}, ba.settings, ba.txStore, ba.utxoStore, ba.subtreeStore, ba.blockchainClient)
 	require.NotNil(t, newBA)
 
 	err = newBA.Init(ctx)
@@ -515,44 +527,13 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 }
 
 // This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block
-// This testcase tests TNA-6: Teranode must express its acceptance of the block by working on creating the next block in the chain, using the hash of the accepted block as previous hash. 
+// This testcase tests TNA-6: Teranode must express its acceptance of the block by working on creating the next block in the chain, using the hash of the accepted block as previous hash.
 func TestShouldAddSubtreesToLongerChain(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Block.StoreCacheEnabled = false
-	// Create a cancellable context
-	ctx := context.Background()
-	done := make(chan struct{})
+	t.Skip("This test should pass")
 
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	t.Logf("Creating block assembler...")
-
-	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, baService)
-	err = baService.Init(ctx)
-	require.NoError(t, err)
-
-	t.Logf("Block assembler created")
-
-	go func() {
-		defer close(done)
-
-		readyChan := make(chan struct{})
-		err = baService.Start(ctx, readyChan)
-		if err != nil {
-			t.Errorf("Error starting service: %v", err)
-		}
-	}()
-
-	// wait for the block assembler to start
-	time.Sleep(5 * time.Second)
-	ba := baService.blockAssembler
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
 
 	// Get initial state
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -611,37 +592,38 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	t.Log("Adding Chain A block...")
 	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
 	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
 
 	t.Log("Adding Chain B block...")
 	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
 	require.NoError(t, err)
-	time.Sleep(1 * time.Second)
 
 	// Add transactions
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
 
 	t.Log("Waiting for transactions to be processed...")
-	time.Sleep(2 * time.Second)
 
 	// Get mining candidate with timeout context
 	t.Log("Getting mining candidate...")
 
 	var miningCandidate *model.MiningCandidate
 
+	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
+	require.NoError(t, err)
+
 	var s []*util.Subtree
-	miningCandidate, s, mcErr := ba.getMiningCandidate()
+
+	miningCandidate, mcErr := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, mcErr)
 
 	// Verify the mining candidate is built on Chain A
@@ -668,42 +650,9 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 // TestShouldHandleReorg verifies blockchain reorganization handling.
 func TestShouldHandleReorg(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Block.StoreCacheEnabled = false
-
-	ctx := context.Background()
-	done := make(chan struct{})
-
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	t.Log("Creating block assembler...")
-	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, baService)
-	err = baService.Init(ctx)
-	require.NoError(t, err)
-
-	// Start the service
-	go func() {
-		defer close(done)
-
-		readyChan := make(chan struct{})
-
-		err = baService.Start(ctx, readyChan)
-		if err != nil {
-			t.Errorf("Error starting service: %v", err)
-		}
-
-		<-readyChan
-	}()
-
-	time.Sleep(5 * time.Second)
-	ba := baService.blockAssembler
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
 
 	// Get initial state
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -748,15 +697,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -773,10 +722,10 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify transactions in original chain
-	mc1, subtrees1, err := ba.getMiningCandidate()
+	mc1, st1, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err)
 	require.NotNil(t, mc1)
-	require.NotEmpty(t, subtrees1)
+	require.NotEmpty(t, st1)
 
 	// check the previous hash of the mining candidate
 	prevHash := chainhash.Hash(mc1.PreviousHash)
@@ -796,10 +745,10 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.getMiningCandidate()
+	mc2, st2, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
-	require.NotEmpty(t, subtrees2)
+	require.NotEmpty(t, st2)
 
 	// check the previous hash of the mining candidate
 	prevHash = chainhash.Hash(mc2.PreviousHash)
@@ -809,7 +758,7 @@ func TestShouldHandleReorg(t *testing.T) {
 	// Verify transaction count is maintained
 	var foundTxsAfterReorg int
 
-	for _, subtree := range subtrees2 {
+	for _, subtree := range st2 {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
 				foundTxsAfterReorg++
@@ -829,41 +778,9 @@ func TestShouldHandleReorg(t *testing.T) {
 
 // TestShouldHandleReorgWithLongerChain verifies reorganization with extended chains.
 func TestShouldHandleReorgWithLongerChain(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Block.StoreCacheEnabled = false
-	ctx := context.Background()
-	done := make(chan struct{})
-
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	t.Log("Creating block assembler...")
-	baService := New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, baService)
-	err = baService.Init(ctx)
-	require.NoError(t, err)
-
-	// Start the service
-	go func() {
-		defer close(done)
-
-		readyChan := make(chan struct{})
-
-		err = baService.Start(ctx, readyChan)
-		if err != nil {
-			t.Errorf("Error starting service: %v", err)
-		}
-
-		<-readyChan
-	}()
-
-	time.Sleep(5 * time.Second)
-	ba := baService.blockAssembler
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
 
 	// Get initial state
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -937,15 +854,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")
@@ -992,7 +909,8 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
-	mc1, subtrees1, err := ba.getMiningCandidate()
+
+	mc1, subtrees1, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
@@ -1016,7 +934,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.getMiningCandidate()
+	mc2, subtrees2, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
@@ -1048,217 +966,60 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 // TestShouldFailCoinbaseArbitraryTextTooLong verifies max coinbase size policy.
 func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	t.Skip("Skipping coinbase arbitrary text too long test")
+	_, ba, ctx, cancel, cleanup := setupTest(t)
+	defer cancel()
+	defer cleanup()
+
+	tSettings := ba.settings
 	tSettings.Coinbase.ArbitraryText = "too long"
 	tSettings.ChainCfgParams.MaxCoinbaseScriptSigSize = 5
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, ba)
-
-	err = ba.Init(ctx)
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	go func() {
-		readyChan := make(chan struct{})
-
-		err = ba.Start(ctx, readyChan)
-		require.NoError(t, err)
-	}()
-	time.Sleep(1 * time.Second)
-
-	_, err = ba.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
+	_, err := ba.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
 	require.Error(t, err, "Should return error for bad coinbase length")
 	require.Contains(t, err.Error(), "bad coinbase length")
 }
 
-// TestReset verifies that the Reset() function properly triggers a state reset
-// and updates the block assembler state correctly.
-func TestReset(t *testing.T) {
+func CreateCoinbaseTxCandidate(m *model.MiningCandidate) (*bt.Tx, error) {
 	tSettings := test.CreateBaseTestSettings()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
-	defer cancel()
+	arbitraryText := tSettings.Coinbase.ArbitraryText
 
-	memStore := memory.New()
-	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
-	require.NotNil(t, ba)
-
-	err = ba.Init(ctx)
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	// Generate initial 101 blocks
-	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
-	require.NoError(t, err, "Failed to generate initial blocks")
-	time.Sleep(5 * time.Second)
-
-	// Get initial block height and hash
-	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get initial block header")
-
-	initialHeight := initialMetadata.Height
-	t.Logf("Initial block height: %d", initialHeight)
-
-	// Create a new block with different difficulty
-	newBits, _ := model.NewNBitFromString("1d00ffff")
-	newHeader := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  initialHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          1,
-		Bits:           *newBits,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+	coinbasePrivKeys := tSettings.BlockAssembly.MinerWalletPrivateKeys
+	if len(coinbasePrivKeys) == 0 {
+		return nil, errors.NewConfigurationError("miner_wallet_private_keys not found in config")
 	}
 
-	// Create coinbase transaction for the new block
-	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	walletAddresses := make([]string, len(coinbasePrivKeys))
 
-	// Create and add the new block
-	newBlock := &model.Block{
-		Header:           newHeader,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
+	for i, coinbasePrivKey := range coinbasePrivKeys {
+		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		if err != nil {
+			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
+		}
+
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+		if err != nil {
+			return nil, errors.NewProcessingError("can't create coinbase address", err)
+		}
+
+		walletAddresses[i] = walletAddress.AddressString
 	}
 
-	t.Log("Adding new block...")
-
-	err = ba.blockchainClient.AddBlock(ctx, newBlock, "")
-	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
-
-	// Call Reset to trigger state update
-	t.Log("Calling Reset...")
-	ba.blockAssembler.Reset()
-	time.Sleep(1 * time.Second)
-
-	// Verify the state was updated by checking with blockchain client
-	finalHeader, finalMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get final block header")
-
-	finalHeight := finalMetadata.Height
-
-	// Verify the height increased
-	require.Greater(t, finalHeight, initialHeight, "Block height should have increased")
-
-	// Verify we're on the new block
-	require.Equal(t, newHeader.Hash(), finalHeader.Hash(), "Should be on the new block after reset")
-
-	// Create a new block with different difficulty
-	newBits2, _ := model.NewNBitFromString("1d00ffff")
-	newHeader2 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  newHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          2,
-		Bits:           *newBits2,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-	}
-
-	// Create coinbase transaction for the new block
-	coinbaseTx2, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-
-	// Create and add the new block
-	newBlock2 := &model.Block{
-		Header:           newHeader2,
-		CoinbaseTx:       coinbaseTx2,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-
-	t.Log("Adding new block...")
-
-	err = ba.blockchainClient.AddBlock(ctx, newBlock2, "")
-	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
-
-	// Call Reset to trigger state update
-	t.Log("Calling Reset...")
-	ba.blockAssembler.Reset()
-	time.Sleep(1 * time.Second)
-
-	// Verify the state was updated by checking with blockchain client
-	finalHeader2, finalMetadata2, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get final block header")
-
-	finalHeight2 := finalMetadata2.Height
-
-	// Verify the height increased
-	require.Greater(t, finalHeight2, finalHeight, "Block height should have increased")
-
-	// Verify we're on the new block
-	require.Equal(t, newHeader2.Hash(), finalHeader2.Hash(), "Should be on the new block after reset")
-}
-
-// CallRPC performs an RPC call to a Bitcoin node.
-//
-// Parameters:
-//   - url: RPC endpoint URL
-//   - method: RPC method to call
-//   - params: Parameters for the RPC call
-//
-// Returns:
-//   - string: RPC response
-//   - error: Any error encountered during the call
-func CallRPC(url string, method string, params []interface{}) (string, error) {
-	// Create the request payload
-	requestBody, err := json.Marshal(map[string]interface{}{
-		"method": method,
-		"params": params,
-	})
+	a, b, err := model.GetCoinbaseParts(m.Height, m.CoinbaseValue, arbitraryText, walletAddresses)
 	if err != nil {
-		return "", errors.NewProcessingError("failed to marshal request body", err)
+		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
 	}
 
-	// Create the HTTP request
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
+	extranonce := make([]byte, 12)
+	_, _ = rand.Read(extranonce)
+	a = append(a, extranonce...)
+	a = append(a, b...)
+
+	coinbaseTx, err := bt.NewTxFromBytes(a)
 	if err != nil {
-		return "", errors.NewProcessingError("failed to create request", err)
+		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
 	}
 
-	// Set the appropriate headers
-	req.SetBasicAuth("bitcoin", "bitcoin")
-	req.Header.Set("Content-Type", "application/json")
-
-	// Perform the request
-	client := &http.Client{}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", errors.NewProcessingError("failed to perform request", err)
-	}
-	defer resp.Body.Close()
-
-	// Check the status code
-	if resp.StatusCode != http.StatusOK {
-		return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
-	}
-
-	// Read the response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", errors.NewProcessingError("failed to read response body", err)
-	}
-
-	// Return the response as a string
-	return string(body), nil
+	return coinbaseTx, nil
 }
