@@ -37,7 +37,7 @@ func TestServerOperations(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	serverAddr := "localhost:8080"
+	serverAddr := "localhost:7979"
 	go func() {
 		err := blobServer.Start(context.Background(), serverAddr)
 		if err != nil {
@@ -48,7 +48,7 @@ func TestServerOperations(t *testing.T) {
 	// Wait for the server to start
 	time.Sleep(100 * time.Millisecond)
 
-	clientStoreURL, err := url.Parse("http://localhost:8080")
+	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
 	client, err := http.New(logger, clientStoreURL)
