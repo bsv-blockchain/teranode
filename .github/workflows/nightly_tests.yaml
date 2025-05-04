@@ -253,13 +253,13 @@ jobs:
           - test_dir: "test/tnb/withdaemon"
             test_tags: "test_tnb"
             test_func: "TestUnspentTransactionOutputsWithPostgres"
-            test_filename: "tna6_pg_test.go"
+            test_filename: "tnb6_pg_test.go"
 
           #TNx postgres tests - tnb7 
           - test_dir: "test/tnb/withdaemon"
             test_tags: "test_tnb"
             test_func: "TestValidatedTxShouldSpendInputsWithPostgres"
-            test_filename: "tna7_pg_test.go"
+            test_filename: "tnb7_pg_test.go"
 
       max-parallel: 1
       fail-fast: false
