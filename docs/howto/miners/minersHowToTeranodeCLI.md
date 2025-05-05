@@ -1,13 +1,12 @@
 # Teranode CLI Documentation
 
-Last Modified: 31-January-2024
+Last Modified: 4-May-2025
 
 ## Overview
 
 The teranode-cli is a command-line interface tool for interacting with Teranode services. It provides various commands for maintenance, debugging, and operational tasks.
 
 ## Basic Usage
-
 
 To access the CLI in a Docker container:
 ```
@@ -18,19 +17,12 @@ Usage: teranode-cli <command> [options]
 
     Available Commands:
     aerospikereader      Aerospike Reader
-    assemblyblaster      Assembly Blaster
     bitcoin2utxoset      Bitcoin 2 Utxoset
-    blockchainstatus     Blockchain Status
-    chainintegrity       Chain Integrity
     filereader           File Reader
-    propagation_blaster  Propagation Blaster
-    recover_tx           Recover one or more transactions by TXID and block height
-    s3_blaster           Blaster for S3
-    s3inventoryintegrity S3 Inventory Integrity
+    getfsmstate          Get the current FSM State
     seeder               Seeder
+    setfsmstate          Set the FSM State
     settings             Settings
-    txblockidcheck       Transaction Block ID Check
-    unspend              Unspend a transaction by its TXID
     utxopersister        Utxo Persister
 
     Use 'teranode-cli <command> --help' for more information about a command
@@ -39,78 +31,93 @@ Usage: teranode-cli <command> [options]
 
 ## Available Commands
 
-### Core Operations
+### Configuration
 
-| Command            | Description               | Key Options                                         |
-|--------------------|---------------------------|-----------------------------------------------------|
-| `settings`         | View settings             | None                                                |
-| `blockchainstatus` | Monitor blockchain status | `--miners`, `--refresh`                             |
-| `chainintegrity`   | Verify chain integrity    | `--interval`, `--threshold`, `--debug`, `--logfile` |
+| Command     | Description                  | Key Options |
+|-------------|------------------------------|-------------|
+| `settings`  | View system configuration    | None        |
 
-### Transaction Management
+### Data Management
 
-| Command          | Description                          | Key Options                                    |
-|------------------|--------------------------------------|------------------------------------------------|
-| `unspend`        | Unspend a transaction (⚠️ Dangerous) | `--txid`                                       |
-| `recover_tx`     | Recover transactions (⚠️ Dangerous)  | `<txID> <blockHeight> [spending_txids]`        |
-| `txblockidcheck` | Verify transaction block IDs         | `--txhash`, `--utxostore`, `--blockchainstore` |
-
-### Data Storage & Integrity
-
-| Command                | Description                  | Key Options                        |
-|------------------------|------------------------------|------------------------------------|
-| `aerospikereader`      | Read from Aerospike database | `<txid>`                           |
-| `s3_blaster`           | Test S3 operations           | `--workers`, `--usePrefix`         |
-| `s3inventoryintegrity` | Verify S3 inventory          | `--verbose`, `--quick`, `-d`, `-f` |
-
-### UTXO Management
-
-| Command           | Description                      | Key Options                   |
-|-------------------|----------------------------------|-------------------------------|
-| `utxopersister`   | Manage UTXO persistence          | None                          |
-| `bitcoin2utxoset` | Convert Bitcoin data to UTXO set | `--bitcoinDir`, `--outputDir` |
+| Command           | Description                           | Key Options                                      |
+|-------------------|---------------------------------------|--------------------------------------------------|
+| `aerospikereader` | Read transaction data from Aerospike  | `<txid>` - Transaction ID to lookup              |
+| `bitcoin2utxoset` | Convert Bitcoin data to UTXO set      | `--bitcoinDir` - Location of bitcoin data        |
+|                   |                                       | `--outputDir` - Output directory for UTXO set    |
+|                   |                                       | `--skipHeaders` - Skip processing headers        |
+|                   |                                       | `--skipUTXOs` - Skip processing UTXOs           |
+|                   |                                       | `--blockHash` - Block hash to start from         |
+|                   |                                       | `--blockHeight` - Block height to start from     |
+| `utxopersister`   | Manage UTXO persistence               | None                                             |
 
 ### System Tools
 
-| Command       | Description                  | Key Options                   |
-|---------------|------------------------------|-------------------------------|
-| `seeder`      | Seed initial blockchain data | `--inputDir`, `--hash`        |
-| `filereader`  | Read and process files       | `--verbose`, `--checkHeights` |
-| `getfsmstate` | Get FSM state                | None                          |
-| `setfsmstate` | Set FSM state                | `--fsmstate`                  |
+| Command        | Description                      | Key Options                                      |
+|----------------|----------------------------------|--------------------------------------------------|
+| `seeder`       | Seed initial blockchain data     | `--inputDir` - Input directory for data          |
+|                |                                  | `--hash` - Hash of the data to process          |
+|                |                                  | `--skipHeaders` - Skip processing headers       |
+|                |                                  | `--skipUTXOs` - Skip processing UTXOs          |
+| `filereader`   | Read and process files           | `--verbose` - Enable verbose output              |
+|                |                                  | `--checkHeights` - Check heights in UTXO headers |
+|                |                                  | `--useStore` - Use store                        |
+| `getfsmstate`  | Get the current FSM state        | None                                             |
+| `setfsmstate`  | Set the FSM state                | `--fsmstate` - Target FSM state                  |
+|                |                                  | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
 
 ## Detailed Command Reference
 
-### Dangerous Commands ⚠️
-
-Some commands are marked as dangerous and require explicit confirmation:
-- `unspend`
-- `recover_tx`
-
-These commands will prompt for confirmation by requiring you to type the command name.
-
-### Blockchain Status
+### Aerospike Reader
 ```bash
-teranode-cli blockchainstatus --miners=<miner-list> --refresh=<seconds>
+teranode-cli aerospikereader <txid>
 ```
-- `--miners`: Comma-separated list of blockchain miners to monitor
-- `--refresh`: Refresh rate in seconds (default: 5)
+Retrieves transaction data from Aerospike database using the provided transaction ID.
 
-### Chain Integrity
+### Bitcoin 2 UTXO Set
 ```bash
-teranode-cli chainintegrity [options]
+teranode-cli bitcoin2utxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
 ```
 Options:
-- `--interval`: Check interval in seconds (default: 10)
-- `--threshold`: Alert threshold (default: 5)
-- `--debug`: Enable debug logging
-- `--logfile`: Log file path (default: chainintegrity.log)
+- `--bitcoinDir`: Location of Bitcoin data (required)
+- `--outputDir`: Output directory for UTXO set (required)
+- `--skipHeaders`: Skip processing headers
+- `--skipUTXOs`: Skip processing UTXOs
+- `--blockHash`: Block hash to start from
+- `--previousBlockHash`: Previous block hash
+- `--blockHeight`: Block height to start from
+- `--dumpRecords`: Dump records from index
 
-### Transaction Recovery
+### File Reader
 ```bash
-teranode-cli recover_tx <txID> <blockHeight> [spending_txids] --simulate
+teranode-cli filereader [path] [options]
 ```
-- `--simulate`: Run in simulation mode without making changes
+Options:
+- `--verbose`: Enable verbose output
+- `--checkHeights`: Check heights in UTXO headers
+- `--useStore`: Use store
+
+### FSM State Management
+```bash
+teranode-cli getfsmstate
+```
+Gets the current FSM state of the system.
+
+```bash
+teranode-cli setfsmstate --fsmstate=<state>
+```
+Options:
+- `--fsmstate`: Target FSM state (required)
+  - Valid values: running, idle, catchingblocks, legacysyncing
+
+### Seeder
+```bash
+teranode-cli seeder --inputDir=<input-dir> --hash=<hash> [options]
+```
+Options:
+- `--inputDir`: Input directory for UTXO set and headers (required)
+- `--hash`: Hash of the UTXO set / headers to process (required)
+- `--skipHeaders`: Skip processing headers
+- `--skipUTXOs`: Skip processing UTXOs
 
 ## Error Handling
 
