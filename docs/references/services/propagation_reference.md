@@ -18,6 +18,8 @@ type PropagationServer struct {
     validator                    validator.Interface
     blockchainClient             blockchain.ClientI
     validatorKafkaProducerClient kafka.KafkaAsyncProducerI
+    httpServer                   *echo.Echo
+    validatorHTTPAddr            *url.URL
 }
 ```
 
@@ -62,10 +64,10 @@ Initializes the Propagation Server.
 ### Start
 
 ```go
-func (ps *PropagationServer) Start(ctx context.Context) (err error)
+func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 ```
 
-Starts the Propagation Server, including UDP6 listeners and Kafka producer.
+Starts the Propagation Server, including FSM state restoration (if configured), UDP6 multicast listeners, Kafka producer initialization, and gRPC server setup. Once initialized, it signals readiness by closing the readyCh channel.
 
 ### Stop
 
@@ -92,30 +94,106 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 Processes a batch of transactions.
 
 
+## Additional Methods
+
+### StartUDP6Listeners
+
+```go
+func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error
+```
+
+Initializes IPv6 multicast listeners for transaction propagation. It creates UDP listeners on specified interfaces and addresses, processing incoming transactions in separate goroutines.
+
+### HTTP Server Methods
+
+```go
+func (ps *PropagationServer) handleSingleTx(ctx context.Context) echo.HandlerFunc
+```
+
+Handles a single transaction request on the `/tx` endpoint.
+
+```go
+func (ps *PropagationServer) handleMultipleTx(ctx context.Context) echo.HandlerFunc
+```
+
+Handles multiple transactions on the `/txs` endpoint.
+
+```go
+func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses string) error
+```
+
+Initializes and starts the HTTP server for transaction processing.
+
+```go
+func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string)
+```
+
+Starts the HTTP server and monitors for shutdown.
+
+### Internal Transaction Processing
+
+```go
+func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error
+```
+
+Handles the core transaction processing logic including validation, storage, and triggering async validation.
+
+```go
+func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error
+```
+
+Persists a transaction to the configured storage backend using its chain hash as the key.
+
+```go
+func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error
+```
+
+Sends a transaction to the validator through Kafka.
+
+```go
+func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error
+```
+
+Sends a transaction to the validator's HTTP endpoint. This is used as a fallback when Kafka message size limits are exceeded.
+
 ## Key Processes
 
 ### Transaction Processing
 
-1. The server receives transactions through various protocols (UDP, gRPC).
+1. The server receives transactions through various protocols (UDP6 multicast, HTTP, gRPC).
 2. Transactions are validated to ensure they are not coinbase transactions and are in the extended format.
-3. Valid transactions are stored in the transaction store.
-4. Transactions are sent to the validator (either directly or via Kafka) for further processing.
+3. Valid transactions are stored in the transaction store using their chain hash as the key.
+4. Transactions are sent to the validator either via Kafka or HTTP (for large transactions) for further processing.
 
 ### UDP6 Multicast Listening
 
-The server can listen on multiple IPv6 multicast addresses for incoming transactions.
+The server listens on multiple IPv6 multicast addresses for incoming transactions. The implementation has the following characteristics:
+
+- Supports configurable UDP datagram size (default: 512 bytes)
+- Uses the default IPv6 port 9999 for multicast listeners
+- Creates independent listeners for each multicast address specified
+- Processes incoming datagrams concurrently through separate goroutines
+
+### HTTP Integration
+
+The server provides HTTP endpoints for transaction submission:
+
+- `/tx` endpoint for single transaction submissions
+- `/txs` endpoint for batch transaction submissions
+- Supports rate limiting for API protection
 
 ### Kafka Integration
 
-The server uses a Kafka producer to send transactions to a validator service for asynchronous processing.
+The server uses a Kafka producer to send transactions to a validator service for asynchronous processing. When transactions exceed the Kafka message size limit, it automatically falls back to HTTP-based validation.
 
 ## Configuration
 
-The Propagation Server uses various configuration values from `gocore.Config()`, including:
+The Propagation Server is configured through the settings system instead of directly using `gocore.Config()`, including:
 
-- IPv6 multicast addresses and interface
-- Kafka configuration for validator transactions
-- gRPC server settings
+- `settings.Propagation.UDP6MulticastAddresses`: IPv6 multicast addresses for UDP listeners
+- `settings.Propagation.HTTPAddresses`: HTTP addresses for transaction submission endpoints
+- `settings.Validator.HTTPAddress`: HTTP address for the validator service (used for fallback validation)
+- `settings.Validator.KafkaTopic`: Kafka topic for validator transactions
 
 ## Dependencies
 

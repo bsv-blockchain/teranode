@@ -4,8 +4,8 @@
 ## Table of Contents
 
 - [subtreevalidation_api.proto](#subtreevalidation_api.proto)
-    - [CheckSubtreeRequest](#CheckSubtreeRequest)
-    - [CheckSubtreeResponse](#CheckSubtreeResponse)
+    - [CheckSubtreeFromBlockRequest](#CheckSubtreeFromBlockRequest)
+    - [CheckSubtreeFromBlockResponse](#CheckSubtreeFromBlockResponse)
     - [EmptyMessage](#EmptyMessage)
     - [HealthResponse](#HealthResponse)
 
@@ -22,33 +22,35 @@
 
 
 
-<a name="CheckSubtreeRequest"></a>
+<a name="CheckSubtreeFromBlockRequest"></a>
 
-### CheckSubtreeRequest
-swagger:model CheckSubtreeRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-| base_url | [string](#string) |  |  |
-| block_height | [uint32](#uint32) |  |  |
-| block_hash | [bytes](#bytes) |  |  |
-
-
-
-
-
-
-<a name="CheckSubtreeResponse"></a>
-
-### CheckSubtreeResponse
-swagger:model CheckSubtreeResponse
+### CheckSubtreeFromBlockRequest
+Defines the input parameters for subtree validation.
+swagger:model CheckSubtreeFromBlockRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blessed | [bool](#bool) |  |  |
+| hash | [bytes](#bytes) |  | Merkle root hash of the subtree requiring validation |
+| base_url | [string](#string) |  | Endpoint for retrieving missing transaction data |
+| block_height | [uint32](#uint32) |  | Blockchain height where the subtree is located |
+| block_hash | [bytes](#bytes) |  | Uniquely identifies the block containing the subtree |
+
+
+
+
+
+
+<a name="CheckSubtreeFromBlockResponse"></a>
+
+### CheckSubtreeFromBlockResponse
+Contains the validation result for a subtree check.
+swagger:model CheckSubtreeFromBlockResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| blessed | [bool](#bool) |  | Indicates if the subtree passes all validation criteria |
 
 
 
@@ -58,6 +60,7 @@ swagger:model CheckSubtreeResponse
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
+Represents an empty message structure used for health check requests.
 swagger:model EmptyMessage
 
 
@@ -68,14 +71,15 @@ swagger:model EmptyMessage
 <a name="HealthResponse"></a>
 
 ### HealthResponse
+Encapsulates the service health status information.
 swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Indicates if the service is operating normally |
+| details | [string](#string) |  | Provides additional context about the service health status |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Records when the health check was performed |
 
 
 
@@ -91,12 +95,12 @@ swagger:model HealthResponse
 <a name="SubtreeValidationAPI"></a>
 
 ### SubtreeValidationAPI
-
+Provides gRPC services for validating blockchain subtrees. The service exposes endpoints for health monitoring and subtree validation operations.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#subtreevalidation_api-EmptyMessage) | [HealthResponse](#subtreevalidation_api-HealthResponse) | Health returns the health of the API. |
-| CheckSubtree | [CheckSubtreeRequest](#subtreevalidation_api-CheckSubtreeRequest) | [CheckSubtreeResponse](#subtreevalidation_api-CheckSubtreeResponse) |  |
+| HealthGRPC | [EmptyMessage](#subtreevalidation_api-EmptyMessage) | [HealthResponse](#subtreevalidation_api-HealthResponse) | Checks the service's health status. It takes an empty request message and returns a response indicating the service's health. |
+| CheckSubtreeFromBlock | [CheckSubtreeFromBlockRequest](#subtreevalidation_api-CheckSubtreeFromBlockRequest) | [CheckSubtreeFromBlockResponse](#subtreevalidation_api-CheckSubtreeFromBlockResponse) | Validates a subtree within a specified block in the blockchain. It takes a request containing the subtree's merkle root hash and block details, returning a response indicating the subtree's validity status. |
 
  <!-- end services -->
 

@@ -29,6 +29,7 @@
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
+Represents an empty request message. Used for endpoints that don't require input parameters.
 swagger:model EmptyMessage
 
 
@@ -39,12 +40,13 @@ swagger:model EmptyMessage
 <a name="GetBlockHeightResponse"></a>
 
 ### GetBlockHeightResponse
+Provides the current block height.
 swagger:model GetBlockHeightResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| height | [uint32](#uint32) |  |  |
+| height | [uint32](#uint32) |  | Current block height |
 
 
 
@@ -54,12 +56,13 @@ swagger:model GetBlockHeightResponse
 <a name="GetMedianBlockTimeResponse"></a>
 
 ### GetMedianBlockTimeResponse
+Provides the median time of recent blocks. Used for time-based validation rules.
 swagger:model GetMedianBlockTimeResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| median_time | [uint32](#uint32) |  |  |
+| median_time | [uint32](#uint32) |  | Median time of recent blocks |
 
 
 
@@ -69,14 +72,15 @@ swagger:model GetMedianBlockTimeResponse
 <a name="HealthResponse"></a>
 
 ### HealthResponse
+Provides health check information for the validation service.
 swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Overall health status |
+| details | [string](#string) |  | Detailed health information |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp of health check |
 
 
 
@@ -86,12 +90,13 @@ swagger:model HealthResponse
 <a name="ValidateTransactionBatchRequest"></a>
 
 ### ValidateTransactionBatchRequest
+Contains multiple transactions for batch validation.
 swagger:model ValidateTransactionBatchRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| transactions | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | repeated |  |
+| transactions | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | repeated | Array of transactions to validate |
 
 
 
@@ -101,13 +106,15 @@ swagger:model ValidateTransactionBatchRequest
 <a name="ValidateTransactionBatchResponse"></a>
 
 ### ValidateTransactionBatchResponse
+Provides batch validation results for multiple transactions.
 swagger:model ValidateTransactionBatchResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| valid | [bool](#bool) |  |  |
-| errors | [string](#string) | repeated |  |
+| valid | [bool](#bool) |  | Overall batch validation status |
+| errors | [errors.TError](#errors-TError) | repeated | Array of error messages, one per transaction |
+| metadata | [bytes](#bytes) | repeated | Array of metadata for each transaction |
 
 
 
@@ -117,13 +124,18 @@ swagger:model ValidateTransactionBatchResponse
 <a name="ValidateTransactionRequest"></a>
 
 ### ValidateTransactionRequest
+Contains data for transaction validation.
 swagger:model ValidateTransactionRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| transaction_data | [bytes](#bytes) |  |  |
-| block_height | [uint32](#uint32) |  |  |
+| transaction_data | [bytes](#bytes) |  | Raw transaction data to validate |
+| block_height | [uint32](#uint32) |  | Block height for validation context |
+| skip_utxo_creation | [bool](#bool) | optional | Skip UTXO creation for validation |
+| add_tx_to_block_assembly | [bool](#bool) | optional | Add transaction to block assembly |
+| skip_policy_checks | [bool](#bool) | optional | Skip policy checks |
+| create_conflicting | [bool](#bool) | optional | Create conflicting transaction |
 
 
 
@@ -133,14 +145,16 @@ swagger:model ValidateTransactionRequest
 <a name="ValidateTransactionResponse"></a>
 
 ### ValidateTransactionResponse
+Provides transaction validation results.
 swagger:model ValidateTransactionResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| valid | [bool](#bool) |  |  |
-| txid | [bytes](#bytes) |  |  |
-| reason | [string](#string) |  |  |
+| valid | [bool](#bool) |  | Validation result (true if valid) |
+| txid | [bytes](#bytes) |  | Transaction ID of the validated transaction |
+| reason | [string](#string) |  | Reason for rejection if invalid |
+| metadata | [bytes](#bytes) |  | Additional metadata for the transaction |
 
 
 
@@ -156,15 +170,15 @@ swagger:model ValidateTransactionResponse
 <a name="ValidatorAPI"></a>
 
 ### ValidatorAPI
-
+Service provides methods for transaction validation and related operations.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#validator_api-EmptyMessage) | [HealthResponse](#validator_api-HealthResponse) | Health returns the health of the API. |
-| ValidateTransaction | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) |  |
-| ValidateTransactionBatch | [ValidateTransactionBatchRequest](#validator_api-ValidateTransactionBatchRequest) | [ValidateTransactionBatchResponse](#validator_api-ValidateTransactionBatchResponse) |  |
-| GetBlockHeight | [EmptyMessage](#validator_api-EmptyMessage) | [GetBlockHeightResponse](#validator_api-GetBlockHeightResponse) |  |
-| GetMedianBlockTime | [EmptyMessage](#validator_api-EmptyMessage) | [GetMedianBlockTimeResponse](#validator_api-GetMedianBlockTimeResponse) |  |
+| HealthGRPC | [EmptyMessage](#validator_api-EmptyMessage) | [HealthResponse](#validator_api-HealthResponse) | Checks the health status of the validation service. Returns detailed health information including service status and timestamp. |
+| ValidateTransaction | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) | Validates a single transaction. Performs comprehensive validation including script verification and UTXO checks. |
+| ValidateTransactionBatch | [ValidateTransactionBatchRequest](#validator_api-ValidateTransactionBatchRequest) | [ValidateTransactionBatchResponse](#validator_api-ValidateTransactionBatchResponse) | Validates multiple transactions in a single request. Provides efficient batch processing of transactions. |
+| GetBlockHeight | [EmptyMessage](#validator_api-EmptyMessage) | [GetBlockHeightResponse](#validator_api-GetBlockHeightResponse) | Retrieves the current block height. Used for validation context and protocol upgrade determination. |
+| GetMedianBlockTime | [EmptyMessage](#validator_api-EmptyMessage) | [GetMedianBlockTimeResponse](#validator_api-GetMedianBlockTimeResponse) | Retrieves the median time of recent blocks. Used for time-based validation rules. |
 
  <!-- end services -->
 

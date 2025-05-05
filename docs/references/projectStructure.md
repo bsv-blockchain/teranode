@@ -6,78 +6,86 @@ The Teranode project is structured as follows:
 ```
 teranode/
 │
-├── main.go                       # Start the services.
+├── main.go                       # Entry point to start the services
 │
-├── main_native.go                # Start the services in native secp256k1 mode.
-│
-├── Makefile                      # This Makefile facilitates a variety of development and build tasks for our project.
+├── Makefile                      # Facilitates a variety of development and build tasks for the project
 │
 ├── settings.conf                 # Global settings
 │
 ├── settings_local.conf           # Local overridden settings
 │
-├── certs/                        # Project dev self-signed and ca certificates
+├── Dockerfile                    # Main Dockerfile for containerization
+├── local.Dockerfile              # Dockerfile for local development
+├── docker-compose.yml            # Docker Compose configuration
 │
-├── cmd/                          # Directory containing all different Commands
+├── cmd/                          # Directory containing command-line tools and utilities
 │   ├── aerospike_reader/         # Command related to Aerospike reader functionality
-│   ├── bare/                     # Simple command setup
 │   ├── bitcoin2utxoset/          # Bitcoin to UTXO set utility
-│   ├── blockassembly_blaster/    # Load testing for blockassembly
-│   ├── blockchainstatus/         # Utility for checking blockchain status
-│   ├── blockpersisterintegrity/  # Utility for verifying block persister integrity
-│   ├── chainintegrity/           # Utility to verify the integrity of the blockchain.
-│   ├── propagation_blaster/      # Utility to load test the Propagation service
-│   ├── s3_blaster/               # Utility to load test the S3 service
-│   ├── seeder/                   # Seeder command
-│   ├── utxopersister/            # Utility to load test the UTXO Store service
-│   └── various other utilities like txblaster, peer-cli, etc.
+│   ├── filereader/               # Utility for reading files
+│   ├── getfsmstate/              # Tool to get FSM state
+│   ├── keygen/                   # Key generation utility
+│   ├── peer-cli/                 # Peer network command-line interface
+│   ├── seeder/                   # Seeder functionality
+│   ├── setfsmstate/              # Tool to set FSM state
+│   ├── settings/                 # Settings management tools
+│   ├── teranodecli/              # Teranode command-line interface
+│   └── utxopersister/            # UTXO persistence utility
 │
-├── data/                         # Local node data directory
+├── services/                     # Core service implementations
+│   ├── alert/                    # Alert service
+│   ├── asset/                    # Asset service
+│   ├── blockassembly/            # Block assembly service
+│   ├── blockchain/               # Blockchain service
+│   ├── blockpersister/           # Block persister service
+│   ├── blockvalidation/          # Block validation service
+│   ├── legacy/                   # Legacy services
+│   ├── p2p/                      # Peer-to-peer networking service
+│   ├── propagation/              # Transaction propagation service
+│   ├── rpc/                      # RPC service
+│   ├── subtreevalidation/        # Subtree validation service
+│   ├── utxopersister/            # UTXO persister service
+│   └── validator/                # Transaction validator service
 │
-├── deploy/                       # Deployment scripts for the project
-│   ├── dev/                      # Development deployment configurations
-│   ├── docker/                   # Docker deployment scripts
-│   └── operator/                 # Kubernetes operator deployment scripts
+├── stores/                       # Data storage implementations
+│   ├── blob/                     # Blob storage implementation
+│   ├── utxo/                     # UTXO storage implementation
+│   └── various other stores
 │
 ├── docs/                         # Documentation for the project
-│   ├── architecture/             # Architectural diagrams and related docs
-│   ├── services/                 # Service documentation including protobuf docs
-│   └── other documentation folders for Kafka, sharding, SOP, etc.
+│   ├── architecture/             # Architectural diagrams
+│   ├── references/               # Reference documentation
+│   │   ├── protobuf_docs/        # Protobuf API documentation
+│   │   ├── services/            # Service reference documentation
+│   │   ├── stores/              # Store reference documentation
+│   │   └── kafkaMessageFormat.md # Kafka message format documentation
+│   └── images/                   # Documentation images
 │
-├── errors/                       # Error handling and testing tools
+├── errors/                       # Error handling and definitions
 │
 ├── k8sresolver/                  # Kubernetes resolver for gRPC
 │
-├── model/                        # Key model definitions for the project
+├── model/                        # Data models
 │
-├── modules/                      # Various modules
+├── chaincfg/                     # Chain configuration parameters
 │
-├── scripts/                      # Various scripts
+├── compose/                      # Docker compose configurations
 │
-├── services/                     # Directory containing all different Services
-│   ├── alert/                    # Alert Service
-│   ├── asset/                    # Asset Service
-│   ├── blockassembly/            # Block Assembly Service
-│   ├── blockchain/               # Blockchain Service
-│   ├── blockpersister/           # Block Persister Service
-│   ├── blockvalidation/          # Block Validation Service
-│   ├── legacy/                   # Legacy P2P services
-│   ├── miner/                    # Miner Service
-│   ├── propagation/              # Propagation Service
-│   ├── subtreevalidation/        # Subtree Validation Service
-│   └── utxopersister/            # UTXO Persister Service
+├── daemon/                       # Daemon implementation
 │
-├── stores/                       # Stores used by various services
-│   ├── blob/                     # Blob store implementations
-│   ├── blockchain/               # Blockchain store implementations
-│   └── utxo/                     # UTXO store implementations
+├── scripts/                      # Various utility scripts
 │
-├── test/                         # Test-related scripts and data
+├── settings/                     # Settings management implementation
 │
-├── tracing/                      # Tracing, Stats and Metric utilities
+├── test/                         # Test utilities and integration tests
 │
-├── ui/
+├── testutil/                     # Test utilities
+│
+├── tracing/                      # Tracing and metrics utilities
+│
+├── ui/                           # User interface components
 │   └── dashboard/                # Teranode Dashboard UI
 │
-└── util/                         # Utilities
+├── ulogger/                      # Unified logging implementation
+│
+└── util/                         # Common utilities
 ```

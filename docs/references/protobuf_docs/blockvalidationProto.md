@@ -18,7 +18,6 @@
     - [SetMinedMultiResponse](#SetMinedMultiResponse)
     - [SetTxMetaRequest](#SetTxMetaRequest)
     - [SetTxMetaResponse](#SetTxMetaResponse)
-    - [SubtreeFoundRequest](#SubtreeFoundRequest)
 
     - [BlockValidationAPI](#BlockValidationAPI)
 
@@ -244,21 +243,6 @@ swagger:model SetTxMetaResponse
 
 
 
-<a name="SubtreeFoundRequest"></a>
-
-### SubtreeFoundRequest
-swagger:model SubtreeFoundRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-| base_url | [string](#string) |  |  |
-
-
-
-
-
  <!-- end messages -->
 
  <!-- end enums -->
@@ -273,15 +257,14 @@ swagger:model SubtreeFoundRequest
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#blockvalidation_api-EmptyMessage) | [HealthResponse](#blockvalidation_api-HealthResponse) | Health returns the health of the API. |
-| BlockFound | [BlockFoundRequest](#blockvalidation_api-BlockFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) |  |
-| SubtreeFound | [SubtreeFoundRequest](#blockvalidation_api-SubtreeFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) |  |
-| ProcessBlock | [ProcessBlockRequest](#blockvalidation_api-ProcessBlockRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) |  |
-| Get | [GetSubtreeRequest](#blockvalidation_api-GetSubtreeRequest) | [GetSubtreeResponse](#blockvalidation_api-GetSubtreeResponse) |  |
-| Exists | [ExistsSubtreeRequest](#blockvalidation_api-ExistsSubtreeRequest) | [ExistsSubtreeResponse](#blockvalidation_api-ExistsSubtreeResponse) |  |
-| SetTxMeta | [SetTxMetaRequest](#blockvalidation_api-SetTxMetaRequest) | [SetTxMetaResponse](#blockvalidation_api-SetTxMetaResponse) |  |
-| DelTxMeta | [DelTxMetaRequest](#blockvalidation_api-DelTxMetaRequest) | [DelTxMetaResponse](#blockvalidation_api-DelTxMetaResponse) |  |
-| SetMinedMulti | [SetMinedMultiRequest](#blockvalidation_api-SetMinedMultiRequest) | [SetMinedMultiResponse](#blockvalidation_api-SetMinedMultiResponse) |  |
+| HealthGRPC | [EmptyMessage](#blockvalidation_api-EmptyMessage) | [HealthResponse](#blockvalidation_api-HealthResponse) | Returns the health status of the BlockValidation service. |
+| BlockFound | [BlockFoundRequest](#blockvalidation_api-BlockFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Notifies the service that a new block has been found and requires validation. |
+| ProcessBlock | [ProcessBlockRequest](#blockvalidation_api-ProcessBlockRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Processes a block to validate its content and structure. |
+| Get | [GetSubtreeRequest](#blockvalidation_api-GetSubtreeRequest) | [GetSubtreeResponse](#blockvalidation_api-GetSubtreeResponse) | Retrieves a subtree by its hash. |
+| Exists | [ExistsSubtreeRequest](#blockvalidation_api-ExistsSubtreeRequest) | [ExistsSubtreeResponse](#blockvalidation_api-ExistsSubtreeResponse) | Checks if a subtree with the specified hash exists. |
+| SetTxMeta | [SetTxMetaRequest](#blockvalidation_api-SetTxMetaRequest) | [SetTxMetaResponse](#blockvalidation_api-SetTxMetaResponse) | Sets transaction metadata for one or more transactions. |
+| DelTxMeta | [DelTxMetaRequest](#blockvalidation_api-DelTxMetaRequest) | [DelTxMetaResponse](#blockvalidation_api-DelTxMetaResponse) | Deletes transaction metadata for a specific transaction hash. |
+| SetMinedMulti | [SetMinedMultiRequest](#blockvalidation_api-SetMinedMultiRequest) | [SetMinedMultiResponse](#blockvalidation_api-SetMinedMultiResponse) | Marks multiple transactions as mined in a specific block. |
 
  <!-- end services -->
 

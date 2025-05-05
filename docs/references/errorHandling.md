@@ -479,7 +479,7 @@ func WrapGRPC(err error) error {
 The `WrapGRPC` function performs the following steps:
 1. If the input error is nil, it returns nil.
 2. It attempts to cast the error to Teranode's custom `Error` type.
-3. If successful, it creates a new `TError` (likely a protobuf message) with the error's code and message.
+3. If successful, it creates a new `TError` with the error's code and message.
 4. It then creates a new gRPC status with the corresponding gRPC code and message.
 5. The `TError` is added as a detail to the gRPC status.
 6. If the error is not a Teranode `Error`, it creates a generic "unknown" gRPC error.

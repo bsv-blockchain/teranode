@@ -20,32 +20,35 @@
 - [Authentication](#authentication)
 - [General Format](#general-format)
 - [Supported RPC Commands](#supported-rpc-commands)
-    - [createrawtransaction](#createrawtransaction)
-    - [generate](#generate)
-    - [getbestblockhash](#getbestblockhash)
-    - [getblock](#getblock)
-    - [getblockbyheight](#getblockbyheight)
-    - [getblockhash](#getblockhash)
-    - [getblockheader](#getblockheader)
-    - [getdifficulty](#getdifficulty)
-    - [getmininginfo](#getmininginfo)
-    - [sendrawtransaction](#sendrawtransaction)
-    - [getminingcandidate](#getminingcandidate)
-    - [submitminingsolution](#submitminingsolution)
-    - [getblockchaininfo](#getblockchaininfo)
-    - [getinfo](#getinfo)
-    - [getpeerinfo](#getpeerinfo)
-    - [invalidateblock](#invalidateblock)
-    - [isbanned](#isbanned)
-    - [reconsiderblock](#reconsiderblock)
-    - [setban](#setban)
-    - [stop](#stop)
-    - [version](#version)
-    - [freeze](#freeze)
-    - [unfreeze](#unfreeze)
-    - [reassign](#reassign)
-    - [generatetoaddress](#generatetoaddress)
-    - [getrawtransaction](#getrawtransaction)
+    - [createrawtransaction](#createrawtransaction) - Creates a raw transaction without signing it
+    - [generate](#generate) - Mine blocks (for regression testing)
+    - [generatetoaddress](#generatetoaddress) - Mine blocks to a specified address
+    - [getbestblockhash](#getbestblockhash) - Returns the hash of the best (most recent) block in the longest blockchain
+    - [getblock](#getblock) - Returns information about a block
+    - [getblockbyheight](#getblockbyheight) - Returns information about a block at the specified height
+    - [getblockhash](#getblockhash) - Returns the hash of a block at the specified height
+    - [getblockheader](#getblockheader) - Returns information about a block header
+    - [getblockchaininfo](#getblockchaininfo) - Returns blockchain state information
+    - [getdifficulty](#getdifficulty) - Returns the proof-of-work difficulty
+    - [getinfo](#getinfo) - Returns general information about the node
+    - [getmininginfo](#getmininginfo) - Returns mining-related information
+    - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
+    - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
+    - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
+    - [help](#help) - Lists all available commands or gets help on a specific command
+    - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
+    - [isbanned](#isbanned) - Checks if an IP/subnet is banned
+    - [listbanned](#listbanned) - Lists all banned IPs/subnets
+    - [clearbanned](#clearbanned) - Clears all banned IPs
+    - [reconsiderblock](#reconsiderblock) - Removes invalidity status from a block
+    - [sendrawtransaction](#sendrawtransaction) - Submits a raw transaction to the network
+    - [setban](#setban) - Attempts to add or remove an IP/subnet from the banned list
+    - [stop](#stop) - Stops the server
+    - [submitminingsolution](#submitminingsolution) - Submits a mining solution to the network
+    - [version](#version) - Returns the server version information
+    - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
+    - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
+    - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
@@ -70,23 +73,24 @@ type RPCServer struct {
    started                int32
    shutdown               int32
    authsha                [sha256.Size]byte
-   limitauthsha          [sha256.Size]byte
-   numClients            int32
-   statusLines           map[int]string
-   statusLock            sync.RWMutex
-   wg                    sync.WaitGroup
+   limitauthsha           [sha256.Size]byte
+   numClients             int32
+   statusLines            map[int]string
+   statusLock             sync.RWMutex
+   wg                     sync.WaitGroup
    requestProcessShutdown chan struct{}
-   quit                  chan int
-   logger                ulogger.Logger
-   rpcMaxClients         int
-   rpcQuirks             bool
-   listeners             []net.Listener
-   blockchainClient      blockchain.ClientI
-   blockAssemblyClient   *blockassembly.Client
-   peerClient            peer.ClientI
-   p2pClient             p2p.ClientI
-   assetHTTPURL          *url.URL
-   helpCacher            *helpCacher
+   quit                   chan int
+   logger                 ulogger.Logger
+   rpcMaxClients          int
+   rpcQuirks              bool
+   listeners              []net.Listener
+   blockchainClient       blockchain.ClientI
+   blockAssemblyClient    *blockassembly.Client
+   peerClient             peer.ClientI
+   p2pClient              p2p.ClientI
+   assetHTTPURL           *url.URL
+   helpCacher             *helpCacher
+   utxoStore              utxo.Store
 }
 ```
 
@@ -95,20 +99,20 @@ type RPCServer struct {
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Service.
+Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, and UTXO store.
 
 ## Methods
 
 ### Start
 
 ```go
-func (s *RPCServer) Start(ctx context.Context) error
+func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Starts the RPC server and begins listening for client connections.
+Starts the RPC server, begins listening for client connections, and signals readiness by closing the readyCh channel once initialization is complete.
 
 ### Stop
 
@@ -1243,16 +1247,87 @@ Returns raw transaction data for a specific transaction.
 
 ## Unimplemented RPC Commands
 
-The following commands are recognized by the RPC server but are not currently implemented:
+The following commands are recognized by the RPC server but are not currently implemented (they would return an ErrRPCUnimplemented error):
 
-- `addnode` - Not yet implemented
-- `decoderawtransaction` - Not yet implemented
-- `decodescript` - Not yet implemented
-- `estimatefee` - Not yet implemented
-- `getblocktemplate` - Not yet implemented
-- `getmempoolinfo` - Not yet implemented
-- `getrawmempool` - Not yet implemented
-- `gettxout` - Not yet implemented
+- `addnode` - Adds a node to the peer list
+- `debuglevel` - Changes the debug level on the fly
+- `decoderawtransaction` - Decodes a raw transaction hexadecimal string
+- `decodescript` - Decodes a hex-encoded script
+- `estimatefee` - Estimates the fee per kilobyte
+- `getaddednodeinfo` - Returns information about added nodes
+- `getbestblock` - Returns information about best block
+- `getblockcount` - Returns the current block count
+- `getblocktemplate` - Returns template for block generation
+- `getcfilter` - Returns the committed filter for a block
+- `getcfilterheader` - Returns the filter header for a filter
+- `getconnectioncount` - Returns connection count
+- `getcurrentnet` - Returns the current network ID
+- `getgenerate` - Returns if the server is generating coins
+- `gethashespersec` - Returns hashes per second
+- `getheaders` - Returns header information
+- `getmempoolinfo` - Returns mempool information (Not in scope for Teranode)
+- `getnettotals` - Returns network statistics
+- `getnetworkhashps` - Returns estimated network hashes per second
+- `getrawmempool` - Returns raw mempool contents (Not in scope for Teranode)
+- `gettxout` - Returns unspent transaction output
+- `gettxoutproof` - Returns proof that transaction was included in a block
+- `node` - Attempts to add or remove a node
+- `ping` - Pings the server
+- `searchrawtransactions` - Searches for raw transactions
+- `setgenerate` - Sets if server will generate coins
+- `submitblock` - Submits a block to the network
+- `uptime` - Returns how long the server has been running
+- `validateaddress` - Validates an address
+- `verifychain` - Verifies the blockchain
+- `verifymessage` - Verifies a signed message
+- `verifytxoutproof` - Verifies proof that transaction was included in a block
+
+### Wallet-Related Commands
+
+The following wallet-related commands are recognized but explicitly not supported in this implementation (they would return an ErrRPCNoWallet error). These commands should be directed to a connected Bitcoin SV wallet service:
+
+- `addmultisigaddress` - Add a multisignature address to the wallet
+- `backupwallet` - Safely copies wallet.dat to the specified file
+- `createencryptedwallet` - Creates a new encrypted wallet
+- `createmultisig` - Creates a multi-signature address and returns the redeem script
+- `dumpprivkey` - Reveals the private key corresponding to an address
+- `dumpwallet` - Dumps all wallet keys in a human-readable format
+- `encryptwallet` - Encrypts the wallet
+- `getaccount` - Returns the account associated with an address
+- `getaccountaddress` - Returns an address for the given account
+- `getaddressesbyaccount` - Returns all addresses for the given account
+- `getbalance` - Returns total balance available
+- `getnewaddress` - Returns a new Bitcoin address for receiving payments
+- `getrawchangeaddress` - Returns a new address for receiving change
+- `getreceivedbyaccount` - Returns total amount received for the account
+- `getreceivedbyaddress` - Returns amount received by an address
+- `gettransaction` - Returns transaction details
+- `gettxoutsetinfo` - Returns statistics about the unspent transaction output set
+- `getunconfirmedbalance` - Returns the server's unconfirmed balance
+- `getwalletinfo` - Returns wallet state information
+- `importprivkey` - Adds a private key to the wallet
+- `importwallet` - Imports keys from a wallet dump file
+- `keypoolrefill` - Fills the keypool
+- `listaccounts` - Returns all account names and their balances
+- `listaddressgroupings` - Lists groups of addresses which have had their common ownership made public
+- `listlockunspent` - Returns list of temporarily unspendable outputs
+- `listreceivedbyaccount` - Lists balances by account
+- `listreceivedbyaddress` - Lists balances by address
+- `listsinceblock` - Returns transactions since the specified block
+- `listtransactions` - Returns the most recent transactions
+- `listunspent` - Returns an array of unspent transaction outputs
+- `lockunspent` - Locks or unlocks specified transaction outputs
+- `move` - Moves funds between accounts
+- `sendfrom` - Sends an amount from an account to an address
+- `sendmany` - Sends multiple amounts to multiple addresses
+- `sendtoaddress` - Sends an amount to an address
+- `setaccount` - Sets the account associated with an address
+- `settxfee` - Sets the transaction fee per kB
+- `signmessage` - Signs a message with the private key of an address
+- `signrawtransaction` - Creates a raw transaction
+- `walletlock` - Removes the encryption key from memory, locking the wallet
+- `walletpassphrase` - Stores the wallet decryption key in memory
+- `walletpassphrasechange` - Changes the wallet passphrase
 
 ## Error Handling
 

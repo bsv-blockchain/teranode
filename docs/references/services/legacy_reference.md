@@ -62,7 +62,7 @@ This function creates a new server instance with all required dependencies and i
 
 ### Health Management
 
-The server implements comprehensive health checking through two main methods:
+The server implements comprehensive health checking through the Health method:
 
 ```go
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
@@ -83,6 +83,8 @@ For readiness checks (when checkLiveness is false):
 - Verifies SubtreeValidation service
 - Checks BlockValidation service
 - Confirms BlockAssembly client status
+- Checks peer connections to ensure at least one peer is connected
+- Verifies recent peer activity within the last 2 minutes
 
 ### Server Lifecycle Management
 
@@ -101,14 +103,16 @@ The Init method performs essential setup:
 - Sets up initial peer connections
 
 ```go
-func (s *Server) Start(ctx context.Context) error
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 The Start method initializes server operation:
-- Signals FSM to transition to LegacySync state
+- Accepts a ready channel that signals when the server is ready
+- Waits for FSM transition from IDLE state
 - Starts the internal server for peer connections
+- Initiates periodic peer statistics logging
 - Initializes the gRPC server for the peer service
-- Begins processing network messages
+- Signals readiness by closing the readyCh channel
 
 ```go
 func (s *Server) Stop(_ context.Context) error
@@ -117,6 +121,12 @@ func (s *Server) Stop(_ context.Context) error
 The Stop method ensures graceful shutdown by stopping the internal server.
 
 ### Peer Management
+
+```go
+func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeerCountResponse, error)
+```
+
+Returns the count of currently connected peers.
 
 ```go
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeersResponse, error)
@@ -130,15 +140,46 @@ This method provides detailed information about connected peers including:
 - Node status (starting height, current height)
 - Connection quality metrics (ban score, whitelist status)
 
+### Ban Management
+
+```go
+func (s *Server) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error)
+```
+
+Checks if a specific peer is currently banned.
+
+```go
+func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ListBannedResponse, error)
+```
+
+Returns a list of all currently banned peers.
+
+```go
+func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ClearBannedResponse, error)
+```
+
+Removes all entries from the ban list.
+
+```go
+func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error)
+```
+
+Bans a specific peer for a specified duration.
+
+```go
+func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error)
+```
+
+Removes a specific peer from the ban list.
+
 ## Configuration
 
 The Legacy Service uses various configuration values from `gocore.Config()`, including:
 
-- `network`: The Bitcoin network to connect to (default: "mainnet")
-- `legacy_listen_addresses`: Addresses to listen on for incoming connections
-- `asset_httpAddress`: HTTP address for the asset service
-- `legacy_connect_peers`: Peers to connect to on startup
-- `fsm_state_restore`: Whether to restore the FSM state on startup
+- `settings.Legacy.ListenAddresses`: Addresses to listen on for incoming connections
+- `settings.Legacy.GRPCListenAddress`: Address for the gRPC service
+- `settings.Legacy.ConnectPeers`: Peer addresses to connect to on startup
+- `settings.Asset.HTTPAddress`: HTTP address for the asset service
 
 ## Dependencies
 

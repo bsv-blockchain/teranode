@@ -53,12 +53,15 @@ Creates a new `Server` instance with the provided dependencies.
 
 #### Methods
 
-- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the server and its dependencies.
-- `Init(ctx context.Context) error`: Initializes the server by reading the last processed height.
-- `Start(ctx context.Context) error`: Starts the server, including blockchain event subscription and processing.
-- `Stop(ctx context.Context) error`: Stops the server (currently a no-op).
-- `trigger(ctx context.Context, source string) error`: Triggers the processing of the next block.
-- `processNextBlock(ctx context.Context) (time.Duration, error)`: Processes the next block in the chain.
+- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the server and its dependencies. It conducts both liveness and readiness checks based on the parameter.
+- `Init(ctx context.Context) error`: Initializes the server by reading the last processed height from persistent storage.
+- `Start(ctx context.Context, readyCh chan<- struct{}) error`: Starts the server, including blockchain event subscription and block processing. The readyCh is closed when initialization is complete to signal readiness.
+- `Stop(ctx context.Context) error`: Stops the server's processing operations and performs necessary cleanup.
+- `trigger(ctx context.Context, source string) error`: Triggers the processing of the next block, ensuring only one processing operation runs at a time.
+- `processNextBlock(ctx context.Context) (time.Duration, error)`: Processes the next block in the chain, extracting and persisting UTXOs.
+- `readLastHeight(ctx context.Context) (uint32, error)`: Reads the last processed block height from storage.
+- `writeLastHeight(ctx context.Context, height uint32) error`: Writes the current block height to storage for recovery purposes.
+- `verifyLastSet(ctx context.Context, hash *chainhash.Hash) error`: Verifies the integrity of the last UTXO set, ensuring it was completely written and is not corrupted.
 
 ### UTXOSet
 
@@ -103,16 +106,23 @@ The `UTXO` struct represents an individual Unspent Transaction Output.
 
 ```go
 type UTXO struct {
-Index  uint32
-Value  uint64
-Script []byte
+    // Index represents the output index in the transaction
+    Index  uint32
+    // Value represents the amount in satoshis
+    Value  uint64
+    // Script contains the locking script
+    Script []byte
 }
 ```
 
 #### Methods
 
-- `Bytes() []byte`: Serializes the UTXO to bytes.
-- `String() string`: Returns a string representation of the UTXO.
+- `Bytes() []byte`: Serializes the UTXO to bytes. The serialized format includes the index (4 bytes), value (8 bytes), script length (4 bytes), and the script itself. All integers are serialized in little-endian format.
+- `String() string`: Returns a string representation of the UTXO. It includes the output index, value in satoshis, and a hexadecimal representation of the script.
+
+#### Factory Methods
+
+- `NewUTXOFromReader(r io.Reader) (*UTXO, error)`: Creates a new UTXO from the provided reader. It deserializes a UTXO by reading the index, value, script length, and script bytes.
 
 ### UTXOWrapper
 
@@ -120,18 +130,35 @@ The `UTXOWrapper` struct wraps multiple UTXOs for a single transaction.
 
 ```go
 type UTXOWrapper struct {
-TxID     chainhash.Hash
-Height   uint32
-Coinbase bool
-UTXOs    []*UTXO
+    // TxID contains the transaction ID
+    TxID     chainhash.Hash
+    // Height represents the block height
+    Height   uint32
+    // Coinbase indicates if this is a coinbase transaction
+    Coinbase bool
+    // UTXOs contains the unspent transaction outputs
+    UTXOs    []*UTXO
 }
 ```
 
 #### Methods
 
-- `Bytes() []byte`: Serializes the UTXOWrapper to bytes.
-- `DeletionBytes(index uint32) [36]byte`: Returns the bytes representation for UTXO deletion.
-- `String() string`: Returns a string representation of the UTXOWrapper.
+- `Bytes() []byte`: Serializes the UTXOWrapper to bytes. The serialized format includes the transaction ID, encoded height/coinbase flag, number of UTXOs, and the serialized UTXOs themselves.
+- `DeletionBytes(index uint32) [36]byte`: Returns the bytes representation for deletion of a specific output. It creates a fixed-size array containing the transaction ID and the output index.
+- `String() string`: Returns a string representation of the UTXOWrapper. The string includes the transaction ID, height, coinbase status, number of outputs, and a formatted representation of each UTXO.
+
+#### Factory Methods
+
+- `NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided reader. It deserializes the UTXOWrapper data from a byte stream.
+- `NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided bytes.
+
+### EOFMarker
+
+The package defines an `EOFMarker` which is a byte slice of 32 zero bytes used to identify the end of a data stream when reading UTXOs from a file.
+
+```go
+var EOFMarker = make([]byte, 32) // 32 zero bytes
+```
 
 ### UTXODeletion
 
@@ -139,15 +166,17 @@ The `UTXODeletion` struct represents a UTXO to be deleted.
 
 ```go
 type UTXODeletion struct {
-TxID  chainhash.Hash
-Index uint32
+    // TxID contains the transaction ID of the UTXO to delete
+    TxID  chainhash.Hash
+    // Index represents the output index to delete
+    Index uint32
 }
 ```
 
 #### Methods
 
-- `DeletionBytes() []byte`: Returns the bytes representation of the UTXODeletion.
-- `String() string`: Returns a string representation of the UTXODeletion.
+- `DeletionBytes() []byte`: Returns the bytes representation of the UTXODeletion, used when marking a UTXO as spent.
+- `String() string`: Returns a string representation of the UTXODeletion for debugging purposes.
 
 ## File Formats
 

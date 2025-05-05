@@ -38,17 +38,32 @@ The `Store` interface defines the contract for blob storage operations.
 
 ```go
 type Store interface {
-Health(ctx context.Context, checkLiveness bool) (int, string, error)
-Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
-Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
-GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
-Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
-SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
-SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
-GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error)
-Del(ctx context.Context, key []byte, opts ...options.FileOption) error
-Close(ctx context.Context) error
+    // Health checks the health status of the blob store
+    Health(ctx context.Context, checkLiveness bool) (int, string, error)
+    // Exists checks if a blob exists in the store
+    Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+    // Get retrieves a blob from the store
+    Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+    // GetHead retrieves the first n bytes of a blob
+    GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
+    // GetIoReader returns an io.ReadCloser for streaming blob data
+    GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+    // Set stores a blob in the store
+    Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
+    // SetFromReader stores a blob from an io.ReadCloser
+    SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
+    // SetDAH sets the delete at height for a blob
+    SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error
+    // GetDAH retrieves the delete at height value for a blob
+    GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error)
+    // Del deletes a blob from the store
+    Del(ctx context.Context, key []byte, opts ...options.FileOption) error
+    // GetHeader retrieves the header of a blob
+    GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+    // GetFooterMetaData retrieves metadata from the footer of a blob
+    GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+    // Close closes the blob store and releases any resources
+    Close(ctx context.Context) error
 }
 ```
 
@@ -60,15 +75,16 @@ The service exposes the following HTTP endpoints:
 - `HEAD /blob/{key}`: Check if a blob exists.
 - `GET /blob/{key}`: Retrieve a blob.
 - `POST /blob/{key}`: Store a new blob.
-- `PATCH /blob/{key}`: Update the TTL of a blob.
+- `PATCH /blob/{key}`: Set the delete-at-height (DAH) value for a blob.
 - `DELETE /blob/{key}`: Delete a blob.
 
 ## Key Features
 
 1. **Health Checks**: The service provides a health check endpoint.
 2. **Range Requests**: Supports partial content requests using the `Range` header.
-3. **TTL Management**: Allows setting and updating Time-To-Live for blobs.
+3. **DAH Management**: Allows setting and retrieving Delete-At-Height values for blob lifecycle management.
 4. **Streaming**: Supports streaming for both storing and retrieving blobs.
+5. **Metadata Support**: Allows retrieving header and footer metadata from blobs.
 
 ## Error Handling
 
@@ -88,8 +104,9 @@ The service uses HTTP status codes to indicate the result of operations:
 - `handleHealth`: Handles health check requests.
 - `handleExists`: Checks if a blob exists.
 - `handleGet`: Retrieves a blob, including support for range requests.
+- `handleRangeRequest`: Processes partial content requests using the Range header.
 - `handleSet`: Stores a new blob.
-- `handleSetTTL`: Updates the TTL of an existing blob.
+- `handleSetDAH`: Sets the delete-at-height value for a blob.
 - `handleDelete`: Deletes a blob.
 
 ## Utility Functions

@@ -2,34 +2,121 @@
 
 ## Framework Components
 
-### BitcoinTestFramework Structure
+### TeranodeTestEnv Structure
 ```go
-type BitcoinTestFramework struct {
-    ComposeFilePaths []string          // Docker compose file paths
-    Context          context.Context   // Test context
-    Compose          tc.ComposeStack   // Docker compose stack
-    Nodes            []BitcoinNode     // Array of test nodes
-    Logger           ulogger.Logger    // Framework logger
-    Cancel           context.CancelFunc // Context cancellation
+type TeranodeTestEnv struct {
+    TConfig              tconfig.TConfig       // Test configuration
+    Context              context.Context      // Test context
+    Compose              tc.ComposeStack      // Docker compose stack
+    ComposeSharedStorage tstore.TStoreClient  // Shared storage client
+    Nodes                []TeranodeTestClient // Array of test nodes
+    LegacyNodes          []SVNodeTestClient   // Array of legacy nodes
+    Logger               ulogger.Logger       // Framework logger
+    Cancel               context.CancelFunc   // Context cancellation
+    Daemon               daemon.Daemon        // Daemon instance
 }
 ```
 
-### BitcoinNode Structure
+### TeranodeTestClient Structure
 ```go
-type BitcoinNode struct {
-    NodeName            string                  // Node identifier
+type TeranodeTestClient struct {
+    Name                string                  // Node identifier
     SettingsContext     string                  // Configuration context
-    CoinbaseClient      cb.Client              // Coinbase service client
-    BlockchainClient    bc.ClientI             // Blockchain service client
-    BlockassemblyClient ba.Client              // Block assembly client
+    BlockchainClient    bc.ClientI              // Blockchain service client
+    BlockassemblyClient ba.Client               // Block assembly client
     DistributorClient   distributor.Distributor // Distribution service client
-    BlockChainDB        blockchain_store.Store  // Blockchain storage
-    Blockstore          blob.Store             // Block storage
-    SubtreeStore        blob.Store             // Subtree storage
-    BlockstoreURL       *url.URL               // Block store URL
-    UtxoStore           *utxostore.Store       // UTXO storage
-    SubtreesKafkaURL    *url.URL               // Kafka URL for subtrees
-    RPCURL              string                  // RPC endpoint URL
+    ClientBlockstore    *bhttp.HTTPStore        // HTTP client for block storage
+    ClientSubtreestore  *bhttp.HTTPStore        // HTTP client for subtree storage
+    UtxoStore           *utxostore.Store        // UTXO storage
+    CoinbaseClient      *stubs.CoinbaseClient   // Coinbase service client stub
+    AssetURL            string                  // Asset service URL
+    RPCURL              string                  // RPC service URL
+    IPAddress           string                  // Node IP address
+    SVNodeIPAddress     string                  // Legacy node IP address
+    Settings            *settings.Settings      // Node settings
+    BlockChainDB        bcs.Store               // Blockchain storage
+}
+```
+
+### SVNodeTestClient Structure
+```go
+type SVNodeTestClient struct {
+    Name      string // Node identifier
+    IPAddress string // Node IP address
+}
+```
+
+## Framework Setup and Usage
+
+### Creating a Test Environment
+
+The test environment is created using the `NewTeraNodeTestEnv` function, which accepts a test configuration:
+
+```go
+func NewTeraNodeTestEnv(c tconfig.TConfig) *TeranodeTestEnv {
+    logger := ulogger.New("e2eTestRun", ulogger.WithLevel(c.Suite.LogLevel))
+    ctx, cancel := context.WithCancel(context.Background())
+
+    return &TeranodeTestEnv{
+        TConfig: c,
+        Context: ctx,
+        Logger:  logger,
+        Cancel:  cancel,
+    }
+}
+```
+
+### Setting Up Docker Nodes
+
+The `SetupDockerNodes` method initializes the Docker Compose environment with the provided settings:
+
+```go
+func (t *TeranodeTestEnv) SetupDockerNodes() error {
+    // Set up Docker Compose environment
+    // Create test nodes with proper settings
+    // Initialize shared storage if needed
+}
+```
+
+### Initializing Node Clients
+
+The `InitializeTeranodeTestClients` method sets up all the necessary client connections for the nodes:
+
+```go
+func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
+    // Set up blob stores
+    // Initialize blockchain clients
+    // Initialize blockassembly clients
+    // Initialize distributor clients
+    // Set up other stores and connections
+}
+```
+
+## Using the Framework in Tests
+
+A typical test using this framework would follow this pattern:
+
+```go
+func TestSomeFunctionality(t *testing.T) {
+    // Create test configuration
+    config := tconfig.NewTConfig("testID")
+
+    // Create test environment
+    env := utils.NewTeraNodeTestEnv(config)
+
+    // Set up Docker nodes
+    err := env.SetupDockerNodes()
+    require.NoError(t, err)
+
+    // Initialize node clients
+    err = env.InitializeTeranodeTestClients()
+    require.NoError(t, err)
+
+    // Run tests using the environment
+    // Access node clients via env.Nodes[i]
+
+    // Clean up when done
+    env.Cancel()
 }
 ```
 

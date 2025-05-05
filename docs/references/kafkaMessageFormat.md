@@ -112,7 +112,7 @@ The block notification message is defined in protobuf as `KafkaBlockTopicMessage
 
 ```protobuf
 message KafkaBlockTopicMessage {
-  bytes hash = 1;  // Block hash (32 bytes)
+  string hash = 1;  // Block hash (as hex string)
   string URL = 2;  // URL pointing to block data
 }
 ```
@@ -120,8 +120,8 @@ message KafkaBlockTopicMessage {
 ### Field Specifications
 
 #### hash
-- Type: bytes
-- Description: Raw bytes representation of the BSV block hash (32 bytes)
+- Type: string
+- Description: Hexadecimal string representation of the BSV block hash
 - Required: Yes
 
 #### URL
@@ -135,7 +135,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 
 ```json
 {
-  "hash": "<binary data - 32 bytes>",
+  "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
   "URL": "https://datahub.example.com/blocks/123"
 }
 ```
@@ -150,7 +150,7 @@ dataHubUrl := "https://datahub.example.com/blocks/123"
 
 // Create a new protobuf message
 message := &kafkamessage.KafkaBlockTopicMessage{
-    Hash: blockHash[:],
+    Hash: blockHash.String(), // convert the hash to a string
     URL:  dataHubUrl,
 }
 
@@ -180,9 +180,11 @@ func handleBlockMessage(msg *kafka.Message) error {
         return fmt.Errorf("failed to deserialize block message: %w", err)
     }
 
-    // Extract block hash (32 bytes)
-    var blockHash chainhash.Hash
-    copy(blockHash[:], blockMessage.Hash)
+    // Convert string hash to chainhash.Hash
+    blockHash, err := chainhash.NewHashFromStr(blockMessage.Hash)
+    if err != nil {
+        return fmt.Errorf("invalid block hash: %w", err)
+    }
 
     // Extract DataHub URL
     dataHubUrl := blockMessage.URL
@@ -192,6 +194,11 @@ func handleBlockMessage(msg *kafka.Message) error {
     return nil
 }
 ```
+
+### Error Cases
+- Invalid message format: Message cannot be unmarshaled to KafkaBlockTopicMessage
+- Empty or malformed hash: Hash is not a valid hexadecimal string representation of a block hash
+- Invalid URL: DataHub URL is empty or not properly formatted
 
 ---
 
@@ -207,7 +214,7 @@ The subtree notification message is defined in protobuf as `KafkaSubtreeTopicMes
 
 ```protobuf
 message KafkaSubtreeTopicMessage {
-  bytes hash = 1;  // Subtree hash (32 bytes)
+  string hash = 1;  // Subtree hash (as hex string)
   string URL = 2;  // URL pointing to subtree data
 }
 ```
@@ -215,8 +222,8 @@ message KafkaSubtreeTopicMessage {
 ### Field Specifications
 
 #### hash
-- Type: bytes
-- Description: Raw bytes representation of the BSV subtree hash (32 bytes)
+- Type: string
+- Description: Hexadecimal string representation of the BSV subtree hash
 - Required: Yes
 
 #### URL
@@ -230,7 +237,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 
 ```json
 {
-  "hash": "<binary data - 32 bytes>",
+  "hash": "45a2b856743012ce25a4dabddd5f5bdf534c27c9347b34862bca5a14176d07",
   "URL": "https://datahub.example.com/subtrees/123"
 }
 ```
@@ -245,7 +252,7 @@ dataHubUrl := "https://datahub.example.com/subtrees/123"
 
 // Create a new protobuf message
 message := &kafkamessage.KafkaSubtreeTopicMessage{
-    Hash: subtreeHash[:],
+    Hash: subtreeHash.String(), // convert the hash to a string
     URL:  dataHubUrl,
 }
 
@@ -275,9 +282,11 @@ func handleSubtreeMessage(msg *kafka.Message) error {
         return fmt.Errorf("failed to deserialize subtree message: %w", err)
     }
 
-    // Extract subtree hash (32 bytes)
-    var subtreeHash chainhash.Hash
-    copy(subtreeHash[:], subtreeMessage.Hash)
+    // Convert string hash to chainhash.Hash
+    subtreeHash, err := chainhash.NewHashFromStr(subtreeMessage.Hash)
+    if err != nil {
+        return fmt.Errorf("invalid subtree hash: %w", err)
+    }
 
     // Extract DataHub URL
     dataHubUrl := subtreeMessage.URL
@@ -290,7 +299,7 @@ func handleSubtreeMessage(msg *kafka.Message) error {
 
 ### Error Cases
 - Invalid message format: Message cannot be unmarshaled to KafkaSubtreeTopicMessage
-- Empty or malformed hash: Hash does not contain exactly 32 bytes
+- Empty or malformed hash: Hash is not a valid hexadecimal string representation of a subtree hash
 - Invalid URL: DataHub URL is empty or not properly formatted
 
 ---

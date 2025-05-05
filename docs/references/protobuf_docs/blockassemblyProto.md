@@ -9,7 +9,9 @@
     - [AddTxRequest](#AddTxRequest)
     - [AddTxResponse](#AddTxResponse)
     - [EmptyMessage](#EmptyMessage)
+    - [GenerateBlocksRequest](#GenerateBlocksRequest)
     - [GetCurrentDifficultyResponse](#GetCurrentDifficultyResponse)
+    - [GetMiningCandidateRequest](#GetMiningCandidateRequest)
     - [HealthResponse](#HealthResponse)
     - [NewChaintipAndHeightRequest](#NewChaintipAndHeightRequest)
     - [RemoveTxRequest](#RemoveTxRequest)
@@ -106,6 +108,22 @@ An empty message used as a placeholder or a request with no data.
 
 
 
+<a name="GenerateBlocksRequest"></a>
+
+### GenerateBlocksRequest
+Request for generating a block.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| count | [int32](#int32) |  | the number of blocks to generate |
+| address | [string](#string) | optional | the address to send the generated blocks to |
+| maxTries | [int32](#int32) | optional | the maximum number of attempts to generate a block |
+
+
+
+
+
 <a name="GetCurrentDifficultyResponse"></a>
 
 ### GetCurrentDifficultyResponse
@@ -115,6 +133,20 @@ Response containing the current difficulty of the blockchain.
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | difficulty | [double](#double) |  | the current difficulty of the blockchain |
+
+
+
+
+
+<a name="GetMiningCandidateRequest"></a>
+
+### GetMiningCandidateRequest
+Request for retrieving a mining candidate block template.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| includeSubtrees | [bool](#bool) |  | whether to include the subtrees in the mining candidate |
 
 
 
@@ -203,8 +235,8 @@ Request for submitting a mining solution to the blockchain.
 | id | [bytes](#bytes) |  | the id of the mining candidate |
 | nonce | [uint32](#uint32) |  | the nonce value used for mining |
 | coinbase_tx | [bytes](#bytes) |  | the coinbase transaction bytes |
-| time | [uint32](#uint32) |  | the timestamp of the block |
-| version | [uint32](#uint32) |  | the version of the block |
+| time | [uint32](#uint32) | optional | the timestamp of the block |
+| version | [uint32](#uint32) | optional | the version of the block |
 
 
 
@@ -239,16 +271,17 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#blockassembly_api-EmptyMessage) | [HealthResponse](#blockassembly_api-HealthResponse) | Health returns the health of the API. |
-| AddTx | [AddTxRequest](#blockassembly_api-AddTxRequest) | [AddTxResponse](#blockassembly_api-AddTxResponse) | Adds a transaction to the list of transactions to be included in the next available Subtree. |
-| RemoveTx | [RemoveTxRequest](#blockassembly_api-RemoveTxRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes a transaction from the list of transactions to be included in the next available Subtree. |
-| AddTxBatch | [AddTxBatchRequest](#blockassembly_api-AddTxBatchRequest) | [AddTxBatchResponse](#blockassembly_api-AddTxBatchResponse) | Adds a batch of transactions to the list of transactions to be included in the next available Subtree. |
-| GetMiningCandidate | [EmptyMessage](#blockassembly_api-EmptyMessage) | [.model.MiningCandidate](#model-MiningCandidate) | Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees. |
-| GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Get the current difficulty of the blockchain. |
-| SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [SubmitMiningSolutionResponse](#blockassembly_api-SubmitMiningSolutionResponse) | Submits a mining solution to the blockchain. |
-| DeDuplicateBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | De-duplicate transaction in block assembly subtree processor. |
-| ResetBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Reset transaction in block assembly subtree processor. |
-| GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Get the block assembly state. |
+| HealthGRPC | [EmptyMessage](#blockassembly_api-EmptyMessage) | [HealthResponse](#blockassembly_api-HealthResponse) | Checks the health status of the block assembly service. Returns detailed health information including service status and timestamp. |
+| AddTx | [AddTxRequest](#blockassembly_api-AddTxRequest) | [AddTxResponse](#blockassembly_api-AddTxResponse) | Adds a single transaction to the next available subtree. The transaction will be included in block assembly for mining. |
+| RemoveTx | [RemoveTxRequest](#blockassembly_api-RemoveTxRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes a transaction from consideration for block inclusion. This is useful for handling double-spends or invalid transactions. |
+| AddTxBatch | [AddTxBatchRequest](#blockassembly_api-AddTxBatchRequest) | [AddTxBatchResponse](#blockassembly_api-AddTxBatchResponse) | Efficiently adds multiple transactions in a single request. Provides better performance than multiple individual AddTx calls. |
+| GetMiningCandidate | [GetMiningCandidateRequest](#blockassembly_api-GetMiningCandidateRequest) | [.model.MiningCandidate](#model-MiningCandidate) | Retrieves a block template ready for mining. Includes all necessary components for miners to begin work. |
+| GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Retrieves the current network mining difficulty. Used by miners to understand the current mining requirements. |
+| SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [SubmitMiningSolutionResponse](#blockassembly_api-SubmitMiningSolutionResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
+| DeDuplicateBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes duplicate transactions from the assembly process. Ensures transaction uniqueness within blocks. |
+| ResetBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Resets the block assembly state. Useful for handling reorgs or recovering from errors. |
+| GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Retrieves the current state of block assembly. Provides detailed information about the assembly process status. |
+| GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |
 
  <!-- end services -->
 

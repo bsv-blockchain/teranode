@@ -13,7 +13,7 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                       *p2p.P2PNode              // The P2P network node instance
+    P2PNode                       P2PNodeI                  // The P2P network node interface
     logger                        ulogger.Logger            // Logger instance for the server
     settings                      *settings.Settings        // Configuration settings
     bitcoinProtocolID             string                    // Bitcoin protocol identifier
@@ -25,16 +25,60 @@ type Server struct {
     rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
     subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
     blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
-    banList                       *BanList                  // List of banned peers
-    banChan                       chan BanEvent             // Channel for ban events
+    banList                       BanListI                 // Interface for banned peers
+    banChan                       chan BanEvent            // Channel for ban events
+    banManager                    *PeerBanManager          // Manager for peer banning
+    bestBlockMessageReceived      atomic.Bool              // Flag for best block message receipt
+    gCtx                          context.Context          // Context for the server
+    blockTopicName                string                   // Name of the block topic
+    subtreeTopicName              string                   // Name of the subtree topic
+    bestBlockTopicName            string                   // Name of the best block topic
+    miningOnTopicName             string                   // Name of the mining-on topic
+    rejectedTxTopicName           string                   // Name of the rejected tx topic
 }
 ```
 
 The server manages several key components, each serving a specific purpose in the P2P network:
-- The P2PNode handles direct peer connections and message routing
+- The P2PNode handles direct peer connections and message routing through the P2PNodeI interface
 - The various Kafka clients manage message distribution across the network
-- The ban system maintains network security by managing peer access
+- The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
+
+### P2PNodeI Interface
+
+The P2P Server uses a P2PNodeI interface rather than a concrete P2PNode implementation to enable better testability:
+
+```go
+type P2PNodeI interface {
+    // Core lifecycle methods
+    Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
+    Stop(ctx context.Context) error
+
+    // Topic-related methods
+    SetTopicHandler(ctx context.Context, topicName string, handler Handler) error
+    GetTopic(topicName string) *pubsub.Topic
+    Publish(ctx context.Context, topicName string, msgBytes []byte) error
+
+    // Peer management methods
+    HostID() peer.ID
+    ConnectedPeers() []PeerInfo
+    CurrentlyConnectedPeers() []PeerInfo
+    DisconnectPeer(ctx context.Context, peerID peer.ID) error
+    SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
+
+    // Stats methods
+    LastSend() time.Time
+    LastRecv() time.Time
+    BytesSent() uint64
+    BytesReceived() uint64
+
+    // Additional accessors
+    GetProcessName() string
+    UpdateBytesReceived(bytesCount uint64)
+    UpdateLastReceived()
+    GetPeerIPs(peerID peer.ID) []string
+}
+```
 
 ## Server Operations
 
@@ -90,7 +134,7 @@ It verifies and adjusts HTTP/HTTPS settings based on security requirements and e
 
 The Start method initiates server operations:
 ```go
-func (s *Server) Start(ctx context.Context) error
+func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 It begins:
 - Kafka message processing
@@ -99,6 +143,7 @@ It begins:
 - P2P network communication
 - Blockchain subscription monitoring
 - Ban event processing
+- Once initialization is complete, it signals readiness by closing the readyCh channel
 
 The Stop method ensures graceful shutdown:
 ```go
@@ -106,6 +151,55 @@ func (s *Server) Stop(ctx context.Context) error
 ```
 It manages the orderly shutdown of all server components and connections.
 
+
+### Ban Management
+
+The P2P Server implements a sophisticated peer banning system through several components:
+
+```go
+type BanEventHandler interface {
+    OnPeerBanned(peerID string, until time.Time, reason string)
+}
+```
+
+The `BanEventHandler` interface allows the system to react to ban events, which is implemented by the P2P Server.
+
+```go
+type PeerBanManager struct {
+    ctx           context.Context
+    mu            sync.RWMutex
+    peerBanScores map[string]*BanScore
+    reasonPoints  map[BanReason]int
+    banThreshold  int
+    banDuration   time.Duration
+    decayInterval time.Duration
+    decayAmount   int
+    handler       BanEventHandler
+}
+```
+
+The `PeerBanManager` maintains scores for peers and automatically bans them when they exceed a threshold. It provides methods like:
+
+- `AddScore`: Increments a peer's score for specific violations
+- `GetBanScore`: Retrieves the current ban score and status
+- `IsBanned`: Checks if a peer is currently banned
+- `ListBanned`: Returns all currently banned peers
+- `ResetBanScore`: Clears a peer's ban score
+
+The system defines standard ban reasons with associated scoring:
+
+```go
+type BanReason int
+
+const (
+    ReasonUnknown BanReason = iota
+    ReasonInvalidSubtree     // 10 points
+    ReasonProtocolViolation  // 20 points
+    ReasonSpam              // 50 points
+)
+```
+
+Peer scores automatically decay over time to allow for recovery from temporary issues.
 
 ### Message Handlers
 

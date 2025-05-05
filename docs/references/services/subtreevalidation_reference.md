@@ -68,10 +68,10 @@ Initializes the server, setting up Kafka consumers and other necessary component
 ### Start
 
 ```go
-func (u *Server) Start(ctx context.Context) error
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Starts the server, including Kafka consumers and gRPC server.
+Starts the server, including Kafka consumers and gRPC server. It blocks until the context is canceled or an error occurs, and signals readiness by closing the readyCh channel once initialization is complete.
 
 ### Stop
 
@@ -79,25 +79,41 @@ Starts the server, including Kafka consumers and gRPC server.
 func (u *Server) Stop(_ context.Context) error
 ```
 
-Stops the server (currently a no-op).
+Gracefully shuts down the server components including Kafka consumers.
 
-### CheckSubtree
+### CheckSubtreeFromBlock
 
 ```go
-func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (*subtreevalidation_api.CheckSubtreeResponse, error)
+func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevalidation_api.CheckSubtreeFromBlockRequest) (*subtreevalidation_api.CheckSubtreeFromBlockResponse, error)
 ```
 
-Checks the validity of a subtree based on the provided request.
+Validates a subtree and its transactions based on the provided request. It handles both legacy and current validation paths, managing locks to prevent duplicate processing. The function implements a retry mechanism for lock acquisition and supports both legacy and current validation paths.
 
 ## Internal Methods
 
-### checkSubtree
+### checkSubtreeFromBlock
 
 ```go
-func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (ok bool, err error)
+func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevalidation_api.CheckSubtreeFromBlockRequest) (ok bool, err error)
 ```
 
-Internal implementation of subtree checking logic.
+Internal implementation of subtree checking logic. This function expects a subtree to have been stored in the subtree store with an extension of .subtreeToCheck compared to the normal .subtree extension, which is done to ensure the subtree validation does not think the subtree has already been checked.
+
+### GetUutxoStore
+
+```go
+func (u *Server) GetUutxoStore() utxo.Store
+```
+
+Returns the UTXO store instance used by the server.
+
+### SetUutxoStore
+
+```go
+func (u *Server) SetUutxoStore(s utxo.Store)
+```
+
+Sets the UTXO store instance for the server.
 
 ### ValidateSubtreeInternal
 
@@ -157,13 +173,21 @@ Checks if a priority subtree check is active for the given subtree hash.
 
 ## Kafka Handlers
 
-### subtreeHandler
+### consumerMessageHandler
 
 ```go
-func (u *Server) subtreeHandler(msg *kafka.KafkaMessage) error
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error
 ```
 
-Handles incoming subtree messages from Kafka.
+Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. This is used for the subtree consumer.
+
+### subtreesHandler
+
+```go
+func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error
+```
+
+The actual implementation that handles incoming subtree messages from Kafka.
 
 ### txmetaHandler
 

@@ -9,6 +9,7 @@
     - [CheckBlockIsCurrentChainResponse](#CheckBlockIsCurrentChainResponse)
     - [GetBestHeightAndTimeResponse](#GetBestHeightAndTimeResponse)
     - [GetBlockByHeightRequest](#GetBlockByHeightRequest)
+    - [GetBlockByIDRequest](#GetBlockByIDRequest)
     - [GetBlockExistsResponse](#GetBlockExistsResponse)
     - [GetBlockGraphDataRequest](#GetBlockGraphDataRequest)
     - [GetBlockHeaderIDsResponse](#GetBlockHeaderIDsResponse)
@@ -18,8 +19,12 @@
     - [GetBlockHeadersByHeightResponse](#GetBlockHeadersByHeightResponse)
     - [GetBlockHeadersFromHeightRequest](#GetBlockHeadersFromHeightRequest)
     - [GetBlockHeadersFromHeightResponse](#GetBlockHeadersFromHeightResponse)
+    - [GetBlockHeadersFromTillRequest](#GetBlockHeadersFromTillRequest)
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
+    - [GetBlockHeadersToCommonAncestorRequest](#GetBlockHeadersToCommonAncestorRequest)
+    - [GetBlockIsMinedRequest](#GetBlockIsMinedRequest)
+    - [GetBlockIsMinedResponse](#GetBlockIsMinedResponse)
     - [GetBlockLocatorRequest](#GetBlockLocatorRequest)
     - [GetBlockLocatorResponse](#GetBlockLocatorResponse)
     - [GetBlockRequest](#GetBlockRequest)
@@ -27,6 +32,8 @@
     - [GetBlocksMinedNotSetResponse](#GetBlocksMinedNotSetResponse)
     - [GetBlocksRequest](#GetBlocksRequest)
     - [GetBlocksResponse](#GetBlocksResponse)
+    - [GetLastNInvalidBlocksRequest](#GetLastNInvalidBlocksRequest)
+    - [GetLastNInvalidBlocksResponse](#GetLastNInvalidBlocksResponse)
     - [GetBlocksSubtreesNotSetResponse](#GetBlocksSubtreesNotSetResponse)
     - [GetFSMStateResponse](#GetFSMStateResponse)
     - [GetFullBlockResponse](#GetFullBlockResponse)
@@ -902,11 +909,8 @@ swagger:enum FSMEventType
 | ---- | ------ | ----------- |
 | STOP | 0 |  |
 | RUN | 1 |  |
-| CATCHUPBLOCKS | 3 | MINE = 2; |
-| CATCHUPTXS | 4 |  |
-| RESTORE | 5 |  |
-| LEGACYSYNC | 6 |  |
-| UNAVAILABLE | 7 |  |
+| CATCHUPBLOCKS | 2 |  |
+| LEGACYSYNC | 3 |  |
 
 
 
@@ -917,13 +921,10 @@ swagger:enum FSMStateType
 
 | Name | Number | Description |
 | ---- | ------ | ----------- |
-| STOPPED | 0 |  |
-| RUNNING | 1 |  |
-| CATCHINGBLOCKS | 3 | MINING = 2; |
-| CATCHINGTXS | 4 |  |
-| RESTORING | 5 |  |
-| LEGACYSYNCING | 6 |  |
-| RESOURCE_UNAVAILABLE | 7 |  |
+| IDLE | 0 | Service is idle |
+| RUNNING | 1 | Service is running normally |
+| CATCHINGBLOCKS | 2 | Service is catching up blocks |
+| LEGACYSYNCING | 3 | Service is in legacy sync mode |
 
 
  <!-- end enums -->
@@ -938,47 +939,51 @@ swagger:enum FSMStateType
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#blockchain_api-HealthResponse) | Health returns the health of the API. |
-| AddBlock | [AddBlockRequest](#blockchain_api-AddBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | AddBlock adds a block to the blockchain. This will be called by BlockValidator. |
-| GetBlock | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) |  |
-| GetBlocks | [GetBlocksRequest](#blockchain_api-GetBlocksRequest) | [GetBlocksResponse](#blockchain_api-GetBlocksResponse) |  |
-| GetBlockByHeight | [GetBlockByHeightRequest](#blockchain_api-GetBlockByHeightRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) |  |
-| GetBlockStats | [.google.protobuf.Empty](#google-protobuf-Empty) | [.model.BlockStats](#model-BlockStats) |  |
-| GetBlockGraphData | [GetBlockGraphDataRequest](#blockchain_api-GetBlockGraphDataRequest) | [.model.BlockDataPoints](#model-BlockDataPoints) |  |
-| GetLastNBlocks | [GetLastNBlocksRequest](#blockchain_api-GetLastNBlocksRequest) | [GetLastNBlocksResponse](#blockchain_api-GetLastNBlocksResponse) |  |
-| GetSuitableBlock | [GetSuitableBlockRequest](#blockchain_api-GetSuitableBlockRequest) | [GetSuitableBlockResponse](#blockchain_api-GetSuitableBlockResponse) |  |
-| GetHashOfAncestorBlock | [GetHashOfAncestorBlockRequest](#blockchain_api-GetHashOfAncestorBlockRequest) | [GetHashOfAncestorBlockResponse](#blockchain_api-GetHashOfAncestorBlockResponse) |  |
-| GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) |  |
-| GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) |  |
-| GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) |  |
-| GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) |  |
-| GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) |  |
-| GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) |  |
-| GetBestBlockHeader | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) |  |
-| CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) |  |
-| GetBlockHeader | [GetBlockHeaderRequest](#blockchain_api-GetBlockHeaderRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) |  |
-| InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| RevalidateBlock | [RevalidateBlockRequest](#blockchain_api-RevalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| Subscribe | [SubscribeRequest](#blockchain_api-SubscribeRequest) | [Notification](#blockchain_api-Notification) stream |  |
-| SendNotification | [Notification](#blockchain_api-Notification) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| GetState | [GetStateRequest](#blockchain_api-GetStateRequest) | [StateResponse](#blockchain_api-StateResponse) |  |
-| SetState | [SetStateRequest](#blockchain_api-SetStateRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| SetBlockMinedSet | [SetBlockMinedSetRequest](#blockchain_api-SetBlockMinedSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| GetBlocksMinedNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksMinedNotSetResponse](#blockchain_api-GetBlocksMinedNotSetResponse) |  |
-| SetBlockSubtreesSet | [SetBlockSubtreesSetRequest](#blockchain_api-SetBlockSubtreesSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| GetBlocksSubtreesNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksSubtreesNotSetResponse](#blockchain_api-GetBlocksSubtreesNotSetResponse) |  |
-| SendFSMEvent | [SendFSMEventRequest](#blockchain_api-SendFSMEventRequest) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) |  |
-| GetFSMCurrentState | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) |  |
-| WaitFSMToTransitionToGivenState | [WaitFSMToTransitionRequest](#blockchain_api-WaitFSMToTransitionRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| Run | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| CatchUpTransactions | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| CatchUpBlocks | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| Restore | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| LegacySync | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| Unavailable | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) |  |
-| GetBlockLocator | [GetBlockLocatorRequest](#blockchain_api-GetBlockLocatorRequest) | [GetBlockLocatorResponse](#blockchain_api-GetBlockLocatorResponse) |  |
-| LocateBlockHeaders | [LocateBlockHeadersRequest](#blockchain_api-LocateBlockHeadersRequest) | [LocateBlockHeadersResponse](#blockchain_api-LocateBlockHeadersResponse) |  |
-| GetBestHeightAndTime | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBestHeightAndTimeResponse](#blockchain_api-GetBestHeightAndTimeResponse) |  |
+| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#blockchain_api-HealthResponse) | Checks the health status of the blockchain service. |
+| AddBlock | [AddBlockRequest](#blockchain_api-AddBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Adds a new block to the blockchain. Called by BlockValidator to add validated blocks. |
+| GetBlock | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) | Retrieves a block by its hash. |
+| GetBlocks | [GetBlocksRequest](#blockchain_api-GetBlocksRequest) | [GetBlocksResponse](#blockchain_api-GetBlocksResponse) | Retrieves multiple blocks starting from a specific hash. |
+| GetBlockByHeight | [GetBlockByHeightRequest](#blockchain_api-GetBlockByHeightRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) | Retrieves a block at a specific height. |
+| GetBlockByID | [GetBlockByIDRequest](#blockchain_api-GetBlockByIDRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) | Retrieves a block by its id. |
+| GetBlockStats | [.google.protobuf.Empty](#google-protobuf-Empty) | [.model.BlockStats](#model-BlockStats) | Retrieves statistical information about the blockchain. |
+| GetBlockGraphData | [GetBlockGraphDataRequest](#blockchain_api-GetBlockGraphDataRequest) | [.model.BlockDataPoints](#model-BlockDataPoints) | Retrieves data points for blockchain visualization. |
+| GetLastNBlocks | [GetLastNBlocksRequest](#blockchain_api-GetLastNBlocksRequest) | [GetLastNBlocksResponse](#blockchain_api-GetLastNBlocksResponse) | Retrieves the most recent N blocks from the blockchain. |
+| GetLastNInvalidBlocks | [GetLastNInvalidBlocksRequest](#blockchain_api-GetLastNInvalidBlocksRequest) | [GetLastNInvalidBlocksResponse](#blockchain_api-GetLastNInvalidBlocksResponse) | Retrieves the most recent N blocks that have been marked as invalid. |
+| GetSuitableBlock | [GetSuitableBlockRequest](#blockchain_api-GetSuitableBlockRequest) | [GetSuitableBlockResponse](#blockchain_api-GetSuitableBlockResponse) | Finds a suitable block for mining purposes. |
+| GetHashOfAncestorBlock | [GetHashOfAncestorBlockRequest](#blockchain_api-GetHashOfAncestorBlockRequest) | [GetHashOfAncestorBlockResponse](#blockchain_api-GetHashOfAncestorBlockResponse) | Retrieves the hash of an ancestor block at a specified depth. |
+| GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) | Calculates the required proof of work for the next block. |
+| GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) | Checks if a block exists in the blockchain. |
+| GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
+| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers to a common ancestor. |
+| GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
+| GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
+| GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) | Retrieves block headers between two specified heights. |
+| GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) | Retrieves block header IDs for a range of blocks. |
+| GetBestBlockHeader | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of the current best block. |
+| CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) | Verifies if specified blocks are in the main chain. |
+| GetBlockHeader | [GetBlockHeaderRequest](#blockchain_api-GetBlockHeaderRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of a specific block. |
+| InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as invalid in the blockchain. |
+| RevalidateBlock | [RevalidateBlockRequest](#blockchain_api-RevalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Restores a previously invalidated block. |
+| Subscribe | [SubscribeRequest](#blockchain_api-SubscribeRequest) | [Notification](#blockchain_api-Notification) stream | Creates a subscription for blockchain notifications. |
+| SendNotification | [Notification](#blockchain_api-Notification) | [.google.protobuf.Empty](#google-protobuf-Empty) | Broadcasts a notification to subscribers. |
+| GetState | [GetStateRequest](#blockchain_api-GetStateRequest) | [StateResponse](#blockchain_api-StateResponse) | Retrieves state data by key. |
+| SetState | [SetStateRequest](#blockchain_api-SetStateRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Stores state data with a key. |
+| GetBlockIsMined | [GetBlockIsMinedRequest](#blockchain_api-GetBlockIsMinedRequest) | [GetBlockIsMinedResponse](#blockchain_api-GetBlockIsMinedResponse) | Checks if a block is marked as mined. |
+| SetBlockMinedSet | [SetBlockMinedSetRequest](#blockchain_api-SetBlockMinedSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as mined. |
+| GetBlocksMinedNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksMinedNotSetResponse](#blockchain_api-GetBlocksMinedNotSetResponse) | Retrieves blocks not marked as mined. |
+| SetBlockSubtreesSet | [SetBlockSubtreesSetRequest](#blockchain_api-SetBlockSubtreesSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block's subtrees as set. |
+| GetBlocksSubtreesNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksSubtreesNotSetResponse](#blockchain_api-GetBlocksSubtreesNotSetResponse) | Retrieves blocks with unset subtrees. |
+| SendFSMEvent | [SendFSMEventRequest](#blockchain_api-SendFSMEventRequest) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) | Sends an event to the blockchain FSM. |
+| GetFSMCurrentState | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetFSMStateResponse](#blockchain_api-GetFSMStateResponse) | Retrieves the current state of the FSM. |
+| WaitFSMToTransitionToGivenState | [WaitFSMToTransitionRequest](#blockchain_api-WaitFSMToTransitionRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Waits for FSM to reach a specific state. |
+| WaitUntilFSMTransitionFromIdleState | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Waits for FSM to transition from IDLE state. |
+| Run | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Transitions the blockchain service to running state. |
+| CatchUpBlocks | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates block catch-up process. |
+| LegacySync | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates legacy synchronization process. |
+| Idle | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks the service as idle. |
+| GetBlockLocator | [GetBlockLocatorRequest](#blockchain_api-GetBlockLocatorRequest) | [GetBlockLocatorResponse](#blockchain_api-GetBlockLocatorResponse) | Retrieves a block locator for chain synchronization. |
+| LocateBlockHeaders | [LocateBlockHeadersRequest](#blockchain_api-LocateBlockHeadersRequest) | [LocateBlockHeadersResponse](#blockchain_api-LocateBlockHeadersResponse) | Finds block headers using a locator. |
+| GetBestHeightAndTime | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBestHeightAndTimeResponse](#blockchain_api-GetBestHeightAndTimeResponse) | Retrieves the current best height and median time. |
 
  <!-- end services -->
 

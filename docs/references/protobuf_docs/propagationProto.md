@@ -28,6 +28,7 @@
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
+Represents an empty request or response. Used when no additional data needs to be transmitted.
 swagger:model EmptyMessage
 
 
@@ -38,12 +39,13 @@ swagger:model EmptyMessage
 <a name="GetRequest"></a>
 
 ### GetRequest
+Represents a request to retrieve a transaction by its ID.
 swagger:model GetRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| txid | [bytes](#bytes) |  |  |
+| txid | [bytes](#bytes) |  | Transaction ID in bytes |
 
 
 
@@ -53,12 +55,13 @@ swagger:model GetRequest
 <a name="GetResponse"></a>
 
 ### GetResponse
+Contains the retrieved transaction data.
 swagger:model GetResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  |  |
+| tx | [bytes](#bytes) |  | Raw transaction bytes |
 
 
 
@@ -68,14 +71,15 @@ swagger:model GetResponse
 <a name="HealthResponse"></a>
 
 ### HealthResponse
+Provides information about the service's health status.
 swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Indicates whether the service is healthy |
+| details | [string](#string) |  | Provides additional information about the health status |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Indicates when the health check was performed |
 
 
 
@@ -85,12 +89,13 @@ swagger:model HealthResponse
 <a name="ProcessTransactionBatchRequest"></a>
 
 ### ProcessTransactionBatchRequest
-swagger:model ProcessTransactionRequest
+Represents a request to process multiple transactions in a batch.
+swagger:model ProcessTransactionBatchRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) | repeated |  |
+| tx | [bytes](#bytes) | repeated | Array of raw transaction bytes to process |
 
 
 
@@ -105,7 +110,7 @@ swagger:model ProcessTransactionBatchResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| error | [string](#string) | repeated |  |
+| errors | [errors.TError](#errors-TError) | repeated | Error messages for each transaction in the batch. Empty error indicates success for that transaction. |
 
 
 
@@ -115,12 +120,13 @@ swagger:model ProcessTransactionBatchResponse
 <a name="ProcessTransactionRequest"></a>
 
 ### ProcessTransactionRequest
+Represents a request to process a single transaction.
 swagger:model ProcessTransactionRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  |  |
+| tx | [bytes](#bytes) |  | Raw transaction bytes to process |
 
 
 
@@ -140,9 +146,9 @@ swagger:model ProcessTransactionRequest
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#propagation_api-EmptyMessage) | [HealthResponse](#propagation_api-HealthResponse) | Health returns the health of the API. |
-| ProcessTransaction | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
-| ProcessTransactionBatch | [ProcessTransactionBatchRequest](#propagation_api-ProcessTransactionBatchRequest) | [ProcessTransactionBatchResponse](#propagation_api-ProcessTransactionBatchResponse) |  |
+| HealthGRPC | [EmptyMessage](#propagation_api-EmptyMessage) | [HealthResponse](#propagation_api-HealthResponse) | Checks the health status of the propagation service and its dependencies. Returns a HealthResponse containing the service status and details. |
+| ProcessTransaction | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) | Processes a single BSV transaction. The transaction must be provided in raw byte format and must be extended. Coinbase transactions are not allowed. |
+| ProcessTransactionBatch | [ProcessTransactionBatchRequest](#propagation_api-ProcessTransactionBatchRequest) | [ProcessTransactionBatchResponse](#propagation_api-ProcessTransactionBatchResponse) | Processes multiple transactions in a single request. This is more efficient than processing transactions individually when dealing with large numbers of transactions. |
 
  <!-- end services -->
 
