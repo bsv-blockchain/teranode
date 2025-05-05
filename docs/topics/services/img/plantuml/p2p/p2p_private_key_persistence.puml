@@ -1,0 +1,129 @@
+@startuml p2p_private_key_persistence
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+title P2P Private Key Persistence
+
+actor "Node Operator" as operator
+participant "P2P Service" as p2p
+participant "NewP2PNode" as newp2p
+box "Key Management" #LightBlue
+    participant "readPrivateKey()" as readkey
+    participant "generatePrivateKey()" as genkey
+end box
+participant "Blockchain Service" as blockchain
+database "Blockchain Store" as store
+
+autonumber
+
+== Node Startup (Configuration without Private Key) ==
+
+operator -> p2p: Start P2P service
+activate p2p
+
+p2p -> newp2p: Create new P2P node
+activate newp2p
+
+newp2p -> newp2p: Check if private key\nis specified in config
+note right: config.PrivateKey == ""
+
+newp2p -> readkey: Attempt to read existing key
+activate readkey
+
+readkey -> blockchain: blockchainClient.GetState("p2p.privateKey")
+activate blockchain
+
+blockchain -> store: Query state
+activate store
+store --> blockchain: Return stored key bytes (or not found)
+deactivate store
+
+blockchain --> readkey: Return key bytes or error
+deactivate blockchain
+
+alt Key found in blockchain store
+    readkey -> readkey: crypto.UnmarshalPrivateKey(privBytes)
+    readkey --> newp2p: Return unmarshaled private key
+    newp2p -> newp2p: Use existing key for node identity
+else Key not found
+    readkey --> newp2p: Return error (not found)
+
+    newp2p -> genkey: Generate new private key
+    activate genkey
+
+    genkey -> genkey: crypto.GenerateEd25519Key()
+    genkey -> genkey: crypto.MarshalPrivateKey()
+
+    genkey -> blockchain: blockchainClient.SetState("p2p.privateKey", privBytes)
+    activate blockchain
+
+    blockchain -> store: Store key bytes
+    activate store
+    store --> blockchain: Confirm storage
+    deactivate store
+
+    blockchain --> genkey: Return success
+    deactivate blockchain
+
+    genkey --> newp2p: Return new private key
+    deactivate genkey
+
+    newp2p -> newp2p: Use new key for node identity
+end
+
+deactivate readkey
+
+== Node Startup (Configuration with Private Key) ==
+
+operator -> p2p: Start P2P service with config.PrivateKey
+activate p2p
+
+p2p -> newp2p: Create new P2P node
+activate newp2p
+
+newp2p -> newp2p: Check if private key\nis specified in config
+note right: config.PrivateKey != ""
+
+newp2p -> newp2p: decodeHexEd25519PrivateKey(config.PrivateKey)
+newp2p -> newp2p: Use decoded key for node identity
+
+== Node Restart (Container Destroyed and Recreated) ==
+
+operator -> p2p: Start P2P service in new container
+activate p2p
+
+p2p -> newp2p: Create new P2P node
+activate newp2p
+
+newp2p -> newp2p: Check if private key\nis specified in config
+note right: config.PrivateKey == ""
+
+newp2p -> readkey: Attempt to read existing key
+activate readkey
+
+readkey -> blockchain: blockchainClient.GetState("p2p.privateKey")
+activate blockchain
+
+blockchain -> store: Query state
+activate store
+note right: Key persists in blockchain store\neven though container was destroyed
+store --> blockchain: Return previously stored key bytes
+deactivate store
+
+blockchain --> readkey: Return key bytes
+deactivate blockchain
+
+readkey -> readkey: crypto.UnmarshalPrivateKey(privBytes)
+readkey --> newp2p: Return unmarshaled private key
+deactivate readkey
+
+newp2p -> newp2p: Use existing key from blockchain store\npreserving node identity despite container recreation
+
+deactivate newp2p
+deactivate p2p
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

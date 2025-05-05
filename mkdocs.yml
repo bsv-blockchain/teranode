@@ -128,7 +128,6 @@ nav:
           - Validator: references/services/validator_reference.md
       - Overlay Services:
           - Block Persister: references/services/blockpersister_reference.md
-          - Coinbase Service: references/services/coinbase_reference.md
           - P2P: references/services/p2p_reference.md
           - P2P Legacy Service: references/services/legacy_reference.md
           - RPC: references/services/rpc_reference.md

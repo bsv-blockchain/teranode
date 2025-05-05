@@ -93,8 +93,17 @@ In more detail:
 The startup process of the node involves the `main.go` file calling the `p2p.NewServer` function from the P2P package (`services/p2p/Server.go`). This function is tasked with creating a new P2P server instance.
 
 1. **Private Key Management**:
-    - The server tries to read an existing private key from storage through the `readPrivateKey()` function.
-    - If no existing key is found, it generates a new one using the `generatePrivateKey()` function.
+    - The server tries to read an existing private key from the blockchain store through the `readPrivateKey()` function:
+      - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
+      - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
+    - If no key is specified in the configuration and no key exists in the blockchain store, it generates a new one using the `generatePrivateKey()` function:
+      - `generatePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
+      - It serializes the private key with `crypto.MarshalPrivateKey()`
+      - It stores the serialized key in the blockchain store using `blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)`
+    - This blockchain store persistence mechanism works through gRPC calls to the blockchain service
+    - Using the blockchain store ensures that the P2P private key (and therefore node identity) persists even if the container is destroyed, maintaining consistent peer relationships in the network
+
+![p2p_private_key_persistence.svg](img/plantuml/p2p/p2p_private_key_persistence.svg)
 
 2. **Configuration Retrieval and Topic Registration**:
     - Retrieves required configuration settings like `p2p_listen_addresses`, `p2p_port`, and `p2p_topic_prefix`.
@@ -432,7 +441,7 @@ The following settings can be configured for the p2p service:
 - **`p2p_dht_use_private`**: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
 - **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
 - **`p2p_static_peers`**: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
-- **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network.
+- **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network. If not provided, the service will attempt to retrieve the key from the blockchain store. If no key exists in the store, a new one will be generated and persisted in the blockchain store, ensuring the node maintains a consistent identity even if its container is destroyed.
 - **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
 - **`securityLevelHTTP`**: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
 - **`server_certFile`** and **`server_keyFile`**: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
