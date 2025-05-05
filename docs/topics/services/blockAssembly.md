@@ -132,6 +132,24 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
 
 
+### 2.3.1 Dynamic Subtree Size Adjustment
+
+
+The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
+
+- The system targets a rate of approximately one subtree per second under high throughput conditions
+- If subtrees are being created too quickly, the size is automatically increased
+- If subtrees are being created too slowly, the size is decreased
+- Adjustments are always made to a power of 2 and constrained by minimum and maximum bounds
+- Size increases are capped at 2x per block to prevent wild oscillations
+
+Importantly, the system maintains a minimum subtree size threshold, configured via `minimum_merkle_items_per_subtree`. In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement. This means that during periods of low network usage, the target rate of one subtree per second may not be achieved, as the system prioritizes reaching the minimum subtree size before sending.
+
+![block_assembly_dynamic_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_dynamic_subtree.svg)
+
+This self-tuning mechanism helps maintain consistent processing rates and optimal resource utilization during block assembly, automatically adapting to the node's current processing capabilities and transaction volumes.
+
+
 ### 2.4. Creating Mining Candidates
 
 ![block_assembly_get_mining_candidate.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_get_mining_candidate.svg)
@@ -415,6 +433,9 @@ The Block Assembly service uses the following configuration options:
 9. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the channel dedicated to retrying subtree storage operations. Default: 1,000.
 10. **`blockassembly_subtreeTTLConcurrency`**: Concurrency level for subtree TTL operations. Default: 32.
 11. **`initial_merkle_items_per_subtree`**: Initial number of items per subtree. Default: 1,048,576.
+12. **`blockassembly_useDynamicSubtreeSize`**: Enables automatic adjustment of subtree size based on real-time performance. Default: false.
+13. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees (must be a power of 2). Default: 1,024.
+14. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees. Default: 1,048,576 (1024*1024).
 
 ## Block and Transaction Processing
 

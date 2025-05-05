@@ -1,0 +1,63 @@
+@startuml block_assembly_dynamic_subtree
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+participant "SubtreeProcessor" as STP
+participant "Block Header" as BH
+note over STP: Block N processing
+
+STP -> STP: Create subtrees based on current size
+note right: Current subtree size: X items
+
+STP <-- BH: New block header (Block N+1)
+STP -> STP: SetCurrentBlockHeader()
+note right: Start timing for new block
+
+STP -> STP: Record intervals between subtrees
+note right: Calculate time between\neach subtree creation
+
+STP -> STP: adjustSubtreeSize()
+
+alt UseDynamicSubtreeSize = true
+    STP -> STP: Calculate average interval
+    note right: avgInterval = sum(intervals) / count
+
+    STP -> STP: Calculate target/actual ratio
+    note right: ratio = targetInterval(1sec) / avgInterval
+
+    alt Subtrees created too quickly (ratio > 1)
+        STP -> STP: Increase subtree size
+        note right: newSize = currentSize × ratio
+    else Subtrees created too slowly (ratio < 1)
+        STP -> STP: Decrease subtree size
+        note right: newSize = currentSize × ratio
+    end
+
+    STP -> STP: Round to next power of 2
+    note right: newSize = 2^ceil(log2(newSize))
+
+    STP -> STP: Apply constraints
+    note right: Cap increase to 2x per block
+    note right: Enforce min/max size bounds
+
+    alt newSize != currentSize
+        STP -> STP: Set new subtree size
+        note right: currentItemsPerFile = newSize
+    end
+else
+    note over STP: Dynamic sizing disabled
+    note right: Size remains fixed
+end
+
+STP -> STP: Reset intervals for next block
+note right: blockIntervals = []
+
+note over STP: Block N+1 processing
+STP -> STP: Create subtrees based on new size
+note right: Current subtree size: Y items
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
