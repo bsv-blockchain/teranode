@@ -66,7 +66,7 @@ func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidSt
 				os.Exit(1)
 			}
 
-			for i := uint32(1); i < nrRecordsUint32; i++ {
+			for i := uint32(1); i <= nrRecordsUint32; i++ {
 				keySource := uaerospike.CalculateKeySource(hash, i)
 
 				key, err := aero.NewKey(namespace, setName, keySource)

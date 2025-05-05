@@ -159,7 +159,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if value != nil {
 		utxos, ok := value.Bins[fields.Utxos.String()].([]interface{})
 		if ok {
-			b, ok := utxos[spend.Vout].([]byte)
+			b, ok := utxos[spend.Vout%sUtxoBatchSizeUint32].([]byte)
 			if ok {
 				if len(b) < 32 {
 					return nil, errors.NewProcessingError("invalid utxo hash length", nil)
