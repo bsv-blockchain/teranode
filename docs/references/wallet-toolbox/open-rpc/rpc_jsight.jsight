@@ -222,10 +222,22 @@ URL /rpc
     Params
       [
         "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000", // The hex string of the raw transaction
-        true // Allow high fees, default=false
+        true, // Allow high fees, default=false
+        false // Skip fee checking, default=false
       ]
     Result
       "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0" // The transaction hash
+
+  Method getrawtransaction // Gets raw transaction data.
+    Params
+      [
+        "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0", // The transaction id
+        true // Verbose output (true=json object, false=hex-encoded data), default=false
+      ]
+    Result
+      @RawTransaction // When verbose=true
+      // OR
+      "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000" // When verbose=false
 
   # Mining Commands
 
@@ -245,7 +257,6 @@ URL /rpc
   Method getminingcandidate // Returns data needed to construct a block to work on.
     Params
       [
-        "coinbase/012345", // Optional identifier for a miner
         true // Calculate merkle proof (optional), default=false
       ]
     Result
@@ -277,6 +288,19 @@ URL /rpc
     Params
       [
         2, // Number of blocks to generate
+        1000 // Maximum iterations, default=1000000
+      ]
+    Result
+      [
+        "blockhash1", // Hashes of generated blocks
+        "blockhash2"
+      ]
+
+  Method generatetoaddress // Generates blocks to a specified address (for testing).
+    Params
+      [
+        2, // Number of blocks to generate
+        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", // Bitcoin address to send coinbase rewards to
         1000 // Maximum iterations, default=1000000
       ]
     Result
@@ -333,7 +357,7 @@ URL /rpc
         "192.168.1.113", // IP/Subnet (can be IP or subnet CIDR notation)
         "add", // Command: 'add' to add to the banned list, 'remove' to remove from the banned list
         86400, // Ban time in seconds (optional)
-        false // Absolute is a mandatory argument -- 'true' ignores the ban time argument and uses the absolute time when formatting the date (optional)
+        false // Optional parameter - 'true' ignores the ban time argument and uses the absolute time when formatting the date
       ]
     Result
       null // No data returned
@@ -348,3 +372,115 @@ URL /rpc
         "banned": true,
         "expire": 1683388902
       }
+
+  Method listbanned // Returns list of all banned IP addresses and subnets.
+    Params
+      []
+    Result
+      [
+        {
+          "address": "192.168.1.113/32",
+          "ban_created": 1622802552,
+          "ban_reason": "manually added",
+          "banned_until": 1622888952
+        }
+      ]
+
+  Method clearbanned // Removes all IP address bans.
+    Params
+      []
+    Result
+      null // No data returned
+
+  # Block Management Commands
+
+  Method invalidateblock // Permanently marks a block as invalid.
+    Params
+      [
+        "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09" // Block hash to invalidate
+      ]
+    Result
+      null // No data returned
+
+  Method reconsiderblock // Removes invalidation status from a block.
+    Params
+      [
+        "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09" // Block hash to reconsider
+      ]
+    Result
+      null // No data returned
+
+  # UTXO Control Commands
+
+  Method freeze // Freezes a specific UTXO, preventing it from being spent.
+    Params
+      [
+        "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0", // Transaction ID
+        0 // Output index (vout)
+      ]
+    Result
+      true // Whether freeze was successful
+
+  Method unfreeze // Unfreezes a previously frozen UTXO.
+    Params
+      [
+        "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0", // Transaction ID
+        0 // Output index (vout)
+      ]
+    Result
+      true // Whether unfreeze was successful
+
+  Method reassign // Reassigns ownership of a UTXO to a different address.
+    Params
+      [
+        "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0", // Transaction ID
+        0, // Output index (vout)
+        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" // Destination address
+      ]
+    Result
+      true // Whether reassignment was successful
+
+  # Help Command
+
+  Method help // Displays help information about RPC commands.
+    Params
+      [
+        "getblock" // Optional command to get specific help for. If omitted, returns list of all commands.
+      ]
+    Result
+      "getblock "hash" ( verbosity )
+
+If verbosity is 0, returns a string that is serialized, hex-encoded data for block 'hash'.
+If verbosity is 1, returns an Object with information about block <hash>.
+If verbosity is 2, returns an Object with information about block <hash> and information about each transaction.
+
+Arguments:
+1. hash          (string, required) The block hash
+2. verbosity     (numeric, optional, default=1) 0 for hex encoded data, 1 for a json object, and 2 for json object with transaction data
+
+Result (for verbosity = 0):
+"data"           (string) A string that is serialized, hex-encoded data for block 'hash'.
+
+Result (for verbosity = 1):
+{
+  "hash" : "hash",     (string) the block hash (same as provided)
+  "confirmations" : n,   (numeric) The number of confirmations, or -1 if the block is not on the main chain
+  "size" : n,            (numeric) The block size
+  ...
+}
+
+Result (for verbosity = 2):
+{
+  ...,
+  "tx" : [               (array of json objects)
+         {
+           ...
+         },
+         ...
+       ]
+}
+
+Examples:
+> bitcoin-cli getblock "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09"
+> curl --user myusername --data-binary '{"jsonrpc": "1.0", "id":"curltest", "method": "getblock", "params": ["00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09"]}' -H 'content-type: text/plain;' http://127.0.0.1:8332/"
+      // Help text for the specified command, or list of all commands if no command specified

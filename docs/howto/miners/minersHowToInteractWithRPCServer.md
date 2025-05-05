@@ -1,8 +1,8 @@
 # How to Interact with the RPC Server
 
-Last Modified: 26-March-2025
+Last Modified: 4-May-2025
 
-There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods.
+There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods with their parameters and return values.
 
 
 ## Teranode RPC HTTP API
@@ -21,27 +21,164 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
 ### Mining-related Methods
 1. `getdifficulty`: Returns the current network difficulty
+   - Parameters: None
+   - Returns: Current difficulty as a floating point number
+
 2. `getmininginfo`: Returns mining-related information
+   - Parameters: None
+   - Returns: Object containing block height, current block size and weight, current difficulty, and network hashrate
+
 3. `getminingcandidate`: Obtain a mining candidate
+   - Parameters: None
+   - Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches
+   - Example Request:
+     ```json
+     {
+         "jsonrpc": "1.0",
+         "id": "mining",
+         "method": "getminingcandidate",
+         "params": []
+     }
+     ```
+   - Example Response:
+     ```json
+     {
+         "result": {
+             "id": "00000000000000000000000000000000...",
+             "prevhash": "000000000000000004a1b6d6fdfa0d0a...",
+             "coinbase": "01000000010000000000000000000000000000...",
+             "coinbaseValue": 5000000000,
+             "version": 536870912,
+             "merkleproof": [...],
+             "time": 1621500000,
+             "bits": "180d60e3",
+             "height": 700001,
+             "nBits": 402947203,
+             "num_tx": 5620,
+             "sizeWithoutCoinbase": 2300000,
+             "minTime": 1621498888,
+             "fullCurrentTime": 1621500000
+         },
+         "error": null,
+         "id": "mining"
+     }
+     ```
+
 4. `submitminingsolution`: Submits a new mining solution
-5. `generate`: Generates new blocks
+   - Parameters:
+     - `id` (string, required): Mining candidate ID
+     - `nonce` (hexadecimal string, required): Nonce value found
+     - `coinbase` (hexadecimal string, required): Complete coinbase transaction
+     - `time` (numeric, required): Block time
+     - `version` (numeric, optional): Block version
+   - Returns: Boolean `true` if block accepted, error if rejected
+   - Example Request:
+     ```json
+     {
+         "jsonrpc": "1.0",
+         "id": "mining",
+         "method": "submitminingsolution",
+         "params": [{
+             "id": "00000000000000000000000000000000...",
+             "nonce": "17aab479321b85",
+             "coinbase": "01000000010000000000000000000000000000...",
+             "time": 1621500004
+         }]
+     }
+     ```
+
+5. `generate`: Generates new blocks (for testing only)
+   - Parameters:
+     - `nblocks` (numeric, required): Number of blocks to generate
+     - `maxtries` (numeric, optional): Maximum iterations to try
+   - Returns: Array of block hashes generated
 
 ### Transaction-related Methods
 1. `createrawtransaction`: Creates a raw transaction
-2. `sendrawtransaction`: Submits a raw transaction to the network
-3. `freeze`: Freezes a specific UTXO, preventing it from being spent
-4. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
-5. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
+   - Parameters:
+     - `inputs` (array, required): Array of transaction inputs
+     - `outputs` (object, required): JSON object with outputs as key-value pairs
+   - Returns: Hex-encoded raw transaction
+
+2. `getrawtransaction`: Gets a raw transaction
+   - Parameters:
+     - `txid` (string, required): Transaction ID
+     - `verbose` (boolean, optional): If true, returns detailed information
+   - Returns: Hex-encoded transaction data or detailed transaction object if verbose is true
+
+3. `sendrawtransaction`: Sends a raw transaction
+   - Parameters:
+     - `hexstring` (string, required): Hex-encoded raw transaction
+     - `allowhighfees` (boolean, optional): Allow high fees
+     - `dontcheckfee` (boolean, optional): Skip fee checks
+   - Returns: Transaction hash (txid) if successful
+   - Example Request:
+     ```json
+     {
+         "jsonrpc": "1.0",
+         "id": "curltext",
+         "method": "sendrawtransaction",
+         "params": ["0100000001bd2b5ba3d4a3a05c8ef31e8b6f8ab3e73b1f9ff5c617130cdf55e150d97a06ef000000006b483045022100c23a6432950e1ca96e438c95ce51bda58500ffa3a7a9941495a838bc7d3aee10022072ed0da7d7879f9ac7308a41c0e8ec7823e1b7932e211cf13a83a3ada10dacb141210386536695a23ba3ed37a18d542990f9b1df30a13952659d2820df3f47be78dcd3ffffffff01801a0600000000001976a914c5c25b16fa949402a8712e8e5fb3568eb87aee7288ac00000000"]
+     }
+     ```
+
+4. `freeze`: Freezes a specific UTXO, preventing it from being spent
+   - Parameters:
+     - `txid` (string, required): The transaction ID of the UTXO
+     - `vout` (numeric, required): The output index
+   - Returns: Boolean `true` if successful
+
+5. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
+   - Parameters:
+     - `txid` (string, required): The transaction ID of the frozen UTXO
+     - `vout` (numeric, required): The output index
+   - Returns: Boolean `true` if successful
+
+6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
+   - Parameters:
+     - `txid` (string, required): The transaction ID of the UTXO
+     - `vout` (numeric, required): The output index
+     - `destination` (string, required): The Bitcoin address to reassign to
+   - Returns: Boolean `true` if successful
 
 ### Network-related Methods
 1. `getinfo`: Returns information about the node
+   - Parameters: None
+   - Returns: Object containing node information including version, protocol version, blocks, connections, etc.
+
 2. `getpeerinfo`: Returns information about connected peers
+   - Parameters: None
+   - Returns: Array of objects with detailed information about each connected peer
+
 3. `setban`: Manages banned IP addresses/subnets
+   - Parameters:
+     - `subnet` (string, required): The IP/Subnet to ban (e.g. 192.168.0.0/24)
+     - `command` (string, required): 'add' to add to banlist, 'remove' to remove from banlist
+     - `bantime` (numeric, optional): Time in seconds how long to ban (0 = permanently)
+     - `absolute` (boolean, optional): If set to true, the bantime is interpreted as an absolute timestamp
+   - Returns: None
+
 4. `isbanned`: Checks if a network address is currently banned
+   - Parameters:
+     - `subnet` (string, required): The IP/Subnet to check
+   - Returns: Boolean `true` if the address is banned, `false` otherwise
+
+5. `listbanned`: Returns list of all banned IP addresses/subnets
+   - Parameters: None
+   - Returns: Array of objects containing banned addresses with ban creation time and ban expiry time
+
+6. `clearbanned`: Removes all IP address bans
+   - Parameters: None
+   - Returns: None
 
 ### Server Control Methods
 1. `stop`: Stops the Teranode server
-2. `version`: Returns version information
+   - Parameters: None
+   - Returns: String 'Teranode server stopping' when successful
+
+2. `version`: Returns version information about the node
+   - Parameters: None
+   - Returns: Object containing version information including build version, build date, and protocol version
 
 
 **Authentication**

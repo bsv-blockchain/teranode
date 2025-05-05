@@ -944,6 +944,68 @@ Attempts to add or remove an IP/Subnet from the banned list.
 }
 ```
 
+### listbanned
+
+Returns list of all banned IP addresses/subnets.
+
+**Parameters:** none
+
+**Returns:**
+- Array of objects with banned addresses and details
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "listbanned",
+    "params": []
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": [
+        {
+            "address": "192.168.0.6/32",
+            "ban_created": 1621500000,
+            "ban_reason": "manually added",
+            "banned_until": 1621586400
+        }
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### clearbanned
+
+Removes all IP address bans.
+
+**Parameters:** none
+
+**Returns:**
+- `null` on success
+
+**Example Request:**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "clearbanned",
+    "params": []
+}
+```
+
+**Example Response:**
+```json
+{
+    "result": null,
+    "error": null,
+    "id": "curltest"
+}
+```
 
 ### stop
 

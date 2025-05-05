@@ -370,25 +370,7 @@ These dependencies are injected into the `Server` and `Repository` structures du
 
 ## API Endpoints
 
-The Asset Service provides various API endpoints for interacting with blockchain data:
-
-- `/alive`: Check if the service is alive
-- `/health`: Perform a health check
-- `/rest/block/:hash.bin`: Get a legacy block (binary stream)
-- `/api/v1/tx/:hash`: Get a transaction (various formats)
-- `/api/v1/txmeta/:hash/json`: Get transaction metadata
-- `/api/v1/subtree/:hash`: Get a subtree (various formats)
-- `/api/v1/headers/:hash`: Get block headers (various formats)
-- `/api/v1/blocks`: Get blocks
-- `/api/v1/block/:hash`: Get a block by hash (various formats)
-- `/api/v1/search`: Search functionality
-- `/api/v1/blockstats`: Get block statistics
-- `/api/v1/blockgraphdata/:period`: Get block graph data
-- `/api/v1/lastblocks`: Get the last N blocks
-- `/api/v1/utxo/:hash`: Get UTXO information (various formats)
-- `/api/v1/balance`: Get balance information
-- `/api/v1/bestblockheader`: Get the best block header (various formats)
-
+The Asset Service provides various API endpoints for interacting with blockchain data. These endpoints are organized by category and support different response formats for flexibility.
 
 All API endpoints are prefixed with `/api/v1` unless otherwise specified.
 
@@ -399,6 +381,194 @@ Most endpoints support multiple response formats:
 - **BINARY_STREAM**: Raw binary data (`application/octet-stream`)
 - **HEX**: Hexadecimal string representation (`text/plain`)
 - **JSON**: Structured JSON data (`application/json`)
+
+The format can be selected by appending `/hex` or `/json` to the endpoint, or by setting the appropriate `Accept` header. If not specified, the binary format is used as the default.
+
+### Health and Status Endpoints
+
+- **GET `/alive`**
+  - Purpose: Service liveness check
+  - Returns: Text message with uptime information
+  - Status Code: 200 on success
+
+- **GET `/health`**
+  - Purpose: Service health check with dependency status
+  - Returns: Status information and dependency health
+  - Status Code: 200 on success, 503 on failure
+
+### Transaction Endpoints
+
+- **GET `/api/v1/tx/:hash`**
+  - Purpose: Get transaction in binary format
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Transaction data (binary)
+
+- **GET `/api/v1/tx/:hash/hex`**
+  - Purpose: Get transaction in hex format
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Transaction data (hex string)
+
+- **GET `/api/v1/tx/:hash/json`**
+  - Purpose: Get transaction in JSON format
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Transaction data (JSON)
+
+- **POST `/api/v1/txs`**
+  - Purpose: Batch retrieve multiple transactions
+  - Request Body: Concatenated 32-byte transaction hashes
+  - Returns: Concatenated transactions (binary)
+
+- **GET `/api/v1/txmeta/:hash/json`**
+  - Purpose: Get transaction metadata
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Transaction metadata (JSON)
+
+- **GET `/api/v1/txmeta_raw/:hash`**
+  - Purpose: Get raw transaction metadata (binary)
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Raw transaction metadata
+
+- **GET `/api/v1/txmeta_raw/:hash/hex`**
+  - Purpose: Get raw transaction metadata (hex)
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Raw transaction metadata (hex string)
+
+- **GET `/api/v1/txmeta_raw/:hash/json`**
+  - Purpose: Get raw transaction metadata (JSON)
+  - Parameters: `hash` - Transaction ID hash (hex string)
+  - Returns: Raw transaction metadata (JSON)
+
+### Block Endpoints
+
+- **GET `/api/v1/block/:hash`**
+  - Purpose: Get block by hash (binary)
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block data (binary)
+
+- **GET `/api/v1/block/:hash/hex`**
+  - Purpose: Get block by hash (hex)
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block data (hex string)
+
+- **GET `/api/v1/block/:hash/json`**
+  - Purpose: Get block by hash (JSON)
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block data (JSON)
+
+- **GET `/api/v1/block/:hash/forks`**
+  - Purpose: Get fork information for a block
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Fork data (JSON)
+
+- **GET `/api/v1/blocks`**
+  - Purpose: Get paginated blocks list
+  - Parameters: `offset`, `limit` (optional)
+  - Returns: Blocks list (JSON)
+
+- **GET `/api/v1/blocks/:hash`**
+  - Purpose: Get multiple blocks starting with specified hash (binary)
+  - Parameters: `hash` - Starting block hash, `n` - Number of blocks (optional)
+  - Returns: Block data (binary)
+
+- **GET `/api/v1/lastblocks`**
+  - Purpose: Get most recent blocks
+  - Parameters: `n` (optional) - Number of blocks, `includeorphans` (optional), `height` (optional)
+  - Returns: Recent blocks data (JSON)
+
+- **GET `/api/v1/blockstats`**
+  - Purpose: Get block statistics
+  - Returns: Block statistics (JSON)
+
+- **GET `/api/v1/blockgraphdata/:period`**
+  - Purpose: Get time-series block data for graphing
+  - Parameters: `period` - Time period in milliseconds
+  - Returns: Time-series data (JSON)
+
+- **GET `/rest/block/:hash.bin`**
+  - Purpose: Legacy endpoint for block retrieval
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block data (binary)
+
+- **GET `/api/v1/block_legacy/:hash`**
+  - Purpose: Alternative legacy block retrieval
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block data (binary)
+
+### Block Header Endpoints
+
+- **GET `/api/v1/header/:hash`**
+  - Purpose: Get single block header (binary)
+  - Parameters: `hash` - Block hash (hex string)
+  - Returns: Block header (binary)
+
+- **GET `/api/v1/headers/:hash`**
+  - Purpose: Get multiple headers starting from hash (binary)
+  - Parameters: `hash` - Starting block hash, `n` - Number of headers (optional)
+  - Returns: Block headers (binary)
+
+- **GET `/api/v1/headers_to_common_ancestor/:hash`**
+  - Purpose: Get headers to common ancestor (binary)
+  - Parameters: `hash` - Target hash, `locator` - Comma-separated block hashes
+  - Returns: Block headers (binary)
+
+- **GET `/api/v1/bestblockheader`**
+  - Purpose: Get best block header (binary)
+  - Returns: Best block header (binary)
+
+### UTXO Endpoints
+
+- **GET `/api/v1/utxo/:hash`**
+  - Purpose: Get UTXO information (binary)
+  - Parameters: `hash` - Transaction hash, `vout` - Output index
+  - Returns: UTXO data (binary)
+
+- **GET `/api/v1/utxos/:hash/json`**
+  - Purpose: Get all UTXOs for a transaction
+  - Parameters: `hash` - Transaction hash
+  - Returns: UTXO data array (JSON)
+
+### Subtree Endpoints
+
+- **GET `/api/v1/subtree/:hash`**
+  - Purpose: Get subtree data (binary)
+  - Parameters: `hash` - Subtree hash
+  - Returns: Subtree data (binary)
+
+- **GET `/api/v1/subtree/:hash/txs/json`**
+  - Purpose: Get transactions in a subtree
+  - Parameters: `hash` - Subtree hash
+  - Returns: Transaction data array (JSON)
+
+- **GET `/api/v1/block/:hash/subtrees/json`**
+  - Purpose: Get all subtrees for a block
+  - Parameters: `hash` - Block hash
+  - Returns: Subtree data array (JSON)
+
+### Search Endpoints
+
+- **GET `/api/v1/search`**
+  - Purpose: Search for blockchain entities
+  - Parameters: `query` - Search term (hash or height)
+  - Returns: Search results (JSON)
+
+### FSM (Finite State Machine) Endpoints
+
+- **GET `/api/v1/fsm/state`**
+  - Purpose: Get current blockchain FSM state
+  - Returns: Current state information (JSON)
+
+- **POST `/api/v1/fsm/state`**
+  - Purpose: Send event to blockchain FSM
+  - Request Body: Event details (JSON)
+  - Returns: Updated state information (JSON)
+
+- **GET `/api/v1/fsm/events`**
+  - Purpose: List all possible FSM events
+  - Returns: Array of available events (JSON)
+
+- **GET `/api/v1/fsm/states`**
+  - Purpose: List all possible FSM states
+  - Returns: Array of available states (JSON)
 
 ### Authentication
 
