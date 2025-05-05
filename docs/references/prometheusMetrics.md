@@ -226,6 +226,11 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_help`                   | Histogram | Histogram of calls to handleHelp in the rpc service                 |
 | `teranode_rpc_set_ban`                | Histogram | Histogram of calls to handleSetBan in the rpc service               |
 | `teranode_rpc_get_mining_info`        | Histogram | Histogram of calls to handleGetMiningInfo in the rpc service        |
+| `teranode_rpc_list_banned`            | Histogram | Histogram of calls to handleListBanned in the rpc service           |
+| `teranode_rpc_clear_banned`           | Histogram | Histogram of calls to handleClearBanned in the rpc service          |
+| `teranode_rpc_freeze`                 | Histogram | Histogram of calls to handleFreeze in the rpc service               |
+| `teranode_rpc_unfreeze`               | Histogram | Histogram of calls to handleUnfreeze in the rpc service             |
+| `teranode_rpc_reassign`               | Histogram | Histogram of calls to handleReassign in the rpc service             |
 
 
 ## Subtree Validation Service Metrics
