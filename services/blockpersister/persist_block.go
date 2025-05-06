@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -56,7 +57,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		}
 	} else {
 		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(concurrency)
+		util.SafeSetLimit(g, concurrency)
 
 		for i, subtreeHash := range block.Subtrees {
 			subtreeHash := subtreeHash

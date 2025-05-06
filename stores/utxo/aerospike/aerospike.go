@@ -70,7 +70,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -79,6 +79,9 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
+
+// Ensure Store implements the utxo.Store interface
+var _ utxo.Store = (*Store)(nil)
 
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
@@ -124,7 +127,6 @@ type Store struct {
 	externalStore      blob.Store
 	utxoBatchSize      int
 	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	cleanupService     *cleanup.Service
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -195,23 +197,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalTxCache: externalTxCache,
 	}
 
-	cleanupService, err := cleanup.NewService(cleanup.Options{
-		Ctx:            ctx,
-		Logger:         logger,
-		Client:         client,
-		Namespace:      namespace,
-		Set:            setName,
-		MaxJobsHistory: 3,
-		WorkerCount:    2,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	s.cleanupService = cleanupService
-
-	s.cleanupService.Start()
-
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
 
@@ -266,16 +251,21 @@ func (s *Store) SetLogger(logger ulogger.Logger) {
 	s.logger = logger
 }
 
+func (s *Store) GetClient() *uaerospike.Client {
+	return s.client
+}
+
+func (s *Store) GetNamespace() string {
+	return s.namespace
+}
+
+func (s *Store) GetSet() string {
+	return s.setName
+}
+
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
-
-	if blockHeight > 0 {
-		err := s.cleanupService.UpdateBlockHeight(blockHeight)
-		if err != nil {
-			return err
-		}
-	}
 
 	return nil
 }

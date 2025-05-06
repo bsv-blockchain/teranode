@@ -1097,7 +1097,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	g.SetLimit(stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// get all the subtrees in parallel
 	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
@@ -1219,7 +1219,7 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	var block *model.Block
 
@@ -1762,7 +1762,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree
 	g, _ := errgroup.WithContext(ctx)
-	g.SetLimit(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+	util.SafeSetLimit(g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
 	remainderSubtrees := make([][]util.SubtreeNode, len(chainedSubtrees))
@@ -1833,7 +1833,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
 
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrentSubtreeReads)
+	util.SafeSetLimit(g, concurrentSubtreeReads)
 
 	// get all the subtrees from the block that we have not yet cleaned out
 	for subtreeHash, subtreeIdx := range blockSubtreesMap {
@@ -1892,7 +1892,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		}
 	}
 
-	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE")
+	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
@@ -1940,7 +1940,7 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 	}
 
 	// limit the number of concurrent writes to the subtrees
-	g.SetLimit(32)
+	util.SafeSetLimit(g, 32)
 
 	// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 	for blockID, txHashes := range blockIdsMap {

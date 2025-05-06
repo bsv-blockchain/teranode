@@ -66,11 +66,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// GetClient was implemented to facilitate testing
-func (s *Store) GetClient() *uaerospike.Client {
-	return s.client
-}
-
 // SetClient was implemented to facilitate testing
 func (s *Store) SetClient(c *uaerospike.Client) {
 	s.client = c
@@ -84,11 +79,6 @@ func (s *Store) GetSettings() *settings.Settings {
 // SetSettings was implemented to facilitate testing
 func (s *Store) SetSettings(v *settings.Settings) {
 	s.settings = v
-}
-
-// GetNamespace was implemented to facilitate testing
-func (s *Store) GetNamespace() string {
-	return s.namespace
 }
 
 // SetNamespace was implemented to facilitate testing

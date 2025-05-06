@@ -44,7 +44,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	missingTxThreshold := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(validateSubtreeInternalConcurrency)
+	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
 
 	cache, ok := u.utxoStore.(*txmetacache.TxMetaCache)
 	if !ok {

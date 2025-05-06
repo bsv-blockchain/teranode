@@ -412,40 +412,61 @@ func TestCreateCoinbase(t *testing.T) {
 	assert.Equal(t, "5ebaa53d24c8246c439ccd9f142cbe93fc59582e7013733954120e9baab201df", coinbaseTx.TxIDChainHash().String())
 }
 
-func TestTombstoneAfterSpend(t *testing.T) {
-	ctx := t.Context()
+func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	store, tx := setup(ctx, t)
 
-	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
-
-	_, err := store.Create(ctx, tx, 0)
+	// Get the cleanup service (singleton)
+	cleanupService, err := store.GetCleanupService()
 	require.NoError(t, err)
 
+	cleanupService.Start(ctx)
+
+	// Part 1: Test tombstone after spend
+	_, err = store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	// Create a spending transaction that spends outputs 0 and 1
+	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
+
+	// Spend the transaction
 	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
-	err = store.SetBlockHeight(1)
+	doneCh := make(chan string, 1)
+
+	err = cleanupService.UpdateBlockHeight(1, doneCh)
 	require.NoError(t, err)
 
-	err = store.deleteTombstoned(store.db)
-	require.NoError(t, err)
+	select {
+	case <-doneCh:
+		// Job completed successfully
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "cleanup job did not complete within 5 seconds")
+	}
 
+	// Verify the transaction is now gone (tombstoned)
 	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
-}
 
-func TestTombstoneAfterUnspend(t *testing.T) {
-	ctx := t.Context()
+	// Part 2: Test tombstone after unspend
+	err = store.SetBlockHeight(2)
+	require.NoError(t, err)
 
-	store, tx := setup(ctx, t)
+	err = store.Delete(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
 
-	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
+	_, err = store.Create(ctx, tx, 0)
+	require.NoError(t, err)
 
+	// Calculate the UTXO hash for output 0
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
+	// Create a spend record
 	spend0 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
@@ -453,27 +474,35 @@ func TestTombstoneAfterUnspend(t *testing.T) {
 		SpendingTxID: spendTx01.TxIDChainHash(),
 	}
 
-	_, err = store.Create(ctx, tx, 0)
-	require.NoError(t, err)
-
+	// Spend the transaction
 	_, err = store.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
+	// Unspend output 0
 	err = store.Unspend(ctx, []*utxo.Spend{spend0})
 	require.NoError(t, err)
 
-	err = store.SetBlockHeight(1)
+	// Run cleanup for block height 1
+	doneCh = make(chan string, 1)
+
+	err = cleanupService.UpdateBlockHeight(2, doneCh)
 	require.NoError(t, err)
 
-	err = store.deleteTombstoned(store.db)
-	require.NoError(t, err)
+	select {
+	case <-doneCh:
+		// Job completed successfully
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "cleanup job did not complete within 5 seconds")
+	}
 
+	// Verify the transaction is still there (not tombstoned)
 	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
+
 }
 
 func Test_SmokeTests(t *testing.T) {
-	ctx := t.Context()
+	ctx := context.Background()
 
 	t.Run("sql store", func(t *testing.T) {
 		db, _ := setup(ctx, t)

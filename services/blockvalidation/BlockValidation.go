@@ -1275,7 +1275,7 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 
 	// update the subtree DAHs
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(u.settings.BlockValidation.SubtreeDAHConcurrency)
+	util.SafeSetLimit(g, u.settings.SubtreeValidation.SubtreeDAHConcurrency)
 
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
@@ -1318,7 +1318,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
+	util.SafeSetLimit(g, u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	blockHeight := block.Height
 	if blockHeight == 0 && block.Header.Version > 1 {

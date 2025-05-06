@@ -687,7 +687,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(u.settings.SubtreeValidation.SpendBatcherSize * 2)
+		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
 
 		u.logger.Debugf("[processMissingTransactions][%s] processing level %d with %d transactions", subtreeHash.String(), level, len(txsPerLevel[level]))
 
@@ -904,7 +904,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainh
 	getMissingTransactionsConcurrency := u.settings.SubtreeValidation.GetMissingTransactions
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
+	util.SafeSetLimit(g, getMissingTransactionsConcurrency) // keep 32 cores free for other tasks
 
 	// get the transactions in batches of 500
 	batchSize := u.settings.SubtreeValidation.MissingTransactionsBatchSize

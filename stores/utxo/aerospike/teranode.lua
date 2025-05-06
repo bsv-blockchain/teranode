@@ -416,6 +416,10 @@ function unfreeze(rec, offset, utxoHash)
         return ERR_UTXO_NOT_FROZEN
     end
 
+    if not isFrozen(existingSpendingTxID) then
+        return ERR_UTXO_NOT_FROZEN
+    end
+
     -- Update the output utxo to the new utxo
     local newUtxo = createUTXOWithSpendingTxID(utxoHash, nil)
 

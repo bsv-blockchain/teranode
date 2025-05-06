@@ -212,7 +212,6 @@ type BlockValidationSettings struct {
 	SkipCheckParentMined                             bool
 	SubtreeFoundChConcurrency                        int
 	SubtreeBlockHeightRetention                      uint32
-	SubtreeDAHConcurrency                            int
 	SubtreeValidationAbandonThreshold                int
 	ValidateBlockSubtreesConcurrency                 int
 	ValidationMaxRetries                             int

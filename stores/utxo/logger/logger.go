@@ -17,9 +17,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func init() {
-}
-
 type Store struct {
 	logger ulogger.Logger
 	store  utxo.Store

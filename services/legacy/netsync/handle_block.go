@@ -519,8 +519,8 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	storeBatcherSize := sm.settings.Legacy.StoreBatcherSize
 	storeBatcherConcurrency := sm.settings.Legacy.StoreBatcherConcurrency
 
-	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
-	g.SetLimit(storeBatcherSize * storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
+	util.SafeSetLimit(g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
 	if err != nil {
@@ -573,8 +573,8 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap map[ch
 	spendBatcherConcurrency := sm.settings.Legacy.SpendBatcherConcurrency
 
 	// validate all the transactions in parallel
-	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
-	g.SetLimit(spendBatcherSize * spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
+	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	// validate all the transactions in parallel
 	for txHash := range txMap {
@@ -648,8 +648,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			sm.validationClient.TriggerBatcher()
 		} else {
 			// process all the transactions on a certain level in parallel
-			g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
-			g.SetLimit(spendBatcherSize * spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+			g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
+			util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {
 				txIdx := txIdx
@@ -699,8 +699,8 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	outpointBatcherSize := sm.settings.Legacy.OutpointBatcherSize
 	outpointBatcherConcurrency := sm.settings.Legacy.OutpointBatcherConcurrency
 
-	g, gCtx := errgroup.WithContext(ctx)                         // we don't want the tracing to be linked to these calls
-	g.SetLimit(outpointBatcherSize * outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(ctx)                                 // we don't want the tracing to be linked to these calls
+	util.SafeSetLimit(g, outpointBatcherSize*outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()

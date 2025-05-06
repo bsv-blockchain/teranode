@@ -58,7 +58,7 @@ type Block struct {
 	ID               uint32            `json:"id"`
 
 	// local
-	hash            *chainhash.Hash
+	hash            atomic.Pointer[chainhash.Hash]
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
@@ -309,13 +309,16 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 }
 
 func (b *Block) Hash() *chainhash.Hash {
-	if b.hash != nil {
-		return b.hash
+	cachedHash := b.hash.Load()
+	if cachedHash != nil {
+		return cachedHash
 	}
 
-	b.hash = b.Header.Hash()
+	calculatedHash := b.Header.Hash()
 
-	return b.hash
+	b.hash.Store(calculatedHash)
+
+	return calculatedHash
 }
 
 // MinedBlockStore
@@ -532,8 +535,8 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 		concurrency = util.Max(4, runtime.NumCPU()/2)
 	}
 
-	g := errgroup.Group{}
-	g.SetLimit(concurrency)
+	g := new(errgroup.Group)
+	util.SafeSetLimit(g, concurrency)
 
 	transactionCountUint32, err := util.SafeUint64ToUint32(b.TransactionCount)
 	if err != nil {
@@ -598,7 +601,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
+	util.SafeSetLimit(g, concurrency)
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
@@ -744,8 +747,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			if len(checkParentTxHashes) > 0 {
 				// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
-				parentG := errgroup.Group{}
-				parentG.SetLimit(1024 * 32)
+				parentG := new(errgroup.Group)
+				util.SafeSetLimit(parentG, 1024*32)
 
 				for _, parentTxStruct := range checkParentTxHashes {
 					parentTxStruct := parentTxStruct
@@ -1010,7 +1013,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
+	util.SafeSetLimit(g, concurrency)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i

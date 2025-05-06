@@ -271,7 +271,7 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 	processSubtreeConcurrency := repo.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(processSubtreeConcurrency)
+	util.SafeSetLimit(g, processSubtreeConcurrency)
 
 	var missed atomic.Int32
 

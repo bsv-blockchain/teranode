@@ -37,7 +37,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 	validateSubtreeInternalConcurrency := util.Max(4, runtime.NumCPU()/2)
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(validateSubtreeInternalConcurrency)
+	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
 
 	var missed atomic.Int32
 

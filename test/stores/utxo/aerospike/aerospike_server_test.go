@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
@@ -1776,4 +1777,30 @@ func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy,
 
 	err = client.Put(wp, key, bins)
 	require.NoError(t, err)
+}
+
+func TestAerospikeCleanupService(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// start the cleanup service
+	cleanupService, err := cleanup.NewService(cleanup.Options{
+		Ctx:            ctx,
+		Logger:         logger,
+		Client:         client,
+		Namespace:      store.GetNamespace(),
+		Set:            store.GetName(),
+		MaxJobsHistory: 50,
+		WorkerCount:    2,
+	})
+	require.NoError(t, err)
+
+	// Start the cleanup service
+	cleanupService.Start(ctx)
 }

@@ -1,24 +1,28 @@
 package ulogger
 
 import (
-	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 type VerboseTestLogger struct {
-	t     *testing.T
-	mutex sync.Mutex
+	t atomic.Pointer[testing.T]
 }
 
 func NewVerboseTestLogger(t *testing.T) *VerboseTestLogger {
-	return &VerboseTestLogger{t: t}
+	l := &VerboseTestLogger{}
+	l.t.Store(t)
+
+	return l
 }
 
 func (l *VerboseTestLogger) LogLevel() int {
 	return 0
 }
 
-func (l *VerboseTestLogger) SetLogLevel(level string) {}
+func (l *VerboseTestLogger) SetLogLevel(level string) {
+	// No-op
+}
 
 func (l *VerboseTestLogger) New(service string, options ...Option) Logger {
 	return l
@@ -29,31 +33,36 @@ func (l *VerboseTestLogger) Duplicate(options ...Option) Logger {
 }
 
 func (l *VerboseTestLogger) Debugf(format string, args ...interface{}) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.t.Logf("[DEBUG] "+format, args...)
+	t := l.t.Load()
+	if t != nil {
+		t.Logf("[DEBUG] "+format, args...)
+	}
 }
 
 func (l *VerboseTestLogger) Infof(format string, args ...interface{}) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.t.Logf("[INFO] "+format, args...)
+	t := l.t.Load()
+	if t != nil {
+		t.Logf("[INFO] "+format, args...)
+	}
 }
 
 func (l *VerboseTestLogger) Warnf(format string, args ...interface{}) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.t.Logf("[WARN] "+format, args...)
+	t := l.t.Load()
+	if t != nil {
+		t.Logf("[WARN] "+format, args...)
+	}
 }
 
 func (l *VerboseTestLogger) Errorf(format string, args ...interface{}) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.t.Logf("[ERROR] "+format, args...)
+	t := l.t.Load()
+	if t != nil {
+		t.Logf("[ERROR] "+format, args...)
+	}
 }
 
 func (l *VerboseTestLogger) Fatalf(format string, args ...interface{}) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.t.Fatalf("[FATAL] "+format, args...)
+	t := l.t.Load()
+	if t != nil {
+		t.Fatalf("[FATAL] "+format, args...)
+	}
 }

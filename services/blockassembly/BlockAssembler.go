@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -102,6 +103,9 @@ type BlockAssembler struct {
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
+
+	// cleanupService manages background cleanup tasks
+	cleanupService cleanup.Service
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -283,7 +287,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
-				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
+				b.logger.Warnf("[BlockAssembler] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
 				b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine again
 
 				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
@@ -441,6 +445,13 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
 	b.bestBlockHeight.Store(height)
 
+	if b.cleanupService != nil && height > 0 {
+		err := b.cleanupService.UpdateBlockHeight(height)
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler] cleanup service error updating block height: %v", err)
+		}
+	}
+
 	b.logger.Infof("[BlockAssembler][%s] set best block header to: %d", b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
 }
 
@@ -514,6 +525,20 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	}
 
 	b.startChannelListeners(ctx)
+
+	// Check if the UTXO store supports cleanup operations
+	if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
+		b.logger.Infof("[BlockAssembler] initialising cleanup service")
+
+		b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
+		if err != nil {
+			return err
+		}
+
+		b.logger.Infof("[BlockAssembler] starting cleanup service")
+
+		b.cleanupService.Start(ctx)
+	}
 
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 

@@ -972,7 +972,7 @@ func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Blo
 	defer callerSpan.Finish()
 
 	g, gCtx := errgroup.WithContext(callerSpan.Ctx)
-	g.SetLimit(ba.settings.BlockAssembly.SubtreeProcessorConcurrentReads)
+	util.SafeSetLimit(g, ba.settings.BlockAssembly.SubtreeProcessorConcurrentReads)
 
 	startTime := time.Now()
 

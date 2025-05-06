@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
@@ -93,7 +94,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		// Read the body into a 32 byte hashes one by one and stream the tx data back to the client
 		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(1024)
+		util.SafeSetLimit(g, 1024)
 
 		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
 		responseBytesMu := sync.Mutex{}

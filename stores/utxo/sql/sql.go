@@ -49,7 +49,6 @@ import (
 	"net/http"
 	"net/url"
 	"sync/atomic"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -124,28 +123,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		engine:          storeURL.Scheme,
 		blockHeight:     atomic.Uint32{},
 		medianBlockTime: atomic.Uint32{},
-	}
-
-	if tSettings.UtxoStore.BlockHeightRetention > 0 {
-		// // Create a goroutine to remove transactions that are marked with a tombstone time
-		// db2, err := util.InitSQLDB(logger, storeUrl)
-		// if err != nil {
-		// 	return nil, errors.NewStorageError("failed to init sql db", err)
-		// }
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					time.Sleep(1 * time.Minute)
-
-					if err := s.deleteTombstoned(s.db); err != nil {
-						logger.Errorf("failed to delete tombstoned transactions: %v", err)
-					}
-				}
-			}
-		}()
 	}
 
 	return s, nil
@@ -1835,17 +1812,6 @@ func createSqliteSchema(db *usql.DB) error {
 			_ = db.Close()
 			return errors.NewStorageError("could not migrate outputs table - [%+v]", err)
 		}
-	}
-
-	return nil
-}
-
-// deleteTombstoned removes transactions that have passed their expiration time.
-func (s *Store) deleteTombstoned(db *usql.DB) error {
-	// Delete transactions that have passed their expiration time
-	// this will cascade to inputs, outputs, block_ids and conflicting_children
-	if _, err := db.Exec("DELETE FROM transactions WHERE delete_at_height <= $1", s.blockHeight.Load()); err != nil {
-		return errors.NewStorageError("failed to delete transactions", err)
 	}
 
 	return nil

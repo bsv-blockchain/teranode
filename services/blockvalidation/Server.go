@@ -164,7 +164,7 @@ func New(
 
 	// TEMP limit to 1, to prevent multiple subtrees processing at the same time
 	subtreeGroup := errgroup.Group{}
-	subtreeGroup.SetLimit(tSettings.BlockValidation.SubtreeGroupConcurrency)
+	util.SafeSetLimit(&subtreeGroup, tSettings.BlockValidation.SubtreeGroupConcurrency)
 
 	bVal := &Server{
 		logger:               logger,
@@ -950,7 +950,7 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	// process the catchup block headers in reverse order and put them on the channel
 	// this will allow the blocks to be validated while getting them from the other node
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(u.settings.BlockValidation.CatchupConcurrency)
+	util.SafeSetLimit(g, u.settings.BlockValidation.CatchupConcurrency)
 	g.Go(func() error {
 		slices.Reverse(catchupBlockHeaders)
 		batches := getBlockBatchGets(catchupBlockHeaders, 100)

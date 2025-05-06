@@ -119,7 +119,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	maxMinedBatchSize := tSettings.UtxoStore.MaxMinedBatchSize
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(tSettings.UtxoStore.MaxMinedRoutines)
+	util.SafeSetLimit(g, tSettings.UtxoStore.MaxMinedRoutines)
 
 	maxRetries := 10
 
