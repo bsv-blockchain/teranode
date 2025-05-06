@@ -24,6 +24,7 @@ var (
 	prometheusSubtreeProcessorCreateTransactionMapDuration prometheus.Histogram
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
+	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
 )
 
 var (
@@ -158,6 +159,15 @@ func _initPrometheusMetrics() {
 			Name:      "reset",
 			Help:      "Duration of resetting subtree processor",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorCurrentState = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "current_state",
+			Help:      "Current state of the block assembly process",
 		},
 	)
 }

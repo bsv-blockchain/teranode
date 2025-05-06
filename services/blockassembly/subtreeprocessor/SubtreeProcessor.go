@@ -178,6 +178,54 @@ type SubtreeProcessor struct {
 	currentRunningState atomic.Value
 }
 
+type State uint32
+
+// create state strings for the processor
+var (
+	// StateStarting indicates the processor is starting up
+	StateStarting State = 0
+
+	// StateRunning indicates the processor is actively processing
+	StateRunning State = 1
+
+	// StateDequeue indicates the processor is dequeuing transactions
+	StateDequeue State = 2
+
+	// StateGetSubtrees indicates the processor is retrieving subtrees
+	StateGetSubtrees State = 3
+
+	// StateReorg indicates the processor is reorganizing blocks
+	StateReorg State = 4
+
+	// StateMoveForwardBlock indicates the processor is moving forward a block
+	StateMoveForwardBlock State = 5
+
+	// StateDeduplicateTransactions indicates the processor is deduplicating transactions
+	StateDeduplicateTransactions State = 6
+
+	// StateResetBlocks indicates the processor is resetting blocks
+	StateResetBlocks State = 7
+
+	// StateRemoveTx indicates the processor is removing transactions
+	StateRemoveTx State = 8
+
+	// StateCheckSubtreeProcessor indicates the processor is checking its state
+	StateCheckSubtreeProcessor State = 9
+)
+
+var StateStrings = map[State]string{
+	StateStarting:                "starting",
+	StateRunning:                 "running",
+	StateDequeue:                 "dequeue",
+	StateGetSubtrees:             "getSubtrees",
+	StateReorg:                   "reorg",
+	StateMoveForwardBlock:        "moveForwardBlock",
+	StateDeduplicateTransactions: "deDuplicateTransactions",
+	StateResetBlocks:             "resetBlocks",
+	StateRemoveTx:                "removeTx",
+	StateCheckSubtreeProcessor:   "checkSubtreeProcessor",
+}
+
 var (
 	// ExpectedNumberOfSubtrees defines the expected number of subtrees in a block.
 	// This is calculated based on a subtree being created approximately every second,
@@ -246,7 +294,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		stats:                     gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:       atomic.Value{},
 	}
-	stp.currentRunningState.Store("starting")
+	stp.setCurrentRunningState(StateStarting)
 
 	// need to make sure first coinbase tx is counted when we start
 	stp.setTxCountFromSubtrees()
@@ -255,7 +303,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		opts(stp)
 	}
 
-	stp.currentRunningState.Store("running")
+	stp.setCurrentRunningState(StateRunning)
 
 	go func() {
 		var (
@@ -266,7 +314,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		for {
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
-				stp.currentRunningState.Store("getSubtrees")
+				stp.setCurrentRunningState(StateGetSubtrees)
 
 				logger.Infof("[SubtreeProcessor] get current subtrees")
 
@@ -280,6 +328,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					if err != nil {
 						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
 						getSubtreesChan <- nil
+
+						stp.setCurrentRunningState(StateRunning)
 
 						continue
 					}
@@ -310,18 +360,18 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
 
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case reorgReq := <-stp.reorgBlockChan:
-				stp.currentRunningState.Store("reorg")
+				stp.setCurrentRunningState(StateReorg)
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 				err = stp.reorgBlocks(ctx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
 				reorgReq.errChan <- err
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case moveForwardReq := <-stp.moveForwardBlockChan:
-				stp.currentRunningState.Store("moveForwardBlock")
+				stp.setCurrentRunningState(StateMoveForwardBlock)
 
 				logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
 
@@ -331,39 +381,39 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				}
 				moveForwardReq.errChan <- err
 				logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor DONE", moveForwardReq.block.String())
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case <-stp.deDuplicateTransactionsCh:
-				stp.currentRunningState.Store("deDuplicateTransactions")
+				stp.setCurrentRunningState(StateDeduplicateTransactions)
 				stp.deDuplicateTransactions()
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case resetBlocksMsg := <-stp.resetCh:
-				stp.currentRunningState.Store("resetBlocks")
+				stp.setCurrentRunningState(StateResetBlocks)
 				err = stp.reset(resetBlocksMsg.blockHeader, resetBlocksMsg.moveBackBlocks, resetBlocksMsg.moveForwardBlocks, resetBlocksMsg.isLegacySync)
 
 				if resetBlocksMsg.responseCh != nil {
 					resetBlocksMsg.responseCh <- ResetResponse{Err: err}
 				}
 
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case removeTxHash := <-stp.removeTxCh:
 				// remove the given transaction from the subtrees
-				stp.currentRunningState.Store("removingTx")
+				stp.setCurrentRunningState(StateRemoveTx)
 
 				if err = stp.removeTxFromSubtrees(ctx, removeTxHash); err != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error removing tx from subtrees: %s", err.Error())
 				}
 
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 
 			case lengthCh := <-stp.lengthCh:
 				// return the length of the current subtree
 				lengthCh <- stp.currentSubtree.Length()
 
 			default:
-				stp.currentRunningState.Store("dequeue")
+				stp.setCurrentRunningState(StateDequeue)
 
 				nrProcessed := 0
 				mapLength := stp.removeMap.Length()
@@ -405,7 +455,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					}
 				}
 
-				stp.currentRunningState.Store("running")
+				stp.setCurrentRunningState(StateRunning)
 			}
 		}
 	}()
@@ -413,12 +463,21 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	return stp, nil
 }
 
+// setCurrentRunningState updates the current operational state of the processor.
+//
+// Parameters:
+//   - state: New state to set
+func (stp *SubtreeProcessor) setCurrentRunningState(state State) {
+	stp.currentRunningState.Store(state)
+	prometheusSubtreeProcessorCurrentState.Set(float64(state))
+}
+
 // GetCurrentRunningState returns the current operational state of the processor.
 //
 // Returns:
 //   - string: Current state description
-func (stp *SubtreeProcessor) GetCurrentRunningState() string {
-	return stp.currentRunningState.Load().(string)
+func (stp *SubtreeProcessor) GetCurrentRunningState() State {
+	return stp.currentRunningState.Load().(State)
 }
 
 // GetCurrentLength returns the length of the current subtree

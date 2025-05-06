@@ -1056,8 +1056,8 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	}
 
 	return &blockassembly_api.StateMessage{
-		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
-		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),
+		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
+		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
 		ResetWaitCount:        resetWaitCountUint32,
 		ResetWaitTime:         resetWaitTimeUint32,
 		SubtreeCount:          subtreeCountUint32,

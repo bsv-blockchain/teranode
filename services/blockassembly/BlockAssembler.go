@@ -39,6 +39,42 @@ type miningCandidateResponse struct {
 	err error
 }
 
+type State uint32
+
+// create state strings for the processor
+var (
+	// StateStarting indicates the processor is starting up
+	StateStarting State = 0
+
+	// StateRunning indicates the processor is actively processing
+	StateRunning State = 1
+
+	// StateResetting indicates the processor is resetting
+	StateResetting State = 2
+
+	// StateGetMiningCandidate indicates the processor is getting a mining candidate
+	StateGetMiningCandidate State = 3
+
+	// StateBlockchainSubscription indicates the processor is receiving blockchain notifications
+	StateBlockchainSubscription State = 4
+
+	// StateReorging indicates the processor is reorging the blockchain
+	StateReorging State = 5
+
+	// StateMovingUp indicates the processor is moving up the blockchain
+	StateMovingUp State = 6
+)
+
+var StateStrings = map[State]string{
+	StateStarting:               "starting",
+	StateRunning:                "running",
+	StateResetting:              "resetting",
+	StateGetMiningCandidate:     "getMiningCandidate",
+	StateBlockchainSubscription: "blockchainSubscription",
+	StateReorging:               "reorging",
+	StateMovingUp:               "movingUp",
+}
+
 // BlockAssembler manages the assembly of new blocks and coordinates mining operations.
 type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
@@ -159,7 +195,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		resetWaitDuration:   atomic.Int32{},
 		currentRunningState: atomic.Value{},
 	}
-	b.currentRunningState.Store("starting")
+	b.setCurrentRunningState(StateStarting)
 
 	return b, nil
 }
@@ -218,7 +254,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			}
 		}()
 
-		b.currentRunningState.Store("running")
+		b.setCurrentRunningState(StateRunning)
 
 		for {
 			select {
@@ -229,11 +265,13 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				return
 
 			case <-b.resetCh:
-				b.currentRunningState.Store("resetting")
+				b.setCurrentRunningState(StateResetting)
 
 				bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error getting best block header: %v", err)
+					b.setCurrentRunningState(StateRunning)
+
 					continue
 				}
 
@@ -243,11 +281,15 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, meta.Height)
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error getting reorg blocks: %w", err)
+					b.setCurrentRunningState(StateRunning)
+
 					continue
 				}
 
 				if len(moveBackBlocks) == 0 && len(moveForwardBlocks) == 0 {
 					b.logger.Errorf("[BlockAssembler][Reset] no reorg blocks found, invalid reset")
+					b.setCurrentRunningState(StateRunning)
+
 					continue
 				}
 
@@ -270,6 +312,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					_, bestBlockchainBlockHeaderMeta, err := b.blockchainClient.GetBlockHeader(ctx, bestBlockchainBlockHeader.Hash())
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler][Reset] error getting best block header meta: %v", err)
+						b.setCurrentRunningState(StateRunning)
+
 						continue
 					}
 
@@ -304,10 +348,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					<-b.resetCh
 				}
 
-				b.currentRunningState.Store("running")
+				b.setCurrentRunningState(StateRunning)
 
 			case responseCh := <-b.miningCandidateCh:
-				b.currentRunningState.Store("miningCandidate")
+				b.setCurrentRunningState(StateGetMiningCandidate)
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
@@ -340,14 +384,16 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 				}
 				// stat.AddTime(start)
-				b.currentRunningState.Store("running")
+				b.setCurrentRunningState(StateRunning)
 
 			case notification := <-b.blockchainSubscriptionCh:
-				b.currentRunningState.Store("blockchainSubscription")
+				b.setCurrentRunningState(StateBlockchainSubscription)
 
 				if notification.Type == model.NotificationType_Block {
 					b.UpdateBestBlock(ctx)
 				}
+
+				b.setCurrentRunningState(StateRunning)
 			} // select
 		} // for
 	}()
@@ -364,7 +410,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
 	)
 	defer func() {
-		b.currentRunningState.Store("running")
 		deferFn()
 	}()
 
@@ -386,7 +431,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		return
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
-		b.currentRunningState.Store("reorging")
+		b.setCurrentRunningState(StateReorging)
 
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 		if err != nil {
@@ -409,7 +454,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 			return
 		}
 
-		b.currentRunningState.Store("movingUp")
+		b.setCurrentRunningState(StateMovingUp)
 
 		if err = b.subtreeProcessor.MoveForwardBlock(block); err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error moveForwardBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
@@ -455,12 +500,21 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	b.logger.Infof("[BlockAssembler][%s] set best block header to: %d", b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
 }
 
+// setCurrentRunningState sets the current operational state.
+//
+// Parameters:
+//   - state: New state to set
+func (b *BlockAssembler) setCurrentRunningState(state State) {
+	b.currentRunningState.Store(state)
+	prometheusBlockAssemblerCurrentState.Set(float64(state))
+}
+
 // GetCurrentRunningState returns the current operational state.
 //
 // Returns:
 //   - string: Current state description
-func (b *BlockAssembler) GetCurrentRunningState() string {
-	return b.currentRunningState.Load().(string)
+func (b *BlockAssembler) GetCurrentRunningState() State {
+	return b.currentRunningState.Load().(State)
 }
 
 // Start initializes and begins the block assembler operations.

@@ -45,6 +45,7 @@ var (
 	prometheusBlockAssemblerUpdateBestBlock        prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight         prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight      prometheus.Gauge
+	prometheusBlockAssemblerCurrentState           prometheus.Gauge
 	prometheusBlockAssemblerGenerateBlocks         prometheus.Histogram
 )
 
@@ -236,6 +237,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "current_block_height",
 			Help:      "Current block height in block assembly",
+		},
+	)
+
+	prometheusBlockAssemblerCurrentState = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "current_state",
+			Help:      "Current state of the block assembly process",
 		},
 	)
 
