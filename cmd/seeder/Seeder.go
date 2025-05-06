@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	// nolint:gci,gosec
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
@@ -51,6 +51,31 @@ func usage(msg string) {
 }
 
 func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
+	profilerAddr := tSettings.ProfilerAddr
+	if profilerAddr != "" {
+		go func() {
+			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
+
+			gocore.RegisterStatsHandlers()
+
+			prefix := tSettings.StatsPrefix
+			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+			server := &http.Server{
+				Addr:         profilerAddr,
+				Handler:      nil,
+				ReadTimeout:  60 * time.Second,
+				WriteTimeout: 60 * time.Second,
+				IdleTimeout:  120 * time.Second,
+			}
+
+			// http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Errorf("Profiler server failed: %v", err)
+			}
+		}()
+	}
+
 	var (
 		headerFile string
 		utxoFile   string
@@ -134,8 +159,14 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, headersFile string) error {
 	blockchainStoreURL := tSettings.BlockChain.StoreURL
 	if blockchainStoreURL == nil {
-		logger.Fatalf("Failed to get blockchain store URL")
+		return errors.NewConfigurationError("blockchain store URL not found in config")
 	}
+
+	q := blockchainStoreURL.Query()
+	q.Set("seeder", "true")
+
+	blockchainStoreURL.RawQuery = q.Encode()
+	logger.Infof("Using blockchain store at %s", blockchainStoreURL)
 
 	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings)
 	if err != nil {
@@ -215,7 +246,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		headersProcessed++
 		txCount += header.TxCount
 
-		if header.Height%1000 == 0 {
+		if header.Height%10000 == 0 {
 			fmt.Printf("Processed to block height %d\n", header.Height)
 		}
 	}

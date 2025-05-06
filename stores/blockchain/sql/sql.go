@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,8 +47,48 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 
 	switch util.SQLEngine(storeURL.Scheme) {
 	case util.Postgres:
-		if err = createPostgresSchema(db); err != nil {
+		const trueStr = "true"
+
+		offOrOn := "on"
+		trueOrFalse := trueStr
+
+		// The 'seeder' query parameter is used to optimize bulk imports by bypassing index creation.
+		// Creating indexes during data insertion can significantly slow down the process, so we skip
+		// index creation when 'seeder=true' is specified in the query parameters.
+		if err = createPostgresSchema(db, storeURL.Query().Get("seeder") != trueStr); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
+		}
+
+		if storeURL.Query().Get("seeder") == trueStr {
+			offOrOn = "off"
+			trueOrFalse = "false"
+
+			logger.Infof("Aggressively optimizing Postgres for bulk import")
+		}
+
+		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET synchronous_commit = '%s'`, offOrOn))
+		if err != nil {
+			return nil, errors.NewStorageError("failed to set synchronous_commit "+offOrOn, err)
+		}
+
+		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET fsync = '%s'`, offOrOn))
+		if err != nil {
+			return nil, errors.NewStorageError("failed to set fsync "+offOrOn, err)
+		}
+
+		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET full_page_writes = '%s'`, offOrOn))
+		if err != nil {
+			return nil, errors.NewStorageError("failed to set full_page_writes "+offOrOn, err)
+		}
+
+		_, err = db.Exec(`SELECT pg_reload_conf()`)
+		if err != nil {
+			return nil, errors.NewStorageError("failed to reload postgres config", err)
+		}
+
+		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE blocks SET (autovacuum_enabled = '%s')`, trueOrFalse))
+		if err != nil {
+			return nil, errors.NewStorageError("failed to set autovacuum_enabled "+trueOrFalse, err)
 		}
 
 	case util.Sqlite, util.SqliteMemory:
@@ -99,7 +140,7 @@ func (s *SQL) Close() error {
 	return s.db.Close()
 }
 
-func createPostgresSchema(db *usql.DB) error {
+func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
@@ -149,39 +190,41 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create ux_blocks_hash index", err)
 	}
 
-	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not drop pux_blocks_height index", err)
-	}
+	if withIndexes {
+		if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop pux_blocks_height index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_id index", err)
-	}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_chain_work_id index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
-	}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_mined_set index", err)
-	}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_mined_set index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_subtrees_set index", err)
-	}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_subtrees_set index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_height ON blocks (height);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_height index", err)
-	}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_height ON blocks (height);`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_height index", err)
+		}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create idx_parent_id index", err)
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_parent_id index", err)
+		}
 	}
 
 	if _, err := db.Exec(`
@@ -387,11 +430,6 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 		added    = true
 		notAdded = false
 	)
-
-	// height := block.Height
-	// if len(c.chain) != 0 && height == 0 {
-	// 	return false, errors.NewStorageError("block height is 0")
-	// }
 
 	c.headers[*blockHeader.Hash()] = blockHeader
 	c.metas[*blockHeader.Hash()] = blockHeaderMeta

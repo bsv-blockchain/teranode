@@ -204,7 +204,9 @@ RETURNING id
 		coinbaseBytes = block.CoinbaseTx.Bytes()
 	}
 
-	rows, err := s.db.QueryContext(ctx, q,
+	var rows *sql.Rows
+
+	rows, err = s.db.QueryContext(ctx, q,
 		previousBlockID,
 		block.Header.Version,
 		block.Hash().CloneBytes(),
@@ -225,6 +227,7 @@ RETURNING id
 		storeBlockOptions.MinedSet,
 		storeBlockOptions.SubtreesSet,
 	)
+
 	if err != nil {
 		return 0, 0, nil, s.parseSQLError(err, block)
 	}
