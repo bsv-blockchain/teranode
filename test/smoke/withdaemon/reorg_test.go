@@ -88,7 +88,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	require.NoError(t, err)
 
 	// verify blockheight on node2
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 300, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 3, blockWait)
 	require.NoError(t, err)
 
 	// stop node 2 so that it doesn't sync with node 1
@@ -114,7 +114,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	require.NoError(t, err)
 
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 200, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 2, blockWait)
 	require.NoError(t, err)
 
 	// restart node 2 (which is at height 3)

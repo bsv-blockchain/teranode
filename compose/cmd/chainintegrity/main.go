@@ -13,5 +13,6 @@ func main() {
 	logfile := flag.String("logfile", "chainintegrity.log", "Path to logfile")
 	flag.Parse()
 
-	chainintegrity.ChainIntegrity(*checkInterval, *alertThreshold, *debug, *logfile)
+	// chainintegrity.ChainIntegrity(*checkInterval, *alertThreshold, *debug, *logfile)
+	chainintegrity.ChainIntegrityBaseline(*checkInterval, *alertThreshold, *debug, *logfile)
 }
