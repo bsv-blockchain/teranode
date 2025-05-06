@@ -79,7 +79,7 @@ func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpt
 	return q, nil
 }
 
-func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (bool, bool, func(), error) {
+func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (locked bool, exists bool, release func(), err error) {
 	b, err := q.exister.Exists(ctx, hash[:], q.existerOpts...)
 	if err != nil {
 		return false, false, noopFunc, err
@@ -91,29 +91,19 @@ func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (
 
 	lockFile := path.Join(q.path, hash.String()) + ".lock"
 
-	// If the lock file already exists, the item is being processed by another node. However, the lock may be stale.
-	// If the lock file mtime is more than quorumTimeout old it is considered stale and can be removed.
-	if info, err := os.Stat(lockFile); err == nil {
-		t := q.timeout
-		if q.absoluteTimeout > t {
-			t = q.absoluteTimeout
-		}
-
-		if time.Since(info.ModTime()) > t {
-			if err := os.Remove(lockFile); err != nil {
-				q.logger.Warnf("failed to remove stale lock file %q: %v", lockFile, err)
-			}
-		}
-	}
+	q.expireLockIfOld(lockFile)
 
 	// Attempt to acquire lock by atomically creating the lock file
 	// The O_CREATE|O_EXCL|O_WRONLY flags ensure the file is created only if it does not already exist
 	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			// Failed to acquire lock (file already exists or other error)
-			return false, false, noopFunc, nil
+			q.logger.Debugf("[TryLockIfNotExists] lock file %s already exists", lockFile)
+
+			return false, false, noopFunc, nil // Lock held by someone else
 		}
+
+		q.logger.Errorf("[TryLockIfNotExists] error creating lock file %s: %v", lockFile, err)
 
 		return false, false, noopFunc, err
 	}
@@ -126,38 +116,7 @@ func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (
 	// Set up automatic lock release
 	ctx, cancel := context.WithCancel(ctx)
 
-	go func() {
-		if q.absoluteTimeout == 0 {
-			// Initialize ticker to update the lock file twice every quorumTimeout
-			ticker := time.NewTicker(q.timeout / 2)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
-						q.logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
-					}
-
-					return
-				case <-ticker.C:
-					// Touch the lock file by updating its access and modification times to the current time
-					now := time.Now()
-					if err := os.Chtimes(lockFile, now, now); err != nil {
-						q.logger.Warnf("failed to update lock file %q: %v", lockFile, err)
-					}
-				}
-			}
-		} else {
-			// If absoluteTimeout is set, we use a timer to release the lock after the timeout
-			// Release the lock after timeout or when context is cancelled
-			select {
-			case <-ctx.Done():
-			case <-time.After(q.absoluteTimeout):
-			}
-			releaseLock(q.logger, lockFile)
-		}
-	}()
+	go q.autoReleaseLock(ctx, cancel, lockFile)
 
 	return true, false, func() {
 		cancel()
@@ -165,10 +124,105 @@ func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (
 	}, nil
 }
 
+// If the lock file already exists, the item is being processed by another node. However, the lock may be stale.
+// If the lock file mtime is more than quorumTimeout old it is considered stale and can be removed.
+func (q *Quorum) expireLockIfOld(lockFile string) {
+	if info, err := os.Stat(lockFile); err == nil {
+		t := q.timeout
+		if q.absoluteTimeout > t {
+			t = q.absoluteTimeout
+		}
+
+		if time.Since(info.ModTime()) > t {
+			q.logger.Warnf("removing stale lock file %q", lockFile)
+
+			releaseLock(q.logger, lockFile)
+		}
+	}
+}
+
 func releaseLock(logger ulogger.Logger, lockFile string) {
 	if err := os.Remove(lockFile); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
+		}
+	}
+}
+
+func (q *Quorum) autoReleaseLock(ctx context.Context, cancel context.CancelFunc, lockFile string) {
+	if q.absoluteTimeout == 0 {
+		// Initialize ticker to update the lock file twice every quorumTimeout
+		ticker := time.NewTicker(q.timeout / 2)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
+					q.logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
+				}
+
+				return
+			case <-ticker.C:
+				// Touch the lock file by updating its access and modification times to the current time
+				now := time.Now()
+				if err := os.Chtimes(lockFile, now, now); err != nil {
+					q.logger.Warnf("failed to update lock file %q: %v", lockFile, err)
+				}
+			}
+		}
+	} else {
+		// If absoluteTimeout is set, we use a timer to release the lock after the timeout
+		// Release the lock after timeout or when context is cancelled
+		select {
+		case <-ctx.Done():
+		case <-time.After(q.absoluteTimeout):
+		}
+		releaseLock(q.logger, lockFile)
+	}
+}
+
+// TryLockIfNotExistsWithTimeout attempts to acquire a lock for the given hash.
+// Knowing a lock has a timeout, it keeps retrying just beyond the lock timeout or until the file exists.
+// In theory it will always succeed in getting a lock or returning that the file exists.
+func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainhash.Hash) (locked bool, exists bool, release func(), err error) {
+	t := q.timeout
+	if q.absoluteTimeout > t {
+		t = q.absoluteTimeout
+	}
+
+	t += 1 * time.Second
+
+	cancelCtx, cancel := context.WithTimeout(ctx, t)
+	defer cancel()
+
+	const retryDelay = 10 * time.Millisecond // How long to wait between checks
+
+	retryCount := 0
+
+	for {
+		locked, exists, release, err = q.TryLockIfNotExists(ctx, hash)
+		if err != nil || locked || exists {
+			if retryCount > 1 && locked {
+				q.logger.Warnf("[TryLockIfNotExistsWithTimeout][%s] New lock acquired after waiting for previous lock to expire. Two potential issues. 1) Whatever acquired the previous lock is taking longer than lock timeout to process therefore we are about to duplicate effort or 2) whatever acquired the previous lock is stuck", hash)
+			}
+
+			return locked, exists, release, err
+		}
+
+		retryCount++
+
+		// Lock not acquired and item doesn't exist yet, wait briefly before retrying.
+		// Use a context-aware delay to exit promptly if context is cancelled during the wait.
+		select {
+		case <-time.After(retryDelay):
+			// Sleep finished normally, continue loop.
+		case <-ctx.Done():
+			// Parent context cancelled during retry delay.
+			return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] context done during retry delay", hash)
+		case <-cancelCtx.Done():
+			// Internal timeout fired during retry delay.
+			return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] timeout waiting %s for lock to free up during retry delay", hash, t)
 		}
 	}
 }

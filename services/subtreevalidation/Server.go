@@ -315,117 +315,99 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		u.prioritySubtreeCheckActiveMapLock.Unlock()
 	}()
 
-	retryCount := 0
-
-	for {
-		gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash)
-		if err != nil {
-			return false, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
-		}
-		defer releaseLockFunc()
-
-		if exists {
-			u.logger.Infof("[CheckSubtree] Priority subtree request no longer needed as subtree now exists for %s from %s", hash.String(), request.BaseUrl)
-
-			return true, nil
-		}
-
-		if gotLock {
-			u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
-
-			var subtree *util.Subtree
-
-			// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
-			if request.BaseUrl == "legacy" {
-				// read from legacy store
-				subtreeBytes, err := u.subtreeStore.Get(
-					ctx,
-					hash[:],
-					options.WithFileExtension("subtreeToCheck"),
-				)
-				if err != nil {
-					return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
-				}
-
-				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
-				if err != nil {
-					return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
-				}
-
-				txHashes := make([]chainhash.Hash, subtree.Length())
-
-				for i := 0; i < subtree.Length(); i++ {
-					txHashes[i] = subtree.Nodes[i].Hash
-				}
-
-				v := ValidateSubtree{
-					SubtreeHash:   *hash,
-					BaseURL:       request.BaseUrl,
-					TxHashes:      txHashes,
-					AllowFailFast: false,
-				}
-
-				// Call the validateSubtreeInternal method
-				// making sure to skip policy checks, since we are validating a block that has already been mined
-				if err = u.ValidateSubtreeInternal(
-					ctx,
-					v,
-					request.BlockHeight,
-					validator.WithSkipPolicyChecks(true),
-					validator.WithAddTXToBlockAssembly(false),
-					validator.WithCreateConflicting(true),
-					validator.WithDisableConsensus(false),
-					validator.WithIgnoreUnspendable(true),
-				); err != nil {
-					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)
-				}
-
-				u.logger.Debugf("[CheckSubtree] Finished processing priority legacy subtree message for %s from %s", hash.String(), request.BaseUrl)
-
-				return true, nil
-			}
-
-			// This line is only reached when the base URL is not "legacy"
-			v := ValidateSubtree{
-				SubtreeHash:   *hash,
-				BaseURL:       request.BaseUrl,
-				AllowFailFast: false,
-			}
-
-			// Call the ValidateSubtreeInternal method
-			if err = u.ValidateSubtreeInternal(
-				ctx,
-				v,
-				request.BlockHeight,
-				validator.WithSkipPolicyChecks(true),
-				validator.WithCreateConflicting(true),
-				validator.WithDisableConsensus(false),
-				validator.WithIgnoreUnspendable(true),
-			); err != nil {
-				return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
-			}
-
-			u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
-
-			return true, nil
-		} else {
-			u.logger.Infof("[CheckSubtree] Failed to get lock for subtree %s, retry #%d", hash.String(), retryCount)
-
-			// Wait for a bit before retrying.
-			select {
-			case <-ctx.Done():
-				return false, errors.NewContextCanceledError("[CheckSubtree] context cancelled")
-			case <-time.After(1 * time.Second):
-				retryCount++
-
-				// will retry for 20 seconds
-				if retryCount > 20 {
-					return false, errors.NewError("[CheckSubtree] failed to get lock for subtree %s after 20 retries", hash.String())
-				}
-
-				// Automatically retries the loop.
-				continue
-			}
-		}
+	// Note we are not giving up, we either need to see the file exists or we get the lock
+	gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, hash)
+	if err != nil {
+		return false, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
 	}
+	defer releaseLockFunc()
+
+	if exists {
+		u.logger.Infof("[CheckSubtree] Priority subtree request no longer needed as subtree now exists for %s from %s", hash.String(), request.BaseUrl)
+
+		return true, nil
+	}
+
+	if !gotLock {
+		return false, errors.NewError("[CheckSubtree] failed to get lock for subtree %s due to timeout", hash.String())
+	}
+
+	u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+	var subtree *util.Subtree
+
+	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
+	if request.BaseUrl == "legacy" {
+		// read from legacy store
+		subtreeBytes, err := u.subtreeStore.Get(
+			ctx,
+			hash[:],
+			options.WithFileExtension("subtreeToCheck"),
+		)
+		if err != nil {
+			return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
+		}
+
+		subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
+		if err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
+		}
+
+		txHashes := make([]chainhash.Hash, subtree.Length())
+
+		for i := 0; i < subtree.Length(); i++ {
+			txHashes[i] = subtree.Nodes[i].Hash
+		}
+
+		v := ValidateSubtree{
+			SubtreeHash:   *hash,
+			BaseURL:       request.BaseUrl,
+			TxHashes:      txHashes,
+			AllowFailFast: false,
+		}
+
+		// Call the validateSubtreeInternal method
+		// making sure to skip policy checks, since we are validating a block that has already been mined
+		if err = u.ValidateSubtreeInternal(
+			ctx,
+			v,
+			request.BlockHeight,
+			validator.WithSkipPolicyChecks(true),
+			validator.WithAddTXToBlockAssembly(false),
+			validator.WithCreateConflicting(true),
+			validator.WithDisableConsensus(false),
+			validator.WithIgnoreUnspendable(true),
+		); err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)
+		}
+
+		u.logger.Debugf("[CheckSubtree] Finished processing priority legacy subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+		return true, nil
+	}
+
+	// This line is only reached when the base URL is not "legacy"
+	v := ValidateSubtree{
+		SubtreeHash:   *hash,
+		BaseURL:       request.BaseUrl,
+		AllowFailFast: false,
+	}
+
+	// Call the ValidateSubtreeInternal method
+	if err = u.ValidateSubtreeInternal(
+		ctx,
+		v,
+		request.BlockHeight,
+		validator.WithSkipPolicyChecks(true),
+		validator.WithCreateConflicting(true),
+		validator.WithDisableConsensus(false),
+		validator.WithIgnoreUnspendable(true),
+	); err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
+	}
+
+	u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+	return true, nil
+
 }
