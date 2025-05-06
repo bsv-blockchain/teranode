@@ -10,7 +10,7 @@ rm -rf "$(dirname "$0")/../data"
 get_credentials
 
 # Drop all postgres tables
-psql "$(get_pg_url teranode)"  -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions; drop table if exists bans;"
+psql "$(get_pg_url teranode)"  -c "SET client_min_messages TO WARNING; drop table if exists state; drop table if exists utxos; drop table if exists txmeta; drop table if exists blocks; drop table if exists block_ids; drop table if exists outputs; drop table if exists inputs; drop table if exists transactions CASCADE; drop table if exists bans;"
 psql "$(get_pg_url coinbase)" -c "SET client_min_messages TO WARNING; drop table if exists coinbase_utxos; drop table if exists spendable_utxos_balance; drop table if exists spendable_utxos_log; drop table if exists spendable_utxos; drop table if exists blocks; drop table if exists state;"
 
 # Flush aerospike

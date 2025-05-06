@@ -1,6 +1,7 @@
 package teranodecli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/cmd/utxopersister"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 )
@@ -28,6 +30,8 @@ var commandHelp = map[string]string{
 	"getfsmstate":     "Get the current FSM State",
 	"setfsmstate":     "Set the FSM State",
 	"settings":        "Settings",
+	"export-blocks":   "Export blockchain to CSV",
+	"import-blocks":   "Import blockchain from CSV",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -220,6 +224,56 @@ func Start(args []string, version, commit string) {
 	case "settings":
 		cmd.Execute = func(args []string) error {
 			cmdSettings.CmdSettings(logger, tSettings, version, commit)
+			return nil
+		}
+	case "export-blocks":
+		filePath := cmd.FlagSet.String("file", "", "CSV file path to export")
+		cmd.Execute = func(args []string) error {
+			if *filePath == "" {
+				return errors.NewProcessingError("Usage: export-blocks --file <path>")
+			}
+
+			u := tSettings.BlockChain.StoreURL
+			if u == nil {
+				return errors.NewProcessingError("Store URL not configured in settings")
+			}
+
+			s, err := sql.New(logger, u, tSettings)
+			if err != nil {
+				return err
+			}
+
+			if err := s.ExportBlockchainCSV(context.Background(), *filePath); err != nil {
+				return err
+			}
+
+			fmt.Printf("Exported blockchain to %s\n", *filePath)
+
+			return nil
+		}
+	case "import-blocks":
+		filePath := cmd.FlagSet.String("file", "", "CSV file path to import")
+		cmd.Execute = func(args []string) error {
+			if *filePath == "" {
+				return errors.NewProcessingError("Usage: import-blocks --file <path>")
+			}
+
+			u := tSettings.BlockChain.StoreURL
+			if u == nil {
+				return errors.NewProcessingError("Store URL not configured in settings")
+			}
+
+			s, err := sql.New(logger, u, tSettings)
+			if err != nil {
+				return err
+			}
+
+			if err := s.ImportBlockchainCSV(context.Background(), *filePath); err != nil {
+				return err
+			}
+
+			fmt.Printf("Imported blockchain from %s\n", *filePath)
+
 			return nil
 		}
 	default:

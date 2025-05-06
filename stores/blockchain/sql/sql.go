@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
+	"encoding/hex"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -129,7 +133,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,invalid	    BOOLEAN NOT NULL DEFAULT FALSE
         ,mined_set 	    BOOLEAN NOT NULL DEFAULT FALSE
         ,subtrees_set   BOOLEAN NOT NULL DEFAULT FALSE
-        ,peer_id	    TEXT NOT NULL
+    	,peer_id	    TEXT NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -438,6 +442,7 @@ func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, b
 		c.addBlockHeader(blockHeaders[i], blockHeaderMetas[i])
 	}
 }
+
 func (s *SQL) ResetResponseCache() {
 	s.responseCache.DeleteAll()
 }
@@ -585,4 +590,153 @@ func (c *blockchainCache) SetExists(blockHash chainhash.Hash, exists bool) {
 	defer c.mutex.Unlock()
 
 	c.existsCache[blockHash] = exists
+}
+
+func (s *SQL) ExportBlockchainCSV(ctx context.Context, filePath string) error {
+	f, err := os.Create(filePath)
+	if err != nil {
+		return errors.NewStorageError("could not create export file", err)
+	}
+
+	defer f.Close()
+	w := csv.NewWriter(f)
+
+	defer w.Flush()
+	// header
+	header := []string{"version", "hash", "previous_hash", "merkle_root", "block_time", "n_bits", "nonce", "height", "chain_work", "tx_count", "size_in_bytes", "subtree_count", "subtrees", "coinbase_tx", "invalid", "mined_set", "subtrees_set", "peer_id"}
+	if err := w.Write(header); err != nil {
+		return errors.NewStorageError("could not write CSV header", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT version, hash, previous_hash, merkle_root, block_time, n_bits, nonce, height, chain_work, tx_count, size_in_bytes, subtree_count, subtrees, coinbase_tx, invalid, mined_set, subtrees_set, peer_id FROM blocks ORDER BY height ASC`)
+	if err != nil {
+		return errors.NewStorageError("could not query blocks", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var ver int
+
+		var hash, prev, merkle, nBits, cw, subs, cb []byte
+
+		var bt, nonce, height, txc, size, scnt int64
+
+		var invalid, mined, sset bool
+
+		var peer string
+
+		if err := rows.Scan(&ver, &hash, &prev, &merkle, &bt, &nBits, &nonce, &height, &cw, &txc, &size, &scnt, &subs, &cb, &invalid, &mined, &sset, &peer); err != nil {
+			return errors.NewStorageError("could not scan row", err)
+		}
+
+		rec := []string{
+			strconv.Itoa(ver),
+			hex.EncodeToString(hash),
+			hex.EncodeToString(prev),
+			hex.EncodeToString(merkle),
+			strconv.FormatInt(bt, 10),
+			hex.EncodeToString(nBits),
+			strconv.FormatInt(nonce, 10),
+			strconv.FormatInt(height, 10),
+			hex.EncodeToString(cw),
+			strconv.FormatInt(txc, 10),
+			strconv.FormatInt(size, 10),
+			strconv.FormatInt(scnt, 10),
+			hex.EncodeToString(subs),
+			hex.EncodeToString(cb),
+			strconv.FormatBool(invalid),
+			strconv.FormatBool(mined),
+			strconv.FormatBool(sset),
+			peer,
+		}
+
+		if err := w.Write(rec); err != nil {
+			return errors.NewStorageError("could not write record", err)
+		}
+	}
+
+	return rows.Err()
+}
+
+func (s *SQL) ImportBlockchainCSV(ctx context.Context, filePath string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return errors.NewStorageError("could not open import file", err)
+	}
+
+	defer f.Close()
+	r := csv.NewReader(f)
+
+	// read and validate CSV
+	if _, err := r.Read(); err != nil {
+		return errors.NewStorageError("could not read CSV header", err)
+	}
+
+	records, err := r.ReadAll()
+	if err != nil {
+		return errors.NewStorageError("could not read CSV records", err)
+	}
+	// verify genesis block hash matches settings
+	expected := hex.EncodeToString(s.chainParams.GenesisHash.CloneBytes())
+	if records[0][1] != expected {
+		return errors.NewProcessingError("import aborted: genesis block hash mismatch; got %s, want %s", records[0][1], expected)
+	}
+	// ensure there are blocks beyond genesis
+	if len(records) <= 1 {
+		return errors.NewProcessingError("import aborted: CSV contains only genesis block")
+	}
+	// iterate records for import
+	for _, rec := range records {
+		ver, _ := strconv.Atoi(rec[0])
+		hash, _ := hex.DecodeString(rec[1])
+		prev, _ := hex.DecodeString(rec[2])
+		merkle, _ := hex.DecodeString(rec[3])
+		bt, _ := strconv.ParseInt(rec[4], 10, 64)
+		nBits, _ := hex.DecodeString(rec[5])
+		nonce, _ := strconv.ParseInt(rec[6], 10, 64)
+
+		height, _ := strconv.ParseInt(rec[7], 10, 64)
+
+		cw, _ := hex.DecodeString(rec[8])
+		txc, _ := strconv.ParseInt(rec[9], 10, 64)
+		size, _ := strconv.ParseInt(rec[10], 10, 64)
+		scnt, _ := strconv.ParseInt(rec[11], 10, 64)
+		subs, _ := hex.DecodeString(rec[12])
+		cb, _ := hex.DecodeString(rec[13])
+		invalid, _ := strconv.ParseBool(rec[14])
+		mined, _ := strconv.ParseBool(rec[15])
+		sset, _ := strconv.ParseBool(rec[16])
+		peer := rec[17]
+
+		var pid sql.NullInt64
+		if height != 0 {
+			err = s.db.QueryRowContext(ctx, `SELECT id FROM blocks WHERE hash=$1`, prev).Scan(&pid)
+			if err != nil {
+				return errors.NewStorageError("could not lookup parent", err)
+			}
+		}
+
+		// handle genesis record: insert only if missing
+		if height == 0 {
+			var exists bool
+			if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM blocks WHERE height=0)`).Scan(&exists); err != nil {
+				return errors.NewStorageError("could not check genesis existence", err)
+			}
+			if !exists {
+				_, err = s.db.ExecContext(ctx, `INSERT INTO blocks(parent_id,version,hash,previous_hash,merkle_root,block_time,n_bits,nonce,height,chain_work,tx_count,size_in_bytes,subtree_count,subtrees,coinbase_tx,invalid,mined_set,subtrees_set,peer_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, pid, ver, hash, prev, merkle, bt, nBits, nonce, height, cw, txc, size, scnt, subs, cb, invalid, mined, sset, peer)
+				if err != nil {
+					return errors.NewStorageError("could not insert genesis block", err)
+				}
+			}
+			continue
+		}
+
+		_, err = s.db.ExecContext(ctx, `INSERT INTO blocks(parent_id,version,hash,previous_hash,merkle_root,block_time,n_bits,nonce,height,chain_work,tx_count,size_in_bytes,subtree_count,subtrees,coinbase_tx,invalid,mined_set,subtrees_set,peer_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, pid, ver, hash, prev, merkle, bt, nBits, nonce, height, cw, txc, size, scnt, subs, cb, invalid, mined, sset, peer)
+		if err != nil {
+			return errors.NewStorageError("could not insert block", err)
+		}
+	}
+
+	return nil
 }
