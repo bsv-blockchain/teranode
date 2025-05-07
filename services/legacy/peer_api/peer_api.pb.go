@@ -782,7 +782,7 @@ const file_services_legacy_peer_api_peer_api_proto_rawDesc = "" +
 	"\x12ListBannedResponse\x12\x16\n" +
 	"\x06banned\x18\x01 \x03(\tR\x06banned\"%\n" +
 	"\x13ClearBannedResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xac\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xf6\x03\n" +
 	"\vPeerService\x12@\n" +
 	"\bGetPeers\x12\x16.google.protobuf.Empty\x1a\x1a.peer_api.GetPeersResponse\"\x00\x12@\n" +
 	"\aBanPeer\x12\x18.peer_api.BanPeerRequest\x1a\x19.peer_api.BanPeerResponse\"\x00\x12F\n" +
@@ -790,7 +790,8 @@ const file_services_legacy_peer_api_peer_api_proto_rawDesc = "" +
 	"\bIsBanned\x12\x19.peer_api.IsBannedRequest\x1a\x1a.peer_api.IsBannedResponse\"\x00\x12D\n" +
 	"\n" +
 	"ListBanned\x12\x16.google.protobuf.Empty\x1a\x1c.peer_api.ListBannedResponse\"\x00\x12F\n" +
-	"\vClearBanned\x12\x16.google.protobuf.Empty\x1a\x1d.peer_api.ClearBannedResponse\"\x00B\rZ\v./;peer_apib\x06proto3"
+	"\vClearBanned\x12\x16.google.protobuf.Empty\x1a\x1d.peer_api.ClearBannedResponse\"\x00\x12H\n" +
+	"\fGetPeerCount\x12\x16.google.protobuf.Empty\x1a\x1e.peer_api.GetPeerCountResponse\"\x00B\rZ\v./;peer_apib\x06proto3"
 
 var (
 	file_services_legacy_peer_api_peer_api_proto_rawDescOnce sync.Once
@@ -827,14 +828,16 @@ var file_services_legacy_peer_api_peer_api_proto_depIdxs = []int32{
 	7,  // 4: peer_api.PeerService.IsBanned:input_type -> peer_api.IsBannedRequest
 	11, // 5: peer_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
 	11, // 6: peer_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
-	1,  // 7: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
-	4,  // 8: peer_api.PeerService.BanPeer:output_type -> peer_api.BanPeerResponse
-	6,  // 9: peer_api.PeerService.UnbanPeer:output_type -> peer_api.UnbanPeerResponse
-	8,  // 10: peer_api.PeerService.IsBanned:output_type -> peer_api.IsBannedResponse
-	9,  // 11: peer_api.PeerService.ListBanned:output_type -> peer_api.ListBannedResponse
-	10, // 12: peer_api.PeerService.ClearBanned:output_type -> peer_api.ClearBannedResponse
-	7,  // [7:13] is the sub-list for method output_type
-	1,  // [1:7] is the sub-list for method input_type
+	11, // 7: peer_api.PeerService.GetPeerCount:input_type -> google.protobuf.Empty
+	1,  // 8: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
+	4,  // 9: peer_api.PeerService.BanPeer:output_type -> peer_api.BanPeerResponse
+	6,  // 10: peer_api.PeerService.UnbanPeer:output_type -> peer_api.UnbanPeerResponse
+	8,  // 11: peer_api.PeerService.IsBanned:output_type -> peer_api.IsBannedResponse
+	9,  // 12: peer_api.PeerService.ListBanned:output_type -> peer_api.ListBannedResponse
+	10, // 13: peer_api.PeerService.ClearBanned:output_type -> peer_api.ClearBannedResponse
+	2,  // 14: peer_api.PeerService.GetPeerCount:output_type -> peer_api.GetPeerCountResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name

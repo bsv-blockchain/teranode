@@ -125,5 +125,6 @@ message Peer {
     rpc IsBanned(IsBannedRequest) returns (IsBannedResponse) {}
     rpc ListBanned(google.protobuf.Empty) returns (ListBannedResponse) {}
     rpc ClearBanned(google.protobuf.Empty) returns (ClearBannedResponse) {}
+    rpc GetPeerCount(google.protobuf.Empty) returns (GetPeerCountResponse) {}
   }
   
