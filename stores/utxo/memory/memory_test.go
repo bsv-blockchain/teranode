@@ -5,7 +5,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,13 +53,6 @@ func TestMemory(t *testing.T) {
 		db := New(ulogger.TestLogger{})
 		err := db.delete(tests.Hash)
 		require.NoError(t, err)
-
-		// add the parents of the tx, so that the conflicting tx can be added to the parents as conflictingChildren
-		for _, parent := range tests.Tx.Inputs {
-			db.txs[*parent.PreviousTxIDChainHash()] = &memoryData{
-				tx: &bt.Tx{},
-			}
-		}
 
 		tests.Conflicting(t, db)
 	})

@@ -564,20 +564,6 @@ func Test_SmokeTests(t *testing.T) {
 		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
-		// make sure the parents of tx are inserted first, otherwise the conflicting check fails
-		// because of the foreign key constraint
-		q := `
-		INSERT INTO transactions (
-		  hash ,version ,lock_time ,fee ,size_in_bytes ,coinbase ,frozen ,conflicting
-	  	) VALUES (
-		  $1, $2, $3, $4, $5, $6, $7, $8
-		)
-		`
-
-		for _, input := range tests.Tx.Inputs {
-			_, _ = db.db.ExecContext(ctx, q, input.PreviousTxIDChainHash()[:], 1, 0, 0, 0, false, false, false)
-		}
-
 		tests.Conflicting(t, db)
 	})
 }
