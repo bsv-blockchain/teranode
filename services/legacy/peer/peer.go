@@ -63,7 +63,8 @@ const (
 	negotiateTimeout = 30 * time.Second
 
 	// idleTimeout is the duration of inactivity before we time out a peer.
-	idleTimeout = 5 * time.Minute
+	idleTimeout       = 5 * time.Minute
+	processingTimeout = 1 * time.Minute
 
 	// stallTickInterval is the interval of time between each check for
 	// stalled peers.
@@ -485,6 +486,9 @@ type Peer struct {
 	verAckMtx            sync.Mutex // protects verAckSent
 	verAckSent           bool
 	syncPeer             bool
+
+	processingCmdMtx        sync.Mutex // protects currentProcessingMsgCmd
+	currentProcessingMsgCmd string     // Command of the message currently being processed
 
 	wireEncoding wire.MessageEncoding
 
@@ -1426,13 +1430,39 @@ func (p *Peer) inHandler() {
 		p.DisconnectWithInfo(reason)
 	})
 
+	processingTimer := time.AfterFunc(processingTimeout, func() {
+		p.processingCmdMtx.Lock()
+		cmd := p.currentProcessingMsgCmd
+		p.processingCmdMtx.Unlock()
+
+		if cmd == "" {
+			cmd = "[unknown]" // Default if no specific command was being processed
+		}
+
+		reason := fmt.Sprintf("Timeout processing message '%s' from peer, waited %s", cmd, processingTimeout)
+		p.DisconnectWithInfo(reason)
+	})
+
 out:
 	for atomic.LoadInt32(&p.disconnect) == 0 {
+		// we aren't processing anything so lets not start the processing timer yet
+		if !processingTimer.Stop() {
+			select {
+			case <-processingTimer.C:
+			default:
+			}
+		}
+
+		p.processingCmdMtx.Lock()
+		p.currentProcessingMsgCmd = ""
+		p.processingCmdMtx.Unlock()
+
 		// Read a message and stop the idle timer as soon as the read
 		// is done.  The timer is reset below for the next iteration if
 		// needed.
 		rmsg, buf, err := p.readMessage(p.wireEncoding)
 		idleTimer.Stop()
+
 		if err != nil {
 			// In order to allow regression tests with malformed messages, don't
 			// disconnect the peer when we're in regression test mode and the
@@ -1475,11 +1505,20 @@ out:
 			}
 			break out
 		}
+
+		p.processingCmdMtx.Lock()
+		p.currentProcessingMsgCmd = rmsg.Command()
+		p.processingCmdMtx.Unlock()
+		processingTimer.Reset(processingTimeout)
+
 		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
 		p.stallControl <- stallControlMsg{sccReceiveMessage, rmsg}
 
 		// Handle each supported message type.
 		p.stallControl <- stallControlMsg{sccHandlerStart, rmsg}
+
+		p.logger.Debugf("Processing %v from peer ID %v", rmsg.Command(), p.ID())
+
 		switch msg := rmsg.(type) {
 		case *wire.MsgVersion:
 			// Limit to one version message per peer.
@@ -1601,6 +1640,8 @@ out:
 			p.logger.Debugf("Received unhandled message of type %v from %v", rmsg.Command(), p)
 		}
 		p.stallControl <- stallControlMsg{sccHandlerDone, rmsg}
+
+		p.logger.Debugf("Processing %v from peer ID %v DONE", rmsg.Command(), p.ID())
 
 		// A message was received so reset the idle timer.
 		idleTimer.Reset(idleTimeout)

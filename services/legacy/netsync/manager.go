@@ -385,7 +385,7 @@ func (sm *SyncManager) startSync() {
 
 		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
 
 			continue
 		}
@@ -418,110 +418,107 @@ func (sm *SyncManager) startSync() {
 	if len(bestPeers) > 0 {
 		// #nosec G404
 		bestPeer = bestPeers[rand.IntN(len(bestPeers))]
+		sm.logger.Debugf("[startSync] selected best peer %s from %d peers ahead of us", bestPeer.String(), len(bestPeers))
 	} else if len(okPeers) > 0 {
 		// #nosec G404
 		bestPeer = okPeers[rand.IntN(len(okPeers))]
+		sm.logger.Debugf("[startSync] no peers ahead, selected ok peer %s from %d peers at same height", bestPeer.String(), len(okPeers))
 	}
 
 	// Start syncing from the best peer if one was selected.
-	if bestPeer != nil {
-		sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
+	if bestPeer == nil {
+		sm.logger.Warnf("[startSync] No sync peer candidates available after evaluating %d total peers (%d ahead, %d at same height)", sm.peerStates.Length(), len(bestPeers), len(okPeers))
 
-		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
-		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		return
+	}
+
+	sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
+
+	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
+
+		return
+	}
+
+	// check whether we are in sync with this peer and send RUNNING FSM state
+	if bestPeer.LastBlock() == bestBlockHeightInt32 {
+		sm.logger.Debugf("[startSync] peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
+
+		if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
+			sm.logger.Errorf("[startSync] failed to set blockchain state to running: %v", err)
+		}
+
+		sm.resetFeeFilterToDefault()
+
+		return
+	}
+
+	// Clear the requestedBlocks if the sync peer changes, otherwise
+	// we may ignore blocks we need that the last sync peer failed
+	// to send.
+	sm.requestedBlocks.Clear()
+
+	locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("[startSync] Failed to get block locator for the latest block: %v", err)
+
+		return
+	}
+
+	sm.logger.Infof("[startSync] Syncing from block height %d to block height %d using peer %v", bestBlockHeaderMeta.Height, bestPeer.LastBlock(), bestPeer.String())
+
+	// If we are behind the peer more than 10 blocks, move to CATCHING BLOCKS
+	if bestPeer.LastBlock()-bestBlockHeightInt32 > 10 {
+		// move FSM state to CATCHING BLOCKS, we are behind the peer more than 10 blocks
+		if err = sm.blockchainClient.CatchUpBlocks(sm.ctx); err != nil {
+			sm.logger.Errorf("[startSync] failed to set blockchain state to catching blocks: %v", err)
+		}
+	}
+
+	// When the current height is less than a known checkpoint we
+	// can use block headers to learn about which blocks comprise
+	// the chain up to the checkpoint and perform less validation
+	// for them.  This is possible since each header contains the
+	// hash of the previous header and a merkle root.  Therefore, if
+	// we validate all of the received headers linked together
+	// properly and the checkpoint hashes match, we can be sure the
+	// hashes for the blocks in between are accurate.  Further, once
+	// the full blocks are downloaded, the merkle root is computed
+	// and compared against the value in the header which proves the
+	// full block hasn't been tampered with.
+	//
+	// Once we have passed the final checkpoint, or checkpoints are
+	// disabled, use standard inv messages learn about the blocks
+	// and fully validate them.  Finally, regression test mode does
+	// not support the headers-first approach so do normal block
+	// downloads when in regression test mode.
+	if sm.nextCheckpoint != nil &&
+		bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
+		sm.chainParams != &chaincfg.RegressionNetParams {
+		if err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
+			sm.logger.Warnf("[startSync] Failed to send getheaders message to peer %s: %v", bestPeer.String(), err)
 
 			return
 		}
 
-		// check whether we are in sync with this peer and send RUNNING FSM state
-		if bestPeer.LastBlock() == bestBlockHeightInt32 {
-			sm.logger.Debugf("peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
+		sm.headersFirstMode = true
 
-			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
-				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
-			}
-
-			sm.resetFeeFilterToDefault()
-
-			return
-		}
-
-		// Clear the requestedBlocks if the sync peer changes, otherwise
-		// we may ignore blocks we need that the last sync peer failed
-		// to send.
-		sm.requestedBlocks.Clear()
-
-		locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
-		if err != nil {
-			sm.logger.Errorf("Failed to get block locator for the latest block: %v", err)
-			return
-		}
-
-		sm.logger.Infof("Syncing from block height %d to block height %d using peer %v", bestBlockHeaderMeta.Height, bestPeer.LastBlock(), bestPeer.String())
-
-		// If we are behind the peer more than 10 blocks, move to CATCHING BLOCKS
-		if bestPeer.LastBlock()-bestBlockHeightInt32 > 10 {
-			// move FSM state to CATCHING BLOCKS, we are behind the peer more than 10 blocks
-			if err = sm.blockchainClient.CatchUpBlocks(sm.ctx); err != nil {
-				sm.logger.Errorf("failed to set blockchain state to catching blocks: %v", err)
-			}
-		}
-
-		// When the current height is less than a known checkpoint we
-		// can use block headers to learn about which blocks comprise
-		// the chain up to the checkpoint and perform less validation
-		// for them.  This is possible since each header contains the
-		// hash of the previous header and a merkle root.  Therefore, if
-		// we validate all of the received headers linked together
-		// properly and the checkpoint hashes match, we can be sure the
-		// hashes for the blocks in between are accurate.  Further, once
-		// the full blocks are downloaded, the merkle root is computed
-		// and compared against the value in the header which proves the
-		// full block hasn't been tampered with.
-		//
-		// Once we have passed the final checkpoint, or checkpoints are
-		// disabled, use standard inv messages learn about the blocks
-		// and fully validate them.  Finally, regression test mode does
-		// not support the headers-first approach so do normal block
-		// downloads when in regression test mode.
-		if sm.nextCheckpoint != nil &&
-			bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
-			sm.chainParams != &chaincfg.RegressionNetParams {
-			if err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
-				sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", bestPeer.String(), err)
-				return
-			}
-
-			sm.headersFirstMode = true
-
-			sm.logger.Infof("startSync - Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.String())
-		} else {
-			if err = bestPeer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				sm.logger.Warnf("Failed to send getblocks message to peer %s: %v", bestPeer.String(), err)
-				return
-			}
-		}
-
-		bestPeer.SetSyncPeer(true)
-		sm.syncPeer = bestPeer
-		sm.syncPeerState = &syncPeerState{
-			lastBlockTime:     time.Now(),
-			recvBytes:         bestPeer.BytesReceived(),
-			recvBytesLastTick: uint64(0),
-		}
+		sm.logger.Infof("[startSync] Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.String())
 	} else {
-		// If we have no peers available, log a warning and schedule a retry
-		sm.logger.Warnf("No sync peer candidates available, will retry in 5 seconds")
+		if err = bestPeer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+			sm.logger.Warnf("[startSync] Failed to send getblocks message to peer %s: %v", bestPeer.String(), err)
 
-		go func() {
-			select {
-			case <-sm.ctx.Done():
-				return
-			case <-time.After(5 * time.Second):
-				sm.startSync()
-			}
-		}()
+			return
+		}
+	}
+
+	bestPeer.SetSyncPeer(true)
+	sm.syncPeer = bestPeer
+	sm.syncPeerState = &syncPeerState{
+		lastBlockTime:     time.Now(),
+		recvBytes:         bestPeer.BytesReceived(),
+		recvBytesLastTick: uint64(0),
 	}
 }
 
@@ -578,11 +575,17 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 		// The peer is not a candidate for sync if it's not a full
 		// node.
 		nodeServices := peer.Services()
+
+		sm.logger.Debugf("Checking sync candidate %s: Services=%v, Required=%v", peer.String(), nodeServices, wire.SFNodeNetwork)
+
 		if nodeServices&wire.SFNodeNetwork != wire.SFNodeNetwork {
+			sm.logger.Debugf("Peer %s rejected as sync candidate: Missing SFNodeNetwork flag", peer.String())
+
 			return false
 		}
 	}
 
+	sm.logger.Debugf("Peer %s accepted as sync candidate", peer.String())
 	// Candidate if all checks passed.
 	return true
 }
@@ -1530,11 +1533,11 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	}
 
 	// If this inv contains a block announcement, and this isn't coming from
-	// our current sync peer or we're current, then update the last
+	// our current sync peer, then update the last
 	// announced block for this peer. We'll use this information later to
 	// update the heights of peers based on blocks we've accepted that they
 	// previously announced.
-	if lastBlock != -1 && (peer != sm.syncPeer || sm.current()) {
+	if lastBlock != -1 && peer != sm.syncPeer {
 		peer.UpdateLastAnnouncedBlock(&invVects[lastBlock].Hash)
 	}
 
@@ -1544,9 +1547,9 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		return
 	}
 
-	// If our chain is current and a peer announces a block we already
+	// If a peer announces a block we already
 	// know of, then update their current block height.
-	if lastBlock != -1 && sm.current() {
+	if lastBlock != -1 {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
 			blockHeightInt32, err := util.SafeUint32ToInt32(blockHeaderMeta.Height)

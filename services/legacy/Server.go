@@ -380,8 +380,8 @@ func (s *Server) logPeerStats(ctx context.Context) {
 			for _, p := range peers {
 				lastSendElapsed := time.Since(time.Unix(p.GetLastSend(), 0))
 				lastRecvElapsed := time.Since(time.Unix(p.GetLastRecv(), 0))
-				s.logger.Infof("[Legacy Server] Peer %s (ID: %d) - Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
-					p.GetAddr(), p.GetId(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
+				s.logger.Infof("[Legacy Server] Peer %s (ID: %d) - Services: %s, Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
+					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
 			}
 
 			state, err := s.blockchainClient.GetFSMCurrentState(context.Background())

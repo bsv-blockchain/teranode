@@ -228,14 +228,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 							cHash := chainhash.Hash(notification.Hash)
 							bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
 
-							// convert hash to chainhash
-							hash, err := chainhash.NewHash(notification.Hash)
-							if err != nil {
-								bv.logger.Errorf("[BlockValidation:setMined] failed to convert hash to chainhash: %s", err)
-								continue
-							}
 							// push block hash to the setMinedChan
-							bv.setMinedChan <- hash
+							bv.setMinedChan <- &cHash
 						}
 					}
 
@@ -287,6 +281,8 @@ func (u *BlockValidation) start(ctx context.Context) error {
 						_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 					}
 
+					u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
+
 					return nil
 				})
 			}
@@ -325,11 +321,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 	// start a worker to process the setMinedChan
 	go func() {
+		defer u.logger.Infof("[BlockValidation:start] setMinedChan worker stopped")
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case blockHash := <-u.setMinedChan:
+				u.logger.Infof("[BlockValidation:start][%s] setMinedChan size: %d", blockHash.String(), len(u.setMinedChan))
+
 				startTime := time.Now()
 
 				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined", blockHash.String())
@@ -351,6 +351,8 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 	// start a worker to revalidate blocks
 	go func() {
+		defer u.logger.Infof("[BlockValidation:start] revalidateBlockChan worker stopped")
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -1297,6 +1299,8 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 	if err = u.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
 		return errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err)
 	}
+
+	u.logger.Infof("[ValidateBlock][%s] updated subtree DAHs and set block subtrees_set", block.Hash().String())
 
 	return nil
 }
