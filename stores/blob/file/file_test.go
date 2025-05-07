@@ -21,8 +21,10 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 	"gotest.tools/assert"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
@@ -183,6 +185,60 @@ func TestFileLoadDAHs(t *testing.T) {
 		err = f.Del(ctx, key)
 		require.Error(t, err)
 	})
+}
+func BenchmarkFileLoadDAHs(b *testing.B) {
+	// Get a temporary directory
+	tempDir, err := os.MkdirTemp("", "test")
+	require.NoError(b, err)
+	defer os.RemoveAll(tempDir)
+
+	dahInterval := 10 * time.Millisecond
+
+	ctx := context.Background()
+
+	u, err := url.Parse("file://" + tempDir)
+	require.NoError(b, err)
+
+	f, err := newStore(ulogger.TestLogger{}, u, dahInterval)
+	require.NoError(b, err)
+
+	keys := make([][]byte, b.N)
+
+	for i := 0; i < b.N; i++ {
+		key := chainhash.HashH([]byte(fmt.Sprintf("key-%d", i)))
+		value := []byte("value")
+
+		err = f.Set(ctx, key[:], value, options.WithDeleteAt(10))
+		require.NoError(b, err)
+
+		err = f.SetDAH(ctx, key[:], 11)
+		require.NoError(b, err)
+
+		keys[i] = key[:]
+	}
+
+	g := errgroup.Group{}
+
+	for _, key := range keys {
+		// unset all the DAH
+		g.Go(func() error {
+			return f.SetDAH(ctx, key, 0)
+		})
+	}
+
+	require.NoError(b, g.Wait())
+
+	var fileDAHs map[string]uint32
+
+	f.fileDAHsMu.Lock()
+
+	fileDAHs = f.fileDAHs
+
+	for _, key := range keys {
+		require.NotContains(b, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
+	}
+
+	f.fileDAHsMu.Unlock()
 }
 
 func TestFileConcurrentAccess(t *testing.T) {

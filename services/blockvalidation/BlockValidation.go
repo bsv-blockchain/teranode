@@ -202,11 +202,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 				select {
 				case <-ctx.Done():
 					if subscribeCancel != nil {
+						bv.logger.Infof("[BlockValidation:setMined] cancelling blockchain subscription")
+
 						subscribeCancel()
 					}
 
+					bv.logger.Warnf("[BlockValidation:setMined] exiting setMined goroutine: %s", ctx.Err())
+
 					return
 				default:
+					bv.logger.Infof("[BlockValidation:setMined] subscribing to blockchain for setTxMined signal")
 					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
 					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, "blockvalidation")
@@ -226,7 +231,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 						if notification.Type == model.NotificationType_Block {
 							cHash := chainhash.Hash(notification.Hash)
-							bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
+							bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification: %s", cHash.String())
 
 							// push block hash to the setMinedChan
 							bv.setMinedChan <- &cHash
@@ -301,7 +306,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				block := block
 
 				g.Go(func() error {
-					u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
+					u.logger.Infof("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
 
 					if err := u.updateSubtreesDAH(gCtx, block); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to update subtrees DAH: %s", err)
@@ -320,12 +325,16 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	}
 
 	// start a worker to process the setMinedChan
+	u.logger.Infof("[BlockValidation:start] starting setMined goroutine")
+
 	go func() {
 		defer u.logger.Infof("[BlockValidation:start] setMinedChan worker stopped")
 
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Warnf("[BlockValidation:start] exiting setMined goroutine: %s", ctx.Err())
+
 				return
 			case blockHash := <-u.setMinedChan:
 				u.logger.Infof("[BlockValidation:start][%s] setMinedChan size: %d", blockHash.String(), len(u.setMinedChan))
@@ -350,12 +359,16 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	}()
 
 	// start a worker to revalidate blocks
+	u.logger.Infof("[BlockValidation:start] starting reValidation goroutine")
+
 	go func() {
 		defer u.logger.Infof("[BlockValidation:start] revalidateBlockChan worker stopped")
 
 		for {
 			select {
 			case <-ctx.Done():
+				u.logger.Warnf("[BlockValidation:start] exiting reValidation goroutine: %s", ctx.Err())
+
 				return
 			case blockData := <-u.revalidateBlockChan:
 				startTime := time.Now()
@@ -938,15 +951,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
 
 	go func() {
-		u.logger.Infof("[ValidateBlock][%s] updating subtrees DAH", block.Hash().String())
-
-		err := u.updateSubtreesDAH(callerSpan.Ctx, block)
-		if err != nil {
+		if err := u.updateSubtreesDAH(callerSpan.Ctx, block); err != nil {
 			// TODO: what to do here? We have already added the block to the blockchain
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
 		}
-
-		u.logger.Infof("[ValidateBlock][%s] update subtrees DAH DONE", block.Hash().String())
 	}()
 
 	if useOptimisticMining {
@@ -1015,10 +1023,6 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 		}
 	}
 	u.recentBlocksBloomFiltersMu.Unlock()
-
-	if len(missingBlockBloomFilters) == 0 {
-		return nil
-	}
 
 	for _, hash := range missingBlockBloomFilters {
 		// try to get from the subtree store
@@ -1272,7 +1276,10 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 //
 // Returns an error if DAH updates fail.
 func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesDAH")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesDAH",
+		tracing.WithLogMessage(u.logger, "[updateSubtreesDAH][%s] updating subtrees DAH", block.Hash().String()),
+	)
+
 	defer deferFn()
 
 	// update the subtree DAHs
@@ -1283,8 +1290,10 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 		subtreeHash := subtreeHash
 
 		g.Go(func() error {
+			u.logger.Debugf("[updateSubtreesDAH][%s] updating subtree DAH for %s", block.Hash().String(), subtreeHash.String())
+
 			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
-				return errors.NewStorageError("failed to update subtree DAH", err)
+				return errors.NewStorageError("[updateSubtreesDAH][%s] failed to update subtree DAH for %s", block.Hash().String(), subtreeHash.String(), err)
 			}
 
 			return nil
@@ -1292,12 +1301,14 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 	}
 
 	if err = g.Wait(); err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to update subtree DAH", block.Hash().String(), err)
+		return errors.NewServiceError("[updateSubtreesDAH][%s] failed to update subtree DAH", block.Hash().String(), err)
 	}
 
 	// update block subtrees_set to true
+	u.logger.Debugf("[updateSubtreesDAH][%s] setting block subtrees_set to true", block.Hash().String())
+
 	if err = u.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err)
+		return errors.NewServiceError("[updateSubtreesDAH][%s] failed to set block subtrees_set", block.Hash().String(), err)
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] updated subtree DAHs and set block subtrees_set", block.Hash().String())

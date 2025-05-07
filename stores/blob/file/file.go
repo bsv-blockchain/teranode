@@ -13,8 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,7 +37,7 @@ type File struct {
 	options            *options.Options
 	fileDAHs           map[string]uint32
 	fileDAHsMu         sync.Mutex
-	fileDAHsCtx        context.Context
+	fileDAHsCtxCancel  context.CancelFunc
 	currentBlockHeight atomic.Uint32
 	persistSubDir      string
 	longtermClient     longtermStore
@@ -96,6 +99,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	return newStore(logger, storeURL, 1*time.Minute, opts...)
 }
 
+// globally limit the number of cleaners that are started to one
+var fileCleanerOnce sync.Map
+
 func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
@@ -143,13 +149,15 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 		}
 	}
 
+	fileDAHsCtx, fileDAHsCtxCancel := context.WithCancel(context.Background())
+
 	fileStore := &File{
-		path:          path,
-		logger:        logger,
-		options:       options,
-		fileDAHs:      make(map[string]uint32),
-		fileDAHsCtx:   context.Background(),
-		persistSubDir: options.PersistSubDir,
+		path:              path,
+		logger:            logger,
+		options:           options,
+		fileDAHs:          make(map[string]uint32),
+		fileDAHsCtxCancel: fileDAHsCtxCancel,
+		persistSubDir:     options.PersistSubDir,
 	}
 
 	// Check if longterm storage options are provided
@@ -171,15 +179,18 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 	}
 
 	if dahCleanerInterval != 0 {
-		// load dah's in background
-		go func() {
-			if err := fileStore.loadDAHs(); err != nil {
-				fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
-			}
-		}()
+		_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
+		if !loaded { // i.e. it was stored and not loaded
+			// load dah's in the background and start the dah cleaner
+			go func() {
+				if err := fileStore.loadDAHs(); err != nil {
+					fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
+				}
 
-		// start the dah cleaner
-		go fileStore.dahCleaner(fileStore.fileDAHsCtx, dahCleanerInterval)
+				// start the dah cleaner
+				go fileStore.dahCleaner(fileDAHsCtx, dahCleanerInterval)
+			}()
+		}
 	}
 
 	return fileStore, nil
@@ -398,7 +409,7 @@ func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
 
 func (s *File) Close(_ context.Context) error {
 	// stop DAH cleaner
-	s.fileDAHsCtx.Done()
+	s.fileDAHsCtxCancel()
 
 	return nil
 }
@@ -1056,6 +1067,31 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 	}()
 
 	var a []string
+
+	useFind := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+
+	// Check if 'find' is available
+	if useFind {
+		if _, err := exec.LookPath("find"); err == nil {
+			pattern := "*." + ext
+			cmd := exec.Command("find", root, "-type", "f", "-name", pattern)
+
+			var out bytes.Buffer
+
+			cmd.Stdout = &out
+			if err := cmd.Run(); err != nil {
+				return nil, err
+			}
+
+			for _, line := range strings.Split(out.String(), "\n") {
+				if line != "" {
+					a = append(a, line)
+				}
+			}
+
+			return a, nil
+		}
+	}
 
 	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
 		if e != nil {
