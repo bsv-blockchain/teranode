@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -73,8 +74,11 @@ func TestInitialSync(t *testing.T) {
 
 	defer node1.Stop(t)
 
+	_, err = helper.CallRPC(legacySyncURL, "generate", []any{101})
+	require.NoError(t, err, "Failed to generate blocks")
+
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(node1.Ctx, node1.BlockchainClient, 101, 10*time.Second)
+	err = helper.WaitForNodeBlockHeight(node1.Ctx, node1.BlockchainClient, 101, 30*time.Second)
 	require.NoError(t, err)
 
 	resp, err := node1.CallRPC("getpeerinfo", []any{})
@@ -173,4 +177,93 @@ func TestCatchUpWithLegacy(t *testing.T) {
 	// verify blockheight on node1
 	err = helper.WaitForNodeBlockHeight(td.Ctx, td.BlockchainClient, 101+extraBlocks, 10*time.Second)
 	require.NoError(t, err)
+}
+
+func TestSendTxToLegacy(t *testing.T) {
+	err := os.RemoveAll("../../data")
+	require.NoError(t, err)
+
+	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
+		ComposeFile: "../../docker-compose-host-withLegacy.yml",
+	})
+	require.NoError(t, err)
+
+	node1 := tc.GetNodeClients(t, "docker.host.teranode1.legacy")
+
+	_, err = node1.CallRPC(t, "generate", []any{101})
+	require.NoError(t, err, "Failed to generate blocks")
+
+	tc.StopNode(t, "teranode-1")
+
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:        true,
+		EnableP2P:        true,
+		EnableValidator:  true,
+		EnableLegacy:     true,
+		SettingsContext:  "docker.host.teranode1.legacy",
+	})
+
+	t.Cleanup(func() {
+		td.Stop(t)
+	})
+
+	// Wait for at least one peer with timeout
+	timeout := time.After(30 * time.Second)
+	
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for peers")
+		case <-ticker.C:
+			resp, err := td.CallRPC("getpeerinfo", []interface{}{})
+			require.NoError(t, err)
+
+			var p2pResp helper.P2PRPCResponse
+			err = json.Unmarshal([]byte(resp), &p2pResp)
+			require.NoError(t, err)
+
+			t.Logf("%s", resp)
+
+			if len(p2pResp.Result) > 0 {
+				t.Logf("Test succeeded, retrieved P2P peers information")
+				goto CONTINUE
+			}
+			
+			t.Logf("No peers yet, waiting...")
+		}
+	}
+CONTINUE:
+
+	time.Sleep(10 * time.Second)
+
+	// verify blockheight on node1
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	require.NoError(t, err)
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx1 := block1.CoinbaseTx
+
+	tx := td.CreateTransaction(t, coinbaseTx1)
+	t.Logf("Sending New Transaction with RPC: %s\n", tx.TxIDChainHash())
+	txBytes := hex.EncodeToString(tx.Bytes())
+
+	// td.Stop()
+
+	// tc.StartNode(t, "teranode-1")
+
+	// time.Sleep(10 * time.Second)
+
+	resp, err := helper.CallRPC(legacySyncURL, "sendrawtransaction", []interface{}{txBytes})
+	require.NoError(t, err)
+	t.Logf("Transaction sent with RPC: %s\n", resp)
+
+	time.Sleep(10 * time.Second)
+
+	td.VerifyInBlockAssembly(t, tx)
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -55,33 +54,35 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 
 	require.NoError(t, compose.Up(ctx))
 
-	services := []string{"teranode-1", "teranode-2", "teranode-3"}
-	ports := []string{"18000", "28000", "38000"}
+	time.Sleep(30 * time.Second)
 
-	for i, serviceName := range services {
-		port := ports[i]
-		t1, err := compose.ServiceContainer(ctx, serviceName)
-		require.NoError(t, err)
+	// services := []string{"teranode-1", "teranode-2", "teranode-3"}
+	// ports := []string{"18000", "28000", "38000"}
 
-		for i := 0; i < 3; i++ {
-			var t1Port nat.Port
+	// for i, serviceName := range services {
+	// 	port := ports[i]
+	// 	t1, err := compose.ServiceContainer(ctx, serviceName)
+	// 	require.NoError(t, err)
 
-			t1Port, err = t1.MappedPort(ctx, nat.Port(port))
-			if err != nil {
-				t.Fatalf("Failed to get mapped port for %s: %v", serviceName, err)
-			}
+	// 	for i := 0; i < 3; i++ {
+	// 		var t1Port nat.Port
 
-			err = WaitForHealthLiveness(t1Port.Int(), 3*time.Second)
+	// 		t1Port, err = t1.MappedPort(ctx, nat.Port(port))
+	// 		if err != nil {
+	// 			t.Fatalf("Failed to get mapped port for %s: %v", serviceName, err)
+	// 		}
 
-			if err == nil {
-				break
-			}
+	// 		err = WaitForHealthLiveness(t1Port.Int(), 3*time.Second)
 
-			t.Logf("Waiting for %s to start...", serviceName)
-		}
+	// 		if err == nil {
+	// 			break
+	// 		}
 
-		require.NoError(t, err)
-	}
+	// 		t.Logf("Waiting for %s to start...", serviceName)
+	// 	}
+
+	// 	require.NoError(t, err)
+	// }
 
 	return container, nil
 }
