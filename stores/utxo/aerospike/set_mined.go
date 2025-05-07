@@ -128,9 +128,6 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
 
 	for idx, hash := range hashes {
