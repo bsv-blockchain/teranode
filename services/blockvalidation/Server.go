@@ -273,11 +273,15 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	go u.processSubtreeNotify.Start()
 
 	go func() {
+		var err error
+
 		for {
 			select {
+
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
 				return
+
 			default:
 				data := u.SetTxMetaQ.Dequeue()
 				if data == nil {
@@ -302,7 +306,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						values = append(values, meta[32:])
 					}
 
-					if err := u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
+					if err = u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
 						u.logger.Errorf("failed to set tx meta data: %v", err)
 					}
 				}(data)
@@ -312,26 +316,37 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	// process blocks found from channel
 	go func() {
+		var err error
+
 		for {
 			_, _, ctx1 := tracing.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
+
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
 				return
+
 			case c := <-u.catchupCh:
 				{
 					// stop mining
-					err = u.blockchainClient.CatchUpBlocks(ctx)
-					if err != nil {
+					if err = u.blockchainClient.CatchUpBlocks(ctx); err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
 					}
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
 
+					retries := 0
+
 					for {
-						if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
+						if err = u.catchup(ctx1, c.block, c.baseURL); err != nil {
 							u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] - will retry [%v]", c.block.Hash().String(), err)
 
+							if retries >= 3 {
+								u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] - too many retries", c.block.Hash().String())
+								break
+							}
+
+							retries++
 							continue
 						}
 
@@ -342,14 +357,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
 					// catched up, ready to mine, send RUN event
-					err = u.blockchainClient.Run(ctx1, "blockvalidation/Server")
-					if err != nil {
+					if err = u.blockchainClient.Run(ctx1, "blockvalidation/Server"); err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
 					}
 				}
+
 			case blockFound := <-u.blockFoundCh:
 				{
-					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
+					if err = u.processBlockFoundChannel(ctx, blockFound); err != nil {
 						u.logger.Errorf("[Init] failed to process block found [%s] [%v]", blockFound.hash.String(), err)
 					}
 				}
