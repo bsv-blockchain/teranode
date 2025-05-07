@@ -46,6 +46,7 @@ var batchSleepMultiplier float64
 var concurrentNodes int
 
 var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
+var aerospikePrometheusHistograms = *safemap.New[string, prometheus.Histogram]()
 
 func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
@@ -339,6 +340,18 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 
 	client.EnableMetrics(nil)
 
+	aerospikeLatencyBuckets := func() []float64 {
+		buckets := make([]float64, 24)
+		base := 2.0 // microseconds
+
+		for i := uint(1); i <= 24; i++ {
+			shift := 1<<i - 1
+			buckets[i-1] = base * float64(shift)
+		}
+
+		return buckets
+	}()
+
 	go func() {
 		for {
 			if !client.IsConnected() {
@@ -402,7 +415,51 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 								counter.Add(subStat)
 							}
 						case map[string]interface{}:
-							// ignore these for now - new histogram metrics
+							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
+								counter.Add(subStat["count"].(float64))
+							}
+
+							if buckets, ok := subStat["buckets"].([]interface{}); ok && len(buckets) == len(aerospikeLatencyBuckets) {
+								histogramKey := "aerospike_client_histogram_" + key + "_" + subKey
+								// create prometheus histogram, if not exists
+								if _, ok := aerospikePrometheusHistograms.Get(histogramKey); !ok {
+									aerospikePrometheusHistograms.Set(histogramKey, promauto.NewHistogram(
+										prometheus.HistogramOpts{
+											Namespace: "teranode",
+											Subsystem: "aerospike_client_histogram_" + key,
+											Name:      subKey,
+											Help:      fmt.Sprintf("Aerospike histogram %s:%s", key, subKey),
+											Buckets:   aerospikeLatencyBuckets,
+										},
+									))
+								}
+
+								histogram, ok := aerospikePrometheusHistograms.Get(histogramKey)
+								if ok {
+									for i, v := range buckets {
+										count, ok := v.(float64)
+										if !ok || count == 0 {
+											continue
+										}
+
+										// For Prometheus, observe the upper bound value 'count' times
+										// For the last bucket, use the last boundary (2^24)
+										var value float64
+
+										if i < len(aerospikeLatencyBuckets)-1 {
+											value = aerospikeLatencyBuckets[i]
+										} else {
+											value = aerospikeLatencyBuckets[len(aerospikeLatencyBuckets)-1]
+										}
+
+										for j := 0; j < int(count); j++ {
+											histogram.Observe(value)
+										}
+									}
+								} else {
+									logger.Warnf("Histogram %s not found", histogramKey)
+								}
+							}
 						default:
 							logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
 						}
