@@ -557,10 +557,10 @@ func (v *Validator) TriggerBatcher() {
 }
 
 func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.Hash) (err error) {
-	for retries := 0; retries < 3; retries++ {
+	for retries := uint(0); retries < 3; retries++ {
 		if metaErr := v.utxoStore.Delete(setSpan.Ctx, txHash); metaErr != nil {
 			if retries < 2 {
-				backoff := time.Duration(2^retries) * time.Second
+				backoff := time.Duration(1<<retries) * time.Second
 				v.logger.Errorf("error deleting tx %s from tx meta utxoStore, retrying in %s: %v", txHash.String(), backoff.String(), metaErr)
 				time.Sleep(backoff)
 			} else {
@@ -713,10 +713,10 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 	reverseUtxoSpan := tracing.Start(ctx, "reverseSpends")
 	defer reverseUtxoSpan.Finish()
 
-	for retries := 0; retries < 3; retries++ {
+	for retries := uint(0); retries < 3; retries++ {
 		if errReset := v.utxoStore.Unspend(ctx, spentUtxos); errReset != nil {
 			if retries < 2 {
-				backoff := time.Duration(2^retries) * time.Second
+				backoff := time.Duration(1<<retries) * time.Second
 				v.logger.Errorf("error resetting utxos, retrying in %s: %v", backoff.String(), errReset)
 				time.Sleep(backoff)
 			} else {

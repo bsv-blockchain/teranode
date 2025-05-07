@@ -298,12 +298,11 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
 		// get subtree from network over http using the baseUrl
-		for retries := 0; retries < 3; retries++ {
+		for retries := uint(0); retries < 3; retries++ {
 			txHashes, err = u.getSubtreeTxHashes(ctx, stat, &v.SubtreeHash, v.BaseURL)
 			if err != nil {
-				// TODO: Unify retry logic with the helper function
 				if retries < 2 {
-					backoff := time.Duration(2^retries) * time.Second
+					backoff := time.Duration(1<<retries) * time.Second
 					u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
 					time.Sleep(backoff)
 				} else {
