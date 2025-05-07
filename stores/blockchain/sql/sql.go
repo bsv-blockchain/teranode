@@ -49,7 +49,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	case util.Postgres:
 		const trueStr = "true"
 
-		offOrOn := "on"
+		// offOrOn := "on"
 		trueOrFalse := trueStr
 
 		// The 'seeder' query parameter is used to optimize bulk imports by bypassing index creation.
@@ -60,31 +60,31 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		}
 
 		if storeURL.Query().Get("seeder") == trueStr {
-			offOrOn = "off"
+			// offOrOn = "off"
 			trueOrFalse = "false"
 
 			logger.Infof("Aggressively optimizing Postgres for bulk import")
 		}
 
-		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET synchronous_commit = '%s'`, offOrOn))
-		if err != nil {
-			return nil, errors.NewStorageError("failed to set synchronous_commit "+offOrOn, err)
-		}
+		// _, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET synchronous_commit = '%s'`, offOrOn))
+		// if err != nil {
+		// 	return nil, errors.NewStorageError("failed to set synchronous_commit "+offOrOn, err)
+		// }
 
-		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET fsync = '%s'`, offOrOn))
-		if err != nil {
-			return nil, errors.NewStorageError("failed to set fsync "+offOrOn, err)
-		}
+		// _, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET fsync = '%s'`, offOrOn))
+		// if err != nil {
+		// 	return nil, errors.NewStorageError("failed to set fsync "+offOrOn, err)
+		// }
 
-		_, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET full_page_writes = '%s'`, offOrOn))
-		if err != nil {
-			return nil, errors.NewStorageError("failed to set full_page_writes "+offOrOn, err)
-		}
+		// _, err = db.Exec(fmt.Sprintf(`ALTER SYSTEM SET full_page_writes = '%s'`, offOrOn))
+		// if err != nil {
+		// 	return nil, errors.NewStorageError("failed to set full_page_writes "+offOrOn, err)
+		// }
 
-		_, err = db.Exec(`SELECT pg_reload_conf()`)
-		if err != nil {
-			return nil, errors.NewStorageError("failed to reload postgres config", err)
-		}
+		// _, err = db.Exec(`SELECT pg_reload_conf()`)
+		// if err != nil {
+		// 	return nil, errors.NewStorageError("failed to reload postgres config", err)
+		// }
 
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE blocks SET (autovacuum_enabled = '%s')`, trueOrFalse))
 		if err != nil {
