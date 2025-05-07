@@ -515,16 +515,20 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 }
 
 func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta) {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	// DISABLED for now, is causing lots of problems
+	//
+	// c.mutex.RLock()
+	// defer c.mutex.RUnlock()
+	//
+	// if len(c.chain) == 0 {
+	// 	return nil, nil
+	// }
+	//
+	// hash := c.chain[len(c.chain)-1]
+	//
+	// return c.headers[hash], c.metas[hash]
 
-	if len(c.chain) == 0 {
-		return nil, nil
-	}
-
-	hash := c.chain[len(c.chain)-1]
-
-	return c.headers[hash], c.metas[hash]
+	return nil, nil
 }
 
 func (c *blockchainCache) GetBlockHeader(hash chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta) {
