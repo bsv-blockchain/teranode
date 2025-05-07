@@ -1716,3 +1716,30 @@ func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store
 
 	return headerHistory[:numberOfMissingHeaders], headerMetaHistory[:numberOfMissingHeaders], nil
 }
+
+// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_api.SetBlockProcessedAtRequest) (*emptypb.Empty, error) {
+	blockHash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("invalid block hash", err)
+	}
+
+	b.logger.Debugf("[Blockchain] Setting block processed at timestamp for %s, clear=%v", blockHash, req.Clear)
+
+	// Check if the block exists
+	exists, err := b.store.GetBlockExists(ctx, blockHash)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to check if block exists", err)
+	}
+
+	if !exists {
+		return nil, errors.NewNotFoundError("block not found: %s", blockHash)
+	}
+
+	// Update the processed_at timestamp in the database
+	if err := b.store.SetBlockProcessedAt(ctx, blockHash, req.Clear); err != nil {
+		return nil, errors.NewStorageError("failed to set block processed_at", err)
+	}
+
+	return &emptypb.Empty{}, nil
+}

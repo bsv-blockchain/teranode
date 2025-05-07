@@ -57,6 +57,7 @@ const (
 	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
+	BlockchainAPI_SetBlockProcessedAt_FullMethodName                 = "/blockchain_api.BlockchainAPI/SetBlockProcessedAt"
 	BlockchainAPI_SendFSMEvent_FullMethodName                        = "/blockchain_api.BlockchainAPI/SendFSMEvent"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName     = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
@@ -144,6 +145,8 @@ type BlockchainAPIClient interface {
 	SetBlockSubtreesSet(ctx context.Context, in *SetBlockSubtreesSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
+	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+	SetBlockProcessedAt(ctx context.Context, in *SetBlockProcessedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -525,6 +528,16 @@ func (c *blockchainAPIClient) GetBlocksSubtreesNotSet(ctx context.Context, in *e
 	return out, nil
 }
 
+func (c *blockchainAPIClient) SetBlockProcessedAt(ctx context.Context, in *SetBlockProcessedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockProcessedAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFSMStateResponse)
@@ -709,6 +722,8 @@ type BlockchainAPIServer interface {
 	SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error)
 	// GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
+	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+	SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -842,6 +857,9 @@ func (UnimplementedBlockchainAPIServer) SetBlockSubtreesSet(context.Context, *Se
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksSubtreesNotSet not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockProcessedAt not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendFSMEvent not implemented")
@@ -1502,6 +1520,24 @@ func _BlockchainAPI_GetBlocksSubtreesNotSet_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_SetBlockProcessedAt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBlockProcessedAtRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetBlockProcessedAt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetBlockProcessedAt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetBlockProcessedAt(ctx, req.(*SetBlockProcessedAtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_SendFSMEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SendFSMEventRequest)
 	if err := dec(in); err != nil {
@@ -1838,6 +1874,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlocksSubtreesNotSet",
 			Handler:    _BlockchainAPI_GetBlocksSubtreesNotSet_Handler,
+		},
+		{
+			MethodName: "SetBlockProcessedAt",
+			Handler:    _BlockchainAPI_SetBlockProcessedAt_Handler,
 		},
 		{
 			MethodName: "SendFSMEvent",

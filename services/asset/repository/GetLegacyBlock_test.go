@@ -360,6 +360,11 @@ func (s *mockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Ha
 func (s *mockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic("not implemented")
 }
+
+func (s *mockStore) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	panic("not implemented")
+}
+
 func (s *mockStore) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }

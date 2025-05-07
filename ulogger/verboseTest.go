@@ -1,19 +1,19 @@
 package ulogger
 
 import (
-	"sync/atomic"
+	"sync"
 	"testing"
 )
 
 type VerboseTestLogger struct {
-	t atomic.Pointer[testing.T]
+	t     *testing.T
+	mutex sync.RWMutex
 }
 
 func NewVerboseTestLogger(t *testing.T) *VerboseTestLogger {
-	l := &VerboseTestLogger{}
-	l.t.Store(t)
-
-	return l
+	return &VerboseTestLogger{
+		t: t,
+	}
 }
 
 func (l *VerboseTestLogger) LogLevel() int {
@@ -33,36 +33,46 @@ func (l *VerboseTestLogger) Duplicate(options ...Option) Logger {
 }
 
 func (l *VerboseTestLogger) Debugf(format string, args ...interface{}) {
-	t := l.t.Load()
-	if t != nil {
-		t.Logf("[DEBUG] "+format, args...)
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	if l.t != nil {
+		l.t.Logf("[DEBUG] "+format, args...)
 	}
 }
 
 func (l *VerboseTestLogger) Infof(format string, args ...interface{}) {
-	t := l.t.Load()
-	if t != nil {
-		t.Logf("[INFO] "+format, args...)
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	if l.t != nil {
+		l.t.Logf("[INFO] "+format, args...)
 	}
 }
 
 func (l *VerboseTestLogger) Warnf(format string, args ...interface{}) {
-	t := l.t.Load()
-	if t != nil {
-		t.Logf("[WARN] "+format, args...)
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	if l.t != nil {
+		l.t.Logf("[WARN] "+format, args...)
 	}
 }
 
 func (l *VerboseTestLogger) Errorf(format string, args ...interface{}) {
-	t := l.t.Load()
-	if t != nil {
-		t.Logf("[ERROR] "+format, args...)
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	if l.t != nil {
+		l.t.Logf("[ERROR] "+format, args...)
 	}
 }
 
 func (l *VerboseTestLogger) Fatalf(format string, args ...interface{}) {
-	t := l.t.Load()
-	if t != nil {
-		t.Fatalf("[FATAL] "+format, args...)
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	if l.t != nil {
+		l.t.Fatalf("[FATAL] "+format, args...)
 	}
 }

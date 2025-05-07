@@ -1201,3 +1201,23 @@ func fastLog2Floor(n uint32) uint8 {
 
 	return rv
 }
+
+// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+func (c *Client) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	c.logger.Debugf("[Blockchain Client] Setting block processed at timestamp for %s, clear=%v", blockHash, clear)
+
+	req := &blockchain_api.SetBlockProcessedAtRequest{
+		BlockHash: blockHash[:],
+	}
+
+	if len(clear) > 0 {
+		req.Clear = clear[0]
+	}
+
+	_, err := c.client.SetBlockProcessedAt(ctx, req)
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}

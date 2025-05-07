@@ -296,4 +296,12 @@ type Store interface {
 	//   - hash: Starting block hash
 	// Returns: File containing the exported data and any error encountered
 	ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error)
+
+	// SetBlockProcessedAt updates the processed_at timestamp for a block.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to update
+	//   - clear: Boolean flag to determine if the timestamp should be cleared
+	// Returns: Any error encountered
+	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
 }

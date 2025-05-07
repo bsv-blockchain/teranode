@@ -239,6 +239,10 @@ func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.H
 	panic(implementMe)
 }
 
+func (m *MockStore) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	panic(implementMe)
+}
+
 func (m *MockStore) GetBlocksMinedNotSet(_ context.Context) ([]*model.Block, error) {
 	return []*model.Block{}, nil
 }

@@ -206,6 +206,10 @@ func (c LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.
 	return c.store.SetBlockMinedSet(ctx, blockHash)
 }
 
+func (c *LocalClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	return c.store.SetBlockProcessedAt(ctx, blockHash, clear...)
+}
+
 func (c LocalClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
 	return c.store.GetBlocksMinedNotSet(ctx)
 }

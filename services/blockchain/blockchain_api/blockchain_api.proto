@@ -112,6 +112,9 @@ service BlockchainAPI {
   // GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
 
+  // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+  rpc SetBlockProcessedAt (SetBlockProcessedAtRequest) returns (google.protobuf.Empty) {}
+
   // FSM-related methods
 
   // SendFSMEvent sends an event to the blockchain FSM.
@@ -443,6 +446,16 @@ message SetBlockSubtreesSetRequest {
 // GetBlocksSubtreesNotSetResponse contains blocks with unset subtrees.
 message GetBlocksSubtreesNotSetResponse {
   repeated bytes blockBytes = 1;  // List of serialized blocks
+}
+
+// SetBlockProcessedAtRequest defines parameters for setting or clearing a block's processed_at timestamp.
+message SetBlockProcessedAtRequest {
+  // Block hash to set or clear the processed_at timestamp for
+  bytes block_hash = 1;
+  
+  // If true, the processed_at timestamp will be cleared (set to NULL)
+  // If false, the processed_at timestamp will be set to the current time
+  bool clear = 2;
 }
 
 // GetFSMStateResponse contains current FSM state.

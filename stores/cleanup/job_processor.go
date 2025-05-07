@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/ordishs/go-utils"
 )
 
 // JobManager manages background jobs for cleaning up records based on block height
@@ -154,8 +155,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 				// If the job is already completed or failed, signal the new doneCh with the same status
 				if status == JobStatusCompleted || status == JobStatusFailed {
 					if len(doneCh) > 0 && doneCh[0] != nil {
-						doneCh[0] <- status.String()
-						close(doneCh[0])
+						utils.SafeSend(doneCh[0], status.String())
+						safeClose(doneCh[0])
 					}
 
 					return nil
@@ -166,8 +167,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 				if status == JobStatusPending || status == JobStatusRunning {
 					// If there's an existing doneCh, close it with a cancelled status
 					if m.jobs[i].DoneCh != nil {
-						m.jobs[i].DoneCh <- JobStatusCancelled.String()
-						close(m.jobs[i].DoneCh)
+						utils.SafeSend(m.jobs[i].DoneCh, JobStatusCancelled.String())
+						safeClose(m.jobs[i].DoneCh)
 					}
 
 					// Replace with the new doneCh
@@ -184,8 +185,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 
 		// If we didn't find a job with this block height, signal the doneCh
 		if len(doneCh) > 0 {
-			doneCh[0] <- JobStatusCancelled.String()
-			close(doneCh[0])
+			utils.SafeSend(doneCh[0], JobStatusCancelled.String())
+			safeClose(doneCh[0])
 		}
 
 		return nil
@@ -199,8 +200,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 			m.jobs[i].Ended = time.Now()
 
 			if m.jobs[i].DoneCh != nil {
-				m.jobs[i].DoneCh <- JobStatusCancelled.String()
-				close(m.jobs[i].DoneCh)
+				utils.SafeSend(m.jobs[i].DoneCh, JobStatusCancelled.String())
+				safeClose(m.jobs[i].DoneCh)
 			}
 
 			m.jobs[i].Cancel()
@@ -224,8 +225,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 			m.jobs[0].Ended = time.Now()
 
 			if m.jobs[0].DoneCh != nil {
-				m.jobs[0].DoneCh <- JobStatusCancelled.String()
-				close(m.jobs[0].DoneCh)
+				utils.SafeSend(m.jobs[0].DoneCh, JobStatusCancelled.String())
+				safeClose(m.jobs[0].DoneCh)
 			}
 
 			m.jobs[0].Cancel()
@@ -301,7 +302,20 @@ func (m *JobManager) worker(workerID int) {
 
 		// Process the job
 		m.jobProcessor(job, workerID)
+
+		if job.DoneCh != nil {
+			utils.SafeSend(job.DoneCh, job.GetStatus().String())
+			safeClose(job.DoneCh)
+		}
 	}
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
 }
 
 // getNextJob gets the next job from the queue

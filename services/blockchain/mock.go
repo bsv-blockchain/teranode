@@ -288,6 +288,12 @@ func (m *Mock) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) 
 	return args.Error(0)
 }
 
+// SetBlockProcessedAt mocks the SetBlockProcessedAt method
+func (m *Mock) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	args := m.Called(ctx, blockHash, clear)
+	return args.Error(0)
+}
+
 // GetBlockIsMined mocks the GetBlockIsMined method
 func (m *Mock) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, blockHash)

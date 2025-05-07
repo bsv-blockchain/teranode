@@ -183,6 +183,27 @@ func (s *Service) Start(ctx context.Context) {
 	}()
 }
 
+// Stop stops the cleanup service and waits for all workers to exit.
+// This ensures all goroutines are properly terminated before returning.
+func (s *Service) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.initialized {
+		return nil
+	}
+
+	// Stop the job manager
+	s.jobManager.Stop()
+
+	// Mark the service as not initialized
+	s.initialized = false
+
+	s.logger.Infof("[AerospikeCleanupService] stopped cleanup service")
+
+	return nil
+}
+
 // UpdateBlockHeight updates the block height and triggers a cleanup job
 func (s *Service) UpdateBlockHeight(blockHeight uint32, done ...chan string) error {
 	if blockHeight == 0 {

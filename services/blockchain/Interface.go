@@ -105,6 +105,9 @@ type ClientI interface {
 	// SetBlockSubtreesSet marks a block's subtrees as set.
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
+
 	// GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 

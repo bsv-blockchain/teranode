@@ -348,24 +348,34 @@ func TestJobManagerTriggerCleanup(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		manager.Start(ctx)
-		defer manager.Stop()
-
 		// Trigger first cleanup
 		err = manager.TriggerCleanup(123)
 		require.NoError(t, err)
 
+		manager.Start(ctx)
+		defer manager.Stop()
+
+		doneCh := make(chan string)
+
 		// Trigger second cleanup
-		err = manager.TriggerCleanup(456)
+		err = manager.TriggerCleanup(456, doneCh)
 		require.NoError(t, err)
+
+		select {
+		case <-doneCh:
+			// Expected
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "Second cleanup job should be completed")
+		}
 
 		// Verify jobs were created and first job was cancelled
 		jobs := manager.GetJobs()
+
 		require.Len(t, jobs, 2)
 		assert.Equal(t, uint32(123), jobs[0].BlockHeight)
 		assert.Equal(t, JobStatusCancelled, jobs[0].GetStatus())
 		assert.Equal(t, uint32(456), jobs[1].BlockHeight)
-		assert.Equal(t, JobStatusPending, jobs[1].GetStatus())
+		assert.Equal(t, JobStatusCompleted, jobs[1].GetStatus())
 	})
 
 	t.Run("max jobs history", func(t *testing.T) {

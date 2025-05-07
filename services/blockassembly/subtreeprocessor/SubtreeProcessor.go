@@ -1240,6 +1240,12 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 
 	prometheusSubtreeProcessorMoveBackBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
+	// Clear the block's processed timestamp
+	if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash(), true); err != nil {
+		// Don't return error here, as this is not critical for the operation
+		stp.logger.Warnf("[moveBackBlock][%s] error clearing block processed_at timestamp: %v", block.String(), err)
+	}
+
 	return nil
 }
 
@@ -1379,6 +1385,12 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 	stp.currentBlockHeader = block.Header
 
 	prometheusSubtreeProcessorMoveBackBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+
+	// Clear the block's processed timestamp
+	if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash(), true); err != nil {
+		// Don't return error here, as this is not critical for the operation
+		stp.logger.Warnf("[moveBackBlock][%s] error clearing block processed_at timestamp: %v", block.String(), err)
+	}
 
 	return nil
 }
@@ -1595,6 +1607,12 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	stp.adjustSubtreeSize()
+
+	// Mark the block as processed
+	if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
+		// Don't return error here, as this is not critical for the operation
+		stp.logger.Warnf("[moveForwardBlock][%s] error setting block processed_at timestamp: %v", block.String(), err)
+	}
 
 	return nil
 }

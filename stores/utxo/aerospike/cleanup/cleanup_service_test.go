@@ -209,7 +209,6 @@ func TestServiceStartStop(t *testing.T) {
 
 	// Create a context with cancel
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start the service
 	service.Start(ctx)
@@ -220,8 +219,9 @@ func TestServiceStartStop(t *testing.T) {
 	// Cancel the context to stop the service
 	cancel()
 
-	// Wait a bit for the service to stop
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the service to fully stop by waiting for the job manager to finish
+	err = service.Stop(context.Background())
+	require.NoError(t, err)
 }
 
 func TestDeleteAtHeight(t *testing.T) {

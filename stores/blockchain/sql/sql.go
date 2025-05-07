@@ -176,6 +176,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
         ,subtrees_set   BOOLEAN NOT NULL DEFAULT FALSE
     	,peer_id	    TEXT NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		,processed_at   TIMESTAMPTZ NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -184,6 +185,20 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 
 	// change the blocks table peer_id column to TEXT, if it is not already
 	_, _ = db.Exec(`ALTER TABLE blocks ALTER COLUMN peer_id TYPE TEXT;`)
+
+	// add the processed_at column to the blocks table if it does not exist
+	err := db.QueryRow("SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='processed_at'").Scan(new(string))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN processed_at TIMESTAMPTZ NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add processed_at column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for processed_at column in blocks table", err)
+		}
+	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
@@ -294,10 +309,25 @@ func createSqliteSchema(db *usql.DB) error {
         ,subtrees_set   BOOLEAN NOT NULL DEFAULT FALSE
      	,peer_id	    TEXT NOT NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		,processed_at   TEXT NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
+	}
+
+	// add the processed_at column to the blocks table if it does not exist
+	err := db.QueryRow("SELECT name FROM pragma_table_info('blocks') WHERE name='processed_at'").Scan(new(string))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN processed_at TEXT NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add processed_at column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for processed_at column in blocks table", err)
+		}
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
