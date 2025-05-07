@@ -152,6 +152,9 @@ func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
 		listPolicy       = aerospike.NewListPolicy(aerospike.ListOrderUnordered, aerospike.ListWriteFlagsAddUnique|aerospike.ListWriteFlagsNoFail)
 	)
 
+	// only allow updates to existing records
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
 	for parentTxHash := range updateParentTxHashes {
 		// create the aerospike key on the main records
 		key, err := aerospike.NewKey(s.namespace, s.setName, parentTxHash.CloneBytes())
