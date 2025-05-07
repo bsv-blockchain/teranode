@@ -48,6 +48,9 @@ type longtermStore interface {
 	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 }
 
+// create a global limiting semaphore for file operations
+var fileSemaphore = make(chan struct{}, 1024)
+
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	if storeURL == nil {
 		return nil, errors.NewConfigurationError("storeURL is nil")
@@ -221,6 +224,11 @@ func (s *File) loadDAHs() error {
 }
 
 func (s *File) readDAHFromFile(fileName string) (uint32, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	// read the dah
 	dahBytes, err := os.ReadFile(fileName)
 	if err != nil {
@@ -318,6 +326,11 @@ func (s *File) shouldRemoveFile(fileName string, fileDAH uint32) bool {
 }
 
 func (s *File) removeFiles(fileName string) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
 		s.logger.Warnf("[File] failed to remove file: %s", fileName)
 	}
@@ -338,6 +351,11 @@ func (s *File) removeDAHFromMap(fileName string) {
 }
 
 func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	// Check if the path exists
 	if _, err := os.Stat(s.path); os.IsNotExist(err) {
 		return http.StatusInternalServerError, "File Store: Path does not exist", err
@@ -387,6 +405,11 @@ func (s *File) Close(_ context.Context) error {
 
 func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	if !opts.AllowOverwrite {
+		fileSemaphore <- struct{}{}
+		defer func() {
+			<-fileSemaphore
+		}()
+
 		if _, err := os.Stat(filename); err == nil {
 			return errors.NewBlobAlreadyExistsError("[File][allowOverwrite] [%s] already exists in store", filename)
 		}
@@ -396,6 +419,11 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 }
 
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	filename, err := s.constructFilename(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
@@ -494,6 +522,11 @@ func (s *File) createWriterToBuffer(buf *bytes.Buffer, opts *options.Options) (i
 }
 
 func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	if hasher == nil {
 		return nil
 	}
@@ -522,6 +555,11 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 }
 
 func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	filename, err := s.constructFilename(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
@@ -588,6 +626,11 @@ func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.
 }
 
 func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	merged := options.MergeOptions(s.options, opts)
 
 	if merged.SubDirectory != "" {
@@ -637,14 +680,11 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 	return fileName, nil
 }
 
-// create a global limiting semaphore for setTTL file operations
-var setTTLFileSemaphore = make(chan struct{}, 256)
-
 func (s *File) SetDAH(_ context.Context, key []byte, newDAH uint32, opts ...options.FileOption) error {
 	// limit the number of concurrent file operations
-	setTTLFileSemaphore <- struct{}{}
+	fileSemaphore <- struct{}{}
 	defer func() {
-		<-setTTLFileSemaphore
+		<-fileSemaphore
 	}()
 
 	merged := options.MergeOptions(s.options, opts)
@@ -732,6 +772,11 @@ func (s *File) GetDAH(ctx context.Context, key []byte, opts ...options.FileOptio
 }
 
 func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, hash)
@@ -794,6 +839,11 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileO
 }
 
 func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
@@ -862,6 +912,11 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) (
 }
 
 func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
@@ -897,6 +952,11 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 }
 
 func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
@@ -966,6 +1026,11 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption
 }
 
 func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	merged := options.MergeOptions(s.options, opts)
@@ -985,6 +1050,11 @@ func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) e
 }
 
 func findFilesByExtension(root, ext string) ([]string, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	var a []string
 
 	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
@@ -1006,6 +1076,11 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 }
 
 func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	merged := options.MergeOptions(s.options, opts)
 
 	if merged.Footer == nil {
@@ -1061,6 +1136,11 @@ func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...optio
 }
 
 func (s *File) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	fileSemaphore <- struct{}{}
+	defer func() {
+		<-fileSemaphore
+	}()
+
 	merged := options.MergeOptions(s.options, opts)
 
 	if merged.Header == nil {
