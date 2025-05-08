@@ -58,7 +58,7 @@ teranode-cli
 
 current
 
-compose/grafana/grafana.db/grafana.db
+compose/grafana/grafana.db/
 
 vendor
 
