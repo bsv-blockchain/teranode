@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -20,14 +21,19 @@ func (s *SQL) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash
 			WHERE hash = $1
 		`
 	} else {
-		q = `
-			UPDATE blocks
-			SET processed_at = CASE 
-				WHEN typeof(processed_at) = 'text' THEN datetime('now')
-				ELSE CURRENT_TIMESTAMP
-			END
-			WHERE hash = $1
+		if s.engine == util.Postgres {
+			q = `
+				UPDATE blocks
+				SET processed_at = CURRENT_TIMESTAMP
+				WHERE hash = $1
 		`
+		} else {
+			q = `
+				UPDATE blocks
+				SET processed_at = datetime('now')
+				WHERE hash = $1
+			`
+		}
 	}
 
 	res, err := s.db.ExecContext(ctx, q, blockHash.CloneBytes())
