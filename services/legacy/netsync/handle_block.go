@@ -381,7 +381,7 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil
 		return err
 	}
 
-	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", blockHeightUint32, block.Hash()); err != nil {
+	if err := sm.subtreeValidation.CheckSubtreeFromBlock(ctx, *subtree.RootHash(), "legacy", blockHeightUint32, block.Hash(), &block.MsgBlock().Header.PrevBlock); err != nil {
 		return errors.NewSubtreeError("failed to check subtree", err)
 	}
 

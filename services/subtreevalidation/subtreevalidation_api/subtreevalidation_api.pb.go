@@ -133,9 +133,11 @@ type CheckSubtreeFromBlockRequest struct {
 	// block_height indicates the blockchain height where the subtree is located
 	BlockHeight uint32 `protobuf:"varint,3,opt,name=block_height,json=blockHeight,proto3" json:"block_height,omitempty"`
 	// block_hash uniquely identifies the block containing the subtree
-	BlockHash     []byte `protobuf:"bytes,4,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	BlockHash []byte `protobuf:"bytes,4,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
+	// previous_block_hash identifies the block preceding the current block
+	PreviousBlockHash []byte `protobuf:"bytes,5,opt,name=previous_block_hash,json=previousBlockHash,proto3" json:"previous_block_hash,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CheckSubtreeFromBlockRequest) Reset() {
@@ -196,6 +198,13 @@ func (x *CheckSubtreeFromBlockRequest) GetBlockHash() []byte {
 	return nil
 }
 
+func (x *CheckSubtreeFromBlockRequest) GetPreviousBlockHash() []byte {
+	if x != nil {
+		return x.PreviousBlockHash
+	}
+	return nil
+}
+
 // CheckSubtreeFromBlockResponse contains the validation result for a subtree check.
 type CheckSubtreeFromBlockResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -251,13 +260,14 @@ const file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_ap
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x8f\x01\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xbf\x01\n" +
 	"\x1cCheckSubtreeFromBlockRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12!\n" +
 	"\fblock_height\x18\x03 \x01(\rR\vblockHeight\x12\x1d\n" +
 	"\n" +
-	"block_hash\x18\x04 \x01(\fR\tblockHash\"9\n" +
+	"block_hash\x18\x04 \x01(\fR\tblockHash\x12.\n" +
+	"\x13previous_block_hash\x18\x05 \x01(\fR\x11previousBlockHash\"9\n" +
 	"\x1dCheckSubtreeFromBlockResponse\x12\x18\n" +
 	"\ablessed\x18\x01 \x01(\bR\ablessed2\xf9\x01\n" +
 	"\x14SubtreeValidationAPI\x12Z\n" +

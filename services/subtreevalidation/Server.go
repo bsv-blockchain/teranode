@@ -291,19 +291,33 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		deferFn(err)
 	}()
 
-	var hash *chainhash.Hash
+	if request.BaseUrl == "" {
+		return false, errors.NewInvalidArgumentError("[CheckSubtree] Missing base URL in request")
+	}
+
+	var (
+		hash              *chainhash.Hash
+		blockHash         *chainhash.Hash
+		previousBlockHash *chainhash.Hash
+	)
 
 	hash, err = chainhash.NewHash(request.Hash)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse subtree hash from request", err)
 	}
 
-	if request.BaseUrl == "" {
-		return false, errors.NewInvalidArgumentError("[CheckSubtree] Missing base URL in request")
+	blockHash, err = chainhash.NewHash(request.BlockHash)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse block hash from request", err)
 	}
 
-	u.logger.Debugf("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
-	defer u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	previousBlockHash, err = chainhash.NewHash(request.PreviousBlockHash)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse previous block hash from request", err)
+	}
+
+	u.logger.Debugf("[CheckSubtree] Received priority subtree message for %s:%s from %s", blockHash.String(), hash.String(), request.BaseUrl)
+	defer u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s:%s from %s", blockHash.String(), hash.String(), request.BaseUrl)
 
 	u.prioritySubtreeCheckActiveMapLock.Lock()
 	u.prioritySubtreeCheckActiveMap[hash.String()] = true
@@ -330,6 +344,18 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 	if !gotLock {
 		return false, errors.NewError("[CheckSubtree] failed to get lock for subtree %s due to timeout", hash.String())
+	}
+
+	// get the previous block headers on this chain and pass into the validation
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, previousBlockHash, uint64(u.settings.UtxoStore.BlockHeightRetention))
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
+	}
+
+	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
+
+	for _, blockID := range blockHeaderIDs {
+		blockIds[blockID] = true
 	}
 
 	u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
@@ -372,6 +398,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			ctx,
 			v,
 			request.BlockHeight,
+			blockIds,
 			validator.WithSkipPolicyChecks(true),
 			validator.WithAddTXToBlockAssembly(false),
 			validator.WithCreateConflicting(true),
@@ -398,6 +425,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		ctx,
 		v,
 		request.BlockHeight,
+		blockIds,
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithDisableConsensus(false),

@@ -45,6 +45,8 @@ message CheckSubtreeFromBlockRequest {
   uint32 block_height = 3;
   // block_hash uniquely identifies the block containing the subtree
   bytes block_hash = 4;
+  // previous_block_hash identifies the block preceding the current block
+  bytes previous_block_hash = 5;
 }
 
 // CheckSubtreeFromBlockResponse contains the validation result for a subtree check.

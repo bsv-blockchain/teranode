@@ -36,6 +36,7 @@ import (
 )
 
 var (
+	parentTx1, _ = bt.NewTxFromString("010000000000000000ef0158ef6d539bf88c850103fa127a92775af48dba580c36bbde4dc6d8b9da83256d050000006a47304402200ca69c5672d0e0471cd4ff1f9993f16103fc29b98f71e1a9760c828b22cae61c0220705e14aa6f3149130c3a6aa8387c51e4c80c6ae52297b2dabfd68423d717be4541210286dbe9cd647f83a4a6b29d2a2d3227a897a4904dc31769502cb013cbe5044dddffffffff8c2f6002000000001976a914308254c746057d189221c36418ba93337de33bc988ac03002d3101000000001976a91498cde576de501ceb5bb1962c6e49a4d1af17730788ac80969800000000001976a914eb7772212c334c0bdccee75c0369aa675fc21d2088ac706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac00000000")
 	// tx, _  = hex.DecodeString("0100000001ae73759b118b9c8d54a13ad4ccd5de662bbaa2175ee7f4b413f402affb831ed3000000006b483045022100a6af846212b0c611056a9a30c22f0eed3adc29f8c688e804509b113f322459220220708fb79c66d235d937e8348ac022b3cfa6b64fec8d35a749ea0b2293ad95da014121039f271b930111fd7c818100ee1603d5c5094c68b3d15ad0a58f712e7d766225edffffffff0550c30000000000001976a91448bea2d45f4f6175e47ccb717e4f5d19d8f68f3b88ac204e0000000000001976a91442859b9bada6461d08a0aab8a18105ef30457a8b88ac10270000000000001976a914d0e2122bdeed7b2235f670cdc832f518fb63db9f88ac0c040000000000001976a914d56f84ae869e4a743e929e31218b198f02ce67fe88ac8d0c0100000000001976a91444a8e7fb1a426e4c60597d9d3f534c677d4f858388ac00000000")
 	tx1, _ = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 	tx2    = newTx(2)
@@ -102,7 +103,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 		require.NoError(t, err)
 	})
 }
@@ -173,7 +174,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the ValidateSubtreeInternal method
-	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight)
+	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
 	require.NoError(t, err)
 }
 
@@ -433,7 +434,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100, nil)
 		require.NoError(t, err)
 
 		// Verify initial cache state
@@ -457,7 +458,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100)
+		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100, nil)
 		require.NoError(t, err)
 
 		// Verify final cache state
@@ -473,5 +474,67 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		require.NoError(t, err, "tx5 should now be in cache")
 		_, err = txMetaStore.Get(context.Background(), hash6)
 		require.NoError(t, err, "tx6 should now be in cache")
+	})
+}
+
+func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
+	InitPrometheusMetrics()
+
+	t.Run("checkCounterConflictingOnCurrentChain - smoke test", func(t *testing.T) {
+		// Create a mock Server struct
+		s := &Server{
+			utxoStore: memory.New(ulogger.TestLogger{}),
+		}
+
+		_, err := s.utxoStore.Create(t.Context(), parentTx1, 123)
+		require.NoError(t, err)
+
+		_, err = s.utxoStore.Create(t.Context(), tx1, 123)
+		require.NoError(t, err)
+
+		// Call the checkCounterConflictingOnCurrentChain method
+		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{})
+		require.NoError(t, err)
+	})
+
+	t.Run("checkCounterConflictingOnCurrentChain - counter conflicting mined", func(t *testing.T) {
+		// Create a mock Server struct
+		s := &Server{
+			utxoStore: memory.New(ulogger.TestLogger{}),
+		}
+
+		_, err := s.utxoStore.Create(t.Context(), parentTx1, 122)
+		require.NoError(t, err)
+
+		tx1DoubleSpend := tx1.Clone()
+		tx1DoubleSpend.Version = 2
+
+		// spend the parent tx with tx2
+		_, err = s.utxoStore.Spend(t.Context(), tx1DoubleSpend)
+		require.NoError(t, err)
+
+		_, err = s.utxoStore.Create(t.Context(), tx1DoubleSpend, 122)
+		require.NoError(t, err)
+
+		_, err = s.utxoStore.Create(t.Context(), tx1, 123, utxo.WithConflicting(true))
+		require.NoError(t, err)
+
+		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
+		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{})
+		require.NoError(t, err)
+
+		// set the tx1DoubleSpend to mined
+		err = s.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tx1DoubleSpend.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:     122,
+			BlockHeight: 122,
+			SubtreeIdx:  0,
+		})
+		require.NoError(t, err)
+
+		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
+		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{
+			122: true,
+		})
+		require.Error(t, err, "should be an error since tx1DoubleSpend has been mined")
 	})
 }

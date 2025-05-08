@@ -42,6 +42,7 @@ import (
 	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -109,6 +110,48 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 }
 
 func TestValidate_ValidTransaction(t *testing.T) {
+	t.Run("Mined transactions return blockIDs", func(t *testing.T) {
+		tracing.SetGlobalMockTracer()
+
+		// delete spends set to false
+		utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+		txMeta, err := utxoStore.Create(t.Context(), tests.ParentTx, 122)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 0)
+
+		txMeta, err = utxoStore.Create(t.Context(), tests.Tx, 123)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 0)
+
+		tSettings := test.CreateBaseTestSettings()
+
+		v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
+		require.NoError(t, err)
+
+		// validate the transaction and make sure we are not getting blockIDs
+		txMeta, err = v.Validate(t.Context(), tests.Tx, 123)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 0)
+
+		// set the transaction as mined
+		err = utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tests.Tx.TxIDChainHash()}, utxostore.MinedBlockInfo{
+			BlockID:     125,
+			BlockHeight: 123,
+			SubtreeIdx:  0,
+		})
+		require.NoError(t, err)
+
+		// validate the transaction and make sure we are getting blockIDs
+		txMeta, err = v.Validate(t.Context(), tests.Tx, 123)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 1)
+		assert.Equal(t, uint32(125), txMeta.BlockIDs[0])
+	})
 }
 
 func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {

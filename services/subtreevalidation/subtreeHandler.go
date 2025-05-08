@@ -131,7 +131,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		}
 
 		// Call the validateSubtreeInternal method
-		if err = u.ValidateSubtreeInternal(ctx, v, 0); err != nil {
+		if err = u.ValidateSubtreeInternal(ctx, v, 0, nil); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 			// Here we return the error directly without further wrapping, as ValidateSubtreeInternal categorizes the error
 			return err

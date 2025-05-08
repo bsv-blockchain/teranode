@@ -107,7 +107,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		TxHashes:      nil,
 		AllowFailFast: false,
 	}
-	err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight)
+	err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))

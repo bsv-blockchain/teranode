@@ -215,7 +215,8 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata if validation succeeds
 //   - error: Any error encountered during validation
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32,
+	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
@@ -247,7 +248,79 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chain
 		return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] tx meta is nil", subtreeHash.String(), tx.TxID())
 	}
 
+	// check whether this transaction was already mined on our chain by comparing the block ids
+	if len(txMeta.BlockIDs) > 0 && len(blockIds) > 0 {
+		for _, blockID := range txMeta.BlockIDs {
+			if blockIds[blockID] {
+				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is already mined on our chain", subtreeHash.String(), tx.TxID())
+			}
+		}
+	}
+
+	if txMeta.Conflicting {
+		if err = u.checkCounterConflictingOnCurrentChain(ctx, *tx.TxIDChainHash(), blockIds); err != nil {
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to check counter conflicting tx on current chain", subtreeHash.String(), tx.TxID(), err)
+		}
+	}
+
 	return txMeta, nil
+}
+
+// checkCounterConflictingOnCurrentChain checks if the counter-conflicting transactions of a given transaction have
+// already been mined on the current chain. If they have, it returns an error indicating that the transaction is invalid.
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - subtreeHash: Hash of the subtree containing the transaction
+//   - txHash: Hash of the transaction to check
+//   - blockIds: Map of block IDs to check if transactions in the subtree are already mined
+//
+// Returns:
+//   - error: Any error encountered during the check
+//   - nil: If the counter-conflicting transactions have not been mined on the current chain
+func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHash chainhash.Hash, blockIds map[uint32]bool) error {
+	// the tx is conflicting, check whether the counter-conflicting transactions have already been mined on our chain
+	// first get the parent transactions and check if they were spent
+	counterConflictingTxHashes, err := utxo.GetCounterConflictingTxHashes(ctx, u.utxoStore, txHash)
+	if err != nil {
+		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx hashes", txHash.String(), err)
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(128)
+
+	counterConflictingTxMetas := make([]*meta.Data, len(counterConflictingTxHashes))
+
+	for idx, counterConflictingTxHash := range counterConflictingTxHashes {
+		g.Go(func() error {
+			counterConflictingTxMeta, err := u.utxoStore.GetMeta(gCtx, &counterConflictingTxHash)
+			if err != nil {
+				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
+			}
+
+			if counterConflictingTxMeta == nil {
+				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx meta is nil", txHash.String())
+			}
+
+			counterConflictingTxMetas[idx] = counterConflictingTxMeta
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
+	}
+
+	// check whether the counter-conflicting transactions have already been mined on our chain
+	for _, counterConflictingTxMeta := range counterConflictingTxMetas {
+		for _, blockID := range counterConflictingTxMeta.BlockIDs {
+			if blockIds[blockID] {
+				return errors.NewTxInvalidError("[checkCounterConflictingOnCurrentChain][%s] transaction is already mined on our chain", txHash.String())
+			}
+		}
+	}
+
+	return nil
 }
 
 // ValidateSubtree contains the parameters needed for validating a subtree.
@@ -264,7 +337,18 @@ type ValidateSubtree struct {
 
 // ValidateSubtreeInternal performs the actual validation of a subtree.
 // It handles transaction validation, metadata management, and subtree storage.
-func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) (err error) {
+//
+// Parameters:
+// - ctx: The context for managing request-scoped values and deadlines.
+// - v: The ValidateSubtree struct containing subtree details.
+// - blockHeight: The height of the block containing the subtree.
+// - blockIds: A map of block IDs to check if transactions in the subtree are already mined.
+// - validationOptions: Additional options for transaction validation.
+//
+// Returns:
+// - err: An error if validation fails.
+func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
+	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	startTotal := time.Now()
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
@@ -431,6 +515,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 				v.BaseURL,
 				txMetaSlice,
 				blockHeight,
+				blockIds,
 				validationOptions...,
 			)
 			if err != nil {
@@ -627,7 +712,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 // processMissingTransactions handles the retrieval and validation of missing transactions
 // in a subtree. It supports both file-based and network-based transaction retrieval.
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
-	baseURL string, txMetaSlice []*meta.Data, blockHeight uint32, validationOptions ...validator.Option) (err error) {
+	baseURL string, txMetaSlice []*meta.Data, blockHeight uint32, blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions",
 		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
 	)
@@ -700,7 +785,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, processedValidatorOptions)
+				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
 				if err != nil {
 					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 				}

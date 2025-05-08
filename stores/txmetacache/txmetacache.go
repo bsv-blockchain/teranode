@@ -199,9 +199,11 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
-	// add to cache
-	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	// add to cache, but only if the blockIDs have not been set
+	if len(txMeta.BlockIDs) == 0 {
+		txMeta.Tx = nil
+		_ = t.SetCache(hash, txMeta)
+	}
 
 	return txMeta, nil
 }
@@ -232,9 +234,11 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...f
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
-	// add to cache
-	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	// add to cache, but only if the blockIDs have not been set
+	if len(txMeta.BlockIDs) == 0 {
+		txMeta.Tx = nil
+		_ = t.SetCache(hash, txMeta)
+	}
 
 	return txMeta, nil
 }
@@ -286,9 +290,11 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 		txHash = tx.TxIDChainHash()
 	}
 
-	// add to cache
-	txMeta.Tx = nil
-	_ = t.SetCache(txHash, txMeta)
+	// add to cache, but only if the blockIDs have not been set
+	if len(txMeta.BlockIDs) == 0 {
+		txMeta.Tx = nil
+		_ = t.SetCache(txHash, txMeta)
+	}
 
 	return txMeta, nil
 }
@@ -354,8 +360,11 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 		txMeta.BlockIDs = append(txMeta.BlockIDs, minedBlockInfo.BlockID)
 	}
 
-	txMeta.Tx = nil
-	_ = t.SetCache(hash, txMeta)
+	// if the blockID is not set, then we need to set it
+	if len(txMeta.BlockIDs) == 0 {
+		txMeta.Tx = nil
+		_ = t.SetCache(hash, txMeta)
+	}
 
 	return nil
 }
