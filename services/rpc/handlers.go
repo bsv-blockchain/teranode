@@ -196,15 +196,19 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 
 	// Get next block hash unless there are none.
 	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, b.Height+1)
-	if err != nil {
+	if err != nil && !errors.Is(err, errors.ErrBlockNotFound) {
 		return nil, err
 	}
-
 	var (
-		blockReply interface{}
+		blockReply    interface{}
+		nextBlockHash string
 		// 	params      = s.cfg.ChainParams
 		// 	blockHeader = &blk.MsgBlock().Header
 	)
+
+	if nextBlock != nil {
+		nextBlockHash = nextBlock.Hash().String()
+	}
 
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
@@ -231,7 +235,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		Size:          blkBytesInt32,
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
-		NextHash:      nextBlock.Hash().String(),
+		NextHash:      nextBlockHash,
 	}
 
 	// TODO: we can't add the txs to the block as there could be too many.

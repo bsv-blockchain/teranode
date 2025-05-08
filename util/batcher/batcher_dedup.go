@@ -82,9 +82,9 @@ func (m *TimePartitionedMap[K, V]) Get(key K) (V, bool) {
 
 // Set adds or updates a key-value pair in the map
 func (m *TimePartitionedMap[K, V]) Set(key K, value V) bool {
-	_, ok := m.Get(key)
-	if ok {
-		// already set somewhere, stop processing
+	// Global deduplication check: if key already exists in any bucket, do not proceed.
+	// This check iterates over all buckets and can be resource-intensive.
+	if _, exists := m.Get(key); exists {
 		return false
 	}
 
@@ -95,14 +95,14 @@ func (m *TimePartitionedMap[K, V]) Set(key K, value V) bool {
 
 	bucketID := m.currentBucketID.Load()
 
-	m.bucketsMu.Lock()
+	m.bucketsMu.Lock() // Lock before accessing or modifying m.buckets structure
 
-	// Initialize bucket if it doesn't exist
+	// Initialize bucket if it doesn't exist for the current bucketID
 	if bucket, exists = m.buckets.Get(bucketID); !exists {
 		bucket = util.NewSyncedMap[K, V]()
 		m.buckets.Set(bucketID, bucket)
 
-		// Update newest/oldest bucket trackers
+		// Update newest/oldest bucket trackers since a new bucket was added
 		if m.newestBucket.Load() < bucketID {
 			m.newestBucket.Store(bucketID)
 		}
@@ -112,11 +112,14 @@ func (m *TimePartitionedMap[K, V]) Set(key K, value V) bool {
 		}
 	}
 
-	m.bucketsMu.Unlock()
-
-	// Add to current bucket
-	m.itemCount.Add(1)
+	// Add item to the determined bucket and update total item count.
+	// This is now done under the m.bucketsMu lock to prevent a race condition
+	// where the bucket might be removed by cleanupOldBuckets between being
+	// retrieved/created and the item being added to it.
 	bucket.Set(key, value)
+	m.itemCount.Add(1)
+
+	m.bucketsMu.Unlock() // Unlock after all modifications to m.buckets and the specific bucket's content.
 
 	return true
 }
