@@ -27,6 +27,7 @@ local ERR_UTXO_NOT_FOUND = "ERROR:UTXO not found for offset "
 local ERR_UTXO_INVALID_SIZE = "ERROR:UTXO has an invalid size"
 local ERR_UTXO_HASH_MISMATCH = "ERROR:Output utxohash mismatch"
 local ERR_UTXO_NOT_FROZEN = "ERROR:UTXO is not frozen"
+local ERR_UTXO_IS_FROZEN = "ERROR:UTXO is frozen"
 local ERR_SPENT_EXTRA_RECS_NEGATIVE = "ERROR: spentExtraRecs cannot be negative"
 local ERR_SPENT_EXTRA_RECS_EXCEED = "ERROR: spentExtraRecs cannot be greater than totalExtraRecs"
 local ERR_TOTAL_EXTRA_RECS = "ERROR: totalExtraRecs not found in record. Possible non-master record?"
@@ -124,12 +125,16 @@ end
 
 -- Function to check if a spending transaction ID indicates a frozen UTXO
 local function isFrozen(spendingTxID)
+    if spendingTxID == nil then
+        return false
+    end
+
     for i = 1, SPENDING_TX_SIZE do
         if spendingTxID[i] ~= FROZEN_BYTE then
             return false
         end
     end
-
+    
     return true
 end
 
@@ -275,8 +280,12 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
 
     local signal = ""
 
-    -- If the utxo has been spent, remove the spendingTxID
+    -- Only unspend if the UTXO is spent and not frozen
     if bytes.size(utxo) == FULL_UTXO_SIZE then
+        if isFrozen(existingSpendingTxID) then
+            return ERR_UTXO_IS_FROZEN
+        end
+        
         local newUtxo = createUTXOWithSpendingTxID(utxoHash, nil)
         
         -- Update the record
@@ -407,16 +416,12 @@ function unfreeze(rec, offset, utxoHash)
 
     local signal = ""
 
-    if not bytes.size(utxo) == 64 then
+    if bytes.size(utxo) ~= 64 then
         return ERR_UTXO_INVALID_SIZE
     end
 
-    -- If the utxo has been spent, trigger alert
-    if not existingSpendingTxID then
-        return ERR_UTXO_NOT_FROZEN
-    end
-
-    if not isFrozen(existingSpendingTxID) then
+    -- Proper validation - check if the UTXO exists and is actually frozen
+    if not existingSpendingTxID or not isFrozen(existingSpendingTxID) then
         return ERR_UTXO_NOT_FROZEN
     end
 
@@ -457,12 +462,12 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
 
     local signal = ""
 
-    if not bytes.size(utxo) == 64 then
+    if bytes.size(utxo) ~= 64 then
         return ERR_UTXO_INVALID_SIZE
     end
 
     -- Check if UTXO is frozen (required for reassignment)
-    if not existingSpendingTxID then
+    if not existingSpendingTxID or not isFrozen(existingSpendingTxID) then
         return ERR_UTXO_NOT_FROZEN
     end
 
