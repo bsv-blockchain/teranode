@@ -10,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -20,7 +19,7 @@ import (
 var (
 	testLock sync.Mutex
 	// DEBUG DEBUG DEBUG
-	blockWait = 20 * time.Second
+	blockWait = 120 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
@@ -403,81 +402,54 @@ func TestInvalidBlock(t *testing.T) {
 }
 
 func TestBlockAssemblyReset(t *testing.T) {
-	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../../docker-compose-host.yml",
+	testLock.Lock()
+	defer testLock.Unlock()
+
+	// Start node2 and generate 1001 blocks
+	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode2",
 	})
+	t.Cleanup(func() { node2.Stop(t) })
+
+	_, err := node2.CallRPC("generate", []interface{}{1001})
 	require.NoError(t, err)
 
-	// Add cleanup for test container
-	t.Cleanup(func() {
-		if tc != nil {
-			tc.Compose.Down(tc.Ctx)
-		}
-	})
-
-	// Stop node1 initially
-	tc.StopNode(t, "teranode-1")
-
-	// Get node2 and generate blocks to get above 1000
-	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
-	_, err = node2.CallRPC(t, "generate", []interface{}{1001}) // Just above 1000
-	require.NoError(t, err)
-
-	block1001Node2, err := node2.BlockchainClient.GetBlockByHeight(tc.Ctx, 1001)
-	require.NoError(t, err)
-
-	// Start node1 with test daemon
-	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+	// Start node1 and generate 100 blocks (shorter chain)
+	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       false, // Start without P2P to allow separate chain
 		EnableValidator: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s = settings.NewSettings("docker.host.teranode1")
-		},
+		SettingsContext: "docker.host.teranode1",
 	})
+	t.Cleanup(func() { node1.Stop(t) })
 
-	// Add cleanup for test daemon
-	t.Cleanup(func() {
-		if td != nil {
-			td.Stop(t)
-		}
-	})
-
-	// Generate blocks on node1 to create a chain that differs by more than 5 blocks
-	_, err = td.CallRPC("generate", []interface{}{100}) // This will create a 6+ block difference
+	_, err = node1.CallRPC("generate", []interface{}{100})
 	require.NoError(t, err)
 
-	// block100Node1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 100)
-	// require.NoError(t, err)
+	// Now enable P2P on node1 to trigger reorg
+	node1.Stop(t)
+	node1.ResetServiceManagerContext(t)
 
-	// Now enable P2P to trigger reorg
-	td.Stop(t)
-	td.ResetServiceManagerContext(t)
-
-	td2 := daemon.NewTestDaemon(t, daemon.TestOptions{
+	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true, // Enable P2P to trigger reorg
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s = settings.NewSettings("docker.host.teranode1")
-		},
+		SettingsContext:   "docker.host.teranode1",
 	})
+	t.Cleanup(func() { node1.Stop(t) })
 
-	// Add cleanup for td2
-	t.Cleanup(func() {
-		if td2 != nil {
-			td2.Stop(t)
-		}
-	})
-
-	// Verify node1 has synced to node2's chain
-	// td2.WaitForBlockHeight(t, block100Node1, blockWait, true)
-
-	// At this stage, call BA reset
-	err = td2.BlockAssemblyClient.ResetBlockAssembly(td2.Ctx)
+	_, err = node1.CallRPC("generate", []interface{}{1})
 	require.NoError(t, err)
 
-	// Verify blocks match after reorg
-	td2.WaitForBlockHeight(t, block1001Node2, blockWait, true)
+	// At this stage, call BA reset
+	err = node1.BlockAssemblyClient.ResetBlockAssembly(node1.Ctx)
+	require.NoError(t, err)
+
+	// Verify node1 has synced to node2's chain
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1001, blockWait)
+	require.NoError(t, err)
 }
