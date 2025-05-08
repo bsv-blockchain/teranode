@@ -398,7 +398,6 @@ type LegacySettings struct {
 	GRPCAddress                      string
 	AllowBlockPriority               bool
 	WriteMsgBlocksToDisk             bool // Write blocks to disk when syncing with other nodes, this reduces the memory footprint
-	LimitedBlockValidation           bool
 	GRPCListenAddress                string
 	SavePeers                        bool
 	AllowSyncCandidateFromLocalPeers bool

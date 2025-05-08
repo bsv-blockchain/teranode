@@ -1001,7 +1001,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		123123,
-		0, 0, tSettings)
+		101, 0, tSettings)
 	require.NoError(t, err)
 
 	// Setup blockchain store and client
@@ -1232,6 +1232,13 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	tSettings.BlockValidation.OptimisticMining = false
 	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+
+	err = txMetaStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tx1.TxIDChainHash()}, utxoStore.MinedBlockInfo{
+		BlockID:     0,
+		BlockHeight: 1,
+		SubtreeIdx:  0,
+	})
+	require.NoError(t, err)
 
 	// Test block validation - it should request the missing transaction
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())

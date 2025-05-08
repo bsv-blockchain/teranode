@@ -470,16 +470,9 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		legacyLimitedBlockValidation := b.settings.Legacy.LimitedBlockValidation
-		if b.settings.Legacy.LimitedBlockValidation {
-			logger.Warnf("WARNING: legacyLimitedBlockValidation env: %v", legacyLimitedBlockValidation)
-		}
-
-		if !legacyLimitedBlockValidation {
-			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDsMap)
-			if err != nil {
-				return false, err
-			}
+		err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDsMap)
+		if err != nil {
+			return false, err
 		}
 
 		if err = b.checkConflictingTransactions(ctx, logger, txMetaStore); err != nil {
