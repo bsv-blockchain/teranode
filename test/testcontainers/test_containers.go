@@ -233,6 +233,14 @@ func (tc *TestContainer) StopNode(t *testing.T, nodeName string) {
 	require.NoError(t, node.Stop(tc.Ctx, nil))
 }
 
+// start a node
+func (tc *TestContainer) StartNode(t *testing.T, nodeName string) {
+	node, err := tc.Compose.ServiceContainer(tc.Ctx, nodeName)
+	require.NoError(t, err)
+
+	require.NoError(t, node.Start(tc.Ctx))
+}
+
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
 	timeoutElapsed := time.After(timeout)

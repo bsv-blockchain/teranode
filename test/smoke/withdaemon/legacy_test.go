@@ -190,18 +190,24 @@ func TestSendTxToLegacy(t *testing.T) {
 
 	node1 := tc.GetNodeClients(t, "docker.host.teranode1.legacy")
 
-	_, err = node1.CallRPC(t, "generate", []any{101})
+	// generate 10 blocks on svnode
+	_, err = helper.CallRPC(legacySyncURL, "generatetoaddress", []any{100, "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6"})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	tc.StopNode(t, "teranode-1")
+	tc.StartNode(t, "teranode-1")
+	
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 100, 20*time.Second)
+	require.NoError(t, err)
 
+	tc.StopNode(t, "teranode-2")
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:        true,
 		EnableP2P:        true,
 		EnableValidator:  true,
 		EnableLegacy:     true,
-		SettingsContext:  "docker.host.teranode1.legacy",
+		SettingsContext:  "docker.host.teranode2",
 	})
 
 	t.Cleanup(func() {
@@ -226,7 +232,7 @@ func TestSendTxToLegacy(t *testing.T) {
 			err = json.Unmarshal([]byte(resp), &p2pResp)
 			require.NoError(t, err)
 
-			t.Logf("%s", resp)
+			t.Logf("peers: %s", resp)
 
 			if len(p2pResp.Result) > 0 {
 				t.Logf("Test succeeded, retrieved P2P peers information")
@@ -241,7 +247,7 @@ CONTINUE:
 	time.Sleep(10 * time.Second)
 
 	// verify blockheight on node1
-	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 100)
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
