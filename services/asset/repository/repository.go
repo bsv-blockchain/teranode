@@ -41,8 +41,9 @@ type Interface interface {
 	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
-	GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
-	GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
@@ -390,7 +391,7 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 // Returns:
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
@@ -403,7 +404,7 @@ func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Ha
 // Returns:
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 

@@ -231,6 +231,11 @@ func TestSubtreesHandler(t *testing.T) {
 			httpmock.Activate()
 			httpmock.RegisterResponder(
 				"GET",
+				`=~subtree_data.*`,
+				httpmock.NewBytesResponder(http.StatusNotFound, nil),
+			)
+			httpmock.RegisterResponder(
+				"GET",
 				`=~.*`,
 				httpmock.NewBytesResponder(tt.httpStatusCode, tt.httpResponse),
 			)

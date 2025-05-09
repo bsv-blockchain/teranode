@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"net/http"
 	"testing"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,7 +50,9 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	ctx.logger.Debugf("test")
 
 	block, subtree := newBlock(ctx, t, params)
-	require.NoError(t, ctx.repo.BlockchainClient.AddBlock(context.Background(), block, "test_peerID"))
+
+	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 	metaDatas := make([]*meta.Data, 0, len(params.txs))
 	for _, tx := range params.txs {
@@ -97,7 +99,9 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	ctx.logger.Debugf("test")
 
 	block, subtree := newBlock(ctx, t, params)
-	require.NoError(t, ctx.repo.BlockchainClient.AddBlock(context.Background(), block, "test_peerID"))
+
+	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
@@ -144,7 +148,9 @@ func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
 	ctx.logger.Debugf("test")
 
 	block, subtree := newBlock(ctx, t, params)
-	require.NoError(t, ctx.repo.BlockchainClient.AddBlock(context.Background(), block, "test_peerID"))
+
+	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
@@ -252,178 +258,6 @@ type blockInfo struct {
 	txs               []*bt.Tx
 }
 
-type mockStore struct {
-	block *model.Block
-}
-
-func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return http.StatusOK, "OK", nil
-}
-
-func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	// TODO implement me
-	panic("implement me")
-}
-
-func (s *mockStore) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	s.block = block
-	return nil
-}
-func (s *mockStore) SendNotification(ctx context.Context, notification *blockchain.Notification) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	return s.block, nil
-}
-func (s *mockStore) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	return s.block, nil
-}
-func (s *mockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (*model.Block, error) {
-	return s.block, nil
-}
-func (s *mockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	panic("not implemented")
-}
-func (s *mockStore) Subscribe(ctx context.Context, source string) (chan *blockchain.Notification, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetState(ctx context.Context, key string) ([]byte, error) {
-	panic("not implemented")
-}
-func (s *mockStore) SetState(ctx context.Context, key string, data []byte) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	// TODO implement me
-	panic("implement me")
-}
-
-func (s *mockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	// TODO implement me
-	panic("implement me")
-}
-
-func (s *mockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-
-func (s *mockStore) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
-	panic("not implemented")
-}
-
-func (s *mockStore) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-
-func (s *mockStore) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-	panic("not implemented")
-}
-
-func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
-	panic("not implemented")
-}
-
-func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
-	panic("implement me")
-}
-func (s *mockStore) Run(ctx context.Context, source string) error {
-	panic("not implemented")
-}
-func (s *mockStore) Idle(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *mockStore) CatchUpBlocks(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *mockStore) LegacySync(ctx context.Context) error {
-	panic("not implemented")
-}
-func (s *mockStore) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain.FSMStateType, error) {
-	panic("not implemented")
-}
-func (s *mockStore) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
-	panic("implement me")
-}
-func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain.FSMStateType) error {
-	panic("not implemented")
-}
-func (s *mockStore) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
-	panic("not implemented")
-}
-
-func (s *mockStore) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
-	panic("not implemented")
-}
-
 type testContext struct {
 	repo     *Repository
 	logger   ulogger.Logger
@@ -436,7 +270,7 @@ func setup(t *testing.T) *testContext {
 
 	utxoStore := memory_utxo.New(logger)
 	txStore := memory_blob.New()
-	blockchainClient := &mockStore{}
+	blockchainClient := &blockchain.Mock{}
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
 

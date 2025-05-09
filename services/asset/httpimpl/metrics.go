@@ -33,6 +33,9 @@ var (
 	// prometheusAssetHTTPGetBlockLegacy tracks legacy format block retrievals
 	prometheusAssetHTTPGetBlockLegacy *prometheus.CounterVec
 
+	// prometheusAssetHTTPGetSubtreeData tracks subtree data retrievals
+	prometheusAssetHTTPGetSubtreeData *prometheus.CounterVec
+
 	// prometheusAssetHTTPGetLastNBlocks tracks multiple block retrievals
 	prometheusAssetHTTPGetLastNBlocks *prometheus.CounterVec
 
@@ -175,6 +178,19 @@ func _initPrometheusMetrics() {
 			Subsystem: "asset",
 			Name:      "http_get_block_legacy",
 			Help:      "Number of Get legacy block ops",
+		},
+		[]string{
+			"function",  // function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHTTPGetSubtreeData = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_get_subtree_data",
+			Help:      "Number of Get subtree data ops",
 		},
 		[]string{
 			"function",  // function tracking the operation

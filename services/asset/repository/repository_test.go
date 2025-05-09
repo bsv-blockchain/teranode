@@ -100,7 +100,7 @@ func TestSubtreeReader(t *testing.T) {
 	txns, key, repo := setupSubtreeData(t)
 
 	// Get the subtree node bytes from the repository
-	reader, err := repo.GetSubtreeReader(context.Background(), key)
+	reader, err := repo.GetSubtreeTxIDsReader(context.Background(), key)
 	require.NoError(t, err)
 
 	b, err := util.DeserializeNodesFromReader(reader)
@@ -228,4 +228,4 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 // 	require.NotNil(t, tx)
 
 // 	require.Equal(t, size+size2, len(txBytes))
-//}
+// }

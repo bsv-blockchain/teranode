@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+var _ Interface = (*Mock)(nil)
+
 type Mock struct {
 	mock.Mock
 }
@@ -166,7 +168,7 @@ func (m *Mock) GetSubtreeBytes(_ context.Context, hash *chainhash.Hash) ([]byte,
 	return args.Get(0).([]byte), args.Error(1)
 }
 
-func (m *Mock) GetSubtreeReader(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+func (m *Mock) GetSubtreeTxIDsReader(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	args := m.Called(hash)
 
 	if args.Error(1) != nil {
@@ -176,7 +178,7 @@ func (m *Mock) GetSubtreeReader(_ context.Context, hash *chainhash.Hash) (io.Rea
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
-func (m *Mock) GetSubtreeDataReader(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+func (m *Mock) GetSubtreeDataReaderFromBlockPersister(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	args := m.Called(hash)
 
 	if args.Error(1) != nil {
@@ -184,6 +186,16 @@ func (m *Mock) GetSubtreeDataReader(_ context.Context, hash *chainhash.Hash) (io
 	}
 
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *Mock) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error) {
+	args := m.Called(ctx, subtreeHash)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*io.PipeReader), args.Error(1)
 }
 
 func (m *Mock) GetSubtree(_ context.Context, hash *chainhash.Hash) (*util.Subtree, error) {

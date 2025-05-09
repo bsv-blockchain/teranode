@@ -382,6 +382,7 @@ type SubtreeValidationSettings struct {
 	BatchMissingTransactions                  bool
 	SpendBatcherSize                          int
 	MissingTransactionsBatchSize              int
+	PercentageMissingGetFullData              float64
 }
 
 type LegacySettings struct {

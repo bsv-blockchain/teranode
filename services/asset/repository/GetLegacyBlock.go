@@ -152,7 +152,7 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 // Returns:
 //   - error: Any error encountered during writing
 func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *io.PipeWriter, _ *model.Block, subtreeHash *chainhash.Hash) error {
-	if subtreeReader, err := repo.GetSubtreeDataReader(ctx, subtreeHash); err != nil {
+	if subtreeReader, err := repo.GetSubtreeDataReaderFromBlockPersister(ctx, subtreeHash); err != nil {
 		return err
 	} else {
 		// skip the subtree tx size
@@ -173,7 +173,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *i
 //
 // Parameters:
 //   - ctx: Context for the operation
-//   - block: Block containing the transactions
+//   - block: Block containing the coinbase transaction (optional)
 //   - subtreeHash: Hash of the subtree containing transaction information
 //   - w: Writer to write the transactions to
 //
@@ -228,14 +228,16 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
-			// The coinbase tx is not in the txmeta store so we add in a special coinbase placeholder tx
-			if i != 0 {
-				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
-			}
+			if block != nil {
+				// The coinbase tx is not in the txmeta store, so we add in a special coinbase placeholder tx
+				if i != 0 {
+					return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
+				}
 
-			// Write coinbase tx
-			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
-				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx", err)
+				// Write coinbase tx
+				if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+					return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx", err)
+				}
 			}
 		} else {
 			// Write regular tx

@@ -62,7 +62,7 @@ func TestGetSubtree(t *testing.T) {
 
 		reader := bytes.NewReader(subtreeBytes)
 
-		mockRepo.On("GetSubtreeReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -113,7 +113,7 @@ func TestGetSubtree(t *testing.T) {
 
 		reader := bytes.NewReader(subtreeBytes)
 
-		mockRepo.On("GetSubtreeReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -163,7 +163,7 @@ func TestGetSubtree(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetSubtreeReader", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("subtree could not found"))
+		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(nil, errors.NewNotFoundError("subtree could not found"))
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -188,7 +188,7 @@ func TestGetSubtree(t *testing.T) {
 		// create a buffer to write the subtree to
 		reader := bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04})
 
-		mockRepo.On("GetSubtreeReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")
@@ -256,7 +256,7 @@ func TestGetSubtree(t *testing.T) {
 
 		reader := bytes.NewReader(subtreeBytes)
 
-		mockRepo.On("GetSubtreeReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
+		mockRepo.On("GetSubtreeTxIDsReader", mock.Anything, mock.Anything).Return(io.NopCloser(reader), nil)
 
 		// set echo context
 		echoContext.SetPath("/subtree/:hash")

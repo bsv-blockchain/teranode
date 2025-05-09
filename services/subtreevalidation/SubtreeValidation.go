@@ -108,7 +108,7 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 // Returns:
 //   - []*bt.Tx: Slice of retrieved transactions
 //   - error: Any error encountered during retrieval
-func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
+func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
 	log := false
 
 	utxoStoreURL := u.settings.UtxoStore.UtxoStore
@@ -215,7 +215,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata if validation succeeds
 //   - error: Any error encountered during validation
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32,
+func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
@@ -510,7 +510,8 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(
 				ctx5,
-				&v.SubtreeHash,
+				v.SubtreeHash,
+				subtree,
 				missingTxHashesCompacted,
 				v.BaseURL,
 				txMetaSlice,
@@ -711,8 +712,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 // processMissingTransactions handles the retrieval and validation of missing transactions
 // in a subtree. It supports both file-based and network-based transaction retrieval.
-func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
-	baseURL string, txMetaSlice []*meta.Data, blockHeight uint32, blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
+func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
+	missingTxHashes []utxo.UnresolvedMetaData, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32,
+	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions",
 		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
 	)
@@ -733,6 +735,36 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	)
 	if err != nil {
 		return errors.NewProcessingError("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String(), err)
+	}
+
+	if !subtreeDataExists {
+		subtreeSize := subtree.Size()
+		missingTxLength := len(missingTxHashes)
+		percentageMissing := 100 * float64(missingTxLength) / float64(subtreeSize)
+
+		if percentageMissing > u.settings.SubtreeValidation.PercentageMissingGetFullData {
+			// get the whole subtree from the other peer
+			url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
+
+			body, subtreeDataErr := util.DoHTTPRequestBodyReader(ctx, url)
+			if subtreeDataErr != nil {
+				u.logger.Errorf("[validateSubtree][%s] failed to get subtree data from %s: %v", subtreeHash.String(), url, subtreeDataErr)
+			} else {
+				if subtreeDataErr = u.subtreeStore.SetFromReader(ctx,
+					subtreeHash[:],
+					body,
+					options.WithFileExtension("subtreeData"),
+				); subtreeDataErr != nil {
+					u.logger.Errorf("[validateSubtree][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
+				} else {
+					u.logger.Infof("[validateSubtree][%s] stored subtree data from %s", subtreeHash.String(), url)
+
+					subtreeDataExists = true
+				}
+
+				_ = body.Close()
+			}
+		}
 	}
 
 	if subtreeDataExists {
@@ -916,7 +948,7 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 // Returns:
 //   - []missingTx: Slice of retrieved transactions with their indices
 //   - error: Any error encountered during retrieval
-func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData) (missingTxs []missingTx, err error) {
+func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData) (missingTxs []missingTx, err error) {
 	// load the subtree
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
 		subtreeHash[:],
@@ -979,7 +1011,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	return missingTxs, nil
 }
 
-func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
+func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
 	baseURL string) (missingTxs []missingTx, err error) {
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))

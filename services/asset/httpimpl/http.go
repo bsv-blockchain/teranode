@@ -195,6 +195,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
 	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
+	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData())
 
 	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
 

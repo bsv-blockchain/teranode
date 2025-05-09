@@ -139,7 +139,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		}
 
 		// get subtree reader is much more efficient than get subtree
-		subtreeReader, err := h.repository.GetSubtreeReader(ctx, hash)
+		subtreeReader, err := h.repository.GetSubtreeTxIDsReader(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
