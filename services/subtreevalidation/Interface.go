@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/mock"
 )
 
 // Interface defines the contract for subtree validation operations.
@@ -25,12 +26,16 @@ type Interface interface {
 var _ Interface = &MockSubtreeValidation{}
 
 // MockSubtreeValidation provides a mock implementation of the Interface for testing.
-type MockSubtreeValidation struct{}
+type MockSubtreeValidation struct {
+	mock.Mock
+}
 
 func (mv *MockSubtreeValidation) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return 0, "MockValidator", nil
+	args := mv.Called(ctx, checkLiveness)
+	return args.Int(0), args.String(1), args.Error(2)
 }
 
 func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash, previousBlockHash *chainhash.Hash) error {
-	return nil
+	args := mv.Called(ctx, hash, baseURL, blockHeight, blockHash, previousBlockHash)
+	return args.Error(0)
 }

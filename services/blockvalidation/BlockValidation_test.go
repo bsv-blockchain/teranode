@@ -47,6 +47,8 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1373,4 +1375,103 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_validateBlockSubtrees(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings()
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	subtree1, err := util.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree1.AddCoinbaseNode())
+	require.NoError(t, subtree1.AddNode(*hash1, 100, 0))
+
+	subtree2, err := util.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree2.AddNode(*hash2, 100, 0))
+	require.NoError(t, subtree2.AddNode(*hash3, 100, 0))
+
+	t.Run("smoke test", func(t *testing.T) {
+		txMetaStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+
+		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+
+		block := &model.Block{
+			Header:   blockHeader,
+			Subtrees: make([]*chainhash.Hash, 0),
+		}
+
+		err := blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
+		require.NoError(t, err)
+	})
+
+	t.Run("processing in parallel", func(t *testing.T) {
+		txMetaStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+
+		block := &model.Block{
+			Header:           blockHeader,
+			SizeInBytes:      123,
+			TransactionCount: 2,
+			CoinbaseTx:       tx1,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+				subtree2.RootHash(),
+			},
+		}
+
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
+	})
+
+	t.Run("fallback to series", func(t *testing.T) {
+		txMetaStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once().Run(func(args mock.Arguments) {
+			// subtree was validated properly, let's add it to our subtree store so it doesn't get checked again
+			subtreeBytes, err := subtree1.Serialize()
+			require.NoError(t, err)
+
+			require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		})
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.ErrSubtreeError).Once()
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+
+		block := &model.Block{
+			Header:           blockHeader,
+			SizeInBytes:      123,
+			TransactionCount: 2,
+			CoinbaseTx:       tx1,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+				subtree2.RootHash(),
+			},
+		}
+
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
+
+		// check that the subtree validation was called 3 times
+		assert.Len(t, subtreeValidationClient.Mock.Calls, 3)
+	})
 }

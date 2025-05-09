@@ -1345,6 +1345,8 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		}
 	}
 
+	foundError := atomic.Bool{}
+
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash // Create a new variable for each iteration to avoid data race
 
@@ -1355,19 +1357,21 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			default:
 				subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 				if err != nil {
+					// this error will stop all further processing
 					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
 				}
 
 				if !subtreeExists {
-					u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
+					u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] in parallel", block.Hash().String(), subtreeHash.String())
 
 					checkCtx, cancel := context.WithTimeout(gCtx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
 					defer cancel()
 
-					// note: the subtree validation client will handle retries
-					err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock)
-					if err != nil {
-						return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
+					// note: the subtree validation client will handle retries internally
+					if err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock); err != nil {
+						// mark an error as found, which will trigger a re-validation of all subtrees in order
+						foundError.Store(true)
+						u.logger.Errorf("[validateBlockSubtrees][%s] failed to check missing subtree [%s], will retry in series: %s", block.Hash().String(), subtreeHash.String(), err)
 					}
 				}
 
@@ -1376,13 +1380,38 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		})
 	}
 
-	err := g.Wait()
+	// an error is only thrown if the existence of a subtree cannot be checked, which implies a service error
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// if we did find an error, we must run through all the subtrees again, but this time in order
+	// returning an error if one of them is not validated properly
+	if foundError.Load() {
+		for _, subtreeHash := range block.Subtrees {
+			subtreeExists, err := u.GetSubtreeExists(ctx, subtreeHash)
+			if err != nil {
+				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
+			}
+
+			if !subtreeExists {
+				u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] in series", block.Hash().String(), subtreeHash.String())
+
+				checkCtx, cancel := context.WithTimeout(ctx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
+
+				// note: the subtree validation client will handle retries internally
+				if err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock); err != nil {
+					cancel()
+
+					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check missing subtree", block.Hash().String(), err)
+				}
+
+				cancel()
+			}
+		}
+	}
 
 	stat.NewStat("1. validateBlockSubtrees").AddTime(start1)
-
-	if err != nil {
-		return errors.NewError("[validateBlockSubtrees][%s] failed to validate subtrees", block.Hash().String(), err)
-	}
 
 	return nil
 }
