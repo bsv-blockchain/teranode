@@ -146,6 +146,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	tSettings.Kafka.SubtreesConfig.Scheme = memoryScheme
 	tSettings.Kafka.TxMetaConfig.Scheme = memoryScheme
 
+	if tSettings.Kafka.ValidatorTxsConfig != nil {
+		tSettings.Kafka.ValidatorTxsConfig.Scheme = memoryScheme
+	}
+
 	// Override with test settings...
 	tSettings.Asset.CentrifugeDisable = true
 	tSettings.UtxoStore.DBTimeout = 500 * time.Second

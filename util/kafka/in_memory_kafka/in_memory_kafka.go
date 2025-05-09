@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/IBM/sarama"
 )
@@ -15,6 +16,7 @@ var errSessionClosed = errors.New("in-memory session closed")
 // Message represents a simplified message structure.
 type Message struct {
 	Topic  string
+	Key    []byte // Added to store message key
 	Value  []byte
 	Offset int64
 }
@@ -40,7 +42,7 @@ func NewInMemoryBroker() *InMemoryBroker {
 }
 
 // Produce sends a message to the specified topic and notifies consumers.
-func (b *InMemoryBroker) Produce(ctx context.Context, topic string, value []byte) error {
+func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, value []byte) error {
 	b.mu.RLock()
 	t, ok := b.topics[topic]
 	b.mu.RUnlock()
@@ -64,6 +66,7 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, value []byte
 	// Create message with next offset
 	msg := &Message{
 		Topic:  topic,
+		Key:    key, // Store the key
 		Value:  value,
 		Offset: int64(len(t.messages)),
 	}
@@ -105,12 +108,22 @@ func NewInMemorySyncProducer(broker *InMemoryBroker) sarama.SyncProducer {
 
 // SendMessage sends a message to the broker, returning dummy partition and offset.
 func (p *InMemorySyncProducer) SendMessage(msg *sarama.ProducerMessage) (int32, int64, error) {
+	var key []byte
+
+	if msg.Key != nil {
+		var errKey error
+
+		key, errKey = msg.Key.Encode()
+		if errKey != nil {
+			return 0, 0, fmt.Errorf("failed to encode key: %w", errKey) // nolint:forbidigo
+		}
+	}
 	value, err := msg.Value.Encode()
 	if err != nil {
 		return 0, 0, err
 	}
 
-	err = p.broker.Produce(context.Background(), msg.Topic, value)
+	err = p.broker.Produce(context.Background(), msg.Topic, key, value) // Pass key
 	if err != nil {
 		return 0, 0, err
 	}
@@ -295,13 +308,15 @@ func (pc *InMemoryPartitionConsumer) Messages() <-chan *sarama.ConsumerMessage {
 			defer close(pc.messages)
 
 			for msg := range pc.consumer.ch {
-				cm := &sarama.ConsumerMessage{
-					Topic:  msg.Topic,
-					Value:  msg.Value,
-					Offset: msg.Offset,
+				consumerSaramaMsg := &sarama.ConsumerMessage{
+					Topic:     msg.Topic,
+					Key:       msg.Key, // Populate Key from internal message
+					Value:     msg.Value,
+					Offset:    msg.Offset,
+					Timestamp: time.Now(), // Mock timestamp
 				}
 				select {
-				case pc.messages <- cm:
+				case pc.messages <- consumerSaramaMsg:
 				default:
 				}
 			}
@@ -409,6 +424,18 @@ func (p *InMemoryAsyncProducer) messageHandler() {
 				return
 			}
 
+			var key []byte
+
+			if msg.Key != nil {
+				var errKey error
+
+				key, errKey = msg.Key.Encode()
+				if errKey != nil {
+					p.errors <- &sarama.ProducerError{Msg: msg, Err: fmt.Errorf("failed to encode key: %w", errKey)} // nolint:forbidigo
+					continue
+				}
+			}
+
 			value, err := msg.Value.Encode()
 			if err != nil {
 				p.errors <- &sarama.ProducerError{Msg: msg, Err: err}
@@ -416,7 +443,7 @@ func (p *InMemoryAsyncProducer) messageHandler() {
 			}
 
 			// Use context.Background() for the mock Produce call
-			err = p.broker.Produce(context.Background(), msg.Topic, value)
+			err = p.broker.Produce(context.Background(), msg.Topic, key, value) // Pass key
 			if err != nil {
 				p.errors <- &sarama.ProducerError{Msg: msg, Err: err}
 			} else {

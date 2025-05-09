@@ -821,7 +821,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				return err
 			}
 
-			consumerClient, err := getKafkaTxConsumerGroup(createLogger("kctx"), "validator"+"."+tSettings.ClientName)
+			consumerClient, err := getKafkaTxConsumerGroup(createLogger("kctx"), tSettings, "validator"+"."+tSettings.ClientName)
 			if err != nil {
 				return err
 			}

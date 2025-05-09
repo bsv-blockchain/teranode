@@ -126,24 +126,13 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, settings *settings.Set
 	return getKafkaConsumerGroup(logger, kafkaSubtreesConfig, consumerGroupID, true)
 }
 
-func getKafkaTxConsumerGroup(logger ulogger.Logger, consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
-	value, found := gocore.Config().Get("kafka_validatortxsConfig")
-	if !found || value == "" {
+func getKafkaTxConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
+	kafkaTxConfig := settings.Kafka.ValidatorTxsConfig
+	if kafkaTxConfig == nil {
 		return nil, nil
 	}
 
-	url, err := url.ParseRequestURI(value)
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs consumer - kafka_validatortxsConfig", err)
-	}
-
-	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, true)
-
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to create new Kafka listener for kafka_validatortxsConfig", err)
-	}
-
-	return consumer, nil
+	return getKafkaConsumerGroup(logger, kafkaTxConfig, consumerGroupID, true)
 }
 
 func getKafkaTxmetaConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {

@@ -59,7 +59,7 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 		"method": method,
 		"params": params,
 	})
-	logger.Infof("Request: %s", string(requestBody))
+	logger.Infof("Request: url: %s method: %s params: %s", url, method, string(requestBody))
 
 	if err != nil {
 		return "", errors.NewProcessingError("failed to marshal request body", err)
