@@ -201,22 +201,148 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 7. Configuration options (settings flags)
 
-The Block Persister service uses the following configuration settings:
+The Block Persister service configuration is organized into several categories that control different aspects of the service's behavior. All settings can be provided via environment variables or configuration files.
 
-| Setting Name                              | Type     | Description                                                       | Default                                  |
-|-------------------------------------------|----------|-------------------------------------------------------------------|------------------------------------------|
-| `blockpersister_stateFile`                | string   | Path to state file for tracking persisted blocks                  | "file://./data/blockpersister_state.txt" |
-| `blockpersister_httpListenAddress`        | string   | HTTP listener address for blob store server                       | ":8083"                                  |
-| `blockpersister_persistAge`               | int      | Number of blocks to stay behind the tip (controls block finality) | 100                                      |
-| `blockpersister_persistSleep`             | duration | Sleep duration between polling attempts when no blocks available  | 1 minute                                 |
-| `blockpersister_concurrency`              | int      | Concurrency level for block processing                            | 8                                        |
-| `blockpersister_batchMissingTransactions` | bool     | Whether to batch missing transaction requests                     | true                                     |
-| `blockpersister_skipUTXODelete`           | bool     | Whether to skip UTXO deletion operations                          | false                                    |
+### Storage Configuration
 
+#### State Management
 
-The `BlockPersisterPersistAge` setting is particularly important as it determines how many blocks behind the tip the persister stays. For example:
-- If set to 100 (default), only blocks that are at least 100 blocks deep will be persisted
-- This helps avoid reorgs by ensuring blocks are sufficiently confirmed
+- **State File (`blockpersister_stateFile`)**
+  - Type: `string`
+  - Default Value: `"file://./data/blockpersister_state.txt"`
+  - Purpose: Maintains the persister's processing state (last persisted block height and hash)
+  - Format: Supports both local file paths (`file://./path`) and remote storage URLs
+  - Impact: Critical for recovery after service restart and maintaining processing continuity
+  - Recovery Implications: If this file is lost, the service will need to reprocess blocks from the beginning
+
+#### Block Storage
+
+- **Block Store URL** (defined through `Block.BlockStore` in settings)
+  - Type: `*url.URL`
+  - Default Value: Not explicitly set in viewed code
+  - Purpose: Defines where block data files are stored
+  - Supported Formats:
+    - S3: `s3://bucket-name/prefix`
+    - Local filesystem: `file://./path/to/dir`
+  - Impact: Determines the persistence mechanism and reliability characteristics
+
+- **HTTP Listen Address (`blockpersister_httpListenAddress`)**
+  - Type: `string`
+  - Default Value: `":8083"`
+  - Purpose: Controls the network interface and port for the HTTP server that serves block data
+  - Usage: If empty, and BlockStore is set, a blob store HTTP server will be created automatically
+  - Security Consideration: In production environments, should be configured based on network security requirements
+
+### Processing Configuration
+
+#### Block Selection and Timing
+
+- **Persist Age (`blockpersister_persistAge`)**
+  - Type: `uint32`
+  - Default Value: `100`
+  - Purpose: Determines how many blocks behind the tip the persister stays
+  - Impact: Critical for avoiding reorgs by ensuring blocks are sufficiently confirmed
+  - Example: If set to 100, only blocks that are at least 100 blocks deep are processed
+  - Tuning Advice:
+    - Lower values: More immediate processing but higher risk of reprocessing due to reorgs
+    - Higher values: More conservative approach with minimal reorg risk
+
+- **Persist Sleep (`blockPersister_persistSleep`)**
+  - Type: `time.Duration`
+  - Default Value: `1 minute`
+  - Purpose: Sleep duration between polling attempts when no blocks are available to process
+  - Impact: Controls polling frequency and system load during idle periods
+  - Tuning Advice:
+    - Shorter durations: More responsive but higher CPU usage
+    - Longer durations: More resource-efficient but less responsive
+
+#### Performance Tuning
+
+- **Processing Concurrency (`blockpersister_concurrency`)**
+  - Type: `int`
+  - Default Value: `8`
+  - Purpose: Controls the number of concurrent goroutines for processing subtrees
+  - Impact: Directly affects CPU utilization, memory usage, and throughput
+  - Tuning Advice:
+    - Optimal value typically depends on available CPU cores
+    - For systems with 8+ cores, the default value is usually appropriate
+    - For high-performance systems, consider increasing to match available cores
+
+- **Batch Missing Transactions (`blockpersister_batchMissingTransactions`)**
+  - Type: `bool`
+  - Default Value: `true`
+  - Purpose: Controls whether transactions are fetched in batches from the store
+  - Impact: Can significantly improve performance by reducing the number of individual queries
+  - Tuning Advice: Generally should be kept enabled unless encountering specific issues
+
+- **Process TxMeta Using Store Batch Size** (defined through `Block.ProcessTxMetaUsingStoreBatchSize` in settings)
+  - Type: `int`
+  - Purpose: Controls the batch size when processing transaction metadata from the store
+  - Impact: Affects performance and memory usage when fetching transaction data
+  - Tuning Advice: Higher values improve throughput at the cost of increased memory usage
+
+#### UTXO Management
+
+- **Skip UTXO Delete (`blockpersister_skipUTXODelete`)**
+  - Type: `bool`
+  - Default Value: `false`
+  - Purpose: Controls whether UTXO deletions are skipped during processing
+  - Impact: When enabled, improves performance but affects UTXO set completeness
+  - Usage Scenarios:
+    - Enable during initial sync or recovery to improve performance
+    - Disable for normal operation to maintain complete UTXO tracking
+
+### Configuration Interactions and Dependencies
+
+#### Block Processing Pipeline
+
+The Block Persister's processing behavior is controlled by multiple interacting settings:
+
+1. **Block Discovery and Selection**
+   - `BlockPersisterPersistAge` determines which blocks are eligible for processing
+   - The service checks the blockchain tip and calculates which blocks to process based on this setting
+
+2. **Processing Performance**
+   - `BlockPersisterConcurrency` controls parallelism during subtree processing
+   - `BatchMissingTransactions` and `ProcessTxMetaUsingStoreBatchSize` affect how transaction data is fetched
+   - Together, these settings determine overall throughput and resource utilization
+
+3. **Wait Behavior**
+   - `BlockPersisterPersistSleep` controls polling frequency when no blocks are available
+   - On errors, the service applies a fixed 1-minute backoff regardless of this setting
+
+### Deployment Recommendations
+
+#### Development Environment
+
+```
+blockpersister_persistAge=10
+blockpersister_persistSleep=10s
+blockpersister_concurrency=4
+```
+
+These settings provide more immediate processing with less delay between blocks, which is useful during development and testing.
+
+#### Production Environment
+
+```
+blockpersister_persistAge=100
+blockpersister_persistSleep=1m
+blockpersister_concurrency=16
+blockpersister_batchMissingTransactions=true
+```
+
+These settings prioritize stability and resource efficiency for production deployments with adequate hardware.
+
+#### High-Performance Environment
+
+```
+blockpersister_persistAge=144
+blockpersister_persistSleep=30s
+blockpersister_concurrency=32
+```
+
+For systems with ample CPU resources that need to process large blocks efficiently while maintaining a conservative approach to reorgs.
 
 
 ## 8. Other Resources

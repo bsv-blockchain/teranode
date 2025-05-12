@@ -493,21 +493,102 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration options (settings flags)
 
-This service uses several `gocore` configuration settings. Here's a list of these settings:
+The Blockchain service configuration is organized into several categories to manage different aspects of the service's operation. All settings can be provided via environment variables or configuration files.
 
-### Blockchain Service Configuration
-- **Blockchain Store URL (`blockchain_store`)**: The URL for connecting to the blockchain data store. Essential for the service's ability to access and store block data.
-- **gRPC Address (`blockchain_grpcAddress`)**: Specifies the address for the blockchain service's gRPC server, enabling RPC calls for blockchain operations.
-- **HTTP Listen Address (`blockchain_httpListenAddress`)**: Specifies the address the blockchain service's HTTP server listens on.
-- **Network (`network`)**: Specifies the blockchain network (e.g., "mainnet"). Defaults to "mainnet" if not specified.
-- **Kafka Blocks Configuration (`kafka_blocksFinalConfig`)**: URL configuration for connecting to Kafka, used for publishing new block notifications.
+### Network Configuration
+
+- **GRPC Address (`blockchain_grpcAddress`)**: Specifies the address for other services to connect to the Blockchain service's gRPC API. This is how other services will address the blockchain service.
+  - Type: string
+  - Default Value: `localhost:8087`
+  - Impact: Critical for service discovery and inter-service communication
+  - Security Impact: In production environments, should be configured securely based on network architecture
+
+- **GRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the network interface and port the Blockchain service's gRPC server binds to for accepting connections.
+  - Type: string
+  - Default Value: `:8087`
+  - Impact: Controls network interface binding for accepting gRPC connections
+  - Security Impact: Binding to `0.0.0.0` or empty address (`:8087`) exposes the port on all network interfaces
+
+- **HTTP Listen Address (`blockchain_httpListenAddress`)**: Specifies the network interface and port for the HTTP server that exposes REST endpoints (primarily for block invalidation/revalidation).
+  - Type: string
+  - Default Value: `:8082`
+  - Impact: Controls network interface binding for HTTP API access
+  - Security Impact: Should be configured based on who needs access to these endpoints
+
+### Data Storage Configuration
+
+- **Store URL (`blockchain_store`)**: URL connection string for the blockchain database that stores block data and service state.
+  - Type: URL
+  - Default Value: `sqlite:///blockchain`
+  - Supported Formats:
+    - SQLite: `sqlite:///path/to/db`
+    - PostgreSQL: `postgres://user:password@host:port/dbname`
+  - Impact: Determines where all blockchain data is persisted
+  - Performance Impact: Choice of database affects scalability and performance
+
+- **DB Timeout (`blockchain_store_dbTimeoutMillis`)**: The timeout in milliseconds for database operations.
+  - Type: integer
+  - Default Value: `5000` (5 seconds)
+  - Impact: Affects error handling for database operations and resilience during DB latency
+  - Tuning Advice: Increase for slower database connections or when operating at high scale
+
+### State Machine Configuration
+
+- **Initialize Node In State (`blockchain_initializeNodeInState`)**: Specifies the initial state for the blockchain service's finite state machine (FSM).
+  - Type: string
+  - Default Value: `""` (empty, uses default FSM state)
+  - Possible Values:
+    - `"IDLE"`: Initial inactive state
+    - `"RUNNING"`: Normal operating state
+    - `"LEGACY_SYNC"`: Legacy synchronization mode
+    - `"CATCHUP_BLOCKS"`: Block catch-up mode
+  - Impact: Controls the service's startup behavior and initial operational mode
+
+- **FSM State Restore (`FSMStateRestore`)**: Controls whether the service restores its previous FSM state from storage on startup.
+  - Type: boolean
+  - Default Value: `false`
+  - Impact: When enabled, the service will attempt to resume from its last known state instead of starting fresh
+  - Use Cases: Enable for production systems where state continuity across restarts is important
+
+- **FSM State Change Delay (`FSMStateChangeDelay`)**: FOR TESTING ONLY - introduces an artificial delay when changing FSM states.
+  - Type: duration
+  - Default Value: Not set
+  - Impact: Testing only - allows test code to observe state transitions
+  - Warning: Should not be used in production environments
 
 ### Operational Settings
-- **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to perform certain blockchain operations, ensuring resilience against temporary issues. Defaults to 3.
-- **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time in milliseconds between retry attempts, providing a back-off mechanism. Defaults to 1000ms.
+
+- **Maximum Retries (`blockchain_maxRetries`)**: Maximum number of retry attempts for blockchain operations that encounter transient errors.
+  - Type: integer
+  - Default Value: `3`
+  - Impact: Affects resilience and error handling for blockchain operations
+  - Tuning Advice: Increase in unstable environments, decrease for faster failure reporting
+
+- **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time in milliseconds between retry attempts, implementing a back-off mechanism.
+  - Type: integer
+  - Default Value: `1000` (1 second)
+  - Impact: Controls the pace of retries, affecting both system load during retries and recovery time
+  - Tuning Advice: Adjust based on the nature of expected failures (shorter for quick-recovery scenarios)
 
 ### Mining and Difficulty Settings
-- **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments. Defaults to false.
+
+- **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments based on network conditions.
+  - Type: boolean
+  - Default Value: `false`
+  - Impact: Controls whether the blockchain will adjust mining difficulty dynamically
+  - Usage: Enable for production networks where difficulty should adjust automatically
+
+### Configuration Interactions and Dependencies
+
+Some configuration settings work together or depend on other settings:
+
+1. **State Machine Settings**: The `blockchain_initializeNodeInState` and `FSMStateRestore` settings interact to determine the initial state of the service. If `FSMStateRestore` is true, the service tries to restore its previous state from the database, potentially overriding `blockchain_initializeNodeInState`.
+
+2. **Network Settings**: The `blockchain_grpcAddress` setting should be accessible from other services that need to communicate with the blockchain service. If your deployment uses service discovery, this may need to match registered service names.
+
+3. **Database Performance**: The `blockchain_store_dbTimeoutMillis` setting should be tuned based on the database type specified in `blockchain_store` and expected load. Slower databases or high-load environments may require longer timeouts.
+
+4. **Resilience Configuration**: The `blockchain_maxRetries` and `blockchain_retrySleep` settings together determine the retry behavior. The total maximum retry duration will be approximately `maxRetries * retrySleep` milliseconds.
 
 ### FSM Settings
 - **FSM State Restore (`fsm_state_restore`)**: Boolean flag for FSM state restoration. When enabled, the service will attempt to restore its previous state after restart. Default: false.
