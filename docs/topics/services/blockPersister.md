@@ -131,6 +131,32 @@ type UTXODeletion struct {
 }
 ```
 
+### 3.1 Storage Architecture
+
+The Block Persister service uses two distinct storage buckets:
+
+#### Block Store
+
+The block-store bucket contains all the persistent data needed for blockchain reconstruction:
+
+- **Block files** (`.block`) - Complete serialized block data including all transactions
+- **Detailed subtree files** (`.subtree`) - Complete transaction data for each subtree, containing full transaction contents
+- **UTXO files** (`.utxo-additions`, `.utxo-deletions`, `.utxo-set`) - UTXO state changes and complete sets
+
+#### Subtree Store
+
+The subtree-store bucket contains lightweight subtree information:
+
+- **Lightweight subtree files** (no extension) - Minimal transaction metadata (hash, fee, size)
+- **Optional meta files** (`.meta`) - Additional transaction metadata created by block validation
+
+This dual-storage approach serves different purposes:
+
+1. The **subtree-store** acts as a shared, lightweight transaction reference used by multiple services (block validation, subtree validation, block assembly, and asset services)
+
+2. The **block-store** contains comprehensive blockchain data with complete transaction details needed for audit, analysis and blockchain reconstruction
+
+If you need all transaction information in a subtree, you should access the `.subtree` file in the block-store bucket. If you only need basic transaction references (hashes, fees), you can use the more efficient files in the subtree-store bucket.
 
 
 ## 4. Technology
