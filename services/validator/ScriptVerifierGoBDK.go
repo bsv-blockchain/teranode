@@ -14,12 +14,12 @@ import (
 	"strings"
 
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
-	bdkconfig "github.com/bitcoin-sv/bdk/module/gobdk/config"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -31,6 +31,21 @@ func init() {
 	log.Println("Registered scriptVerifierGoBDK")
 }
 
+// uint2int helper to convert array of []uint32 to []int32
+func uint2int(arr []uint32) ([]int32, error) {
+	ret := make([]int32, len(arr))
+
+	for idx, val := range arr {
+		if valInt32, err := util.SafeUint32ToInt32(val); err == nil {
+			ret[idx] = valInt32
+		} else {
+			return []int32{}, err
+		}
+	}
+
+	return ret, nil
+}
+
 // getBDKChainNameFromParams maps chain names from teranode format to BDK format (bsv C++)
 // Parameters:
 //   - pa: Chain parameters containing the network name
@@ -39,24 +54,22 @@ func init() {
 //   - string: The BDK-compatible chain name
 //
 // Chain name mappings:
-//   - mainnet  -> main
-//   - testnet3 -> test
-//   - regtest  -> regtest
-//   - stn      -> stn
+//   - mainnet     -> main
+//   - testnet3    -> test
+//   - regtest     -> regtest
+//   - stn         -> stn
+//   - teratestnet -> teratestnet
+//   - tstn        -> tstn
 func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 	// teranode : mainnet  testnet   regtest  stn
 	// bdk  :    main      test  regtest  stn
 	chainNameMap := map[string]string{
 		"mainnet":     "main",
 		"stn":         "stn",
-		"tstn":        "test",
-		"teratestnet": "test",
+		"tstn":        "tstn",
+		"teratestnet": "teratestnet",
 		"testnet":     "test",
 		"regtest":     "regtest",
-	}
-
-	if pa.Name == "tstn" || pa.Name == "teratestnet" {
-		l.Warnf("Network %v doesn't exist in C++ BSV Node, it will be mapped to testnet", pa.Name)
 	}
 
 	return chainNameMap[pa.Name]
@@ -73,39 +86,59 @@ func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
 func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {
 	l.Infof("Use Script Verifier with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
 
-	// Configure BDK script verification settings
-	bdkScriptConfig := bdkconfig.ScriptConfig{
-		ChainNetwork:                 getBDKChainNameFromParams(l, pa),
-		MaxOpsPerScriptPolicy:        uint64(po.MaxOpsPerScriptPolicy),
-		MaxScriptNumLengthPolicy:     uint64(po.MaxScriptNumLengthPolicy),
-		MaxScriptSizePolicy:          uint64(po.MaxScriptSizePolicy),
-		MaxPubKeysPerMultiSig:        uint64(po.MaxPubKeysPerMultisigPolicy),
-		MaxStackMemoryUsageConsensus: uint64(po.MaxStackMemoryUsageConsensus),
-		MaxStackMemoryUsagePolicy:    uint64(po.MaxStackMemoryUsagePolicy),
-		GenesisActivationHeight:      pa.GenesisActivationHeight,
-	}
-	if err := bdkscript.SetGlobalScriptConfig(bdkScriptConfig); err != nil {
-		l.Errorf("Failed to set global script config for GoBDK: %v", err)
+	network := getBDKChainNameFromParams(l, pa)
+	se := bdkscript.NewScriptEngine(network)
 
-		return nil
+	if se == nil {
+		l.Fatalf("unable to create script engine for network %v", network)
+	}
+
+	// #nosec G115 -- blockHeight won't overflow
+	if err := se.SetGenesisActivationHeight(int32(pa.GenesisActivationHeight)); err != nil {
+		panic(err)
+	}
+
+	// #nosec G115 -- blockHeight won't overflow
+	// For now as our chain params don't have chronicle height, we set that to just genesis+1
+	// We are not sure if that's used yet, but we set it for safety as bdk might depend to this (bsv 1.2.0)
+	if err := se.SetChronicleActivationHeight(int32(pa.GenesisActivationHeight + 1)); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxOpsPerScriptPolicy(po.MaxOpsPerScriptPolicy); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxScriptNumLengthPolicy(int64(po.MaxScriptNumLengthPolicy)); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxScriptSizePolicy(int64(po.MaxScriptSizePolicy)); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxPubKeysPerMultiSigPolicy(po.MaxPubKeysPerMultisigPolicy); err != nil {
+		panic(err)
+	}
+
+	if err := se.SetMaxStackMemoryUsage(int64(po.MaxStackMemoryUsageConsensus), int64(po.MaxStackMemoryUsagePolicy)); err != nil {
+		panic(err)
 	}
 
 	return &scriptVerifierGoBDK{
 		logger: l,
 		policy: po,
 		params: pa,
-		whiteList: map[string]struct{}{
-			"7be4fa421844154ec4105894def768a8bcd80da25792947d585274ce38c07105": {}, // See https://github.com/bitcoin-sv/teranode/issues/1776
-		},
+		se:     se,
 	}
 }
 
 // scriptVerifierGoBDK implements the TxScriptInterpreter interface using Go-BDK
 type scriptVerifierGoBDK struct {
-	logger    ulogger.Logger
-	policy    *settings.PolicySettings
-	params    *chaincfg.Params
-	whiteList map[string]struct{}
+	logger ulogger.Logger
+	policy *settings.PolicySettings
+	params *chaincfg.Params
+	se     *bdkscript.ScriptEngine
 }
 
 // VerifyScript implements script verification using the Go-BDK library
@@ -127,14 +160,20 @@ type scriptVerifierGoBDK struct {
 //
 // Note: Empty scripts and special cases are handled with appropriate logging
 func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consensus bool, utxoHeights []uint32) error {
-	txID := tx.TxID()
-	if _, has := v.whiteList[txID]; has {
-		return nil
+	eTxBytes := tx.ExtendedBytes()
+	intUtxoHeights, errConv := uint2int(utxoHeights)
+
+	if errConv != nil {
+		return errors.NewInvalidArgumentError("failed conversion for utxo heights", errConv)
 	}
 
-	eTxBytes := tx.ExtendedBytes()
+	intBlockHeight, errConv := util.SafeUint32ToInt32(blockHeight)
+	if errConv != nil {
+		return errors.NewInvalidArgumentError("failed conversion for block height heights", errConv)
+	}
 
-	err := bdkscript.VerifyExtendFull(eTxBytes, utxoHeights, blockHeight-1, consensus)
+	// #nosec G115 -- blockHeight won't overflow
+	err := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
 	if err != nil {
 		// Get the information of all utxo heights
 		var utxoHeighstStr []string

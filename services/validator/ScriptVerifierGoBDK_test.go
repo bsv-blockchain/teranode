@@ -23,6 +23,7 @@ package validator
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
@@ -30,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,5 +96,36 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 
 		err := verifier.VerifyScript(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.Error(t, err, fmt.Sprintf("Failed tx with TXID %v", test.TxID))
+	}
+}
+
+func Test_Uint2Int(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []uint32
+		expected []int32
+	}{
+		{
+			name:     "empty slice",
+			input:    []uint32{},
+			expected: []int32{},
+		},
+		{
+			name:     "positive numbers",
+			input:    []uint32{0, 1, 2},
+			expected: []int32{0, 1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := uint2int(tt.input)
+
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("uint2int(%v) = %v; want %v", tt.input, result, tt.expected)
+			}
+
+			assert.NoError(t, err)
+		})
 	}
 }
