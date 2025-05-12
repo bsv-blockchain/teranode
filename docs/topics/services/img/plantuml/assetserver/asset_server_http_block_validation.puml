@@ -1,0 +1,79 @@
+@startuml asset_server_http_block_validation
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+
+actor "Client" as Client
+participant "HTTP Server" as HTTP
+participant "Block Handler" as BlockHandler
+participant "Blockchain Client" as BlockchainClient
+
+note over Client, BlockchainClient: Invalidate Block
+Client -> HTTP: POST /api/v1/block/invalidate
+activate HTTP
+
+HTTP -> BlockHandler: InvalidateBlock()
+activate BlockHandler
+
+BlockHandler -> BlockchainClient: GetBlockExists(hash)
+activate BlockchainClient
+BlockchainClient --> BlockHandler: Block Exists
+deactivate BlockchainClient
+
+BlockHandler -> BlockchainClient: InvalidateBlock(hash)
+activate BlockchainClient
+BlockchainClient --> BlockHandler: Result
+deactivate BlockchainClient
+
+BlockHandler --> HTTP: Result Response
+deactivate BlockHandler
+
+HTTP --> Client: Result JSON
+deactivate HTTP
+
+note over Client, BlockchainClient: Revalidate Block
+Client -> HTTP: POST /api/v1/block/revalidate
+activate HTTP
+
+HTTP -> BlockHandler: RevalidateBlock()
+activate BlockHandler
+
+BlockHandler -> BlockchainClient: GetBlockExists(hash)
+activate BlockchainClient
+BlockchainClient --> BlockHandler: Block Exists
+deactivate BlockchainClient
+
+BlockHandler -> BlockchainClient: RevalidateBlock(hash)
+activate BlockchainClient
+BlockchainClient --> BlockHandler: Result
+deactivate BlockchainClient
+
+BlockHandler --> HTTP: Result Response
+deactivate BlockHandler
+
+HTTP --> Client: Result JSON
+deactivate HTTP
+
+note over Client, BlockchainClient: Get Invalid Blocks
+Client -> HTTP: GET /api/v1/blocks/invalid?count=N
+activate HTTP
+
+HTTP -> BlockHandler: GetLastNInvalidBlocks()
+activate BlockHandler
+
+BlockHandler -> BlockchainClient: GetLastNInvalidBlocks(N)
+activate BlockchainClient
+BlockchainClient --> BlockHandler: Invalid Blocks
+deactivate BlockchainClient
+
+BlockHandler --> HTTP: Invalid Blocks Response
+deactivate BlockHandler
+
+HTTP --> Client: Invalid Blocks JSON
+deactivate HTTP
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

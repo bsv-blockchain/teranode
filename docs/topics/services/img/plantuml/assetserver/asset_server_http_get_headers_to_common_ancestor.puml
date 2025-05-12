@@ -1,0 +1,31 @@
+@startuml asset_server_http_get_headers_to_common_ancestor
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+actor "Client" as Client
+participant "HTTP Server" as HTTP
+participant "Repository" as Repo
+participant "Blockchain Client" as BlockchainClient
+
+Client -> HTTP: GET /api/v1/headers_to_common_ancestor/:hash
+activate HTTP
+
+HTTP -> Repo: GetBlockHeadersToCommonAncestor(hash)
+activate Repo
+
+Repo -> BlockchainClient: GetBlockHeadersToCommonAncestor(hash)
+activate BlockchainClient
+BlockchainClient --> Repo: Headers
+deactivate BlockchainClient
+
+Repo --> HTTP: Headers
+deactivate Repo
+
+HTTP --> Client: Headers Response
+deactivate HTTP
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

@@ -169,6 +169,33 @@ Retrieves a block in legacy format, and as a binary stream.
 
 ![asset_server_http_get_legacy_block.svg](img/plantuml/assetserver/asset_server_http_get_legacy_block.svg)
 
+### 4.1.13. GetBlockHeadersToCommonAncestor()
+
+Retrieves block headers up to a common ancestor point between two chains. This is useful for chain reorganization and fork resolution.
+
+![asset_server_http_get_headers_to_common_ancestor.svg](img/plantuml/assetserver/asset_server_http_get_headers_to_common_ancestor.svg)
+
+### 4.1.14. FSM State Management
+
+The Asset Server provides an interface to the Finite State Machine (FSM) of the blockchain service. These endpoints allow for monitoring and controlling the blockchain state:
+
+![asset_server_http_fsm_state_management.svg](img/plantuml/assetserver/asset_server_http_fsm_state_management.svg)
+
+- **GET /api/v1/fsm/state**: Retrieves the current FSM state
+- **POST /api/v1/fsm/state**: Sends a custom event to the FSM
+- **GET /api/v1/fsm/events**: Lists all available FSM events
+- **GET /api/v1/fsm/states**: Lists all possible FSM states
+
+### 4.1.15. Block Validation Management
+
+The Asset Server offers endpoints for block validation control:
+
+![asset_server_http_block_validation.svg](img/plantuml/assetserver/asset_server_http_block_validation.svg)
+
+- **POST /api/v1/block/invalidate**: Invalidates a specified block
+- **POST /api/v1/block/revalidate**: Revalidates a previously invalidated block
+- **GET /api/v1/blocks/invalid**: Retrieves a list of invalid blocks
+
 
 ## 5. Technology
 
@@ -197,6 +224,7 @@ Key technologies involved:
 ```
 ./services/asset
 ├── Server.go                  # Server logic for the Asset Service.
+├── Server_test.go             # Tests for the server functionality.
 ├── asset_api
 │   ├── asset_api.pb.go        # Generated protobuf code for the asset API.
 │   └── asset_api.proto        # Protobuf definitions for the asset API.
@@ -206,21 +234,20 @@ Key technologies involved:
 │   │   ├── client.go          # Client-side implementation for Centrifuge.
 │   │   └── index.html         # HTML template for client-side rendering.
 │   └── websocket.go           # WebSocket implementation for real-time communication.
-├── http_impl                  # HTTP implementation of the asset service.
-│   ├── GetBalance.go          # Logic to retrieve balance information.
+├── httpimpl                   # HTTP implementation of the asset service.
 │   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
 │   ├── GetBlock.go            # Logic to retrieve a specific block.
 │   ├── GetBlockForks.go       # Logic to retrieve information about block forks.
 │   ├── GetBlockGraphData.go   # Logic to retrieve block graph data.
 │   ├── GetBlockHeader.go      # Logic to retrieve a block header.
 │   ├── GetBlockHeaders.go     # Logic to retrieve multiple block headers.
+│   ├── GetBlockHeadersToCommonAncestor.go # Logic to retrieve headers to common ancestor.
 │   ├── GetBlockStats.go       # Logic to retrieve block statistics.
 │   ├── GetBlockSubtrees.go    # Logic to retrieve block subtrees.
 │   ├── GetBlocks.go           # Logic to retrieve multiple blocks.
 │   ├── GetLastNBlocks.go      # Logic to retrieve the last N blocks.
 │   ├── GetLegacyBlock.go      # Logic to retrieve legacy block format.
 │   ├── GetNBlocks.go          # Logic to retrieve N blocks from a specific point.
-│   ├── GetSubTree_test.go     # Tests for the GetSubtree functionality.
 │   ├── GetSubtree.go          # Logic to retrieve a subtree.
 │   ├── GetSubtreeTxs.go       # Logic to retrieve transactions in a subtree.
 │   ├── GetTransaction.go      # Logic to retrieve a specific transaction.
@@ -231,12 +258,14 @@ Key technologies involved:
 │   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
 │   ├── Readmode.go            # Manages read-only mode settings.
 │   ├── Search.go              # Implements search functionality.
+│   ├── block_handler.go       # Handles block validation operations.
 │   ├── blockHeaderResponse.go # Formats block header responses.
+│   ├── fsm_handler.go         # Handles FSM state and event operations.
 │   ├── helpers.go             # Helper functions for HTTP implementation.
 │   ├── http.go                # Core HTTP implementation.
 │   ├── metrics.go             # HTTP-specific metrics.
 │   ├── sendError.go           # Utility for sending error responses.
-│   └── subtree.bin            # Binary file related to subtree functionality.
+│   └── *_test.go files        # Various test files for each component.
 └── repository                 # Repository layer managing data interactions.
     ├── GetLegacyBlock.go      # Repository logic for retrieving legacy blocks.
     ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
@@ -305,10 +334,19 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 7. **FSM Configuration**
     - fsm_state_restore: Enables or disables the restore state for the Finite State Machine.
       Example: fsm_state_restore=false
+    - The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.
 
 8. **Coinbase Configuration**
     - coinbase_grpcAddress: gRPC address for coinbase-related operations.
       Example: coinbase_grpcAddress=localhost:50051
+
+9. **Dashboard Configuration**
+    - dashboard_enabled: Enables or disables the Teranode dashboard UI.
+      Example: dashboard_enabled=true
+    - dashboard-related settings control authentication and user interface features.
+
+10. **Block Validation**
+    - The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
 
 
 

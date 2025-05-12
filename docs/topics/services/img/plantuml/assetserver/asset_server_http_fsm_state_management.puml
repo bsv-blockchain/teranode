@@ -1,0 +1,75 @@
+@startuml asset_server_http_fsm_state_management
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+
+actor "Client" as Client
+participant "HTTP Server" as HTTP
+participant "FSM Handler" as FSMHandler
+participant "Blockchain Client" as BlockchainClient
+
+note over Client, BlockchainClient: Get Current FSM State
+Client -> HTTP: GET /api/v1/fsm/state
+activate HTTP
+
+HTTP -> FSMHandler: GetFSMState()
+activate FSMHandler
+
+FSMHandler -> BlockchainClient: GetFSMCurrentState()
+activate BlockchainClient
+BlockchainClient --> FSMHandler: FSM State
+deactivate BlockchainClient
+
+FSMHandler --> HTTP: FSM State Response
+deactivate FSMHandler
+
+HTTP --> Client: FSM State JSON
+deactivate HTTP
+
+note over Client, BlockchainClient: Send FSM Event
+Client -> HTTP: POST /api/v1/fsm/state
+activate HTTP
+
+HTTP -> FSMHandler: SendFSMEvent()
+activate FSMHandler
+
+FSMHandler -> BlockchainClient: SendFSMEvent(eventType)
+activate BlockchainClient
+BlockchainClient --> FSMHandler: Result
+deactivate BlockchainClient
+
+FSMHandler --> HTTP: Result Response
+deactivate FSMHandler
+
+HTTP --> Client: Result JSON
+deactivate HTTP
+
+note over Client, BlockchainClient: Get Available FSM Events
+Client -> HTTP: GET /api/v1/fsm/events
+activate HTTP
+
+HTTP -> FSMHandler: GetFSMEvents()
+activate FSMHandler
+FSMHandler --> HTTP: Available Events
+deactivate FSMHandler
+
+HTTP --> Client: Events JSON
+deactivate HTTP
+
+note over Client, BlockchainClient: Get Possible FSM States
+Client -> HTTP: GET /api/v1/fsm/states
+activate HTTP
+
+HTTP -> FSMHandler: GetFSMStates()
+activate FSMHandler
+FSMHandler --> HTTP: All States
+deactivate FSMHandler
+
+HTTP --> Client: States JSON
+deactivate HTTP
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
