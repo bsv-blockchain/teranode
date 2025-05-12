@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,7 +133,8 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 		err = service.CreateIndexIfNotExists(t.Context(), "test_index", "test-bin", aerospike.NUMERIC)
 		require.NoError(t, err)
 
-		time.Sleep(2 * time.Second)
+		err = service.waitForIndexBuilt(t.Context(), "test_index")
+		require.NoError(t, err)
 
 		exists, err = service.indexExists("test_index")
 		require.NoError(t, err)
@@ -210,7 +212,7 @@ func TestServiceStartStop(t *testing.T) {
 	// Create a context with cancel
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Start the service
+	// Start the service (this will create the index and start the job manager)
 	service.Start(ctx)
 
 	// Wait a bit for the service to start
@@ -260,12 +262,8 @@ func TestDeleteAtHeight(t *testing.T) {
 	service, err := NewService(opts)
 	require.NoError(t, err)
 
-	// Start the service
+	// Start the service (this will create the index and start the job manager)
 	service.Start(ctx)
-
-	// Create the index
-	err = service.CreateIndexIfNotExists(ctx, "delete_at_height_idx", fields.DeleteAtHeight.String(), aerospike.NUMERIC)
-	require.NoError(t, err)
 
 	// Create some test records
 	writePolicy := aerospike.NewWritePolicy(0, 0)
@@ -395,6 +393,55 @@ func TestOptionsSimple(t *testing.T) {
 	})
 }
 
+func TestServiceIndexOnceAndWaitForIndexBuilt(t *testing.T) {
+	t.Run("sync.Once prevents duplicate index logic", func(t *testing.T) {
+		service := &Service{
+			indexOnce: sync.Once{},
+		}
+
+		calls := 0
+		f := func() { calls++ }
+		service.indexOnce.Do(f)
+		service.indexOnce.Do(f)
+		assert.Equal(t, 1, calls, "sync.Once should only allow function to run once")
+	})
+
+	t.Run("waitForIndexBuilt times out", func(t *testing.T) {
+		logger := ulogger.NewVerboseTestLogger(t)
+		ctx := context.Background()
+
+		container, err := aeroTest.RunContainer(ctx)
+		require.NoError(t, err)
+
+		t.Cleanup(func() {
+			err = container.Terminate(ctx)
+			require.NoError(t, err)
+		})
+
+		host, err := container.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := container.ServicePort(ctx)
+		require.NoError(t, err)
+
+		client, err := uaerospike.NewClient(host, port)
+		require.NoError(t, err)
+
+		service := &Service{
+			logger:    logger,
+			client:    client,
+			namespace: "ns",
+			set:       "set",
+		}
+
+		ctx2, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+
+		err = service.waitForIndexBuilt(ctx2, "doesnotexist")
+		assert.Error(t, err)
+	})
+}
+
 func TestServiceSimple(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	client := &uaerospike.Client{} // dummy client
@@ -406,6 +453,7 @@ func TestServiceSimple(t *testing.T) {
 			Namespace: "ns",
 			Set:       "set",
 		}
+
 		service, err := NewService(opts)
 		assert.NoError(t, err)
 		assert.NotNil(t, service)

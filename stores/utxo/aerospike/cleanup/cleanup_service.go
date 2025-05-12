@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -60,17 +61,15 @@ type Options struct {
 
 // Service manages background jobs for cleaning up records based on block height
 type Service struct {
-	mu                sync.RWMutex
-	logger            ulogger.Logger
-	client            *uaerospike.Client
-	namespace         string
-	set               string
-	jobManager        *cleanup.JobManager
-	initialized       bool
-	ctx               context.Context
-	indexMutex        sync.Mutex      // Mutex for index creation operations
-	ongoingIndexOps   map[string]bool // Track ongoing index creation operations
-	ongoingIndexMutex sync.RWMutex    // Mutex for the ongoing index operations map
+	logger     ulogger.Logger
+	client     *uaerospike.Client
+	namespace  string
+	set        string
+	jobManager *cleanup.JobManager
+	ctx        context.Context
+	indexMutex sync.Mutex // Mutex for index creation operations
+
+	indexOnce sync.Once // Ensures index creation/wait is only done once per process
 }
 
 // NewService creates a new cleanup service
@@ -101,12 +100,11 @@ func NewService(opts Options) (*Service, error) {
 	})
 
 	service := &Service{
-		logger:          opts.Logger,
-		client:          opts.Client,
-		namespace:       opts.Namespace,
-		set:             opts.Set,
-		ctx:             opts.Ctx,
-		ongoingIndexOps: make(map[string]bool),
+		logger:    opts.Logger,
+		client:    opts.Client,
+		namespace: opts.Namespace,
+		set:       opts.Set,
+		ctx:       opts.Ctx,
 	}
 
 	// Create the job processor function
@@ -140,64 +138,47 @@ func NewService(opts Options) (*Service, error) {
 // becomes available.  The rotating queue will always keep the most recent jobs and will drop older
 // jobs if the queue is full or there is a job with a higher height.
 func (s *Service) Start(ctx context.Context) {
-	// Check if the service is already initialized
-	s.mu.RLock()
-	initialized := s.initialized
-	s.mu.RUnlock()
-
-	if initialized {
-		return
-	}
-
-	// Create a context that will be cancelled when the service is stopped
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// Start the job manager
-	s.jobManager.Start(ctx)
+	indexName, _ := gocore.Config().Get("cleanup_IndexName", "cleanup_dah_index")
 
-	// Mark the service as initialized
-	s.mu.Lock()
-	s.initialized = true
-	s.mu.Unlock()
-
-	s.logger.Infof("[AerospikeCleanupService] started cleanup service")
-
-	// Start a goroutine to initialize the service
-	go func() {
-		// Create the index if it doesn't exist
-		// Skip index creation in tests with mock clients
+	// Ensure index creation/wait is only done once per process
+	s.indexOnce.Do(func() {
 		if s.client != nil && s.client.Client != nil {
-			err := s.CreateIndexIfNotExists(ctx, "cleanup_dah_index", fields.DeleteAtHeight.String(), aerospike.NUMERIC)
+			exists, err := s.indexExists(indexName)
 			if err != nil {
-				s.logger.Errorf("Failed to create index: %v", err)
+				s.logger.Errorf("Failed to check index existence: %v", err)
 				return
 			}
-		}
 
-		// Mark the service as initialized
-		s.mu.Lock()
-		s.initialized = true
-		s.mu.Unlock()
-	}()
+			if !exists {
+				// Only one process should try to create the index
+				err := s.CreateIndexIfNotExists(ctx, indexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
+				if err != nil {
+					s.logger.Errorf("Failed to create index: %v", err)
+				}
+			}
+		}
+	})
+
+	// All processes wait for the index to be built
+	if err := s.waitForIndexBuilt(ctx, indexName); err != nil {
+		s.logger.Errorf("Timeout or error waiting for index to be built: %v", err)
+	}
+
+	// Only start job manager after index is built
+	s.jobManager.Start(ctx)
+
+	s.logger.Infof("[AerospikeCleanupService] started cleanup service")
 }
 
 // Stop stops the cleanup service and waits for all workers to exit.
 // This ensures all goroutines are properly terminated before returning.
 func (s *Service) Stop(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.initialized {
-		return nil
-	}
-
 	// Stop the job manager
 	s.jobManager.Stop()
-
-	// Mark the service as not initialized
-	s.initialized = false
 
 	s.logger.Infof("[AerospikeCleanupService] stopped cleanup service")
 
@@ -210,7 +191,7 @@ func (s *Service) UpdateBlockHeight(blockHeight uint32, done ...chan string) err
 		return errors.NewProcessingError("block height cannot be zero")
 	}
 
-	s.logger.Infof("Updating block height to %d", blockHeight)
+	s.logger.Debugf("[AerospikeCleanupService] Updating block height to %d", blockHeight)
 
 	// Pass the done channel to the job manager
 	var doneChan chan string
@@ -333,33 +314,23 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 // This method allows one caller to create the index in the background while
 // other callers can immediately continue without waiting
 func (s *Service) CreateIndexIfNotExists(ctx context.Context, indexName, binName string, indexType aerospike.IndexType) error {
-	// First, check if the index already exists
+	if s.client.Client == nil {
+		return nil // For unit tests, we don't have a client
+	}
+
+	// First, check if the index already exists without a lock
 	exists, err := s.indexExists(indexName)
 	if err != nil {
 		return err
 	}
 
-	// If the index already exists, we're done
 	if exists {
 		return nil
 	}
 
-	// Check if there's already an ongoing creation for this index
-	s.ongoingIndexMutex.RLock()
-	_, isOngoing := s.ongoingIndexOps[indexName]
-	s.ongoingIndexMutex.RUnlock()
-
-	if isOngoing {
-		// Another thread is already creating this index, so we can return immediately
-		s.logger.Infof("Index creation for %s is already in progress, skipping", indexName)
-		return nil
-	}
-
-	// Try to acquire the lock to create the index
+	// Check if the index exists again but this time with a lock
 	s.indexMutex.Lock()
 
-	// Check again if the index exists or if another thread started creating it
-	// while we were waiting for the lock
 	exists, err = s.indexExists(indexName)
 	if err != nil {
 		s.indexMutex.Unlock()
@@ -371,74 +342,64 @@ func (s *Service) CreateIndexIfNotExists(ctx context.Context, indexName, binName
 		return nil
 	}
 
-	s.ongoingIndexMutex.Lock()
+	// Create the index (synchronously)
+	policy := aerospike.NewWritePolicy(0, 0)
 
-	_, isOngoing = s.ongoingIndexOps[indexName]
-	if isOngoing {
-		s.ongoingIndexMutex.Unlock()
+	s.logger.Infof("Creating index %s:%s:%s", s.namespace, s.set, indexName)
+
+	if _, err := s.client.CreateIndex(policy, s.namespace, s.set, indexName, binName, indexType); err != nil {
+		s.logger.Errorf("Failed to create index %s:%s:%s: %v", s.namespace, s.set, indexName, err)
 		s.indexMutex.Unlock()
-		s.logger.Infof("Index creation for %s is already in progress, skipping", indexName)
 
-		return nil
+		return err
 	}
 
-	// Mark this index as being created
-	s.ongoingIndexOps[indexName] = true
-	s.ongoingIndexMutex.Unlock()
-
-	// We can release the lock now since we've marked this index as being created
+	// Unlock the mutex and allow the index to continue being created in the background
 	s.indexMutex.Unlock()
 
-	// Create the index in a goroutine
-	go func() {
-		defer func() {
-			// Remove this index from the ongoing operations map when done
-			s.ongoingIndexMutex.Lock()
-			delete(s.ongoingIndexOps, indexName)
-			s.ongoingIndexMutex.Unlock()
-		}()
+	return nil
+}
 
-		s.logger.Infof("Starting background creation of index %s:%s", s.namespace, indexName)
+// waitForIndexBuilt polls Aerospike until the index is ready or times out
+func (s *Service) waitForIndexBuilt(ctx context.Context, indexName string) error {
+	if s.client.Client == nil {
+		return nil // For unit tests, we don't have a client
+	}
 
-		// Create the index since it doesn't exist
-		policy := aerospike.NewWritePolicy(0, 0)
+	s.logger.Infof("Waiting for index %s:%s:%s to be built", s.namespace, s.set, indexName)
 
-		task, err := s.client.CreateIndex(policy, s.namespace, s.set, indexName, binName, indexType)
-		if err != nil {
-			s.logger.Errorf("Failed to create index %s:%s: %v", s.namespace, indexName, err)
-			return
-		}
+	start := time.Now()
 
-		// Wait for the task to complete
-		for {
-			// Check if the context is cancelled
-			select {
-			case <-ctx.Done():
-				s.logger.Warnf("Create index %s:%s was cancelled during execution", s.namespace, indexName)
-				return
-			default: // Continue processing
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 
-			done, err := task.IsDone()
+		default:
+			// Query index status
+			node, err := s.client.Client.Cluster().GetRandomNode()
 			if err != nil {
-				s.logger.Errorf("Error checking if index %s:%s creation is done: %v", s.namespace, indexName, err)
-				return
+				return err
 			}
 
-			if done {
-				// Task completed
-				s.logger.Infof("Create index %s:%s was completed successfully", s.namespace, indexName)
-				return
+			policy := aerospike.NewInfoPolicy()
+
+			infoMap, err := node.RequestInfo(policy, "sindex")
+			if err != nil {
+				return err
 			}
 
-			// Wait before checking again
+			for _, v := range infoMap {
+				if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.set)) && strings.Contains(v, "RW") {
+					s.logger.Infof("Index %s:%s:%s built in %s", s.namespace, s.set, indexName, time.Since(start))
+
+					return nil // Index is ready
+				}
+			}
+
 			time.Sleep(1 * time.Second)
 		}
-	}()
-
-	s.logger.Infof("Index %s:%s creation started in background", s.namespace, indexName)
-
-	return nil
+	}
 }
 
 // indexExists checks if an index with the given name exists in the namespace

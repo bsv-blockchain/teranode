@@ -103,7 +103,7 @@ func (m *JobManager) Start(ctx context.Context) {
 	m.mu.Unlock()
 
 	// Start the worker pool
-	m.logger.Infof("Starting %d workers for cleanup service", m.workerCount)
+	m.logger.Infof("[JobManager] Starting %d workers for cleanup service", m.workerCount)
 
 	for i := 0; i < m.workerCount; i++ {
 		m.wg.Add(1)
@@ -281,13 +281,13 @@ func (m *JobManager) GetJobs() []*Job {
 
 // worker processes jobs from the queue
 func (m *JobManager) worker(workerID int) {
-	m.logger.Infof("Worker %d started", workerID)
+	m.logger.Debugf("[JobManager] Worker %d started", workerID)
 
 	for {
 		// Check if the service is shutting down
 		select {
 		case <-m.ctx.Done():
-			m.logger.Infof("Worker %d shutting down", workerID)
+			m.logger.Debugf("[JobManager] Worker %d shutting down", workerID)
 			return
 		default: // Continue processing
 		}
