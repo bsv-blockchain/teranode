@@ -231,13 +231,81 @@ gRPC endpoints:
 
 The Blob Server cannot be run independently. It is instantiated as part of the main.go initialization and directly used by the services that require it.
 
-## 8. Configuration options (settings flags)
+## 8. Configuration Options
 
+The Blob Server can be configured through URL-based settings and option parameters. This section provides a comprehensive reference for all configuration options.
 
-The Blob Server supports various backends for the TX Store and SubTree store. Below are configuration setting examples you can use, depending on your preferred storage backend:
+### 8.1. URL Format
 
-### 8.1. TX Store Configuration
+Blob store configurations use URLs that follow this general structure:
 
+```
+<scheme>://<path>[?<parameter1>=<value1>&<parameter2>=<value2>...]
+```
+
+Components:
+- **Scheme**: Determines the storage backend type (file, memory, s3, http, null)
+- **Path**: Specifies the storage location or identifier
+- **Parameters**: Optional query parameters that modify behavior
+
+### 8.2. Store URL Settings
+
+#### 8.2.1. Common URL Parameters
+
+| Parameter | Type | Default | Description | Impact |
+|-----------|------|---------|-------------|--------|
+| `batch` | Boolean | false | Enables batch operations | Improves performance by batching operations |
+| `batch_size` | Integer | 1000 | Maximum items in a batch | Controls batch size; larger values increase throughput but use more memory |
+| `batch_duration` | Integer (ms) | 50 | Maximum time before processing a batch | Balances throughput vs. latency |
+| `localDAHStore` | Boolean | false | Enables Delete-At-Height functionality | Enables automatic expiry of data based on blockchain height |
+| `localDAHStorePath` | String | "/tmp/localDAH" | Path for local DAH store metadata | Only used when localDAHStore=true |
+
+#### 8.2.2. File Backend Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| Path component | String | None (required) | Base directory for file storage |
+
+#### 8.2.3. S3 Backend Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| Path component | String | None (required) | S3 bucket name |
+| `region` | String | "us-east-1" | AWS region for S3 bucket |
+| `endpoint` | String | AWS S3 endpoint | Custom endpoint for S3-compatible storage |
+| `forcePathStyle` | Boolean | false | Force path-style addressing |
+
+#### 8.2.4. HTTP Backend Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| Host+Path | String | None (required) | Remote HTTP blob server endpoint |
+| `timeout` | Integer (ms) | 30000 | HTTP request timeout |
+
+### 8.3. Store Options
+
+Additional configuration is provided through Store Options when creating a store:
+
+| Option | Type | Description | Impact |
+|--------|------|-------------|--------|
+| `WithDefaultBlockHeightRetention` | uint32 | Sets block height retention | Controls automatic deletion after specified blockchain height |
+| `WithDefaultSubDirectory` | String | Sets subdirectory within main path | Organizes data in storage hierarchy |
+| `WithHashPrefix` | Integer | Number of characters from hash to use in filenames | Improves file organization and lookup performance |
+| `WithSHA256Checksum` | Boolean | Enables SHA256 checksum generation | Adds data integrity verification |
+| `WithLongtermStorage` | String, URL | Configures persistent storage options | Enables three-tier storage (memory, local, longterm) |
+
+### 8.4. File Operation Options
+
+These options can be specified per operation:
+
+| Option | Type | Description | Impact |
+|--------|------|-------------|--------|
+| `WithDeleteAt` | uint32 | Sets blockchain height for automatic deletion | Controls per-file data retention |
+| `WithFilename` | String | Sets specific filename | Overrides default hash-based naming |
+| `WithFileExtension` | String | Sets file extension | Useful for identifying file types |
+| `WithAllowOverwrite` | Boolean | Controls overwriting of existing files | Prevents accidental data loss when false |
+
+### 8.5. TX Store Configuration Examples
 
 - **Null Store (No-op)**
   ```plaintext
@@ -246,41 +314,58 @@ The Blob Server supports various backends for the TX Store and SubTree store. Be
 
 - **Amazon S3**
   ```plaintext
-  txstore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&batch=true&writeKeys=true
+  txstore.${YOUR_USERNAME}=s3:///mytxstore?region=eu-west-1&batch=true&batch_size=2000&batch_duration=100
   ```
 
-- **File System**
+- **File System with DAH**
   ```plaintext
-  txstore.${YOUR_USERNAME}=file:///data/txstore?batch=true&writeKeys=true
+  txstore.${YOUR_USERNAME}=file:///data/txstore?batch=true&localDAHStore=true&localDAHStorePath=/data/txstore-dah
   ```
 
-- **SQLite In-Memory**
+- **Memory Store**
   ```plaintext
-  txstore.${YOUR_USERNAME}=sqlitememory:///txstore
+  txstore.${YOUR_USERNAME}=memory:///
   ```
 
-### 8.2. SubTree Store Configuration
-
+### 8.6. SubTree Store Configuration Examples
 
 - **Null Store (No-op)**
   ```plaintext
   subtreestore.${YOUR_USERNAME}=null:///
   ```
 
-- **Amazon S3 with Local TTL Store**
+- **Amazon S3 with Local DAH Store**
   ```plaintext
-  subtreestore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&localTTLStore=file&localTTLStorePath=/data/subtreestore-ttl
+  subtreestore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&localDAHStore=true&localDAHStorePath=/data/subtreestore-dah
   ```
 
-- **File System with Local TTL Store**
+- **File System with Local DAH Store**
   ```plaintext
-  subtreestore.${YOUR_USERNAME}=file:///data/subtreestore?localTTLStore=file&localTTLStorePath=./data/subtreestore-ttl
+  subtreestore.${YOUR_USERNAME}=file:///data/subtreestore?localDAHStore=true&localDAHStorePath=./data/subtreestore-dah
   ```
 
-- **SQLite In-Memory**
+- **Memory Store**
   ```plaintext
-  subtreestore.${YOUR_USERNAME}=sqlitememory:///subtreestore
+  subtreestore.${YOUR_USERNAME}=memory:///
   ```
+
+### 8.7. Configuration Interactions
+
+#### 8.7.1. Storage Backend Selection
+
+The URL scheme determines which backend is used, which in turn determines which parameters are relevant. For example, `region` is only relevant for S3 storage.
+
+#### 8.7.2. Batching Configuration
+
+When batching is enabled (`batch=true`), the `batch_size` and `batch_duration` parameters control batch behavior. Operations are batched until either the size limit is reached or the duration expires, whichever happens first.
+
+#### 8.7.3. Delete-At-Height Functionality
+
+When `localDAHStore` is enabled, the store maintains metadata about when items should be deleted based on blockchain height. This metadata is stored at the path specified by `localDAHStorePath`. Individual files can set their own DAH values using the `WithDeleteAt` option.
+
+#### 8.7.4. Block Height Retention
+
+The `BlockHeightRetention` setting (via `WithDefaultBlockHeightRetention`) interacts with the `DAH` setting (via `WithDeleteAt`). The store-level setting provides a default, while the file-level setting allows per-file control.
 
 
 ## 9. Other Resources

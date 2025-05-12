@@ -9,14 +9,22 @@
     - [P2P Service](#p2p-service)
     - [Blockchain](#blockchain)
 3. [Reliability and Recoverability](#3-reliability-and-recoverability)
-4. [Settings](#4-settings)
+4. [Configuration](#4-configuration)
+    - [Kafka URL Format](#kafka-url-format)
+    - [URL Parameters](#url-parameters)
     - [General Kafka Settings](#general-kafka-settings)
     - [Service-Specific Settings](#service-specific-settings)
         - [Block Assembly](#block-assembly)
         - [Block Validation](#block-validation)
         - [Subtree Validation](#subtree-validation)
         - [Validator](#validator)
-5. [Other Resources](#5-other-resources)
+    - [Consumer Group Configuration](#consumer-group-configuration)
+    - [Configuration Interactions](#configuration-interactions)
+5. [Operational Guidelines](#5-operational-guidelines)
+    - [Performance Tuning](#performance-tuning)
+    - [Reliability Considerations](#reliability-considerations)
+    - [Monitoring](#monitoring)
+6. [Other Resources](#6-other-resources)
 
 
 ## 1. Description
@@ -90,36 +98,245 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 2. During Kafka downtime or unreliability, the node enters a safe state, preventing potential data inconsistencies or processing errors.
 3. Once Kafka is reported as healthy again, the node automatically resumes normal operation without manual intervention.
 
-## 4. Settings
+## 4. Configuration
 
-# Kafka Configuration Summary
+### Kafka URL Format
 
-## General Kafka Settings
-- `kafka_txsConfig`: Kafka URL - Used in Block Assembly and Validator services
-- `kafka_validatortxsConfig`: Kafka URL - Used in Propagation and Validator services
-- `kafka_txmetaConfig`: Kafka URL - Used in Subtree Validation and Validator services
-- `kafka_rejectedTxConfig`: Kafka URL - Used in P2P and Validator services
-- `kafka_blocksConfig`: Kafka URL - Used in Block Validation and P2P services
-- `kafka_subtreesConfig`: Kafka URL - Used in Subtree Validation and P2P services
-- `kafka_blocksFinalConfig`: Kafka URL - Used in Blockchain and Blockpersister services
+Kafka configuration in Teranode is primarily specified through URLs. Each Kafka topic has its own URL with parameters that control its behavior. The URL format is:
 
-## Service-Specific Settings
+```
+kafka://host1,host2,.../topic?param1=value1&param2=value2&...
+```
 
-### Block Assembly
-- `blockassembly_kafkaWorkers`: Number of Kafka workers (default: 100)
+Components of the URL:
+- **Scheme**: Always `kafka://`
+- **Hosts**: Comma-separated list of Kafka brokers (e.g., `localhost:9092,kafka2:9092`)
+- **Topic**: The Kafka topic name (specified as the path component)
+- **Parameters**: Query parameters that configure specific behavior
 
-### Block Validation
-- `blockvalidation_kafkaBlockConcurrency`: Concurrency for block validation (default: max(4, runtime.NumCPU()-16))
+Example:
+```
+kafka://localhost:9092/blocks?partitions=4&replication=3&flush_frequency=5s
+```
 
-### Subtree Validation
-- `subtreevalidation_kafkaSubtreeConcurrency`: Concurrency for subtree validation (default: max(4, runtime.NumCPU()-16))
+### URL Parameters
 
-### Validator
-- `validator_kafkaWorkers`: Number of Kafka workers for validator (default: 100)
-- `validator_kafkaPartitions`: Number of Kafka partitions (mentioned in a comment)
+The following parameters can be specified in Kafka URLs:
 
+1. **`partitions`**
+   - **Type**: Integer
+   - **Default**: 1
+   - **Description**: Number of partitions for the Kafka topic
+   - **Impact**: Higher values increase parallelism but require more resources
 
-## 5. Other Resources
+2. **`replication`**
+   - **Type**: Integer
+   - **Default**: 1
+   - **Description**: Replication factor for the topic
+   - **Impact**: Higher values improve fault tolerance but increase storage requirements
+
+3. **`retention`**
+   - **Type**: String (milliseconds)
+   - **Default**: "600000" (10 minutes)
+   - **Description**: How long messages are retained
+   - **Impact**: Longer retention increases storage requirements
+
+4. **`segment_bytes`**
+   - **Type**: String
+   - **Default**: "1073741824" (1GB)
+   - **Description**: Maximum size of a single log segment file
+   - **Impact**: Smaller values create more files but allow more granular cleanup
+
+5. **`flush_bytes`**
+   - **Type**: Integer
+   - **Default**: 1048576 (1MB)
+   - **Description**: Number of bytes to accumulate before forcing a flush
+   - **Impact**: Larger values improve throughput but increase risk of data loss
+
+6. **`flush_messages`**
+   - **Type**: Integer
+   - **Default**: 50000
+   - **Description**: Number of messages to accumulate before forcing a flush
+   - **Impact**: Larger values improve throughput but increase risk of data loss
+
+7. **`flush_frequency`**
+   - **Type**: Duration (e.g., "5s")
+   - **Default**: "10s" (10 seconds)
+   - **Description**: Maximum time between flushes
+   - **Impact**: Longer durations improve throughput but increase risk of data loss
+
+8. **`consumer_ratio`**
+   - **Type**: Integer
+   - **Default**: 1
+   - **Description**: Ratio of partitions to consumers
+   - **Impact**: Determines how many consumer instances process messages
+
+9. **`replay`**
+   - **Type**: Integer (boolean: 0 or 1)
+   - **Default**: 1 (true)
+   - **Description**: Whether to replay messages from the beginning for new consumer groups
+   - **Impact**: Controls initial behavior of new consumers
+
+### General Kafka Settings
+
+These settings define the Kafka endpoints used across the Teranode system:
+
+- **`kafka_txsConfig`**: Kafka URL - Used in Block Assembly and Validator services
+  - **Critical Impact**: Handles valid transaction flow to Block Assembly
+  - **Required**: Yes
+
+- **`kafka_validatortxsConfig`**: Kafka URL - Used in Propagation and Validator services
+  - **Critical Impact**: Manages new transaction flow from Propagation to Validator
+  - **Required**: Yes
+
+- **`kafka_txmetaConfig`**: Kafka URL - Used in Subtree Validation and Validator services
+  - **Critical Impact**: Carries transaction metadata for subtree construction
+  - **Required**: Yes
+
+- **`kafka_rejectedTxConfig`**: Kafka URL - Used in P2P and Validator services
+  - **Critical Impact**: Notifies network about invalid transactions
+  - **Required**: Yes
+
+- **`kafka_blocksConfig`**: Kafka URL - Used in Block Validation and P2P services
+  - **Critical Impact**: Distributes new blocks for validation
+  - **Required**: Yes
+
+- **`kafka_subtreesConfig`**: Kafka URL - Used in Subtree Validation and P2P services
+  - **Critical Impact**: Distributes subtrees for validation
+  - **Required**: Yes
+
+- **`kafka_blocksFinalConfig`**: Kafka URL - Used in Blockchain and Blockpersister services
+  - **Critical Impact**: Finalizes validated blocks for permanent storage
+  - **Required**: Yes
+
+### Service-Specific Settings
+
+#### Block Assembly
+- **`blockassembly_kafkaWorkers`**
+  - **Type**: Integer
+  - **Default**: 100
+  - **Description**: Number of worker goroutines processing Kafka messages
+  - **Impact**: Higher values increase throughput but consume more resources
+
+#### Block Validation
+- **`blockvalidation_kafkaBlockConcurrency`**
+  - **Type**: Integer
+  - **Default**: max(4, runtime.NumCPU()-16)
+  - **Description**: Number of concurrent block validations
+  - **Impact**: Higher values increase throughput but may cause resource contention
+
+#### Subtree Validation
+- **`subtreevalidation_kafkaSubtreeConcurrency`**
+  - **Type**: Integer
+  - **Default**: max(4, runtime.NumCPU()-16)
+  - **Description**: Number of concurrent subtree validations
+  - **Impact**: Higher values increase throughput but may cause resource contention
+
+#### Validator
+- **`validator_kafkaWorkers`**
+  - **Type**: Integer
+  - **Default**: 100
+  - **Description**: Number of worker goroutines in validator
+  - **Impact**: Higher values increase throughput but consume more resources
+
+### Consumer Group Configuration
+
+Kafka consumers in Teranode are organized into consumer groups, which determine how messages are distributed and processed.
+
+- **Consumer Group ID**: Each service uses a unique consumer group ID to ensure proper message distribution. This is typically passed as a parameter when creating a consumer group.
+
+- **Auto-Commit**:
+  - **Type**: Boolean
+  - **Description**: Controls whether Kafka offsets are automatically committed
+  - **Default**: Varies by service
+  - **Impact**: Critical for message processing guarantees
+  - **Service-Specific Settings**:
+    - **TxMeta Cache**: true (can tolerate missed messages)
+    - **Rejected Transactions**: true (can tolerate missed messages)
+    - **Subtree Validation**: false (requires exactly-once processing)
+    - **Block Persister**: false (requires exactly-once processing)
+    - **Block Validation**: false (requires exactly-once processing)
+
+### Configuration Interactions
+
+Many Kafka settings interact with each other and with system resources. Here are the most important interactions:
+
+1. **Partitioning and Concurrency**
+   - **Primary Settings**: `partitions`, service-specific concurrency settings
+   - **Interaction**: The number of partitions should align with concurrency settings for optimal performance
+   - **Recommendation**: Set partitions ≈ concurrency for balanced load
+
+2. **Durability vs. Performance**
+   - **Primary Settings**: `flush_frequency`, `flush_bytes`, `flush_messages`
+   - **Interaction**: Lower values increase durability but reduce throughput
+   - **Recommendation**: Tune based on importance of data and performance requirements
+
+3. **Resource Scaling**
+   - **Primary Settings**: service worker counts, partition counts
+   - **Interaction**: Must be balanced with available system resources
+   - **Recommendation**: Scale based on CPU cores and available memory
+
+4. **Message Processing Guarantees**
+   - **Primary Settings**: `autoCommit`, consumer logic
+   - **Interaction**: False requires manual commit after successful processing
+   - **Recommendation**: Use false for critical data paths
+
+## 5. Operational Guidelines
+
+### Performance Tuning
+
+1. **Partition Optimization**
+   - Each partition can only be consumed by one consumer in a consumer group
+   - Increase partitions to increase parallelism, but avoid over-partitioning
+   - General guideline: Start with partitions = number of consumers * 2
+
+2. **Resource Allocation**
+   - Kafka is memory-intensive; ensure sufficient RAM
+   - Disk I/O is critical; use fast storage (SSDs recommended)
+   - Network bandwidth should be sufficient for peak message volumes
+
+3. **Producer Tuning**
+   - Batch messages when possible by adjusting `flush_*` parameters
+   - Monitor producer queue size and adjust if messages are being dropped
+
+### Reliability Considerations
+
+1. **Replication Factor**
+   - Minimum recommended for production: 3
+   - Ensures data survives broker failures
+
+2. **Consumer Group Design**
+   - Critical services should use dedicated consumer groups
+   - Monitor consumer lag to detect processing issues
+
+3. **Error Handling**
+   - Services have different retry policies based on criticality
+   - Block and subtree validation use manual commits to ensure exactly-once processing
+
+### Monitoring
+
+Key metrics to monitor:
+
+1. **Broker Metrics**
+   - CPU, memory, disk usage
+   - Network throughput
+
+2. **Topic Metrics**
+   - Message rate
+   - Byte throughput
+   - Partition count
+
+3. **Consumer Metrics**
+   - Consumer lag
+   - Processing time
+   - Error rate
+
+4. **Producer Metrics**
+   - Send success rate
+   - Retry rate
+   - Queue size
+
+## 6. Other Resources
 
 - [Kafka Message Format](../../references/kafkaMessageFormat.md)
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.

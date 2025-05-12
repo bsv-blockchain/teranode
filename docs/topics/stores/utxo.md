@@ -484,109 +484,184 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Settings
 
-The `utxostore` setting must be set to pick a specific datastore implementation. The following values are supported:
+## 8. Configuration and Settings
 
-- **aerospike**: Aerospike UTXO store implementation.
+The UTXO Store can be configured using various connection URLs and configuration parameters. This section provides a comprehensive reference of all available configuration options.
 
-`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
+### 8.1 Connection URL Format
 
-- **memory**: Basic in-memory UTXO store.
+The `utxostore` setting determines which datastore implementation to use. The connection URL format varies depending on the selected backend:
 
-`utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash`
+#### 8.1.1 Aerospike
 
-- **sql**: Implementation of a postgres UTXO store.
+```
+aerosike://host:port/namespace?param1=value1&param2=value2
+```
 
-`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store`
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?set=txmeta&externalStore=blob://blobserver:8080/utxo
+```
 
-- **nullstore**: Implementation of a null or dummy UTXO store.
+**URL Parameters:**
+- `set`: Aerospike set name (default: "txmeta")
+- `externalStore`: URL for storing large transactions (required)
+- `ConnectionQueueSize`: Connection queue size for Aerospike client
+- `LimitConnectionsToQueueSize`: Whether to limit connections to queue size
 
-`utxostore.dev.[YOUR_USERNAME]=null:///`
+#### 8.1.2 SQL (PostgreSQL/SQLite)
 
+**PostgreSQL:**
+```
+postgres://username:password@host:port/dbname?param1=value1&param2=value2
+```
 
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store?expiration=24h
+```
 
-Additionally, the following Aerospike-related settings allow to further configure the application.
+**SQLite:**
+```
+sqlite:///path/to/file.sqlite?param1=value1&param2=value2
+```
 
-1. **Aerospike Debug Mode**
-   ```go
-   if gocore.Config().GetBool("aerospike_debug", true) {
-   ```
-    - **Description**: Enables or disables debug mode for Aerospike client.
-    - **Default Value**: `true`
-    - **Purpose**: Provides detailed logging for debugging purposes.
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=sqlite:///data/utxo.sqlite?expiration=24h
+```
 
-2. **Store Batcher Enabled**
-   ```go
-   storeBatcherEnabled := gocore.Config().GetBool("txmeta_store_storeBatcherEnabled", true)
-   ```
-    - **Description**: Enables or disables batching for store operations.
-    - **Default Value**: `true`
-    - **Purpose**: Controls whether store operations should be batched to improve performance.
+**In-memory SQLite:**
+```
+sqlitememory:///name?param1=value1&param2=value2
+```
 
-3. **Store Batcher Size**
-   ```go
-   batchSize, _ := gocore.Config().GetInt("txmeta_store_storeBatcherSize", 256)
-   ```
-    - **Description**: Sets the batch size for store operations.
-    - **Default Value**: `256`
-    - **Purpose**: Defines the number of transactions to batch before processing.
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=sqlitememory:///utxo?expiration=24h
+```
 
-4. **Store Batcher Duration**
-   ```go
-   batchDuration, _ := gocore.Config().GetInt("txmeta_store_storeBatcherDurationMillis", 10)
-   ```
-    - **Description**: Sets the duration in milliseconds for batching store operations.
-    - **Default Value**: `10`
-    - **Purpose**: Defines the maximum time to wait before processing a batch of transactions.
+**URL Parameters:**
+- `expiration`: Duration after which spent UTXOs are cleaned up (e.g., "24h", "7d")
+- `logging`: Enable SQL query logging (true/false)
 
-5. **Get Batcher Enabled**
-   ```go
-   getBatcherEnabled := gocore.Config().GetBool("txmeta_store_getBatcherEnabled", true)
-   ```
-    - **Description**: Enables or disables batching for get operations.
-    - **Default Value**: `true`
-    - **Purpose**: Controls whether get operations should be batched to improve performance.
+#### 8.1.3 Memory
 
-6. **Get Batcher Size**
-   ```go
-   batchSize, _ := gocore.Config().GetInt("txmeta_store_getBatcherSize", 1024)
-   ```
-    - **Description**: Sets the batch size for get operations.
-    - **Default Value**: `1024`
-    - **Purpose**: Defines the number of UTXO get requests to batch before processing.
+```
+memory://host:port/mode
+```
 
-7. **Get Batcher Duration**
-   ```go
-   batchDuration, _ := gocore.Config().GetInt("txmeta_store_getBatcherDurationMillis", 10)
-   ```
-    - **Description**: Sets the duration in milliseconds for batching get operations.
-    - **Default Value**: `10`
-    - **Purpose**: Defines the maximum time to wait before processing a batch of get requests.
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash
+```
 
-8. **Spend Batcher Enabled**
-   ```go
-   spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
-   ```
-    - **Description**: Enables or disables batching for spend operations.
-    - **Default Value**: `true`
-    - **Purpose**: Controls whether spend operations should be batched to improve performance.
+**Modes:**
+- `splitbyhash`: Distributes UTXOs based on hash
+- `all`: Stores all UTXOs in memory
 
-9. **Spend Batcher Size**
-   ```go
-   batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
-   ```
-    - **Description**: Sets the batch size for spend operations.
-    - **Default Value**: `256`
-    - **Purpose**: Defines the number of UTXO spend requests to batch before processing.
+#### 8.1.4 Nullstore
 
-10. **Spend Batcher Duration**
-    ```go
-    batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
-    ```
-    - **Description**: Sets the duration in milliseconds for batching spend operations.
-    - **Default Value**: `10`
-    - **Purpose**: Defines the maximum time to wait before processing a batch of spend requests.
+```
+null:///
+```
 
+Example:
+```
+utxostore.dev.[YOUR_USERNAME]=null:///
+```
 
+### 8.2 Configuration Parameters
+
+The UTXO Store can be configured through the `UtxoStoreSettings` struct which contains various parameters to control the behavior of the store. These settings can be specified in your configuration file or through environment variables.
+
+#### 8.2.1 General Settings
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|--------|
+| `UtxoStore` | *url.URL | Connection URL for the UTXO store | - |
+| `BlockHeightRetention` | uint32 | Number of blocks to retain data for | - |
+| `UtxoBatchSize` | int | Batch size for UTXOs (critical - do not change after initial setup) | 1024 |
+| `DBTimeout` | time.Duration | Timeout for database operations | 5s |
+| `UseExternalTxCache` | bool | Whether to use external transaction cache | false |
+| `ExternalizeAllTransactions` | bool | Whether to externalize all transactions | false |
+| `VerboseDebug` | bool | Enable verbose debugging | false |
+| `UpdateTxMinedStatus` | bool | Whether to update transaction mined status | true |
+
+#### 8.2.2 SQL-specific Settings
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|--------|
+| `PostgresMaxIdleConns` | int | Maximum number of idle connections to the PostgreSQL database | 10 |
+| `PostgresMaxOpenConns` | int | Maximum number of open connections to the PostgreSQL database | 100 |
+
+#### 8.2.3 Batch Processing Settings
+
+The UTXO Store uses batch processing to improve performance. The following settings control the behavior of various batchers:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|--------|
+| `StoreBatcherSize` | int | Batch size for store operations | 256 |
+| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching | 10 |
+| `StoreBatcherConcurrency` | int | Concurrency level for store batchers | 4 |
+| `GetBatcherSize` | int | Batch size for get operations | 1024 |
+| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching | 10 |
+| `SpendBatcherSize` | int | Batch size for spend operations | 256 |
+| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching | 10 |
+| `SpendBatcherConcurrency` | int | Concurrency level for spend batchers | 4 |
+| `OutpointBatcherSize` | int | Batch size for outpoint operations | 256 |
+| `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching | 10 |
+| `IncrementBatcherSize` | int | Batch size for increment operations | 256 |
+| `IncrementBatcherDurationMillis` | int | Maximum duration in milliseconds for increment batching | 10 |
+| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height (DAH) operations | 256 |
+| `SetDAHBatcherDurationMillis` | int | Maximum duration in milliseconds for DAH batching | 10 |
+| `UnspendableBatcherSize` | int | Batch size for unspendable operations | 256 |
+| `UnspendableBatcherDurationMillis` | int | Maximum duration in milliseconds for unspendable batching | 10 |
+| `MaxMinedRoutines` | int | Maximum number of routines for mined transactions | 4 |
+| `MaxMinedBatchSize` | int | Maximum batch size for mined transactions | 1000 |
+
+### 8.3 Environment Variables
+
+Many of the settings can also be configured through environment variables. The variables follow the pattern of uppercasing the parameter name with underscores, prefixed with `TERANODE_`.
+
+For example:
+- `TERANODE_UTXO_STORE_BLOCK_HEIGHT_RETENTION` sets the `BlockHeightRetention` parameter
+- `TERANODE_UTXO_STORE_UTXO_BATCH_SIZE` sets the `UtxoBatchSize` parameter
+
+### 8.4 Configuration Interactions and Best Practices
+
+#### 8.4.1 Batch Processing
+
+Batch processing significantly improves performance by reducing the number of database operations. However, it introduces a trade-off between latency and throughput:
+
+- Larger batch sizes increase throughput but may increase latency for individual operations
+- Shorter batch durations decrease latency but may reduce throughput
+
+**Recommendations:**
+- For high-throughput environments, increase batch sizes and durations
+- For low-latency requirements, decrease batch durations
+- Balance `StoreBatcherSize`, `GetBatcherSize`, and `SpendBatcherSize` according to your workload characteristics
+
+#### 8.4.2 External Transaction Storage
+
+When `UseExternalTxCache` is enabled, transactions are cached for a short period (10 seconds) after being read from the store. This significantly improves performance for transactions with many outputs being spent simultaneously.
+
+The `ExternalizeAllTransactions` setting controls whether all transactions are stored externally. This can improve performance but requires additional storage space.
+
+#### 8.4.3 Database Connection Pooling
+
+For SQL backends (PostgreSQL), the `PostgresMaxIdleConns` and `PostgresMaxOpenConns` settings control the connection pool behavior:
+
+- `PostgresMaxIdleConns`: Controls how many idle connections are maintained in the pool
+- `PostgresMaxOpenConns`: Limits the maximum number of concurrent connections to the database
+
+**Recommendations:**
+- Set `PostgresMaxOpenConns` based on your database server capacity and expected load
+- Set `PostgresMaxIdleConns` to a value that balances connection reuse with server resource usage
+
+#### 8.4.4 Critical Settings
+
+**Important:** The `UtxoBatchSize` setting is critical and must not be changed after the UTXO store has been running. It is used to calculate the offset for transaction outputs, and changing it would break the store's integrity.
 
 ## 9. Other Resources
 

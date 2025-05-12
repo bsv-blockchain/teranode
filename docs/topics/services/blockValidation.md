@@ -245,81 +245,168 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration options (settings flags)
 
-The Block Validation service uses the following configuration options:
+The Block Validation service configuration can be adjusted through environment variables or command-line flags. This section provides a comprehensive overview of all available configuration options organized by functional category.
 
 ### Network and Communication Settings
 
-1. **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. Default: "localhost:8088".
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_grpcAddress` | string | "localhost:8088" | Address that other services use to connect to this service | Affects how other services discover and communicate with the Block Validation service |
+| `blockvalidation_grpcListenAddress` | string | ":8088" | Network interface and port the service listens on for gRPC connections | Controls network binding and accessibility of the service |
 
-2. **`blockvalidation_grpcListenAddress`**: Specifies the address on which the block validation service's gRPC server listens. Default: ":8088".
+### Block Processing Pipeline
 
-### Kafka and Transaction Processing
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_blockFoundCh_buffer_size` | int | 1000 | Buffer size for the channel handling newly discovered blocks | Affects system's ability to handle bursts of new blocks without blocking |
+| `blockvalidation_maxPreviousBlockHeadersToCheck` | uint64 | 100 | Maximum number of previous block headers to check during validation | Defines the depth of historical validation performed |
+| `blockvalidation_validateBlockSubtreesConcurrency` | int | max(4, runtime.NumCPU()/2) | Number of concurrent goroutines for validating block subtrees | Higher values increase CPU utilization but improve throughput |
+| `blockvalidation_bloom_filter_retention_size` | uint32 | 100 | Number of recent blocks to maintain bloom filters for | Affects memory usage and duplicate transaction detection efficiency |
+| `blockvalidation_optimistic_mining` | bool | true | When enabled, blocks are conditionally accepted before full validation | Dramatically improves throughput at the cost of temporary chain inconsistency if validation fails |
+| `blockvalidation_previous_block_header_count` | uint64 | 100 | Number of previous block headers to maintain in memory | Affects memory usage and validation performance |
+| `blockvalidation_secret_mining_threshold` | uint32 | 10 | Threshold for detecting secret mining attacks | Lower values increase security at the cost of potential false positives |
 
-3. **`kafka_blocksConfig`**: Specifies the Kafka configuration for block messages, enabling the service to consume block data from Kafka.
+### Transaction Processing
 
-4. **`blockvalidation_kafkaWorkers`**: Sets the number of workers for processing Kafka messages. Default: 0 (auto-calculated).
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_localSetTxMinedConcurrency` | int | 8 | Concurrency level for marking transactions as mined | Higher values improve performance but increase memory usage |
+| `blockvalidation_missingTransactionsBatchSize` | int | 5000 | Batch size for retrieving missing transactions | Larger batches improve throughput but increase memory usage |
+| `blockvalidation_batch_missing_transactions` | bool | false | When enabled, missing transactions are fetched in batches | Improves network efficiency at the cost of slightly increased latency |
+| `blockvalidation_txMetaCacheEnabled` | bool | true | Enables or disables transaction metadata caching | Dramatically improves performance at the cost of increased memory usage |
+| `blockvalidation_processTxMetaUsingCache_BatchSize` | int | 1024 | Batch size for processing transaction metadata using cache | Affects performance and memory usage during cache operations |
+| `blockvalidation_processTxMetaUsingCache_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using cache | Controls parallel cache operations |
+| `blockvalidation_processTxMetaUsingCache_MissingTxThreshold` | int | 1 | Threshold for switching to store-based processing when missing transactions | Controls fallback behavior when cache misses occur |
+| `blockvalidation_processTxMetaUsingStore_BatchSize` | int | max(4, runtime.NumCPU()/2) | Batch size for processing transaction metadata using store | Affects storage I/O patterns and transaction processing throughput |
+| `blockvalidation_processTxMetaUsingStore_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using store | Controls parallel storage operations |
+| `blockvalidation_processTxMetaUsingStore_MissingTxThreshold` | int | 1 | Maximum allowed missing transactions before failure | Controls error tolerance during transaction processing |
 
-5. **`blockvalidation_txMetaCacheEnabled`**: Enables or disables the transaction metadata cache, which improves performance by caching recently accessed transaction metadata. Default: true.
+### Synchronization and Recovery
 
-### Transaction Processing Settings
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_useCatchupWhenBehind` | bool | false | Enables specialized catchup mode when node falls behind | Affects synchronization strategy and resource utilization |
+| `blockvalidation_catchupConcurrency` | int | max(4, runtime.NumCPU()/2) | Concurrency level for catchup operations | Controls parallel processing during chain synchronization |
+| `blockvalidation_catchupCh_buffer_size` | int | 10 | Buffer size for catchup operations channel | Affects performance during blockchain synchronization |
+| `blockvalidation_subtreeBlockHeightRetention` | uint32 | (global setting) | How long to keep subtrees (in terms of block height) | Affects storage utilization and historical data availability |
+| `blockvalidation_subtreeGroupConcurrency` | int | 1 | Maximum concurrent goroutines for processing subtree groups | Controls parallelism during subtree group processing |
+| `blockvalidation_skipCheckParentMined` | bool | false | When enabled, skips parent block mining verification | Testing only: compromises chain integrity for performance |
 
-6. **`blockvalidation_localSetTxMinedConcurrency`**: Controls concurrency level for marking transactions as mined locally. Default: 8.
+### Error Handling and Resilience
 
-7. **`blockvalidation_missingTransactionsBatchSize`**: Sets the batch size for retrieving missing transactions. Default: 5000.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_validation_max_retries` | int | 3 | Maximum retries for validation operations | Affects resilience to transient failures |
+| `blockvalidation_validation_retry_sleep` | duration | 5s | Sleep duration between validation retries | Controls back-off behavior during retry attempts |
+| `blockvalidation_isParentMined_retry_max_retry` | int | 20 | Maximum retries when checking if parent block is mined | Affects resilience during chain reorganizations |
+| `blockvalidation_isParentMined_retry_backoff_multiplier` | int | 30 | Backoff multiplier for parent mining check retries | Controls exponential back-off during retries |
+| `blockvalidation_check_subtree_from_block_timeout` | duration | 5m | Timeout for checking subtrees from a block | Limits how long the service will wait for subtree validation |
+| `blockvalidation_check_subtree_from_block_retries` | int | 5 | Number of retries for checking subtrees | Affects resilience to transient subtree retrieval failures |
+| `blockvalidation_check_subtree_from_block_retry_backoff_duration` | duration | 30s | Backoff duration between subtree check retries | Controls delay between retry attempts |
+| `blockvalidation_subtree_validation_abandon_threshold` | int | 1 | Number of validation failures before abandoning a subtree | Controls resilience vs. resource conservation trade-off |
 
-8. **`blockvalidation_processTxMetaUsingStoreBatchSize`**: Sets the batch size for processing transaction metadata using the store. Default: Max(4, Number of CPUs / 2).
+### Kafka Integration
 
-9. **`blockvalidation_processTxMetaUsingStoreConcurrency`**: Sets the concurrency level for processing transaction metadata using the store. Default: 32.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `kafka_blocksConfig` | string | (none) | Kafka configuration for block messages | Required for consuming blocks from Kafka |
+| `blockvalidation_kafkaWorkers` | int | 0 (auto) | Number of Kafka consumer workers | Controls parallelism for Kafka-based block validation |
 
-10. **`blockvalidation_batch_missing_transactions`**: Enables or disables batching when retrieving missing transactions. Default: false.
+### Performance Monitoring
 
-### Concurrency and Channel Settings
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_validation_warmup_count` | int | 128 | Number of validation operations during warmup | Helps prime caches and establish performance baselines |
 
-11. **`blockvalidation_subtreeGroupConcurrency`**: Controls concurrency level for processing subtree groups. Default: 1.
+### Miscellaneous
 
-12. **`blockvalidation_blockFoundCh_buffer_size`**: Sets the buffer size for the channel used to queue newly found blocks. Default: 1000.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `excessiveblocksize` | int | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
+| `utxostore` | URL | (none) | URL for the UTXO store | Required for UTXO validation and updates |
+| `fsm_state_restore` | bool | false | Enables FSM state restoration | Affects recovery behavior after service restart |
 
-13. **`blockvalidation_catchupCh_buffer_size`**: Sets the buffer size for the channel used in handling catchup events. Default: 10.
+## Configuration Interactions and Dependencies
 
-14. **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls concurrency level for validating block subtrees. Default: Max(4, Number of CPUs / 2).
+Many configuration settings interact with each other to affect overall system behavior. Understanding these interactions is crucial for optimal tuning.
 
-15. **`blockvalidation_subtreeTTLConcurrency`**: Sets concurrency level for subtree TTL operations. Default: 32.
+### Optimistic Mining
 
-16. **`blockvalidation_catchupConcurrency`**: Sets concurrency level for catch-up operations. Default: Max(4, Number of CPUs / 2).
+The `blockvalidation_optimistic_mining` setting enables a performance optimization where blocks are conditionally accepted before full validation completes. This dramatically improves blockchain throughput but introduces a risk of temporary chain inconsistency if validation later fails.
 
-### Performance and Optimization
+When enabled:
+- The system achieves higher throughput and lower latency
+- Validation continues asynchronously after block acceptance
+- If validation fails, a chain reorganization may be necessary
 
-17. **`blockvalidation_optimistic_mining`**: When enabled, blocks are added to the blockchain before full validation, improving performance at the cost of potential temporary inconsistencies if a block is later found invalid. Default: true.
+Related settings that affect this behavior include:
+- `blockvalidation_validation_max_retries` - Controls resilience during validation
+- `blockvalidation_validation_retry_sleep` - Affects backoff behavior during retries
 
-18. **`blockvalidation_subtreeTTL`**: Sets the Time-To-Live for subtrees (in minutes). Default: 120 minutes.
+### Transaction Processing Pipeline
 
-19. **`blockvalidation_maxPreviousBlockHeadersToCheck`**: Specifies the maximum number of previous block headers to check during validation. Default: 100.
+The transaction processing pipeline is controlled by multiple settings that affect concurrency, batch sizing, and caching behavior:
 
-20. **`blockvalidation_validation_warmup_count`**: Sets the number of operations to perform during validation warmup. Default: 128.
+- **Cache-based processing**: When `blockvalidation_txMetaCacheEnabled` is true, the service uses an in-memory cache for transaction metadata, controlled by `blockvalidation_processTxMetaUsingCache_*` settings
+- **Store-based processing**: For transactions not in cache, the service uses store-based processing, controlled by `blockvalidation_processTxMetaUsingStore_*` settings
+- **Batch size vs. Concurrency**: Increasing batch sizes improves efficiency but increases memory usage, while increasing concurrency improves throughput but increases CPU utilization
 
-### Error Handling and Retries
+### Synchronization Strategy
 
-21. **`blockvalidation_validation_max_retries`**: Maximum number of retries for validation operations. Default: 3.
+When a node falls behind the blockchain tip, its synchronization strategy is controlled by:
 
-22. **`blockvalidation_validation_retry_sleep`**: Duration to sleep between validation retries. Default: 5 seconds.
+- `blockvalidation_useCatchupWhenBehind` - Enables specialized catchup mode
+- `blockvalidation_catchupConcurrency` - Controls parallel processing during catchup
+- `blockvalidation_catchupCh_buffer_size` - Affects buffer capacity for catchup operations
 
-23. **`blockvalidation_isParentMined_retry_max_retry`**: Maximum number of retries when checking if a parent block is mined. Default: 20.
+Optimal settings depend on hardware capabilities and network conditions.
 
-24. **`blockvalidation_isParentMined_retry_backoff_multiplier`**: Backoff multiplier for parent block mining check retries. Default: 30.
+## Deployment Recommendations
 
-25. **`blockvalidation_useCatchupWhenBehind`**: When enabled, the service will use a catchup process when it falls behind the blockchain. Default: false.
+### Development Environment
 
-26. **`blockvalidation_skipCheckParentMined`**: When enabled, skips checking if the parent block is mined. Generally used for testing. Default: false.
+For development and testing environments, prioritize faster feedback cycles and debugging capabilities:
 
-27. **`excessiveblocksize`**: Sets the excessive block size limit for block validation. Default: 4GB.
+```properties
+blockvalidation_optimistic_mining=false  # Disable for predictable validation behavior
+blockvalidation_txMetaCacheEnabled=true  # Enable cache for better performance
+blockvalidation_localSetTxMinedConcurrency=4  # Lower concurrency to reduce resource usage
+blockvalidation_validateBlockSubtreesConcurrency=2  # Lower concurrency for reduced CPU usage
+blockvalidation_batch_missing_transactions=true  # Enable for better network efficiency
+```
 
-### Storage and State Management
+### Production Environment
 
-18. **`utxostore`**: Specifies the URL for the UTXO (Unspent Transaction Output) store.
+For production environments, prioritize reliability, resilience, and consistent performance:
 
-19. **`blockvalidation_useCatchupWhenBehind`**: Enables catch-up mode when the node is behind in block processing. Default: false.
+```properties
+blockvalidation_optimistic_mining=true  # Enable for better throughput
+blockvalidation_blockFoundCh_buffer_size=2000  # Increased buffer for handling bursts
+blockvalidation_txMetaCacheEnabled=true  # Enable cache for performance
+blockvalidation_localSetTxMinedConcurrency=16  # Higher concurrency for better throughput
+blockvalidation_validateBlockSubtreesConcurrency=8  # Balanced concurrency for validation
+blockvalidation_processTxMetaUsingCache_Concurrency=64  # Higher concurrency for cache operations
+blockvalidation_validation_max_retries=5  # Increased retries for better resilience
+blockvalidation_useCatchupWhenBehind=true  # Enable efficient catchup when behind
+```
 
-20. **`fsm_state_restore`**: Enables Finite State Machine (FSM) state restoration. Default: false.
+### High-Performance Environment
+
+For high-throughput environments with significant hardware resources:
+
+```properties
+blockvalidation_optimistic_mining=true  # Enable for maximum throughput
+blockvalidation_blockFoundCh_buffer_size=5000  # Large buffer for handling extreme bursts
+blockvalidation_txMetaCacheEnabled=true  # Enable cache for performance
+blockvalidation_processTxMetaUsingCache_BatchSize=2048  # Larger batches for efficiency
+blockvalidation_processTxMetaUsingCache_Concurrency=128  # High concurrency for cache operations
+blockvalidation_localSetTxMinedConcurrency=32  # High concurrency for transaction marking
+blockvalidation_validateBlockSubtreesConcurrency=16  # High concurrency for validation
+blockvalidation_catchupConcurrency=16  # High concurrency for catchup operations
+blockvalidation_useCatchupWhenBehind=true  # Enable efficient catchup when behind
+```
+
+> **Note**: These recommendations should be adjusted based on specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
 
 
 ## 9. Other Resources

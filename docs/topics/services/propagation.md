@@ -168,30 +168,114 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration options (settings flags)
 
-The Propagation service uses the following configuration options:
+The Propagation service serves as the transaction intake and distribution system for the Teranode network, critical for handling transaction flow between clients and the internal services. This section provides a comprehensive overview of all configuration options, organized by functional category.
 
-### Daemon Level Settings
+### Network and Communication Settings
 
-1. **`validator.useLocalValidator`**: Controls the validator deployment model used by the Propagation service.
-   - When `true`: Uses a local validator instance embedded within the service (recommended for production).
-   - When `false`: Connects to a remote validator service via gRPC.
-   - This setting affects performance and deployment architecture across multiple services.
-   - Default: `false`
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `propagation_grpcListenAddress` | string | "" | Address for gRPC server to listen on | Controls the endpoint where the gRPC API is exposed |
+| `propagation_grpcAddresses` | []string | [] | List of gRPC addresses for other services to connect to | Affects how other services discover and communicate with this service |
+| `propagation_httpListenAddress` | string | "" | Address for HTTP server to listen on | Controls if and where the HTTP transaction API is exposed |
+| `propagation_httpAddresses` | []string | [] | List of HTTP addresses for other services to connect to | Affects how other services discover this service's HTTP API |
+| `ipv6_addresses` | string | "" | Comma-separated list of IPv6 multicast addresses | Controls which IPv6 multicast addresses are used for transaction reception |
+| `ipv6_interface` | string | "" (falls back to "en0") | Network interface name for IPv6 multicast | Determines which network interface is used for multicast communication |
 
-2. **`validator.httpAddress`**: Specifies the HTTP address for the validator service, used by the large transaction fallback mechanism when transactions exceed Kafka message size limits.
+### Performance and Throttling Settings
 
-### Propagation Service Settings
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `propagation_grpcMaxConnectionAge` | duration | 90s | Maximum duration for gRPC connections before forced renewal | Controls connection lifecycle and helps with load balancing |
+| `propagation_httpRateLimit` | int | 1024 | Rate limit for HTTP API requests (per second) | Controls how many requests per second the HTTP API can handle |
+| `propagation_sendBatchSize` | int | 100 | Maximum number of transactions to send in a batch | Affects efficiency and throughput of transaction processing |
+| `propagation_sendBatchTimeout` | int | 5 | Timeout in seconds for batch sending operations | Controls how long the service waits to collect a full batch |
 
-- **`propagation_sendBatchSize`**: Defines the batch size for sending transactions (default: 100).
-- **`propagation_sendBatchTimeout`**: Sets the timeout for sending batches of transactions, likely in seconds (default: 5).
-- **`grpc_resolver`**: Determines the gRPC resolver to use for client connections, supporting Kubernetes ("k8s" or "kubernetes") and potentially other resolvers.
-- **`propagation_grpcAddresses`**: Lists the gRPC server addresses for the propagation service, used by the client to connect and process transactions.
-- **`propagation_httpListenAddress`**: Specifies the HTTP listen address for the propagation service.
-- **`fsm_state_restore`**: A boolean flag to determine if the Finite State Machine (FSM) should be restored to a previous state (default: false).
-- **`kafka_validatortxsConfig`**: URL configuration for Kafka, used for validator transactions.
-- **`kafka_maxMessageSizeBytes`**: Maximum size in bytes for Kafka messages. Transactions exceeding this size will use the HTTP fallback mechanism.
-- **`validator_kafkaWorkers`**: Number of Kafka workers for the validator service (default: 100).
-- **`propagation_grpcMaxConnectionAge`**: Maximum age of gRPC connections before they are closed and reopened (default: 90 seconds).
+### Validator Integration Settings
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `validator.useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Eliminates network overhead for validation, improving performance |
+| `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of Kafka for transaction validation | Affects how transactions are sent to the validator service |
+| `validator_httpAddress` | url | null | URL for validator HTTP API | Used as fallback for large transactions exceeding Kafka limits |
+
+## Configuration Interactions and Dependencies
+
+### Transaction Ingestion Paths
+
+The Propagation service supports multiple methods for receiving transactions, controlled by several related settings:
+
+- HTTP API (`propagation_httpListenAddress`): REST-based transaction submission, rate-limited by `propagation_httpRateLimit`
+- gRPC API (`propagation_grpcListenAddress`): High-performance RPC interface for transaction submission
+- IPv6 Multicast (`ipv6_addresses` on the specified `ipv6_interface`): Efficient multicast reception of transactions
+
+At least one ingestion path must be configured for the service to be functional. For production deployments, all three methods should be configured for maximum compatibility and performance.
+
+### Transaction Validation Architecture
+
+The Propagation service interacts with the Validator service using one of two architectural patterns:
+
+- **Local Validator Mode** (`validator.useLocalValidator=true`):
+  - Validator runs in-process with the Propagation service
+  - Eliminates network overhead for validation operations
+  - Recommended for production deployments to minimize latency
+
+- **Remote Validator Mode** (`validator.useLocalValidator=false`):
+  - Propagation service communicates with a separate Validator service
+  - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
+  - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`
+
+### Batch Processing Optimization
+
+The transaction processing pipeline uses batching to optimize throughput, controlled by:
+
+- `propagation_sendBatchSize`: Determines maximum batch size for transaction processing
+- `propagation_sendBatchTimeout`: Controls how long to wait for a batch to fill before processing
+
+These settings should be tuned together based on expected transaction volume and size characteristics. Higher batch sizes improve throughput but increase latency, while shorter timeouts decrease latency but may result in smaller, less efficient batches.
+
+## Deployment Recommendations
+
+### Development Environment
+
+For development and testing, prioritize ease of debugging:
+
+```properties
+propagation_httpListenAddress=:9007         # Enable HTTP API on localhost port 9007
+propagation_httpRateLimit=0                # Disable rate limiting for testing
+validator.useLocalValidator=false          # Use separate validator service for easier debugging
+propagation_alwaysUseHTTP=true            # Use direct HTTP instead of Kafka for simplicity
+```
+
+### Production Environment
+
+For production deployments, prioritize performance and reliability:
+
+```properties
+propagation_grpcListenAddress=:9907        # Enable gRPC API on standard port
+propagation_httpListenAddress=:9007        # Enable HTTP API on standard port
+propagation_httpRateLimit=1024             # Apply reasonable rate limiting
+validator.useLocalValidator=true           # Use embedded validator for performance
+propagation_sendBatchSize=250              # Increase batch size for throughput
+ipv6_addresses=ff02::1:1,ff02::1:2         # Enable multicast reception on multiple groups
+ipv6_interface=eth0                        # Use appropriate network interface
+```
+
+### High-Volume Environment
+
+For environments handling high transaction volumes:
+
+```properties
+propagation_grpcListenAddress=:9907        # Enable gRPC API on standard port
+propagation_httpListenAddress=:9007        # Enable HTTP API on standard port
+propagation_httpRateLimit=5000             # Higher rate limit for high volume
+validator.useLocalValidator=true           # Use embedded validator for performance
+propagation_sendBatchSize=500              # Higher batch size for throughput
+propagation_sendBatchTimeout=3             # Lower timeout for more consistent processing
+propagation_grpcMaxConnectionAge=60s       # More frequent connection cycling for load balancing
+```
+
+> **Note**: These recommendations should be adjusted based on your specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
+
 
 
 ## 9. Other Resources

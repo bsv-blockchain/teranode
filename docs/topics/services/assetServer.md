@@ -287,49 +287,159 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Asset Server locally.
 
 
-### 7.2 Configuration options (settings flags)
+### 7.2 Configuration Options (Settings Flags)
 
-1. **HTTP Server Configuration**
-    - `asset_httpListenAddress`: Address for the Asset Service to listen for HTTP requests.
-      Example: asset_httpListenAddress=:8090
-    - `asset_httpAddress`: URL of the Asset Service HTTP server.
-      Example: asset_httpAddress=http://localhost:8090
-    - `securityLevelHTTP`: Determines the security level for HTTP communication. 0 for HTTP, non-zero for HTTPS.
-      Example: securityLevelHTTP=1
-    - `server_certFile`: Path to the SSL certificate file for HTTPS.
-      Example: server_certFile=/path/to/cert.pem
-    - `server_keyFile`: Path to the SSL key file for HTTPS.
-      Example: server_keyFile=/path/to/key.pem
-    - `http_sign_response`: Enables or disables signing of HTTP responses.
-      Example: http_sign_response=true
-    - `asset_apiPrefix`: Specifies the API prefix for HTTP routes.
-      Example: asset_apiPrefix=/api/v1
+The Asset Server can be configured using various settings that control its behavior, network connectivity, security features, and performance characteristics. This section provides a comprehensive reference of all configuration options and their interactions.
 
-2. **Centrifuge Configuration**
-    - `asset_centrifuge_disable`: Disables the Centrifuge service if set to true.
-      Example: asset_centrifuge_disable=false
-    - `asset_centrifugeListenAddress`: Specifies the listen address for the Centrifuge service integration.
-      Example: asset_centrifugeListenAddress=:8101
+#### 7.2.1 HTTP Server Configuration
 
-3. **P2P Configuration**
-    - `p2p_httpAddress`: HTTP address for P2P communication.
-      Example: p2p_httpAddress=localhost:9906
-    - `p2p_private_key`: Private key for P2P communication.
-      Example: p2p_private_key=<your-private-key>
+| Setting | Type | Description | Default | Required |
+|---------|------|-------------|---------|----------|
+| `asset_httpListenAddress` | string | Address for the Asset Service to listen for HTTP requests | - | Yes |
+| `asset_httpAddress` | string | URL of the Asset Service HTTP server (used as base URL for client connections) | - | Yes* |
+| `asset_httpPublicAddress` | string | Public-facing URL for client communication | - | No |
+| `asset_apiPrefix` | string | Specifies the API prefix for HTTP routes (e.g., "/api/v1") | - | No |
+| `securityLevelHTTP` | int | Determines the security level for HTTP communication. 0 for HTTP, non-zero for HTTPS | 0 | No |
+| `server_certFile` | string | Path to the SSL certificate file for HTTPS | - | Yes** |
+| `server_keyFile` | string | Path to the SSL key file for HTTPS | - | Yes** |
+| `asset_signHTTPResponses` | bool | Enables cryptographic signing of HTTP responses | false | No |
+| `asset_echoDebug` | bool | Enables Echo framework debug mode for detailed HTTP request logging | false | No |
 
-4. **UTXO Store Configuration**
-    - `utxostore`: URL for the UTXO store.
-      Example: utxostore=http://localhost:8080
+*Required when Centrifuge is enabled<br>
+**Required when securityLevelHTTP is non-zero
 
-5. **Block Validation Configuration**
-    - blockvalidation_processTxMetaUsingStore_BatchSize: Batch size for processing transaction metadata.
-      Example: blockvalidation_processTxMetaUsingStore_BatchSize=1024
-    - blockvalidation_processTxMetaUsingStor_Concurrency: Concurrency level for processing transaction metadata.
-      Example: blockvalidation_processTxMetaUsingStor_Concurrency=4
+**HTTP Configuration Examples:**
 
-6. **Debugging Configuration**
-    - ECHO_DEBUG: Enables or disables debug mode for the Echo framework.
-      Example: ECHO_DEBUG=true
+**Basic HTTP Server:**
+```
+asset_httpListenAddress=:8090
+asset_apiPrefix=/api/v1
+```
+
+**HTTPS Server:**
+```
+asset_httpListenAddress=:8443
+securityLevelHTTP=1
+server_certFile=/path/to/cert.pem
+server_keyFile=/path/to/key.pem
+```
+
+**Signed Responses:**
+```
+asset_signHTTPResponses=true
+p2p_private_key=ed25519_private_key_in_hex_format
+```
+
+#### 7.2.2 Centrifuge Real-time Updates Configuration
+
+The Asset Server includes a Centrifuge implementation for real-time updates via WebSockets. These settings control its behavior:
+
+| Setting | Type | Description | Default | Required |
+|---------|------|-------------|---------|----------|
+| `asset_centrifugeDisable` | bool | Disables the Centrifuge service when set to true | false | No |
+| `asset_centrifugeListenAddress` | string | Listen address for the Centrifuge WebSocket server | - | Yes* |
+
+*Required only when Centrifuge is enabled (asset_centrifugeDisable=false)
+
+**Centrifuge Configuration Example:**
+```
+asset_centrifugeDisable=false
+asset_centrifugeListenAddress=:8101
+asset_httpAddress=http://localhost:8090
+```
+
+Centrifuge supports the following subscription channels:
+- `ping`: For connection health checks
+- `block`: For new block notifications
+- `subtree`: For Merkle tree updates
+- `mining_on`: For mining status updates
+
+#### 7.2.3 Security Configuration
+
+These settings control security features of the Asset Server:
+
+| Setting | Type | Description | Default | Required |
+|---------|------|-------------|---------|----------|
+| `securityLevelHTTP` | int | Controls HTTP vs HTTPS mode (0 = HTTP, non-zero = HTTPS) | 0 | No |
+| `asset_signHTTPResponses` | bool | Enables cryptographic signing of HTTP responses | false | No |
+| `p2p_private_key` | string | Ed25519 private key in hexadecimal format for signing responses | - | Yes* |
+
+*Required only when asset_signHTTPResponses=true
+
+**Security Best Practices:**
+
+1. **Use HTTPS in production environments**
+   ```
+   securityLevelHTTP=1
+   server_certFile=/path/to/cert.pem
+   server_keyFile=/path/to/key.pem
+   ```
+
+2. **Enable response signing for sensitive APIs**
+   ```
+   asset_signHTTPResponses=true
+   p2p_private_key=secure_private_key
+   ```
+
+3. **Store private keys securely**
+   - Use environment variables for sensitive configuration
+   - Rotate private keys periodically
+   - Restrict access to configuration files
+
+#### 7.2.4 Dependency Configuration
+
+The Asset Server depends on several services for data access. These must be properly configured for the Asset Server to function:
+
+| Service | Setting | Description | Required |
+|---------|---------|-------------|----------|
+| UTXO Store | `utxostore` | Connection URL for UTXO data | Yes |
+| Transaction Store | `txstore` | Connection URL for transaction data | Yes |
+| Subtree Store | `subtreestore` | Connection URL for Merkle subtree data | Yes |
+| Block Persister Store | `block_persisterStore` | Connection URL for persisted block data | Yes |
+| Blockchain Client | `blockchain_grpcAddress` | gRPC connection for blockchain service | Yes |
+
+**Example Configuration:**
+```
+utxostore=aerospike://localhost:3000/test?set=utxo
+txstore=blob://localhost:8080/tx
+subtreestore=blob://localhost:8080/subtree
+block_persisterStore=blob://localhost:8080/blocks
+blockchain_grpcAddress=localhost:8082
+```
+
+#### 7.2.5 Environment Variables
+
+All configuration options can be set using environment variables with the prefix `TERANODE_`. For example:
+
+```bash
+export TERANODE_ASSET_HTTP_LISTEN_ADDRESS=:8090
+export TERANODE_SECURITY_LEVEL_HTTP=1
+export TERANODE_SERVER_CERT_FILE=/path/to/cert.pem
+```
+
+#### 7.2.6 Configuration Interactions and Dependencies
+
+**HTTP/HTTPS Mode:**
+The `securityLevelHTTP` setting determines whether the server runs in HTTP or HTTPS mode:
+- When set to `0`, the server runs in HTTP mode using `asset_httpListenAddress`
+- When set to a non-zero value, the server runs in HTTPS mode and requires valid certificate and key files
+
+**Centrifuge Dependencies:**
+When Centrifuge is enabled (`asset_centrifugeDisable=false`):
+- `asset_centrifugeListenAddress` must be set to specify the WebSocket listen address
+- `asset_httpAddress` must be set to serve as the base URL for client connections
+
+**Response Signing Dependencies:**
+When response signing is enabled (`asset_signHTTPResponses=true`):
+- `p2p_private_key` must be set with a valid Ed25519 private key in hexadecimal format
+
+#### 7.2.7 Debugging Configuration
+
+| Setting | Type | Description | Default |
+|---------|------|-------------|--------|
+| `asset_echoDebug` | bool | Enables detailed HTTP request logging | false |
+
+When `asset_echoDebug` is enabled, the server logs detailed information about each HTTP request and response, useful for development and troubleshooting.
 
 7. **FSM Configuration**
     - fsm_state_restore: Enables or disables the restore state for the Finite State Machine.

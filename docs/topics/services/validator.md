@@ -488,47 +488,261 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.
 
 
-## 8. Configuration options (settings flags)
+## 8. Configuration Settings
 
-### Network and Communication
+The TX Validator service relies on a set of configuration settings that control its behavior, performance, and integration with other services. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.
 
-1. **`validator_grpcAddress`**: Specifies the address for connecting to the validator's gRPC server. Default: "localhost:8081".
-2. **`validator_grpcListenAddress`**: Specifies the address on which the validator's gRPC server listens. Default: ":8081".
-3. **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
-4. **`validator_httpListenAddress`**: Address on which the validator's HTTP server listens, if enabled.
-5. **`validator_httpAddress`**: URL for the validator's HTTP API endpoint.
-6. **`validator_httpRateLimit`**: Rate limit for HTTP requests to the validator. Default: 1024.
+### 8.1 Configuration Categories
 
-### Transaction Processing and Block Assembly
+TX Validator service settings can be organized into the following functional categories:
 
-7. **`blockassembly_disabled`**: When true, disables the integration with block assembly, meaning validated transactions won't be forwarded to block assembly. Default: false.
-8. **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests. Default: 100.
-9. **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests. Default: 2 ms.
-10. **`validator_sendBatchWorkers`**: Number of worker goroutines for processing batched validation requests. Default: 10.
-11. **`useLocalValidator`**: When true, uses a local validator instance instead of a remote one. Default: false.
+1. **Deployment Architecture**: Settings that determine how the validator is deployed and integrated
+2. **Network & Communication**: Settings that control network binding and API endpoints
+3. **Performance & Throughput**: Settings that affect transaction processing performance
+4. **Kafka Integration**: Settings for message-based communication
+5. **Validation Rules**: Settings that control transaction validation policies
+6. **Monitoring & Debugging**: Settings for observability and troubleshooting
 
-### Kafka Integration
+### 8.2 Deployment Architecture Settings
 
-12. **`validator_kafkaWorkers`**: Number of worker goroutines for Kafka operations. Default: 0 (auto-calculated).
-13. **`kafka_validatortxsConfig`**: URL for the Kafka configuration for validator transactions.
-14. **`kafka_txmetaConfig`**: URL for the Kafka configuration for transaction metadata.
-15. **`kafka_rejectedTxConfig`**: URL for the Kafka configuration for rejected transactions.
-16. **`validator_kafka_maxMessageBytes`**: Maximum size of Kafka messages in bytes. Default: 1MB.
+These settings fundamentally change how the validator operates within the system architecture.
 
-### Validation Configuration
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `useLocalValidator` | bool | `false` | Controls whether validation is performed locally or via remote service | Significantly affects system architecture, latency, and deployment model |
 
-17. **`validator_blockvalidation_delay`**: Delay before initiating block validation. Default: 0.
-18. **`validator_blockvalidation_maxRetries`**: Maximum number of retries for block validation. Default: 5.
-19. **`validator_blockvalidation_retrySleep`**: Sleep duration between block validation retries. Default: "2s".
+#### Deployment Architecture Interactions and Dependencies
 
-### Debugging and State Management
+The `useLocalValidator` setting has profound implications for system architecture:
 
-20. **`validator_verbose_debug`**: Enables verbose debug logging for the validator. Default: false.
-21. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
+- When `true`, the validator is instantiated directly within other services (Propagation, Subtree Validation, Legacy), eliminating network overhead but requiring these services to be compiled with the validator
+- When `false`, the validator runs as an independent service with a gRPC interface that other services connect to remotely
 
-### Script Verification
+This choice creates two distinct deployment architectures:
 
-22. **`validator_scriptVerificationLibrary`**: Library to use for Bitcoin script verification. Default: "VerificatorGoBT".
+**Local Validator Architecture:**
+- Services contain embedded validator instances
+- No network calls between services and validator
+- Lower latency and higher throughput
+- All services must be redeployed when validator code changes
+- Limited deployment flexibility
+
+**Remote Validator Architecture:**
+- Validator runs as a standalone service
+- Network calls between services and validator
+- Higher latency but more flexible deployment
+- Validator can be scaled independently
+- Supports independent deployment and updates
+
+### 8.3 Network & Communication Settings
+
+These settings control how the validator communicates over the network.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `validator_grpcAddress` | string | `"localhost:8081"` | Address for connecting to the validator gRPC service | Determines how other services connect to the validator |
+| `validator_grpcListenAddress` | string | `":8081"` | Address on which the validator gRPC server listens | Controls network binding for incoming validation requests |
+| `validator_httpListenAddress` | string | `""` | Address on which the HTTP API server listens | Enables HTTP-based validation requests when set |
+| `validator_httpAddress` | *url.URL | `nil` | URL for connecting to the validator HTTP API | Determines how other services connect to the HTTP interface |
+| `validator_httpRateLimit` | int | `1024` | Maximum number of HTTP requests per second | Prevents resource exhaustion from excessive requests |
+| `grpc_resolver` | string | `""` | Determines the gRPC resolver to use | Enables service discovery in Kubernetes environments |
+
+#### Network & Communication Interactions and Dependencies
+
+The validator offers two API interfaces for transaction validation:
+
+**gRPC Interface**:
+- Primary interface for high-performance validation requests
+- Used by Propagation and Subtree Validation services
+- Always enabled when running in remote validator mode
+- Configured through `validator_grpcAddress` and `validator_grpcListenAddress`
+
+**HTTP Interface**:
+- Optional secondary interface for REST-based validation requests
+- Only enabled when `validator_httpListenAddress` is set
+- Provides a simpler interface for testing and third-party integrations
+- Protected by rate limiting through `validator_httpRateLimit`
+
+In Kubernetes environments, the `grpc_resolver` setting enables service discovery to locate validator instances dynamically.
+
+### 8.4 Performance & Throughput Settings
+
+These settings control how efficiently transactions are processed.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `validator_sendBatchSize` | int | `100` | Number of transactions to accumulate before batch processing | Balances throughput against latency for transaction processing |
+| `validator_sendBatchTimeout` | int | `2` | Maximum time (seconds) to wait before processing a partial batch | Ensures timely processing of transactions even when volume is low |
+| `validator_sendBatchWorkers` | int | `10` | Number of worker goroutines for batch send operations | Controls parallelism for outbound transaction processing |
+| `validator_blockvalidation_delay` | int | `0` | Artificial delay (milliseconds) introduced before block validation | Can be used for testing or throttling validation operations |
+| `validator_blockvalidation_maxRetries` | int | `5` | Maximum number of retries for failed block validations | Affects resilience against transient failures |
+| `validator_blockvalidation_retrySleep` | string | `"2s"` | Time to wait between block validation retry attempts | Controls backoff strategy for failed validations |
+
+#### Performance & Throughput Interactions and Dependencies
+
+The batch processing settings work together to optimize transaction throughput:
+
+- Batching improves performance by amortizing overhead across multiple transactions
+- The validator accumulates up to `validator_sendBatchSize` transactions before processing them as a batch
+- If fewer transactions arrive, a partial batch is processed after `validator_sendBatchTimeout` seconds
+- Multiple worker goroutines (`validator_sendBatchWorkers`) process batches in parallel
+
+This creates a balance between throughput (larger batches) and latency (timely processing).
+
+The block validation retry settings (`validator_blockvalidation_maxRetries` and `validator_blockvalidation_retrySleep`) control resilience by determining how aggressively the system retries failed operations.
+
+### 8.5 Kafka Integration Settings
+
+These settings control message-based communication via Kafka.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `validator_kafkaWorkers` | int | `0` | Number of worker goroutines for Kafka message processing | Affects concurrency and throughput for Kafka-based transaction handling |
+| `kafka_validatortxsConfig` | URL | `""` | URL for the Kafka configuration for validator transactions | Configures how transactions are published to Kafka |
+| `kafka_txmetaConfig` | URL | `""` | URL for the Kafka configuration for transaction metadata | Configures how transaction metadata is published to Kafka |
+| `kafka_rejectedTxConfig` | URL | `""` | URL for the Kafka configuration for rejected transactions | Configures how rejected transaction information is published to Kafka |
+| `validator_kafka_maxMessageBytes` | int | `1048576` | Maximum size of Kafka messages in bytes | Limits the size of transactions that can be processed via Kafka |
+
+#### Kafka Integration Interactions and Dependencies
+
+Kafka integration provides asynchronous communication between the validator and other services:
+
+- Successful validations produce messages to `kafka_txmetaConfig` for Block Assembly
+- Rejected transactions produce messages to `kafka_rejectedTxConfig` for P2P notification
+- `validator_kafka_maxMessageBytes` must be coordinated with Kafka broker's `message.max.bytes`
+- When `validator_kafkaWorkers` is 0, the system auto-calculates based on available CPUs
+
+These Kafka channels complement the synchronous gRPC and HTTP APIs, providing an event-driven architecture for transaction propagation.
+
+### 8.6 Validation Rules Settings
+
+These settings control the rules and policies applied during transaction validation.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `maxtxsizepolicy` | int | Varies | Maximum allowed transaction size in bytes | Restricts oversized transactions from entering the mempool |
+| `minminingtxfee` | int64 | Varies | Minimum fee required for transaction acceptance | Sets economic barrier for transaction inclusion |
+| `validator_scriptVerificationLibrary` | string | `"VerificatorGoBT"` | Library used for Bitcoin script verification | Determines script validation implementation |
+
+#### Validation Rules Interactions and Dependencies
+
+Validation rules determine which transactions are accepted:
+
+- The `maxtxsizepolicy` setting rejects transactions exceeding the size limit
+- The `minminingtxfee` setting enforces minimum fee requirements
+- The script verification library (`validator_scriptVerificationLibrary`) determines how transaction scripts are validated
+
+These settings directly impact consensus and policy enforcement, ensuring that only valid transactions are propagated and included in blocks.
+
+### 8.7 Monitoring & Debugging Settings
+
+These settings control observability and diagnostics.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `validator_verbose_debug` | bool | `false` | Enables detailed debug logging for validator operations | Provides additional diagnostic information at the cost of log verbosity |
+| `fsm_state_restore` | bool | `false` | Controls whether the service restores from a previously saved state | Affects recovery behavior after restarts or failures |
+
+#### Monitoring & Debugging Interactions and Dependencies
+
+These settings help with troubleshooting and observability:
+
+- `validator_verbose_debug` increases log verbosity, useful for diagnosing issues but increases log volume
+- `fsm_state_restore` enables recovering from previous state after restart, important for maintaining continuity
+
+### 8.8 Deployment Recommendations
+
+#### Development Environment
+
+```
+useLocalValidator=false
+validator_grpcAddress=localhost:8081
+validator_grpcListenAddress=:8081
+validator_httpListenAddress=:8082
+validator_httpRateLimit=1024
+validator_sendBatchSize=10
+validator_sendBatchTimeout=1
+validator_sendBatchWorkers=4
+validator_verbose_debug=true
+```
+
+**Rationale**: Development environments benefit from the remote validator deployment model for easier debugging and independent testing. Smaller batch sizes and timeouts improve responsiveness during development, while debug logging provides more visibility.
+
+#### Production Environment
+
+```
+useLocalValidator=true
+validator_sendBatchSize=100
+validator_sendBatchTimeout=2
+validator_sendBatchWorkers=10
+validator_blockvalidation_maxRetries=5
+validator_verbose_debug=false
+validator_kafka_maxMessageBytes=1048576
+```
+
+**Rationale**: Production environments should use the local validator model for optimal performance. Standard batch sizes and worker counts balance throughput and resource usage. Debug logging is disabled to reduce overhead, and retry mechanisms ensure resilience.
+
+#### High-Throughput Environment
+
+```
+useLocalValidator=true
+validator_sendBatchSize=500
+validator_sendBatchTimeout=5
+validator_sendBatchWorkers=32
+validator_blockvalidation_maxRetries=10
+validator_kafka_maxMessageBytes=4194304
+```
+
+**Rationale**: High-throughput environments maximize performance with larger batch sizes, more worker threads, and increased message size limits. The local validator mode minimizes latency in the critical path, while increased retry limits improve resilience under heavy load.
+
+#### High-Availability Environment
+
+```
+useLocalValidator=false
+validator_grpcAddress=validator-service:8081
+grpc_resolver=k8s
+validator_sendBatchSize=200
+validator_sendBatchTimeout=2
+validator_sendBatchWorkers=16
+validator_blockvalidation_maxRetries=10
+validator_blockvalidation_retrySleep=1s
+```
+
+**Rationale**: High-availability deployments use the remote validator model with Kubernetes service discovery to enable independent scaling and failover. Moderate batch settings balance throughput and responsiveness, while aggressive retry settings ensure continuity during disruptions.
+
+### 8.9 Configuration Best Practices
+
+1. **Deployment Model Selection**: Choose `useLocalValidator=true` for maximum performance in production environments. Only use the remote validator model when you need independent scaling or specialized deployment scenarios.
+
+2. **Batch Sizing**: Tune batch parameters based on your transaction volume and latency requirements:
+   - Higher `validator_sendBatchSize` improves throughput but may increase latency
+   - Lower `validator_sendBatchTimeout` reduces latency but may decrease throughput
+   - Adjust `validator_sendBatchWorkers` based on available CPU cores
+
+3. **HTTP API Security**: If enabling the HTTP API with `validator_httpListenAddress`, consider:
+   - Using a private network or VPN for access
+   - Implementing additional authentication mechanisms
+   - Setting appropriate `validator_httpRateLimit` to prevent DOS attacks
+
+4. **Kafka Configuration**: When using Kafka integration:
+   - Ensure broker's `message.max.bytes` is at least as large as `validator_kafka_maxMessageBytes`
+   - Configure adequate disk space for Kafka logs, especially for high transaction volumes
+   - Monitor Kafka consumer lag to detect processing bottlenecks
+
+5. **Monitoring Setup**: Implement comprehensive monitoring:
+   - Track transaction validation rates and latencies
+   - Monitor rejection rates and reasons
+   - Set alerts for unusual patterns indicating potential issues
+
+6. **Resource Allocation**: Provision adequate resources:
+   - The validator is CPU-intensive during script verification
+   - Allocate sufficient memory for transaction batches
+   - Consider using dedicated instances for high-volume deployments
+
+7. **Failure Recovery**: Test and verify recovery mechanisms:
+   - Ensure `fsm_state_restore=true` works correctly in your environment
+   - Validate that `validator_blockvalidation_maxRetries` settings handle transient failures
+   - Implement circuit breakers for persistent failures
 
 
 ## 9. Other Resources

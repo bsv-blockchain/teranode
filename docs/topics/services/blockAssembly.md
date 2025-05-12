@@ -27,7 +27,10 @@
     - [gRPC Client Settings](#grpc-client-settings)
     - [Subtree Management](#subtree-management)
     - [Block and Transaction Processing](#block-and-transaction-processing)
+    - [Blockchain Reorganization](#blockchain-reorganization)
     - [Mining and Difficulty](#mining-and-difficulty)
+    - [Performance Tuning](#performance-tuning)
+    - [Security Settings](#security-settings)
     - [Service Control](#service-control)
 9. [Other Resources](#9-other-resources)
 
@@ -420,45 +423,186 @@ The Block Assembly service uses the following configuration options:
 ### Network and Communication Settings
 
 1. **`blockassembly_grpcAddress`**: Specifies the gRPC address for the block assembly service.
-2. **`network`**: Defines the network setting (e.g., "mainnet"). Default: "mainnet".
+
+2. **`blockassembly_grpcListenAddress`**: The address for the gRPC server to listen on.
+   - Type: string
+   - Default: ""
+   - Impact: Controls which network interfaces the service binds to for accepting gRPC connections.
 
 ### gRPC Client Settings
 
-3. **`blockassembly_grpcMaxRetries`**: Maximum number of gRPC retries. Default: 3.
-4. **`blockassembly_grpcRetryBackoff`**: Backoff duration for gRPC retries. Default: 2 seconds.
-5. **`blockassembly_sendBatchSize`**: Batch size for sending operations. Default: 0 (no batching).
-6. **`blockassembly_sendBatchTimeout`**: Timeout for batch send operations in milliseconds. Default: 100.
+3. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for failed gRPC operations.
+   - Type: int
+   - Default: 3
+   - Impact: Affects resilience of gRPC client operations when facing temporary failures.
+
+4. **`blockassembly_grpcRetryBackoff`**: The duration to wait between gRPC retry attempts.
+   - Type: time.Duration
+   - Default: 1s
+   - Impact: Controls how quickly the service retries failed gRPC operations.
 
 ### Subtree Management
 
-7. **`blockassembly_subtreeTTL`**: Time-to-live (in minutes) for subtrees stored in the cache. Default: 120 minutes.
-8. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the channel that handles new subtree processing. Default: 1,000.
-9. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the channel dedicated to retrying subtree storage operations. Default: 1,000.
-10. **`blockassembly_subtreeTTLConcurrency`**: Concurrency level for subtree TTL operations. Default: 32.
-11. **`initial_merkle_items_per_subtree`**: Initial number of items per subtree. Default: 1,048,576.
-12. **`blockassembly_useDynamicSubtreeSize`**: Enables automatic adjustment of subtree size based on real-time performance. Default: false.
-13. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees (must be a power of 2). Default: 1,024.
-14. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees. Default: 1,048,576 (1024*1024).
+Subtrees are a critical component in the Block Assembly process, organizing transactions hierarchically for efficient block construction. The following settings control how subtrees are created, sized, and managed.
+
+5. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the new subtree channel.
+   - Type: int
+   - Default: 100
+   - Impact: Controls how many new subtree requests can be queued before blocking.
+
+6. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the subtree retry channel.
+   - Type: int
+   - Default: 100
+   - Impact: Controls how many subtree retry operations can be queued before blocking.
+
+7. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
+   - Type: uint32
+   - Default: 1000
+   - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
+
+8. **`initial_merkle_items_per_subtree`**: Initial number of merkle items per subtree when the service starts.
+   - Type: int
+   - Default: 1024
+   - Impact: Sets the starting subtree size, affecting initial memory usage and subtree creation rate.
+   - Note: When `use_dynamic_subtree_size` is enabled, this is just the starting point.
+
+9. **`minimum_merkle_items_per_subtree`**: Minimum number of merkle items per subtree.
+   - Type: int
+   - Default: 1024
+   - Impact: Sets a lower bound on subtree size to ensure efficient tree structures and prevent excessive subtree creation.
+   - Note: In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement.
+
+10. **`use_dynamic_subtree_size`**: Whether to dynamically adjust subtree size based on processing throughput.
+    - Type: bool
+    - Default: false
+    - Impact: When enabled, the system will automatically optimize subtree sizes to target approximately one subtree per second under high throughput conditions.
+    - Note: When true, subtree sizes will automatically adjust between minimum and maximum values, always maintaining a power of 2 size (1024, 2048, 4096, etc.).
+
+11. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees.
+    - Type: int
+    - Default: 65536 (64K)
+    - Impact: Sets an upper bound on subtree size, preventing excessive memory usage and ensuring subtrees don't become too large for efficient processing.
 
 ### Block and Transaction Processing
 
-12. **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization. Default: 100.
-13. **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization. Default: 100.
-14. **`tx_chan_buffer_size`**: Buffer size for transaction channel. Default: 0 (unlimited).
-15. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for subtree processor. Default: 1000.
-16. **`double_spend_window_millis`**: Window for detecting double spends in milliseconds. Default: 2000.
-17. **`blockassembly_moveBackBlockConcurrency`**: Concurrency for moving down block operations. Default: 64.
-18. **`blockassembly_processRemainderTxHashesConcurrency`**: Concurrency for processing remainder transaction hashes. Default: 64.
-19. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent reads for subtree processor. Default: 4.
+12. **`blockassembly_sendBatchSize`**: Size of batches when sending transaction data.
+    - Type: int
+    - Default: 100
+    - Impact: Affects throughput and memory usage during transaction processing.
+
+13. **`blockassembly_sendBatchTimeout`**: Maximum time in milliseconds to wait before sending a batch of transactions.
+    - Type: int
+    - Default: 100
+    - Impact: Balances latency against batch efficiency in transaction processing.
+
+14. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for the subtree processor.
+    - Type: int
+    - Default: 1000
+    - Impact: Controls memory usage and processing efficiency of transaction batches.
+
+15. **`double_spend_window`**: Time window in milliseconds for tracking and detecting double-spend attempts.
+    - Type: time.Duration
+    - Default: 10s
+    - Impact: Affects how double-spend detection works and for how long transactions are monitored.
+    - Note: Critical for maintaining blockchain integrity by preventing the same coins from being spent multiple times.
+
+16. **`blockassembly_maxGetReorgHashes`**: Maximum number of transaction hashes to retrieve during reorganization.
+    - Type: int
+    - Default: 1000
+    - Impact: Limits memory usage during blockchain reorganizations.
+
+### Blockchain Reorganization
+
+Blockchain reorganization occurs when the node discovers a competing chain with more accumulated proof of work. The following settings control how the Block Assembly service handles reorganization scenarios.
+
+17. **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back during a blockchain reorganization.
+    - Type: int
+    - Default: 5
+    - Impact: Limits the size of backward reorganizations to protect against malicious chain splits.
+    - Note: If a reorganization would require rolling back more than this number of blocks, a full reset is triggered instead.
+
+18. **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization.
+    - Type: int
+    - Default: 5
+    - Impact: Limits the size of forward reorganizations to protect against malicious chain splits.
+    - Note: Works in conjunction with `maxBlockReorgRollback` to define reorganization boundaries.
+
+19. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines used when rolling back blocks during reorganization.
+    - Type: int
+    - Default: 5
+    - Impact: Controls parallelism for performance during blockchain reorganizations.
+    - Note: Higher values may improve performance on systems with more CPU cores but consume more resources.
+
+20. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines used when processing remaining transaction hashes.
+    - Type: int
+    - Default: 5
+    - Impact: Controls parallelism for transaction processing performance during reorganizations.
+
+21. **`blockassembly_resetWaitCount`**: Number of reset attempts to wait before forcing a reset.
+    - Type: int32
+    - Default: 10
+    - Impact: Controls how aggressively the service resets when facing issues during reorganizations or other operations.
+
+22. **`blockassembly_resetWaitDuration`**: Duration to wait between reset attempts.
+    - Type: time.Duration
+    - Default: 1s
+    - Impact: Controls the pace of reset attempts when service recovery is needed.
 
 ### Mining and Difficulty
 
-20. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for response when submitting mining solutions. Default: true.
+23. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for a response when submitting mining solutions.
+    - Type: bool
+    - Default: false
+    - Impact: Controls synchronous vs. asynchronous behavior of mining solution submissions.
+    - Note: When true, the mining client will wait for confirmation that the solution was accepted before proceeding.
+
+24. **`blockassembly_difficultyCache`**: Whether to cache difficulty calculations.
+    - Type: bool
+    - Default: true
+    - Impact: Affects performance of difficulty calculations during block assembly by reducing redundant calculations.
+
+25. **`blockassembly_minerWalletPrivateKeys`**: Private keys used for mining rewards.
+    - Type: []string
+    - Default: [] (empty array)
+    - Impact: Determines which wallets receive mining rewards when blocks are mined.
+    - Note: Never share these private keys; they should be securely managed and kept confidential.
+
+### Performance Tuning
+
+These settings affect the performance characteristics of the Block Assembly service and can be adjusted based on your hardware capabilities and network conditions.
+
+26. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
+    - Type: int
+    - Default: 5
+    - Impact: Controls parallelism for reading subtree data, affecting throughput.
+    - Note: Higher values may improve throughput on systems with many CPU cores but consume more resources.
+
+27. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
+    - Type: int
+    - Default: 1000
+    - Impact: Controls how many transactions can be queued before backpressure is applied.
+    - Note: Larger values allow for more transactions to be queued during burst periods but consume more memory.
+
+### Security Settings
+
+28. **`blockassembly_localDAHCache`**: Local cache for Delete-At-Height (DAH) information.
+    - Type: string
+    - Default: ""
+    - Impact: Affects performance of DAH operations by providing local caching.
+    - Note: This setting is important for security as it helps manage the lifecycle of sensitive transaction data.
 
 ### Service Control
 
-21. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether. Useful for testing or maintenance scenarios. Default: false.
-22. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration. When enabled, the service will attempt to restore its previous state after restart. Default: false.
+29. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether.
+    - Type: bool
+    - Default: false
+    - Impact: When true, prevents the service from starting and processing transactions.
+
+30. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
+    - Type: bool
+    - Default: false
+    - Impact: Controls whether the service attempts to restore its previous state on startup.
+
 
 
 ## 9. Other Resources

@@ -262,42 +262,188 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 6. Configuration options (settings flags)
 
-This service uses several `gocore` configuration settings. Here's a list of these settings:
+The Alert Service can be configured using various settings that control its behavior, storage options, and network connectivity. This section provides a comprehensive reference for all configuration options.
 
-### Alert Service Configuration
-- **Alert Store URL (`alert_store`)**: The URL for connecting to the alert system's data store. Default is "sqlite:///alert". Can be set to a PostgreSQL URL for production use.
-  Example: `alert_store = sqlite:///alert`
+### 6.1 Core Alert Service Configuration
+
+- **Alert Store URL (`alert_store`)**: The URL for connecting to the alert system's data store.
+  - Type: `string` (converted to `*url.URL` internally)
+  - Impact: Determines the database backend and connection parameters
+  - Example: `alert_store = sqlite:///alert` or `alert_store = postgres://user:pass@host:5432/database?sslmode=disable`
+
+- **Genesis Keys (`alert_genesis_keys`)**: A pipe-separated list of public keys used for genesis alerts.
+  - Type: `[]string`
+  - Impact: **Critical** - The service will not start without valid genesis keys
+  - Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed
+  - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
+
+- **P2P Private Key (`alert_p2p_private_key`)**: Private key for P2P communication.
+  - Type: `string`
+  - Impact: Establishes node identity in the P2P network
+  - Note: If not provided, a default key will be created in the data directory
+  - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
+
+- **Protocol ID (`alert_protocol_id`)**: Protocol identifier for the P2P alert network.
+  - Type: `string`
+  - Default: Internal default if not specified
+  - Impact: Determines which P2P protocol group the service will join
+  - Example: `alert_protocol_id = "/bsv/alert/1.0.0"`
+
+- **Topic Name (`alert_topic_name`)**: P2P topic name for alert propagation.
+  - Type: `string`
+  - Default: Internal default if not specified
+  - Note: Automatically prefixed with network name if not on mainnet
+  - Example: `alert_topic_name = "bitcoin_alert_system"`
+
+- **P2P Port (`alert_p2p_port`)**: Port number for P2P communication.
+  - Type: `int`
+  - Impact: **Required** - Service will not start without a valid port
+  - Example: `alert_p2p_port = 4001`
+
+### 6.2 Data Storage Configuration
+
+The Alert Service supports multiple database backends through the `alert_store` URL:
+
+#### 6.2.1 SQLite
+
+```
+sqlite:///database_name
+```
+
+The SQLite database will be stored in the `DataFolder` directory specified in the main Teranode configuration.
+
+**Parameters:**
+- None
+
+**Connection Pool Settings (hardcoded):**
+- Max Idle Connections: 1
+- Max Open Connections: 1
+
+#### 6.2.2 In-Memory SQLite
+
+```
+sqlitememory:///database_name
+```
+
+**Parameters:**
+- None
+
+**Connection Pool Settings (hardcoded):**
+- Max Idle Connections: 1
+- Max Open Connections: 1
+
+#### 6.2.3 PostgreSQL
+
+```
+postgres://username:password@host:port/database?param1=value1&param2=value2
+```
+
+**Parameters:**
+- `sslmode`: SSL mode for the connection (default: `disable`)
+
+**Connection Pool Settings (hardcoded):**
+- Max Idle Connections: 2
+- Max Open Connections: 5
+- Max Connection Idle Time: 20 seconds
+- Max Connection Time: 20 seconds
+- Transaction Timeout: 20 seconds
+
+#### 6.2.4 MySQL
+
+```
+mysql://username:password@host:port/database?param1=value1&param2=value2
+```
+
+**Parameters:**
+- `sslmode`: SSL mode for the connection (default: `disable`)
+
+**Connection Pool Settings (hardcoded):**
+- Same as PostgreSQL
+
+### 6.3 Internal Settings and Behaviors
+
+The following settings are hardcoded in the service and cannot be configured externally:
+
+- **Alert Processing Interval**: 5 minutes
+  - Controls how frequently alerts are processed
+
+- **Request Logging**: Enabled (true)
+  - Controls HTTP request logging
+
+- **Auto Migrate**: Enabled (true)
+  - Automatically migrates the database schema on startup
+
+- **Database Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
+  - Prefix used for database tables
+
+### 6.4 Service Dependencies
+
+The Alert Service depends on several other Teranode services:
+
+- **Blockchain Client**: Required for blockchain operations like retrieving block headers and invalidating blocks
+
+- **UTXO Store**: Required for UTXO operations, particularly freezing, unfreezing, and reassignment
+
+- **Block Assembly Client**: Used for block assembly coordination when alerts affect mining
+
+- **Peer Client**: Used for peer management (banning/unbanning)
+
+- **P2P Client**: Required for P2P alert distribution
+
+### 6.5 Environment Variables
+
+All settings can also be configured through environment variables using the following pattern:
+
+```
+TERANODE_ALERT_<SETTING_NAME>
+```
+
+For example:
+- `TERANODE_ALERT_GENESIS_KEYS`
+- `TERANODE_ALERT_P2P_PORT`
+- `TERANODE_ALERT_PROTOCOL_ID`
+
+### 6.6 Security Considerations
+
+#### 6.6.1 Genesis Keys Management
+
+The genesis keys are critical for the security of the alert system. They should be carefully managed:
+
+- Store private keys securely and offline
+- Use multiple keys with a threshold signature scheme for increased security
+- Rotate keys periodically according to your security policy
+
+#### 6.6.2 Database Security
+
+When using PostgreSQL or MySQL:
+
+- Use strong passwords
+- Enable SSL for database connections (`sslmode=require` or stronger)
+- Restrict database access to authorized users only
+- Consider using a dedicated database user with limited permissions
 
 
-- **Alert Store Operator URL (`alert_store.operator`)**: The URL for the operator's database connection, typically a PostgreSQL database.
-  Example: `alert_store.operator = postgres://teranode:teranode@server:5432/alert`
+### 6.7 Configuration Examples
 
+#### Complete Configuration Example
 
-- **Genesis Keys (`alert_genesis_keys`)**: A pipe-separated list of public keys used for genesis alerts. These keys are crucial for the initial setup and security of the alert system.
-  Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433 | 03ddb2806f3cc48aa36bd4aea6b9f1c7ed3ffc8b9302b198ca963f15beff123678 | 036846e3e8f4f944af644b6a6c6243889dd90d7b6c3593abb9ccf2acb8c9e606e2 | 03e45c9dd2b34829c1d27c8b5d16917dd0dc2c88fa0d7bad7bffb9b542229a9304"`
+```
+# Alert Service Core Configuration
+alert_store = postgres://alert_user:secure_password@db-server:5432/alert_db?sslmode=require
+alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"
+alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"
+alert_protocol_id = "/bsv/alert/1.0.0"
+alert_topic_name = "bitcoin_alert_system"
+alert_p2p_port = 4001
+```
 
+#### Development Configuration Example
 
-- **P2P Private Key (`alert_p2p_private_key`)**: The private key used for P2P communications in the alert system. This should be kept secure and not shared.
-  Example: `alert_p2p_private_key = "e76c77795b43d2aacd564648bffebde74a4c31540357dad4a3694a561b4c4f1fbb0ba060a3015f7f367742500ef8486707e58032af1b4dfdb1203c790bcf2526"`
-
-
-- **P2P Topic Name (`alert_topic_name`)**: The topic name used for P2P communications. Default is "bitcoin_alert_system".
-  Example: `alert_topic_name = "bitcoin_alert_system"`
-
-
-- **P2P Protocol ID (`alert_protocol_id`)**: The protocol ID used for P2P communications.
-  Example: `alert_protocol_id = "/bitcoin/alert-system/1.0.0"`
-
-
-### Network Configuration
-- **Network Type (`network`)**: Specifies the network type (e.g., "mainnet", "testnet"). This affects the P2P topic name for non-mainnet networks.
-  Example: `network = "mainnet"`
-
-
-### P2P Configuration
-- **P2P Port (`ALERT_P2P_PORT`)**: The port used for P2P communications in the alert system. Default is 9908.
-  Example: `ALERT_P2P_PORT = 9908`
-
+```
+alert_store = sqlite:///alert
+alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768"
+alert_p2p_port = 4001
+```
 
 
 ## 7. Other Resources

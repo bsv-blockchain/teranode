@@ -266,14 +266,156 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UTXOPersister=1
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the UTXO Persister Service locally.
 
 
-## 7. Configuration options (settings flags)
+## 7. Configuration Settings
 
-The `utxopersister` service utilizes specific `gocore` settings for configuration, each serving a distinct purpose in the service's operation:
+The UTXO Persister service relies on a set of configuration settings that control its behavior, performance, and resource usage. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.
 
-- `network`: Specifies the blockchain network (e.g., "mainnet").
-- `fsm_state_restore`: Boolean flag to indicate if the service should restore from a specific state.
-- `skip_delete`: Boolean flag to control whether previous block's UTXOSet should be deleted.
-- `utxoPersister_buffer_size`: Specifies the buffer size for readers (default "4KB").
+### 7.1 Configuration Categories
+
+UTXO Persister service settings can be organized into the following functional categories:
+
+1. **Performance Tuning**: Settings that control I/O performance and memory usage
+2. **Storage Management**: Settings that manage file storage and retention policies
+3. **Deployment Architecture**: Settings that determine how the service interacts with other components
+4. **Operational Controls**: Settings that affect general service behavior
+
+### 7.2 Performance Tuning Settings
+
+These settings control the I/O performance and memory usage patterns of the UTXO Persister service.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `utxoPersister_buffer_size` | string | `"4KB"` | Controls the buffer size for reading from and writing to UTXO files | Affects I/O performance and memory usage when processing UTXO data |
+
+#### Performance Tuning Interactions and Dependencies
+
+The buffer size setting directly affects how efficiently the service reads and writes UTXO data:
+
+- Larger buffer sizes (e.g., 64KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations
+- Smaller buffer sizes reduce memory usage but may increase CPU overhead due to more frequent I/O operations
+- The optimal buffer size depends on the hardware characteristics, particularly disk I/O capabilities, available memory, and the size of typical UTXO files
+
+For high-throughput environments with fast storage systems (like SSDs), larger buffer sizes provide better performance. For memory-constrained environments, smaller buffers may be necessary despite the performance impact.
+
+### 7.3 Storage Management Settings
+
+These settings control how UTXO data is stored and retained.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockpersister_skipUTXODelete` | bool | `false` | When true, previous block's UTXO sets aren't deleted after processing | Controls storage usage and retention policy for historical UTXO sets |
+| `blockstore` | *url.URL | `"file://./data/blockstore"` | Specifies the URL for the block storage backend | Determines where block data, including UTXO sets, are stored |
+
+#### Storage Management Interactions and Dependencies
+
+These settings determine the storage footprint and data persistence behavior of the service:
+
+- When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by only keeping the UTXO set for the most recent processed block
+- When set to `true`, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation
+- The `blockstore` setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system
+
+Storage requirements grow significantly when keeping historical UTXO sets, as each set contains the complete state of all unspent outputs at a given block height.
+
+### 7.4 Deployment Architecture Settings
+
+These settings control how the UTXO Persister interacts with other components in the system.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `direct` | bool | `true` | Controls whether the service connects directly to the blockchain store or uses the client interface | Affects performance and deployment architecture |
+
+#### Deployment Architecture Interactions and Dependencies
+
+The deployment architecture settings determine how the service integrates with the broader system:
+
+- When `direct` is `true`, the service bypasses the blockchain client interface and connects directly to the blockchain store, which improves performance but requires the service to be deployed in the same process
+- When `direct` is `false`, the service uses the blockchain client interface, allowing for distributed deployment at the cost of additional network overhead
+
+This setting has significant implications for system design and deployment flexibility. Direct access provides better performance but limits deployment options, while client-based access enables more flexible deployment topologies but may impact performance.
+
+### 7.5 Operational Controls Settings
+
+These settings control general operational aspects of the service.
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `fsm_state_restore` | bool | `false` | When true, the service restores state from a previously saved state file | Controls recovery behavior after restarts or failures |
+| `network` | string | Varies by deployment | Specifies the blockchain network (mainnet, testnet, etc.) | Determines which network's rules and parameters are used |
+
+#### Operational Controls Interactions and Dependencies
+
+These settings affect how the service operates and recovers from failures:
+
+- The `fsm_state_restore` setting enables recovery from a previously saved state, which can be crucial for maintaining data continuity after unexpected shutdowns
+- The `network` setting ensures the service applies the correct rules and parameters for the target blockchain network
+
+These settings typically interact with broader system configuration and are often shared across multiple services.
+
+### 7.6 Deployment Recommendations
+
+#### Development Environment
+
+```
+utxoPersister_buffer_size="4KB"
+blockpersister_skipUTXODelete=false
+direct=true
+fsm_state_restore=false
+blockstore="file://./data/blockstore"
+```
+
+**Rationale**: Development environments benefit from default settings that minimize resource usage and storage requirements. Direct access simplifies development and testing workflow by keeping components together.
+
+#### Production Environment
+
+```
+utxoPersister_buffer_size="64KB"
+blockpersister_skipUTXODelete=false
+direct=true
+fsm_state_restore=true
+blockstore="file:///var/teranode/blockstore"
+```
+
+**Rationale**: Production environments should optimize for performance with larger buffer sizes while still maintaining efficient storage usage. Direct access provides the best performance, and state restoration enables recovery from failures. A persistent filesystem location ensures data durability.
+
+#### High-Throughput Environment
+
+```
+utxoPersister_buffer_size="1MB"
+blockpersister_skipUTXODelete=false
+direct=true
+fsm_state_restore=true
+blockstore="file:///var/teranode/blockstore"
+```
+
+**Rationale**: High-throughput environments maximize performance with very large buffer sizes to reduce I/O overhead. Keeping only the latest UTXO set optimizes storage usage. Direct access minimizes latency in the critical path.
+
+#### Archival Environment
+
+```
+utxoPersister_buffer_size="256KB"
+blockpersister_skipUTXODelete=true
+direct=true
+fsm_state_restore=true
+blockstore="file:///var/teranode/blockstore"
+```
+
+**Rationale**: Archival environments preserve historical UTXO sets for analysis, auditing, or recovery purposes. This configuration accepts the increased storage requirements in exchange for maintaining complete historical data.
+
+### 7.7 Configuration Best Practices
+
+1. **Performance Monitoring**: Regularly monitor I/O performance metrics when adjusting buffer sizes. Balance memory usage against throughput based on your specific hardware capabilities.
+
+2. **Storage Planning**: When using `blockpersister_skipUTXODelete=true`, implement a storage monitoring and management strategy. UTXO sets grow significantly over time and may require substantial storage capacity.
+
+3. **Deployment Architecture**: Choose direct access (`direct=true`) whenever possible for best performance, unless your system architecture specifically requires distributed deployment.
+
+4. **Recovery Testing**: Regularly test the recovery process with `fsm_state_restore=true` to ensure continuity after failures or planned restarts.
+
+5. **Storage Location**: Use persistent, reliable storage locations for the `blockstore` setting in production environments, ideally on dedicated, high-performance storage systems.
+
+6. **Backup Strategy**: Implement regular backups of your UTXO data, especially the most recent UTXO set, to enable rapid recovery in case of data corruption or storage failures.
+
+7. **Service Coordination**: Ensure that blockchain services and UTXO Persister services are properly coordinated in terms of startup sequence and operational dependencies, particularly when using direct access mode.
 
 
 

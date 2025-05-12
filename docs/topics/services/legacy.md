@@ -357,29 +357,126 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 7. Configuration options (settings flags)
 
-### Daemon Level Settings
-
-1. **`validator.useLocalValidator`**: Controls the validator deployment model used by the Legacy service.
-   - When `true`: Uses a local validator instance embedded within the service (recommended for production).
-   - When `false`: Connects to a remote validator service via gRPC.
-   - This setting affects performance and deployment architecture across multiple services.
-   - Default: `false`
+The Legacy service bridges traditional Bitcoin nodes with the Teranode architecture, making its configuration particularly important for network integration. This section provides a comprehensive overview of all configuration options, organized by functional category.
 
 ### Network and Communication Settings
 
-1. **`legacy_grpcAddress`**: Specifies the gRPC address for the Legacy service.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `legacy_listen_addresses` | []string | [] (falls back to external IP:8333) | Network addresses for the service to listen on for peer connections | Controls which interfaces and ports accept connections from other nodes |
+| `legacy_connect_peers` | []string | [] | Peer addresses to connect to on startup | Forces connections to specific peers rather than using automatic peer discovery |
+| `legacy_grpcAddress` | string | "" | Address for other services to connect to the Legacy service | Enables service-to-service communication |
+| `legacy_grpcListenAddress` | string | "" | Interface and port to listen on for gRPC connections | Controls network binding for the gRPC server |
+| `network` | string | "mainnet" | Specifies which blockchain network to connect to | Determines network rules, consensus parameters, and compatibility |
 
-2. **`legacy_httpListenAddress`**: Specifies the HTTP listen address for the Legacy service.
+### Memory and Storage Management
 
-3. **`legacy_bsvMainnet`**: When true, connects to the BSV mainnet. When false, connects to testnet.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `legacy_orphanEvictionDuration` | duration | 10m | How long orphan transactions are kept before eviction | Affects memory usage and ability to process delayed transactions |
+| `legacy_writeMsgBlocksToDisk` | bool | false | Write blocks to disk when syncing | Reduces memory footprint during blockchain synchronization |
+| `legacy_storeBatcherSize` | int | 1024 | Batch size for store operations | Affects efficiency of storage operations and memory usage |
+| `legacy_spendBatcherSize` | int | 1024 | Batch size for spend operations | Affects efficiency of spend operations and memory usage |
+| `legacy_outpointBatcherSize` | int | 1024 | Batch size for outpoint operations | Affects efficiency of outpoint processing |
+| `legacy_workingDir` | string | "../../data" | Directory where service stores data files | Controls where peer information and other data is stored |
 
-### Block and Transaction Processing
+### Concurrency and Performance
 
-4. **`legacy_blockBuffer`**: Size of the block buffer for processing incoming blocks.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `legacy_storeBatcherConcurrency` | int | 32 | Number of concurrent store operations | Controls parallelism for storage operations |
+| `legacy_spendBatcherConcurrency` | int | 32 | Number of concurrent spend operations | Controls parallelism for spend operations |
+| `legacy_outpointBatcherConcurrency` | int | 32 | Number of concurrent outpoint operations | Controls parallelism for outpoint operations |
+| `legacy_config_Upnp` | bool | false | Use UPnP for automatic port forwarding | Affects service accessibility from the internet |
 
-5. **`legacy_txnBuffer`**: Size of the transaction buffer for processing incoming transactions.
+### Peer Management
 
-6. **`legacy_subtreeMaxItems`**: Maximum number of items allowed in a subtree.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `legacy_savePeers` | bool | false | Save peer information to disk for reuse on restart | Enables persistent peer connections across service restarts |
+| `legacy_allowSyncCandidateFromLocalPeers` | bool | false | Allow local peers as sync candidates | Affects peer selection for blockchain synchronization |
+| `legacy_printInvMessages` | bool | false | Print inventory messages to logs | Increases log verbosity for debugging |
+
+### Feature Flags
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `legacy_allowBlockPriority` | bool | false | Prioritize transactions based on block priority | Affects transaction selection for block creation |
+| `validator.useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Improves performance by eliminating network overhead for validation |
+| `excessiveblocksize` | uint64 | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
+
+## Configuration Interactions and Dependencies
+
+### Peer Discovery and Connection Management
+
+The Legacy service's peer connection behavior is controlled by several interrelated settings:
+
+- `legacy_listen_addresses` determines where the service listens for incoming connections
+- `legacy_connect_peers` forces outbound connections to specific peers
+- `legacy_savePeers` enables storing peer information across restarts
+- If no `legacy_listen_addresses` are specified, the service detects the external IP and uses port 8333
+- When `legacy_config_Upnp` is enabled, the service attempts to configure port forwarding automatically
+
+These settings should be configured together based on your network architecture and security requirements.
+
+### Memory Management Considerations
+
+Several settings affect the memory usage patterns of the Legacy service:
+
+- `legacy_writeMsgBlocksToDisk` significantly reduces memory usage during blockchain synchronization by writing blocks to disk rather than keeping them in memory
+- `legacy_orphanEvictionDuration` controls how aggressively orphan transactions are removed from memory
+- The various batcher size settings control memory usage during batch operations
+
+For resource-constrained environments, enable `legacy_writeMsgBlocksToDisk` and use smaller batch sizes.
+
+### Batch Processing Pipeline
+
+The Legacy service uses a batching system for various operations, controlled by these settings:
+
+- Batch sizes (`legacy_storeBatcherSize`, `legacy_spendBatcherSize`, `legacy_outpointBatcherSize`) determine how many operations are grouped together
+- Concurrency settings (`legacy_storeBatcherConcurrency`, `legacy_spendBatcherConcurrency`, `legacy_outpointBatcherConcurrency`) control parallelism
+
+Larger batch sizes improve throughput but use more memory, while higher concurrency improves performance but increases CPU utilization.
+
+## Deployment Recommendations
+
+### Development Environment
+
+For development and testing, prioritize ease of debugging and iteration:
+
+```properties
+legacy_listen_addresses=localhost:8333  # Listen only on localhost for security
+legacy_writeMsgBlocksToDisk=false      # Keep everything in memory for simplicity
+legacy_printInvMessages=true          # Enable verbose logging for debugging
+legacy_savePeers=false                # Don't persist peers between restarts
+```
+
+### Production Environment
+
+For production deployments, prioritize reliability and security:
+
+```properties
+legacy_listen_addresses=0.0.0.0:8333  # Listen on all interfaces
+legacy_writeMsgBlocksToDisk=true      # Reduce memory footprint
+legacy_savePeers=true                 # Persist peer information
+legacy_printInvMessages=false         # Reduce log volume
+validator.useLocalValidator=true      # Use embedded validator for performance
+```
+
+### High-Performance Environment
+
+For high-throughput environments with significant hardware resources:
+
+```properties
+legacy_storeBatcherSize=2048          # Larger batches for efficiency
+legacy_spendBatcherSize=2048          # Larger batches for efficiency
+legacy_storeBatcherConcurrency=64     # Higher concurrency for parallelism
+legacy_spendBatcherConcurrency=64     # Higher concurrency for parallelism
+legacy_writeMsgBlocksToDisk=true      # Manage memory usage
+validator.useLocalValidator=true      # Use embedded validator for performance
+```
+
+> **Note**: These recommendations should be adjusted based on your specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
 
 ## 8. Other Resources
 

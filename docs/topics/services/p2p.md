@@ -438,24 +438,137 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 7. Configuration options (settings flags)
 
-The following settings can be configured for the p2p service:
+The P2P service serves as the communication backbone of the Teranode network, enabling nodes to discover, connect, and exchange data with each other. This section provides a comprehensive overview of all configuration options, organized by functional category.
 
-- **`p2p_listen_addresses`**: Specifies the IP addresses for the P2P service to bind to.
-- **`p2p_port`**: Defines the port number on which the P2P service listens.
-- **`p2p_topic_prefix`**: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
-- **`p2p_block_topic`**: The topic name used for block-related messages in the P2P network.
-- **`p2p_subtree_topic`**: Specifies the topic for subtree-related messages within the P2P network.
-- **`p2p_bestblock_topic`**: Defines the topic for broadcasting the best block information among peers.
-- **`p2p_mining_on_topic`**: The topic used for messages related to the start of mining a new block.
-- **`p2p_rejected_tx_topic`**: Specifies the topic for broadcasting information about rejected transactions.
-- **`p2p_shared_key`**: A shared key for securing P2P communications, required for private network configurations.
-- **`p2p_dht_use_private`**: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
-- **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications. When enabled, this improves network efficiency by implementing an exponential backoff strategy for reconnection attempts and intelligently filtering connection attempts to peers that have repeatedly failed.
-- **`p2p_static_peers`**: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
-- **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network. If not provided, the service will attempt to retrieve the key from the blockchain store. If no key exists in the store, a new one will be generated and persisted in the blockchain store, ensuring the node maintains a consistent identity even if its container is destroyed.
-- **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
-- **`securityLevelHTTP`**: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
-- **`server_certFile`** and **`server_keyFile`**: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
+### Network and Discovery Settings
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_listen_addresses` | []string | [] | Network addresses for the P2P service to listen on | Controls which interfaces and ports the service binds to for accepting connections |
+| `p2p_advertise_addresses` | []string | [] | Addresses to advertise to other peers | Affects how other peers discover and connect to this node |
+| `p2p_port` | int | 9906 | Default port for P2P communication | Used as the fallback port when addresses don't specify a port |
+| `p2p_bootstrapAddresses` | []string | [] | Initial peer addresses for bootstrapping the DHT | Helps new nodes join the network by providing entry points |
+| `p2p_static_peers` | []string | [] | Peer addresses to connect to on startup | Ensures connections to specific peers regardless of discovery |
+| `p2p_dht_protocol_id` | string | "" | Protocol identifier for DHT communications | Affects how nodes discover each other in the network |
+| `p2p_dht_use_private` | bool | false | Use private DHT mode | Restricts DHT communication to trusted peers when enabled |
+| `p2p_optimise_retries` | bool | false | Optimize retry behavior for peer connections | Improves efficiency of connection attempts in certain network conditions |
+
+### Service Endpoints
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_grpcAddress` | string | "" | Address for other services to connect to this service | Enables service-to-service communication |
+| `p2p_grpcListenAddress` | string | :9906 | Interface and port to listen on for gRPC connections | Controls network binding for the gRPC server |
+| `p2p_httpAddress` | string | localhost:9906 | Address other services use to connect to HTTP API | Affects how other services discover the P2P HTTP API |
+| `p2p_httpListenAddress` | string | "" | Interface and port to listen on for HTTP connections | Controls network binding for the HTTP server |
+| `securityLevelHTTP` | int | 0 | HTTP security level (0=HTTP, 1=HTTPS) | Determines whether HTTP or HTTPS is used for web connections |
+| `server_certFile` | string | "" | Path to SSL certificate file | Required for HTTPS when security level is 1 |
+| `server_keyFile` | string | "" | Path to SSL key file | Required for HTTPS when security level is 1 |
+
+### Peer-to-Peer Topics
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_topic_prefix` | string | "" | Prefix for all P2P topics | Ensures topics are unique across different environments |
+| `p2p_block_topic` | string | "" | Topic name for block announcements | Controls subscription and publication to the block channel |
+| `p2p_bestblock_topic` | string | "" | Topic name for best block announcements | Controls subscription and publication to the best block channel |
+| `p2p_subtree_topic` | string | "" | Topic name for subtree announcements | Controls subscription and publication to the subtree channel |
+| `p2p_mining_on_topic` | string | "" | Topic name for mining status announcements | Controls subscription and publication to the mining status channel |
+| `p2p_rejected_tx_topic` | string | "" | Topic name for rejected transaction announcements | Controls subscription to rejected transaction notifications |
+
+### Authentication and Security
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_peer_id` | string | "" | Unique identifier for the P2P node | Used to identify this node in the P2P network |
+| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be generated |
+| `p2p_shared_key` | string | "" | Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
+
+### Ban Management
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_ban_threshold` | int | 100 | Score threshold at which peers are banned | Controls how aggressively misbehaving peers are banned |
+| `p2p_ban_duration` | duration | 24h | Duration for which peers remain banned | Controls how long banned peers are excluded from the network |
+
+## Configuration Interactions and Dependencies
+
+### Network Binding and Discovery
+
+The P2P service's network presence is controlled by several interrelated settings:
+
+- `p2p_listen_addresses` determines which interfaces/ports the service listens on
+- `p2p_advertise_addresses` controls what addresses are advertised to peers
+- `p2p_port` provides a default when addresses don't specify ports
+- If no `p2p_listen_addresses` are specified, the service may not be reachable
+- The gRPC and HTTP listen addresses control how other services can interact with the P2P service
+
+These settings should be configured together based on your network architecture and security requirements.
+
+### Peer Discovery and Connection
+
+Peer discovery in the P2P service uses a multi-layered approach:
+
+- `p2p_bootstrapAddresses` provides initial entry points to the network
+- `p2p_static_peers` ensures connections to specific peers regardless of DHT discovery
+- `p2p_dht_protocol_id` and `p2p_dht_use_private` affect the DHT-based peer discovery mechanism
+- `p2p_optimise_retries` impacts connection retry behavior when peers are unreachable
+
+In private network deployments, you should configure static peers and bootstrap addresses carefully to ensure nodes can find each other.
+
+### Security and Authentication
+
+The P2P service uses several security mechanisms:
+
+- `p2p_private_key` establishes the node's identity, which is reflected in its `p2p_peer_id`
+- `p2p_shared_key` enables private network functionality, restricting communication to nodes with the same shared key
+- If no private key is provided, it will be generated and stored in the blockchain store
+- The ban system uses a score-based approach where peers accumulate points for bad behavior
+
+These settings enable secure and authenticated communication between nodes in the network.
+
+## Deployment Recommendations
+
+### Development Environment
+
+For development and testing, prioritize ease of debugging and local communication:
+
+```properties
+p2p_listen_addresses=localhost:9906        # Listen only on localhost for security
+p2p_port=9906                              # Standard port for local development
+p2p_dht_use_private=true                   # Use private DHT to avoid external connections
+securityLevelHTTP=0                        # Use plain HTTP for easier debugging
+```
+
+### Production Environment
+
+For production deployments, prioritize security and robust peer discovery:
+
+```properties
+p2p_listen_addresses=0.0.0.0:9906          # Listen on all interfaces
+p2p_advertise_addresses=<public-ip>:9906   # Advertise public IP address
+p2p_bootstrapAddresses=<known-node-1>|<known-node-2>  # Use known nodes for bootstrap
+p2p_shared_key=<secure-random-key>         # Enable private network with shared key
+p2p_optimise_retries=true                  # Optimize connection retries
+securityLevelHTTP=1                        # Use HTTPS for web connections
+server_certFile=/path/to/cert              # Specify SSL certificate
+server_keyFile=/path/to/key                # Specify SSL private key
+```
+
+### High-Availability Network
+
+For high-availability deployments with multiple nodes:
+
+```properties
+p2p_static_peers=<node1>|<node2>|<node3>    # Connect to all known nodes in cluster
+p2p_dht_use_private=true                   # Use private DHT for security
+p2p_ban_threshold=150                      # More lenient banning for known peers
+p2p_listen_addresses=<private-ip>:9906     # Listen on private network interface
+p2p_advertise_addresses=<public-ip>:9906   # Advertise public IP for external nodes
+```
+
+> **Note**: These recommendations should be adjusted based on your specific network topology, security requirements, and operational needs. Regular monitoring and tuning are essential for optimal performance.
+
 
 
 ## 8. Other Resources
