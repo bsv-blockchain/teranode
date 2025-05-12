@@ -24,7 +24,13 @@
     - [Blockchain Service Configuration](#blockchain-service-configuration)
     - [Operational Settings](#operational-settings)
     - [Mining and Difficulty Settings](#mining-and-difficulty-settings)
-9. [Other Resources](#9-other-resources)
+    - [FSM Settings](#fsm-settings)
+9. [Additional Technical Details](#9-additional-technical-details)
+    - [9.1. Complete gRPC Method Coverage](#91-complete-grpc-method-coverage)
+    - [9.2. Finite State Machine Implementation](#92-finite-state-machine-implementation)
+    - [9.3. Kafka Integration Details](#93-kafka-integration-details)
+    - [9.4. Error Handling Strategies](#94-error-handling-strategies)
+10. [Other Resources](#10-other-resources)
 
 
 ## 1. Description
@@ -503,7 +509,109 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 ### Mining and Difficulty Settings
 - **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments. Defaults to false.
 
+### FSM Settings
+- **FSM State Restore (`fsm_state_restore`)**: Boolean flag for FSM state restoration. When enabled, the service will attempt to restore its previous state after restart. Default: false.
 
-## 9. Other Resources
+## 9. Additional Technical Details
 
-[Blockchain Reference](../../references/services/blockchain_reference.md)
+### 9.1. Complete gRPC Method Coverage
+
+In addition to the core methods described in the Functionality section, the Blockchain Service provides the following API endpoints:
+
+#### FSM Management Methods
+- **SendFSMEvent**: Sends an event to the blockchain FSM to trigger state transitions.
+- **GetFSMCurrentState**: Retrieves the current state of the FSM.
+- **WaitFSMToTransitionToGivenState**: Waits for FSM to reach a specific state.
+- **WaitUntilFSMTransitionFromIdleState**: Waits for FSM to transition from IDLE state.
+- **Run, CatchUpBlocks, LegacySync, Idle**: Transitions the service to specific operational modes.
+
+#### State Management
+- **GetState**: Retrieves a value from the blockchain state storage by its key.
+- **SetState**: Stores a value in the blockchain state storage with the specified key.
+
+#### Block Mining Status Methods
+- **GetBlockIsMined**: Checks if a block has been marked as mined.
+- **SetBlockMinedSet**: Marks a block as mined in the blockchain.
+- **GetBlocksMinedNotSet**: Retrieves blocks that haven't been marked as mined.
+- **SetBlockSubtreesSet**: Marks a block's subtrees as set.
+- **GetBlocksSubtreesNotSet**: Retrieves blocks whose subtrees haven't been set.
+
+#### Legacy Synchronization Methods
+- **GetBlockLocator**: Creates block locators for chain synchronization.
+- **LocateBlockHeaders**: Finds block headers using a locator.
+- **GetBestHeightAndTime**: Retrieves the current best height and median time.
+
+### 9.2. Finite State Machine Implementation
+
+The Blockchain Service uses a Finite State Machine (FSM) to manage its operational states. This design allows the service to maintain a clear lifecycle and respond appropriately to different events.
+
+For a comprehensive understanding of the Blockchain Service's FSM implementation, please refer to the dedicated [State Management in Teranode](../architecture/stateManagement.md) documentation, which covers:
+
+- FSM states (Idle, Running, CatchingBlocks, LegacySyncing)
+- State transitions and events
+- Allowed operations in each state
+- FSM initialization and access methods
+- Waiting on state transitions
+
+The FSM implementation in the Blockchain Service exposes several gRPC methods for state management:
+
+- **GetFSMCurrentState**: Returns the current state of the FSM
+- **WaitFSMToTransitionToGivenState**: Waits for the FSM to reach a specific state
+- **SendFSMEvent**: Sends events to trigger state transitions
+- **Run, CatchUpBlocks, LegacySync, Idle**: Convenience methods that delegate to SendFSMEvent
+
+The FSM ensures that the service only performs operations appropriate for its current state, providing isolation and predictable behavior.
+
+### 9.3. Kafka Integration Details
+
+The Blockchain Service integrates with Kafka for block notifications and event streaming:
+
+#### Message Formats
+
+Block notifications are serialized using Protocol Buffers and contain:
+- Block header
+- Block height
+- Hash
+- Transaction count
+- Size in bytes
+- Timestamp
+
+#### Topics
+
+- **Blocks-Final**: Used for finalized block notifications, consumed by the Block Persister service.
+
+#### Error Handling
+
+- The service implements exponential backoff retry for Kafka publishing failures.
+- Failed messages are logged and retried based on the `blockchain_maxRetries` and `blockchain_retrySleep` settings.
+- Persistent failures, after the retries are exhausted, are reported through the health monitoring endpoints (`/health` HTTP endpoint and the `HealthGRPC` gRPC method).
+
+### 9.4. Error Handling Strategies
+
+The Blockchain Service employs several strategies to handle errors and maintain resilience:
+
+#### Network and Communication Errors
+
+- Uses timeouts and context cancellation to handle hanging network operations.
+- Implements retry mechanisms for transient failures with configured backoff periods.
+
+#### Validation Errors
+
+- Blocks with invalid headers, merkle roots, or proofs are rejected with appropriate error codes.
+- Invalid blocks can be explicitly marked using the InvalidateBlock method.
+
+#### Chain Reorganization
+
+- Detects chain splits and reorganizations automatically.
+- Uses rollback and catch-up operations to handle chain reorganizations.
+- Limits reorganization depth for security (configurable).
+
+#### Storage Errors
+
+- Implements transaction-based operations with the store to maintain consistency.
+- Reports persistent storage errors through health endpoints.
+
+## 10. Other Resources
+
+- [Blockchain Reference](../../references/services/blockchain_reference.md)
+- [FSM Documentation](../architecture/stateManagement.md)

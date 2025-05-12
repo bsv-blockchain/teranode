@@ -84,6 +84,25 @@ All communication channels receive txs and delegate them to the `ProcessTransact
 
 ![propagation_grpc.svg](img/plantuml/propagation/propagation_grpc.svg)
 
+### 2.3. Transaction Processing Workflow
+
+The transaction processing involves several steps to ensure proper validation and propagation:
+
+1. **Initial Validation**: Each transaction is validated for correct format and to ensure it's not a coinbase transaction.
+2. **Storage**: Valid transactions are stored in the transaction store using the transaction hash as the key.
+3. **Validation Submission**: Transactions are submitted to the validator service through one of two channels:
+   - **Kafka**: Normal-sized transactions are sent to the validator through Kafka for asynchronous processing.
+   - **HTTP Fallback**: Large transactions exceeding Kafka message size limits are sent directly to the validator's HTTP endpoint.
+
+### 2.4. Error Handling
+
+The Propagation Service implements comprehensive error handling:
+
+1. **Transaction Format Errors**: Malformed transactions are rejected with appropriate error messages.
+2. **Storage Failures**: If transaction storage fails, the error is logged and propagated to the client.
+3. **Validation Errors**: Errors during validation are captured and returned to the client.
+4. **Batch Processing**: When processing transaction batches, each transaction is handled independently, allowing some transactions to succeed even if others fail.
+5. **Request Limiting**: Implements limits on transaction size and batch counts to prevent resource exhaustion.
 
 
 ## 3. gRPC Protobuf Definitions
@@ -121,16 +140,19 @@ Main technologies involved:
 ```
 ./services/propagation
 │
-├── Client.go                    - Contains the client-side logic for interacting with the propagation service.
-├── Server.go                    - Contains the main server-side implementation for the propagation service.
-├── Server_test.go               - Unit tests for the Server.go functionality.
-├── StreamingClient.go           - Implementation of a client capable of handling streaming data, for real-time data processing or communication.
-├── StreamingClient_test.go      - Unit tests for the StreamingClient.go functionality.
-├── metrics.go                   - Metrics collection and monitoring of the propagation service.
-└── propagation_api              - Directory containing various files related to the API definition and implementation of the propagation service.
-    ├── propagation_api.pb.go           - Auto-generated file from protobuf definitions, containing Go bindings for the API.
-    ├── propagation_api.proto           - Protocol Buffers definition file for the propagation API.
-    └── propagation_api_grpc.pb.go      - gRPC (Google's RPC framework) specific implementation file for the propagation API.
+├── Client.go                            - Contains the client-side logic for interacting with the propagation service.
+├── Client_test.go                       - Unit tests for the Client.go functionality.
+├── Server.go                            - Contains the main server-side implementation for the propagation service.
+├── Server_test.go                       - Unit tests for the Server.go functionality.
+├── client_large_tx_fallback_test.go     - Tests the large transaction fallback mechanism in the client.
+├── http_handlers_test.go                - Unit tests for HTTP handler functions.
+├── large_tx_fallback_test.go            - Tests for the large transaction fallback mechanism.
+├── metrics.go                           - Metrics collection and monitoring of the propagation service.
+├── propagation_error_test.go            - Unit tests for error handling in the propagation service.
+└── propagation_api                      - Directory containing various files related to the API definition and implementation of the propagation service.
+    ├── propagation_api.pb.go            - Auto-generated file from protobuf definitions, containing Go bindings for the API.
+    ├── propagation_api.proto            - Protocol Buffers definition file for the propagation API.
+    └── propagation_api_grpc.pb.go       - gRPC (Google's RPC framework) specific implementation file for the propagation API.
 ```
 
 ## 7. How to run
@@ -156,6 +178,8 @@ The Propagation service uses the following configuration options:
    - This setting affects performance and deployment architecture across multiple services.
    - Default: `false`
 
+2. **`validator.httpAddress`**: Specifies the HTTP address for the validator service, used by the large transaction fallback mechanism when transactions exceed Kafka message size limits.
+
 ### Propagation Service Settings
 
 - **`propagation_sendBatchSize`**: Defines the batch size for sending transactions (default: 100).
@@ -165,6 +189,7 @@ The Propagation service uses the following configuration options:
 - **`propagation_httpListenAddress`**: Specifies the HTTP listen address for the propagation service.
 - **`fsm_state_restore`**: A boolean flag to determine if the Finite State Machine (FSM) should be restored to a previous state (default: false).
 - **`kafka_validatortxsConfig`**: URL configuration for Kafka, used for validator transactions.
+- **`kafka_maxMessageSizeBytes`**: Maximum size in bytes for Kafka messages. Transactions exceeding this size will use the HTTP fallback mechanism.
 - **`validator_kafkaWorkers`**: Number of Kafka workers for the validator service (default: 100).
 - **`propagation_grpcMaxConnectionAge`**: Maximum age of gRPC connections before they are closed and reopened (default: 90 seconds).
 

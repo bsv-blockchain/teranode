@@ -8,7 +8,10 @@
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
     - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
-    - [2.4. Post-validation: Updating stores and propagating the transaction](#24-post-validation-updating-stores-and-propagating-the-transaction)
+    - [2.4. Script Verification](#24-script-verification)
+    - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
+    - [2.6. Concurrent Processing](#26-concurrent-processing)
+    - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -63,6 +66,29 @@ The Validator notifies the Block Assembly service of new transactions through tw
 
 A node can start multiple parallel instances of the TX Validator. This translates into multiple pods within a Kubernetes cluster. Each instance / pod will have its own gRPC server, and will be able to receive and process transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
+### Kafka Integration
+
+The Validator uses Kafka for several critical messaging paths:
+
+1. **Transaction Metadata Publishing**:
+   - Successfully validated transactions have their metadata published to a Kafka topic
+   - Metadata includes transaction ID, size, fee, input and output information
+   - The `txmetaKafkaProducerClient` handles this publishing process
+   - Target topic is configured via `Kafka.TxMetaConfig` settings
+
+2. **Rejected Transaction Notifications**:
+   - When transactions fail validation, details are published to a rejection topic
+   - The `rejectedTxKafkaProducerClient` is responsible for these messages
+   - Includes rejection reason, transaction ID, and error classification
+   - Helps with network-wide tracking of invalid transactions
+
+3. **Transaction Validation Requests**:
+   - The Validator can also consume validation requests via Kafka
+   - This enables asynchronous transaction processing patterns
+   - Useful for high-throughput scenarios where immediate responses aren't needed
+
+The Kafka integration provides resilience, allowing the system to handle temporary outages or service unavailability by buffering messages.
+
 ## 2. Functionality
 
 ### 2.1. Starting the Validator as a service
@@ -111,9 +137,26 @@ For every transaction received, Teranode must validate:
     - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
  - Bitcoin consensus rules,
  - Local policies (if any),
- - whether the script execution returns `true.
+ - Whether the script execution returns `true`.
 
 Teranode will consider a transaction that passes consensus rules, local policies and script validation as fully validated and fit to be included in the next possible block.
+
+The validation process includes several stages:
+
+1. **Basic Transaction Structure Validation**:
+   - Verify inputs and outputs are present
+   - Check transaction size against policy limits
+   - Validate input and output value ranges
+
+2. **Policy Validation**:
+   - Apply configurable policy rules that can be enabled/disabled
+   - Check transaction fees against minimum requirements
+   - Enforce limits on script operations (sigops)
+
+3. **Input Validation**:
+   - Verify inputs exist in the UTXO set
+   - Ensure inputs are unspent (prevent double-spending)
+   - Validate input script format
 
 New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
 
@@ -121,70 +164,59 @@ New Txs are validated by the `ValidateTransaction()` function. To ensure the val
 We can see the exact steps being executed as part of the validation process below:
 
 ```go
-
-func (v *DefaultValidator) ValidateTransaction(tx *bt.Tx) error { //nolint:funlen - mostly comments
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
 	txSize := tx.Size()
 
-	// fmt.Println(hex.EncodeToString(tx.ExtendedBytes()))
-
-	// 0) Check whether we have a complete transaction in extended format, with all input information
-	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !v.IsExtended(tx) {
-		return validator.NewError(fmt.Errorf("transaction is not in extended format"), api.ErrStatusTxFormat)
-	}
-
-	// 1) Neither lists of inputs or outputs are empty
+	// 1) Neither lists of inputs nor outputs are empty
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-		return validator.NewError(fmt.Errorf("transaction has no inputs or outputs"), api.ErrStatusInputs)
+		return errors.NewTxInvalidError("transaction has no inputs or outputs")
 	}
 
 	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if err := checkTxSize(txSize, v.policy); err != nil {
-		return validator.NewError(err, api.ErrStatusTxFormat)
+	if !validationOptions.SkipPolicyChecks {
+		if err := tv.checkTxSize(txSize); err != nil {
+			return err
+		}
 	}
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
 	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
-	if err := checkInputs(tx); err != nil {
-		return validator.NewError(err, api.ErrStatusInputs)
+	if err := tv.checkInputs(tx, blockHeight); err != nil {
+		return err
 	}
 
 	// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
 	//    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
-	if err := checkOutputs(tx); err != nil {
-		return validator.NewError(err, api.ErrStatusOutputs)
+	if err := tv.checkOutputs(tx, blockHeight); err != nil {
+		return err
 	}
 
-	// 7) The transaction size in bytes is greater than or equal to 100
-	if txSize < 100 {
-		return validator.NewError(fmt.Errorf("transaction size in bytes is less than 100 bytes"), api.ErrStatusMalformed)
-	}
+	// The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
 
-	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	if err := sigOpsCheck(tx, v.policy); err != nil {
-		return validator.NewError(err, api.ErrStatusMalformed)
-	}
+	// The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
+	// Note: This may be disabled for unlimited operation counts
 
-	// 9) The unlocking script (scriptSig) can only push numbers on the stack
-	if err := pushDataCheck(tx); err != nil {
-		return validator.NewError(err, api.ErrStatusMalformed)
+	// The unlocking script (scriptSig) can only push numbers on the stack
+	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
+		if err := tv.pushDataCheck(tx); err != nil {
+			return err
+		}
 	}
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if err := checkFees(tx, api.FeesToBtFeeQuote(v.policy.MinMiningTxFee)); err != nil {
-		return validator.NewError(err, api.ErrStatusFees)
+	if !validationOptions.SkipPolicyChecks {
+		if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+			return err
+		}
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := checkScripts(tx); err != nil {
-		return validator.NewError(err, api.ErrStatusUnlockingScripts)
-	}
+	// (Script verification is handled separately with multiple interpreter options)
 
-	// everything checks out
 	return nil
 }
 ```
@@ -235,7 +267,73 @@ The above represents an implementation of the core Teranode validation rules:
 
 
 
-### 2.4. Post-validation: Updating stores and propagating the transaction
+### 2.4. Script Verification
+
+The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters are supported:
+
+1. **GoBT Interpreter** (`TxInterpreterGoBT`):
+   - Based on the Go-BT library
+   - Default interpreter for basic script validation
+
+2. **GoSDK Interpreter** (`TxInterpreterGoSDK`):
+   - Based on the Go-SDK library
+   - Provides advanced script validation capabilities
+
+3. **GoBDK Interpreter** (`TxInterpreterGoBDK`):
+   - Based on the Go-BDK library
+   - Optimized for performance in high-throughput scenarios
+   - Includes specialized Bitcoin script validation features
+
+The script verification process:
+1. Each transaction input's unlocking script is validated against its corresponding output's locking script
+2. The interpreter evaluates if the combined script executes successfully and leaves 'true' on the stack
+3. The script verification is context-aware, considering current block height and network parameters
+
+Script verification can be configured using the `validator_scriptVerificationLibrary` setting, which defaults to "VerificatorGoBT".
+
+### 2.5. Error Handling and Transaction Rejection
+
+The Validator implements a structured error handling system to categorize and report different types of validation failures:
+
+1. **Error Types**:
+   - `TxInvalidError`: Generated when a transaction fails basic validation rules
+   - `ProcessingError`: Occurs during transaction processing issues
+   - `ConfigurationError`: Indicates validator configuration problems
+   - `ServiceError`: Represents broader service-level issues
+
+2. **Rejection Flow**:
+   - When a transaction is rejected, detailed error information is captured
+   - Rejection reasons are categorized (e.g., invalid inputs, script failure, insufficient fees)
+   - Rejected transactions are published to a dedicated Kafka topic if configured
+   - The P2P service receives notifications about rejected transactions
+
+3. **Error Propagation**:
+   - Errors are wrapped and propagated through the system with context information
+   - GRPC error codes translate internal errors for API responses
+   - Detailed error messages assist in diagnosing validation issues
+
+### 2.6. Concurrent Processing
+
+The Validator leverages concurrency to optimize transaction processing performance:
+
+1. **Parallel UTXO Saving**:
+   - The `saveInParallel` flag enables concurrent UTXO updates
+   - Improves throughput by processing multiple transactions simultaneously
+
+2. **Batching**:
+   - Transactions can be validated in batches for higher throughput
+   - Batch processing is configurable and used by both Propagation and Subtree Validation services
+   - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
+
+3. **Error Group Pattern**:
+   - Uses Go's `errgroup` package for coordinated concurrent execution
+   - Maintains proper error propagation in concurrent processing flows
+
+4. **Two-Phase Commit Process**:
+   - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
+   - Prevents partial updates in case of failures during concurrent processing
+
+### 2.7. Post-validation: Updating stores and propagating the transaction
 
 Once a Tx is validated, the Validator will update the UTXO store with the new Tx data. Then, it will notify the Block Assembly service and any P2P subscribers about the new Tx.
 
@@ -340,6 +438,8 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 2. **gRPC**: Google's Remote Procedure Call system, used here for server-client communication. It enables the server to expose specific methods that clients can call remotely. This is only used if the component is started as a service.
 
 3. **Kafka (by Apache)**: A distributed streaming platform (optionally) used here for message handling. Kafka is used for distributing transaction validation data to the block assembly.
+   - [Kafka in Teranode](../../topics/kafka/kafka.md#validator-component): Overview of Kafka integration with the Validator component
+   - [Kafka Message Format](../../references/kafkaMessageFormat.md): Details on message formats used in Kafka communication
 
 4. **Sarama**: A Go library for Apache Kafka.
 

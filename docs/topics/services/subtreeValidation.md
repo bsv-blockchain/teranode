@@ -126,16 +126,28 @@ In the previous section, the process of validating a subtree was described. Here
 
 ![subtree_validation_detail.svg](img/plantuml/subtreevalidation/subtree_validation_detail.svg)
 
+
 The validation process is as follows:
 
-1. First, the Validator will check if the subtree already exists in the Substree Store. If it does, the subtree will not be validated again.
+1. First, the Validator will check if the subtree already exists in the Subtree Store. If it does, the subtree will not be validated again.
 2. If the subtree is not found in the Subtree Store, the Validator will fetch the subtree from the remote asset server.
 3. The Validator will create a subtree metadata object.
-4. Next, the Validator will decorate all Txs. To do this, it will try 3 approaches (in order):
+4. Next, the Validator will decorate all Txs. To do this, it will try the following approaches (in order):
     - First, it will try to fetch the UTXO metadata from the tx metadata cache (in-memory).
     - If the tx metadata is not found, it will try to fetch the tx metadata from the UTXO store.
     - If the tx metadata is not found in the UTXO store, the Validator will fetch the UTXO from the remote asset server.
     - If the tx is not found, the tx will be marked as invalid, and the subtree validation will fail.
+
+### 2.4. Subtree Locking Mechanism
+
+To prevent concurrent validation of the same subtree, the service implements a file-based locking mechanism:
+
+1. Before validation begins, the service attempts to create a "lock" file for the specific subtree.
+2. If the lock file creation succeeds, the service proceeds with validation.
+3. If the lock file already exists, the service assumes another instance is already validating the subtree.
+4. This mechanism ensures efficient resource usage and prevents duplicate validation work.
+
+The locking implementation is designed to be resilient across distributed systems by leveraging the shared filesystem.
 
 ## 3. gRPC Protobuf Definitions
 
@@ -181,8 +193,10 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 ├── Interface.go                            # Defines interfaces related to subtree validation, facilitating abstraction and testing.
 ├── README.md                               # Project documentation including setup, usage, and examples.
 ├── Server.go                               # Server-side logic for the subtree validation service, handling RPC calls.
+├── Server_test.go                          # Tests for the server implementation.
 ├── SubtreeValidation.go                    # Core logic for validating subtrees within a blockchain structure.
 ├── SubtreeValidation_test.go               # Unit tests for the subtree validation logic.
+├── TryLockIfNotExists.go                   # Implementation of locking mechanism to avoid concurrent subtree validation.
 ├── metrics.go                              # Implementation of metrics collection for monitoring service performance.
 ├── processTxMetaUsingCache.go              # Logic for processing transaction metadata with a caching layer for efficiency.
 ├── processTxMetaUsingStore.go              # Handles processing of transaction metadata directly from storage, bypassing cache.
@@ -192,17 +206,9 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 │   ├── subtreevalidation_api.pb.go         # Generated Go code from .proto definitions, containing structs and methods.
 │   ├── subtreevalidation_api.proto         # Protocol Buffers file defining the subtree validation service API.
 │   └── subtreevalidation_api_grpc.pb.go    # Generated Go code for gRPC client and server interfaces from the .proto service.
-└── txmetaHandler.go                        # Manages operations related to transaction metadata, including validation and caching.
+├── txmetaHandler.go                        # Manages operations related to transaction metadata, including validation and caching.
+└── txmetaHandler_test.go                   # Unit tests for transaction metadata handling.
 ```
-
-## Key Changes and Additions:
-
-1. Added description for the `data` directory, which was missing in the original documentation.
-2. Retained all other file descriptions as they accurately represent the purpose of each file.
-3. Ensured that the structure matches the provided tree, including the correct number of files and directories.
-
-This updated documentation now accurately reflects the current structure of the subtree validation service, including all files and directories present in the provided tree.
-
 
 ## 7. How to Run
 

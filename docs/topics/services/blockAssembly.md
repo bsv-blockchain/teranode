@@ -385,18 +385,21 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 │   ├── blockassembly_api.pb.go    - Generated protobuf code.
 │   ├── blockassembly_api.proto    - Protobuf definitions.
 │   ├── blockassembly_api_grpc.pb.go - gRPC generated code.
+├── blockassembly_system_test.go   - System-level integration tests.
 ├── data.go                        - Data structures used in block assembly.
 ├── data_test.go                   - Tests for data.go.
 ├── metrics.go                     - Metrics collection for block assembly.
+├── mining                         - Directory for mining-related functionality.
 ├── remotettl.go                   - Management of remote TTL (Time To Live) values.
-├── subtreeprocessor               - Directory for subtree processing.
-├── SubtreeProcessor.go        - Main logic for processing subtrees.
-├── SubtreeProcessor_test.go   - Tests for SubtreeProcessor.go.
-├── metrics.go                 - Metrics specific to subtree processing.
-├── options.go                 - Configuration options for subtree processing.
-├── queue.go                   - Queue implementation for subtree processing.
-├── queue_test.go              - Tests for queue.go.
-└── TxIDAndFee.go              - Handling transaction IDs and fees.
+└── subtreeprocessor               - Directory for subtree processing.
+    ├── SubtreeProcessor.go        - Main logic for processing subtrees.
+    ├── SubtreeProcessor_test.go   - Tests for SubtreeProcessor.go.
+    ├── metrics.go                 - Metrics specific to subtree processing.
+    ├── options.go                 - Configuration options for subtree processing.
+    ├── queue.go                   - Queue implementation for subtree processing.
+    ├── queue_test.go              - Tests for queue.go.
+    ├── testdata                   - Test data for subtree processor tests.
+    └── txIDAndFee.go              - Handling transaction IDs and fees.
 ```
 
 ## 7. How to run
@@ -414,19 +417,19 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 The Block Assembly service uses the following configuration options:
 
-## Network and Communication Settings
+### Network and Communication Settings
 
 1. **`blockassembly_grpcAddress`**: Specifies the gRPC address for the block assembly service.
 2. **`network`**: Defines the network setting (e.g., "mainnet"). Default: "mainnet".
 
-## gRPC Client Settings
+### gRPC Client Settings
 
 3. **`blockassembly_grpcMaxRetries`**: Maximum number of gRPC retries. Default: 3.
 4. **`blockassembly_grpcRetryBackoff`**: Backoff duration for gRPC retries. Default: 2 seconds.
 5. **`blockassembly_sendBatchSize`**: Batch size for sending operations. Default: 0 (no batching).
 6. **`blockassembly_sendBatchTimeout`**: Timeout for batch send operations in milliseconds. Default: 100.
 
-## Subtree Management
+### Subtree Management
 
 7. **`blockassembly_subtreeTTL`**: Time-to-live (in minutes) for subtrees stored in the cache. Default: 120 minutes.
 8. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the channel that handles new subtree processing. Default: 1,000.
@@ -437,7 +440,7 @@ The Block Assembly service uses the following configuration options:
 13. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees (must be a power of 2). Default: 1,024.
 14. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees. Default: 1,048,576 (1024*1024).
 
-## Block and Transaction Processing
+### Block and Transaction Processing
 
 12. **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization. Default: 100.
 13. **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization. Default: 100.
@@ -448,14 +451,14 @@ The Block Assembly service uses the following configuration options:
 18. **`blockassembly_processRemainderTxHashesConcurrency`**: Concurrency for processing remainder transaction hashes. Default: 64.
 19. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent reads for subtree processor. Default: 4.
 
-## Mining and Difficulty
+### Mining and Difficulty
 
 20. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for response when submitting mining solutions. Default: true.
 
-## Service Control
+### Service Control
 
-22. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether. Default: false.
-23. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration. Default: false.
+21. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether. Useful for testing or maintenance scenarios. Default: false.
+22. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration. When enabled, the service will attempt to restore its previous state after restart. Default: false.
 
 
 ## 9. Other Resources

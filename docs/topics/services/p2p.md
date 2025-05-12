@@ -29,7 +29,7 @@
 ## 1. Description
 
 
-The `p2p` package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication.
+The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern with `P2PNodeI` abstracting the concrete `P2PNode` implementation to allow for better testability and modularity.
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
@@ -45,13 +45,16 @@ The p2p peers are part of a private network. This private network is managed by 
 
 3. **Networking and Communication**:
     - The server uses `libp2p` for network communication. It sets up a host with given IP and port and handles different topics for publishing and subscribing to messages.
-    - The server uses Kademlia for peer discovery.
-    - The server uses GossipPub for PubSub.
+    - The server uses Kademlia for peer discovery, implementing both standard and private DHT (Distributed Hash Table) modes based on configuration.
+    - The server uses GossipSub for PubSub messaging, with automated topic subscription and management.
     - `handleBlockchainMessage`, `handleBestBlockTopic`, `handleBlockTopic`, `handleSubtreeTopic`, and `handleMiningOnTopic` are functions to handle incoming messages for different topics.
     - `sendBestBlockMessage` and `sendPeerMessage` are used for sending messages to peers in the network.
+    - The implementation includes error handling and retry mechanisms for peer connections to enhance network resilience.
 
 4. **Peer Discovery and Connection**:
     - `discoverPeers` function is responsible for discovering peers in the network and attempting to establish connections with them.
+    - The system implements an intelligent retry mechanism that tracks failed connection attempts and manages reconnection policies based on error types.
+    - A dedicated mechanism for connecting to static peers runs in a separate goroutine, ensuring that mission-critical peers are always connected when available.
 
 5. **HTTP Server and WebSockets**:
     - An HTTP server is started using `echo`, a Go web framework, providing routes for health checks and WebSocket connections.
@@ -171,12 +174,20 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 
 2. **Setting Up Routing Discovery**:
     - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
+    - The DHT implementation supports two modes:
+      - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery
+      - Private mode (`initPrivateDHT`): Creates an isolated private network with custom bootstrap nodes, providing enhanced security for enterprise deployments
 
 3. **Advertising and Searching for Peers**:
     - The node then advertises itself for the configured topics and looks for peers associated with these topics. This is conducted through the `discoverPeers` method, which iterates over the topic names and uses the routing discovery to advertise and find peers interested in the same topics.
 
 4. **Connecting to Discovered and Static Peers**:
-    - The `discoverPeers` method also contains logic to connect to new peers discovered in the network. Simultaneously, the `connectToStaticPeers` method attempts to form connections with a predefined list of peers (static peers), enhancing the robustness of the network connectivity.
+    - The `discoverPeers` method includes sophisticated filtering and error handling mechanisms:
+      - `shouldSkipPeer`: Determines if connection attempts should be skipped based on various criteria
+      - `shouldSkipBasedOnErrors`: Manages retry logic for previously failed connections
+      - `shouldSkipNoGoodAddresses`: Special handling for peers with address resolution issues
+    - The `connectToStaticPeers` method runs in a dedicated goroutine to periodically attempt connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.
+    - Connection errors are carefully tracked to avoid network congestion from repeated failed connection attempts.
 
 5. **Integration with P2P Network**:
     - The capabilities of the DHT for discovery and topic-based advertising enables the node to seamlessly integrate into the Teranode P2P network.
@@ -439,7 +450,7 @@ The following settings can be configured for the p2p service:
 - **`p2p_rejected_tx_topic`**: Specifies the topic for broadcasting information about rejected transactions.
 - **`p2p_shared_key`**: A shared key for securing P2P communications, required for private network configurations.
 - **`p2p_dht_use_private`**: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
-- **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
+- **`p2p_optimise_retries`**: A boolean setting to optimize retry behavior in P2P communications. When enabled, this improves network efficiency by implementing an exponential backoff strategy for reconnection attempts and intelligently filtering connection attempts to peers that have repeatedly failed.
 - **`p2p_static_peers`**: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
 - **`p2p_private_key`**: The private key for the P2P node, used for secure communications within the network. If not provided, the service will attempt to retrieve the key from the blockchain store. If no key exists in the store, a new one will be generated and persisted in the blockchain store, ensuring the node maintains a consistent identity even if its container is destroyed.
 - **`p2p_httpListenAddress`**: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
