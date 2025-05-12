@@ -8,6 +8,7 @@ import (
 )
 
 type Settings struct {
+	Context                  string
 	ServiceName              string
 	ClientName               string
 	DataFolder               string
@@ -178,7 +179,6 @@ type BlockAssemblySettings struct {
 	SendBatchTimeout                    int
 	SubtreeProcessorBatcherSize         int
 	SubtreeProcessorConcurrentReads     int
-	SubtreeBlockHeightRetention         uint32
 	NewSubtreeChanBuffer                int
 	SubtreeRetryChanBuffer              int
 	SubmitMiningSolutionWaitForResponse bool
@@ -211,7 +211,6 @@ type BlockValidationSettings struct {
 	ProcessTxMetaUsingStoreMissingTxThreshold        int
 	SkipCheckParentMined                             bool
 	SubtreeFoundChConcurrency                        int
-	SubtreeBlockHeightRetention                      uint32
 	SubtreeValidationAbandonThreshold                int
 	ValidateBlockSubtreesConcurrency                 int
 	ValidationMaxRetries                             int

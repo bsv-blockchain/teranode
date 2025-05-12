@@ -5,9 +5,15 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/ordishs/gocore"
 )
 
 func NewSettings(alternativeContext ...string) *Settings {
+	settingsContext := gocore.Config().GetContext()
+	if len(alternativeContext) > 0 {
+		settingsContext = alternativeContext[0]
+	}
+
 	params, err := chaincfg.GetChainParams(getString("network", "mainnet", alternativeContext...))
 	if err != nil {
 		panic(err)
@@ -24,6 +30,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	return &Settings{
+		Context:                    settingsContext,
 		ServiceName:                getString("SERVICE_NAME", "teranode", alternativeContext...),
 		ClientName:                 getString("clientName", "defaultClientName", alternativeContext...),
 		DataFolder:                 getString("dataFolder", "data", alternativeContext...),
@@ -179,7 +186,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SendBatchTimeout:                    getInt("blockassembly_sendBatchTimeout", 2, alternativeContext...),
 			SubtreeProcessorBatcherSize:         getInt("blockassembly_subtreeProcessorBatcherSize", 1000, alternativeContext...),
 			SubtreeProcessorConcurrentReads:     getInt("blockassembly_subtreeProcessorConcurrentReads", 375, alternativeContext...),
-			SubtreeBlockHeightRetention:         getUint32("blockassembly_subtreeBlockHeightRetention", globalBlockHeightRetention, alternativeContext...),
 			NewSubtreeChanBuffer:                getInt("blockassembly_newSubtreeChanBuffer", 1_000, alternativeContext...),
 			SubtreeRetryChanBuffer:              getInt("blockassembly_subtreeRetryChanBuffer", 1_000, alternativeContext...),
 			SubmitMiningSolutionWaitForResponse: getBool("blockassembly_SubmitMiningSolution_waitForResponse", true, alternativeContext...),
@@ -223,7 +229,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingStoreMissingTxThreshold:        getInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 1, alternativeContext...),
 			SkipCheckParentMined:                             getBool("blockvalidation_skipCheckParentMined", false, alternativeContext...),
 			SubtreeFoundChConcurrency:                        getInt("blockvalidation_subtreeFoundChConcurrency", 1, alternativeContext...),
-			SubtreeBlockHeightRetention:                      getUint32("blockvalidation_subtreeBlockHeightRetention", globalBlockHeightRetention, alternativeContext...),
 			SubtreeValidationAbandonThreshold:                getInt("blockvalidation_subtree_validation_abandon_threshold", 1, alternativeContext...),
 			ValidateBlockSubtreesConcurrency:                 getInt("blockvalidation_validateBlockSubtreesConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			ValidationMaxRetries:                             getInt("blockvalidation_validation_max_retries", 3, alternativeContext...),

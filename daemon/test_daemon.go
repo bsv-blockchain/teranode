@@ -111,29 +111,31 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		tSettings = settings.NewSettings(opts.SettingsContext)
 	} else {
 		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
-		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 	}
+
+	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+	tSettings.ChainCfgParams.CoinbaseMaturity = 1
 
 	memoryStore, err := url.Parse("memory:///")
 	require.NoError(t, err)
 
-	blockchainStoreURLString := "sqlite:///daemon"
-	coinbaseStoreURLString := "sqlite:///daemoncoinbase"
-	clientName := tSettings.ClientName
-	digit := clientName[len(clientName)-1]
-	blockchainStoreURLString += string(digit)
-	coinbaseStoreURLString += string(digit)
+	// blockchainStoreURLString := "sqlite:///daemon"
+	// coinbaseStoreURLString := "sqlite:///daemoncoinbase"
+	// clientName := tSettings.ClientName
+	// digit := clientName[len(clientName)-1]
+	// blockchainStoreURLString += string(digit)
+	// coinbaseStoreURLString += string(digit)
 
-	blockchainStoreURL, err := url.Parse(blockchainStoreURLString)
-	require.NoError(t, err)
+	// blockchainStoreURL, err := settings.BlockChainSettings.StoreURL.Parse()Parse(blockchainStoreURLString)
+	// require.NoError(t, err)
 
-	coinbaseStoreURL, err := url.Parse(coinbaseStoreURLString)
-	require.NoError(t, err)
+	// coinbaseStoreURL, err := url.Parse(coinbaseStoreURLString)
+	// require.NoError(t, err)
 
 	// use sqlite for db stores
-	tSettings.UtxoStore.UtxoStore = blockchainStoreURL // safe to re-use blockchain store for utxo db schema as they don't conflict
-	tSettings.BlockChain.StoreURL = blockchainStoreURL
-	tSettings.Coinbase.Store = coinbaseStoreURL
+	// tSettings.UtxoStore.UtxoStore = blockchainStoreURL // safe to re-use blockchain store for utxo db schema as they don't conflict
+	// tSettings.BlockChain.StoreURL = blockchainStoreURL
+	// tSettings.Coinbase.Store = coinbaseStoreURL
 
 	// use memory store for subtree store
 	tSettings.SubtreeValidation.SubtreeStore = memoryStore
@@ -161,6 +163,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		// tracing
 		tSettings.UseOpenTracing = true
 		tSettings.TracingSampleRate = "1" // 100% sampling during the test
+	} else {
+		tSettings.UseOpenTracing = false
 	}
 
 	// Override with test settings...
@@ -187,7 +191,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
-	d := New(loggerFactory)
+	d := New(loggerFactory, WithContext(ctx))
 
 	services := []string{
 		"-all=0",
@@ -442,7 +446,7 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	require.NoError(t, err)
 
 	// Check the candidate has at least one subtree hash, otherwise there is nothing to check
-	require.GreaterOrEqual(t, candidate.SubtreeHashes, 1, "Expected at least one subtree hash in the candidate")
+	require.GreaterOrEqual(t, len(candidate.SubtreeHashes), 1, "Expected at least one subtree hash in the candidate")
 
 	txFoundMap := make(map[chainhash.Hash]int)
 

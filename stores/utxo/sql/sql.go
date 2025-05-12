@@ -71,6 +71,7 @@ type Store struct {
 	logger          ulogger.Logger
 	settings        *settings.Settings
 	db              *usql.DB
+	storeURL        *url.URL
 	engine          string
 	blockHeight     atomic.Uint32
 	medianBlockTime atomic.Uint32
@@ -120,6 +121,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		logger:          logger,
 		settings:        tSettings,
 		db:              db,
+		storeURL:        storeURL,
 		engine:          storeURL.Scheme,
 		blockHeight:     atomic.Uint32{},
 		medianBlockTime: atomic.Uint32{},

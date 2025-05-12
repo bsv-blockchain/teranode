@@ -655,12 +655,12 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 		return "", err
 	}
 
-	currentBlockHeight := s.currentBlockHeight.Load()
-
 	dah := merged.DAH
+
+	// If the dah is not set and the block height retention is set, set the dah to the current block height plus the block height retention
 	if dah == 0 && merged.BlockHeightRetention > 0 {
 		// write DAH to file
-		dah = currentBlockHeight + merged.BlockHeightRetention
+		dah = s.currentBlockHeight.Load() + merged.BlockHeightRetention
 	}
 
 	if dah > 0 {

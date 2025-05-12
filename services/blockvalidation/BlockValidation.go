@@ -161,13 +161,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		settings:                      tSettings,
 		blockchainClient:              blockchainClient,
 		subtreeStore:                  subtreeStore,
-		subtreeBlockHeightRetention:   tSettings.BlockValidation.SubtreeBlockHeightRetention,
+		subtreeBlockHeightRetention:   tSettings.GlobalBlockHeightRetention,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
 		recentBlocksBloomFilters:      make(map[chainhash.Hash]*model.BlockBloomFilter),
 		bloomFilterRetentionSize:      tSettings.BlockValidation.BloomFilterRetentionSize,
 		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(tSettings.BlockValidation.SubtreeBlockHeightRetention),
+		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GlobalBlockHeightRetention),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes

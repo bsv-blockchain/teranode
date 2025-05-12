@@ -57,6 +57,12 @@ func WithLoggerFactory(factory func(serviceName string) ulogger.Logger) Option {
 	}
 }
 
+func WithContext(ctx context.Context) Option {
+	return func(d *Daemon) {
+		d.Ctx = ctx
+	}
+}
+
 type externalService struct {
 	Name     string
 	InitFunc func() (servicemanager.Service, error)
@@ -99,7 +105,7 @@ func New(opts ...Option) *Daemon {
 	}
 
 	// Initialize ServiceManager with the configured logger factory
-	d.ServiceManager = servicemanager.NewServiceManager(ctx, d.loggerFactory("ServiceManager"))
+	d.ServiceManager = servicemanager.NewServiceManager(d.Ctx, d.loggerFactory("ServiceManager"))
 
 	return d
 }

@@ -112,7 +112,7 @@ func GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 		}
 
-		mainValidatorClient, err = validator.New(ctx,
+		validatorClient, err := validator.New(ctx,
 			logger,
 			tSettings,
 			utxoStore,
@@ -122,6 +122,9 @@ func GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator", err)
 		}
+
+		return validatorClient, nil
+
 	} else {
 		mainValidatorClient, err = validator.NewClient(ctx, logger, tSettings)
 		if err != nil {

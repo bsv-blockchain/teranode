@@ -1621,7 +1621,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("nonexistent-key-2")
-		newDAH := 1 * time.Hour
+		newDAH := 6
 
 		// Try to set DAH for non-existent key
 		err = f.SetDAH(context.Background(), key, uint32(newDAH)) // nolint: gosec
