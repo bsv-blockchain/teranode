@@ -238,7 +238,7 @@ The results will look similar to the below:
 ```bash
 root@blockassembly1-7874b7bf7c-668bk:/app# ls -ltr
 total 141072
--rw-r--r-- 1 root root    161960 Jan  8  2021 libsecp256k1.so.0.0.0
+
 -rwxr-xr-x 1 root root  18768613 Dec  7 23:59 dlv
 -rw-rw-r-- 1 root root         0 Jan 25 00:12 settings.conf
 drwxr-xr-x 2 root root       116 Jan 25 00:12 certs
@@ -250,8 +250,8 @@ lrwxrwxrwx 1 root root         8 Jan 29 23:38 chainintegrity.run -> teranode.run
 lrwxrwxrwx 1 root root         8 Jan 29 23:38 blockassemblyblaster.run -> teranode.run
 lrwxrwxrwx 1 root root         8 Jan 29 23:38 blaster.run -> teranode.run
 lrwxrwxrwx 1 root root         8 Jan 29 23:38 s3blaster.run -> teranode.run
-lrwxrwxrwx 1 root root        21 Jan 29 23:38 libsecp256k1.so.0 -> libsecp256k1.so.0.0.0
-lrwxrwxrwx 1 root root        21 Jan 29 23:38 libsecp256k1.so -> libsecp256k1.so.0.0.0
+
+
 lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> teranode.run
 
 ```

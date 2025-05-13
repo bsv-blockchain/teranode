@@ -20,13 +20,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 
 ## 🛠 Advanced Configuration
 
-### Native Mode
-
-For a performance boost during development, enable native mode to use the C secp256k1 library. (This step is optional for development.)
-
-```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
-```
 
 ### Aerospike Integration
 

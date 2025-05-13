@@ -14,17 +14,17 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.4 Verify Installation](#34-verify-installation)
     - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools)
 4. [Project Dependencies](#4-project-dependencies)
-5. [Build and Install secp256k1](#5-build-and-install-secp256k1)
-6. [Clone the Project and Install Additional Dependencies](#6-clone-the-project-and-install-additional-dependencies)
-7. [Configure Your Node Dev Settings (Updated Example)](#7-configure-your-node-dev-settings-updated-example)
-    - [7.1 Open and Inspect `settings_local.conf`](#71-open-and-inspect-settings_localconf)
-    - [7.2 Duplicate and Customize the Template Lines](#72-duplicate-and-customize-the-template-lines)
-    - [7.3 Set Your Environment Variable](#73-set-your-environment-variable)
-    - [7.4 Verify](#74-verify)
-    - [7.5 Commit Your Changes (Optional)](#75-commit-your-changes-optional)
-8. [Run the Node](#8-run-the-node)
-9. [Troubleshooting](#9-troubleshooting)
-    - [9.1. Dependency errors and conflicts](#91-dependency-errors-and-conflicts)
+
+5. [Clone the Project and Install Additional Dependencies](#5-clone-the-project-and-install-additional-dependencies)
+6. [Configure Your Node Dev Settings (Updated Example)](#6-configure-your-node-dev-settings-updated-example)
+    - [6.1 Open and Inspect `settings_local.conf`](#61-open-and-inspect-settings_localconf)
+    - [6.2 Duplicate and Customize the Template Lines](#62-duplicate-and-customize-the-template-lines)
+    - [6.3 Set Your Environment Variable](#63-set-your-environment-variable)
+    - [6.4 Verify](#64-verify)
+    - [6.5 Commit Your Changes (Optional)](#65-commit-your-changes-optional)
+7. [Run the Node](#7-run-the-node)
+8. [Troubleshooting](#8-troubleshooting)
+    - [8.1. Dependency errors and conflicts](#81-dependency-errors-and-conflicts)
 - [Next Steps](#next-steps)
 
 
@@ -41,7 +41,7 @@ Open a new terminal and execute:
 ```bash
 go version
 ```
-It should display `go1.24.0` or above.
+It should display `go1.24.3` or above.
 
 
 
@@ -113,9 +113,9 @@ pip install PyYAML
 ```bash
 python -c "import yaml; print(yaml.__version__)"
 ```
-This should print out the installed PyYAML version (e.g., `6.0` or similar).
+This should print out the installed PyYAML version (e.g., `6.0.2` or similar).
 
-#### Alternative: Use `pipx` (for CLI tools)
+#### Alternative: Use `pipx` (for CLI tools) - Not recommended for Teranode Development
 
 If you need PyYAML as part of a **standalone command-line tool**, you could use [pipx](https://pypa.github.io/pipx/) instead:
 ```bash
@@ -136,7 +136,7 @@ Install the various dependencies required for the project.
 ```bash
 brew install golangci-lint
 brew install staticcheck
-brew install secp256k1
+
 brew install protobuf
 brew install protoc-gen-go
 brew install protoc-gen-go-grpc
@@ -154,26 +154,9 @@ protoc --version
 
 
 
-## 5. Build and Install secp256k1
-
----
 
 
-Clone, build, and install the `secp256k1` library:
-
-```bash
-git clone git@github.com:bitcoin-core/secp256k1.git
-cd secp256k1
-./autogen.sh
-./configure
-make
-sudo make install
-```
-
----
-
-
-## 6. Clone the Project and Install Additional Dependencies
+## 5. Clone the Project and Install Additional Dependencies
 
 ---
 
@@ -203,9 +186,9 @@ make install
 
 ---
 
-## 7. Configure Your Node Dev Settings (Updated Example)
+## 6. Configure Your Node Dev Settings (Updated Example)
 
-### 7.1 Open and Inspect `settings_local.conf`
+### 6.1 Open and Inspect `settings_local.conf`
 
 1. In your project directory, locate the file `settings_local.conf`.
 2. Open it in your preferred editor (VSCode, IntelliJ, etc.).
@@ -218,7 +201,7 @@ make install
    ...
    ```
 
-### 7.2 Duplicate and Customize the Template Lines
+### 6.2 Duplicate and Customize the Template Lines
 
 #### **Example:**
 
@@ -240,7 +223,7 @@ For example, if your name is **John**, you copy each line and change `NEW_USER_T
 
 > If there’s already a `clientName.dev.John`, pick something more specific, like `JohnDoe`.
 
-### 7.3 Set Your Environment Variable
+### 6.3 Set Your Environment Variable
 
 In order for your node to read **your** custom lines, you set `SETTINGS_CONTEXT` to match the prefix you used (i.e., `dev.John`).
 
@@ -257,7 +240,7 @@ source ~/.zprofile
 ```
 (or the equivalent for your shell).
 
-### 7.4 Verify
+### 6.4 Verify
 
 1. **Echo** the environment variable to ensure it’s set correctly:
    ```bash
@@ -267,7 +250,7 @@ source ~/.zprofile
 
 2. **Run** or **restart** your node. Check logs or console output to confirm it’s picking up the lines with `dev.John`.
 
-### 7.5 Commit Your Changes (Optional)
+### 6.5 Commit Your Changes (Optional)
 
 If this config is in a shared repository and your team expects each dev to commit their user-specific lines, go ahead and commit them:
 
@@ -279,7 +262,7 @@ git push
 
 ----
 
-## 8. Run the Node
+## 7. Run the Node
 
 As a precondition, we need to have Kafka (https://kafka.apache.org/) running in our local dev env:
 
@@ -298,9 +281,9 @@ If no errors are seen, you have successfully installed the project and are ready
 
 ---
 
-## 9. Troubleshooting
+## 8. Troubleshooting
 
-### 9.1. Dependency errors and conflicts
+### 8.1. Dependency errors and conflicts
 
 Should you have errors with dependencies, try running the following commands:
 
