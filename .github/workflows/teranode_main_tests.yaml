@@ -7,6 +7,9 @@ env:
   ECR_REGION: eu-north-1
   GO_VERSION: '1.24.1'
 
+permissions:
+  id-token: write
+
 jobs:
   go-buildtest:
     name: build non-unit tests
@@ -27,12 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Set up AWS CLI
+      # Set up AWS CLI using OIDC role
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: ${{ env.ECR_REGION }}
 
       # Authenticate Docker to AWS ECR
@@ -69,12 +71,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Set up AWS CLI
+      # Set up AWS CLI using OIDC role
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: ${{ env.ECR_REGION }}
 
       # Authenticate Docker to AWS ECR

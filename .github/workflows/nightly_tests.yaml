@@ -11,6 +11,9 @@ env:
   USE_ECR_IMAGE: true
   GO_VERSION: '1.24.1'
 
+permissions:
+  id-token: write
+  
 jobs:
   pull-image:
     runs-on: ubuntu-latest
@@ -24,8 +27,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Amazon ECR
@@ -271,8 +273,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Amazon ECR

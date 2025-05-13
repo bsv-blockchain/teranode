@@ -14,6 +14,10 @@ on:
         description: 'Release version'
         required: true
         type: string
+
+permissions:
+  id-token: write
+
 jobs:
   build_manifest:
     name: Build manifest
@@ -25,8 +29,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: ${{ inputs.region }}
 
       - name: Login to Amazon ECR

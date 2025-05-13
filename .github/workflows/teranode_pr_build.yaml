@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  id-token: write
 
 env:
   SETTINGS_CONTEXT_DEFAULT: test
@@ -22,6 +23,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     with:
       repository: ${{ github.repository }}
       tag_latest: false
