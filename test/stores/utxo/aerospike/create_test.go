@@ -367,9 +367,7 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 		return
 	}
 
-	t.Cleanup(func() {
-		td.Stop(t)
-	})
+	defer td.Stop(t)
 
 	// set run state
 	err = td.BlockchainClient.Run(td.Ctx, "test")

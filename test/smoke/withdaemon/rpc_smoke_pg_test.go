@@ -44,7 +44,8 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	pgStore := fmt.Sprintf("postgres://teranode:teranode@localhost:%s/teranode?expiration=5m", pg.Port)
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(tSettings *settings.Settings) {
 			url, err := url.Parse(pgStore)
 			require.NoError(t, err)

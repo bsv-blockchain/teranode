@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,8 +49,6 @@ import (
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
-
-const memoryScheme = "memory"
 
 type TestDaemon struct {
 	Ctx                   context.Context
@@ -94,18 +94,10 @@ func (je *JSONError) Error() string {
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var composeDependencies tc.ComposeStack
-
-	if !opts.SkipRemoveDataDir {
-		err := os.RemoveAll("./data")
-		require.NoError(t, err)
-	}
-
-	// if opts.StartDaemonDependencies {
-	// composeDependencies = StartDaemonDependencies(ctx, t, !opts.SkipRemoveDataDir, calculateDependencies(t, opts.Settings))
-	// }
-
-	var tSettings *settings.Settings
+	var (
+		composeDependencies tc.ComposeStack
+		tSettings           *settings.Settings
+	)
 
 	if opts.SettingsContext != "" {
 		tSettings = settings.NewSettings(opts.SettingsContext)
@@ -113,44 +105,34 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 	}
 
+	path := filepath.Join("data", tSettings.ClientName)
+	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
+		// a bit hacky. Ideally all stores sit under data/${ClientName}
+		path = "data"
+	}
+
+	if !opts.SkipRemoveDataDir {
+		t.Logf("Removing data directory: %s", path)
+		err := os.RemoveAll(path)
+		require.NoError(t, err)
+	}
+
+	// if opts.StartDaemonDependencies {
+	// composeDependencies = StartDaemonDependencies(ctx, t, !opts.SkipRemoveDataDir, calculateDependencies(t, opts.Settings))
+	// }
+
 	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 	tSettings.ChainCfgParams.CoinbaseMaturity = 1
 
-	memoryStore, err := url.Parse("memory:///")
+	t.Logf("Creating data directory: %s", path)
+	err := os.MkdirAll(path, 0755)
 	require.NoError(t, err)
 
-	// blockchainStoreURLString := "sqlite:///daemon"
-	// coinbaseStoreURLString := "sqlite:///daemoncoinbase"
-	// clientName := tSettings.ClientName
-	// digit := clientName[len(clientName)-1]
-	// blockchainStoreURLString += string(digit)
-	// coinbaseStoreURLString += string(digit)
+	quorumPath := tSettings.SubtreeValidation.QuorumPath
+	require.NotNil(t, quorumPath, "No subtree_quorum_path specified")
 
-	// blockchainStoreURL, err := settings.BlockChainSettings.StoreURL.Parse()Parse(blockchainStoreURLString)
-	// require.NoError(t, err)
-
-	// coinbaseStoreURL, err := url.Parse(coinbaseStoreURLString)
-	// require.NoError(t, err)
-
-	// use sqlite for db stores
-	// tSettings.UtxoStore.UtxoStore = blockchainStoreURL // safe to re-use blockchain store for utxo db schema as they don't conflict
-	// tSettings.BlockChain.StoreURL = blockchainStoreURL
-	// tSettings.Coinbase.Store = coinbaseStoreURL
-
-	// use memory store for subtree store
-	tSettings.SubtreeValidation.SubtreeStore = memoryStore
-
-	// use in-memory kafka
-	tSettings.Kafka.BlocksConfig.Scheme = memoryScheme
-	tSettings.Kafka.BlocksFinalConfig.Scheme = memoryScheme
-	tSettings.Kafka.LegacyInvConfig.Scheme = memoryScheme
-	tSettings.Kafka.RejectedTxConfig.Scheme = memoryScheme
-	tSettings.Kafka.SubtreesConfig.Scheme = memoryScheme
-	tSettings.Kafka.TxMetaConfig.Scheme = memoryScheme
-
-	if tSettings.Kafka.ValidatorTxsConfig != nil {
-		tSettings.Kafka.ValidatorTxsConfig.Scheme = memoryScheme
-	}
+	err = os.MkdirAll(quorumPath, 0755)
+	require.NoError(t, err)
 
 	// Override with test settings...
 	tSettings.Asset.CentrifugeDisable = true
@@ -219,6 +201,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
+	WaitForPortsFree(t, tSettings)
+
 	go d.Start(logger, services, tSettings, readyCh)
 
 	select {
@@ -238,6 +222,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 			deferFn()
 		})
 	}
+
+	ports := []int{tSettings.HealthCheckPort}
+	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
 
 	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
 	require.NoError(t, err)
@@ -302,6 +289,8 @@ func (td *TestDaemon) Stop(t *testing.T) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
+	WaitForPortsFree(t, td.Settings)
+
 	td.ctxCancel()
 
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
@@ -309,6 +298,78 @@ func (td *TestDaemon) Stop(t *testing.T) {
 
 func (td *TestDaemon) StopDaemonDependencies() {
 	StopDaemonDependencies(td.Ctx, td.composeDependencies)
+}
+
+func WaitForPortsFree(t *testing.T, settings *settings.Settings) {
+	require.NoError(t, testutil.WaitForPortsFree(t.Context(), "localhost", GetPorts(settings), 10*time.Second, 100*time.Millisecond))
+}
+
+func GetPorts(tSettings *settings.Settings) []int {
+	ports := []int{
+		getPortFromString(tSettings.Asset.CentrifugeListenAddress),
+		getPortFromString(tSettings.Asset.HTTPListenAddress),
+		getPortFromString(tSettings.Block.PersisterHTTPListenAddress),
+		getPortFromString(tSettings.BlockAssembly.GRPCListenAddress),
+		getPortFromString(tSettings.BlockChain.GRPCListenAddress),
+		getPortFromString(tSettings.BlockChain.HTTPListenAddress),
+		getPortFromString(tSettings.BlockValidation.GRPCListenAddress),
+		getPortFromString(tSettings.Validator.GRPCListenAddress),
+		getPortFromString(tSettings.Validator.HTTPListenAddress),
+		getPortFromString(tSettings.P2P.GRPCListenAddress),
+		getPortFromString(tSettings.P2P.HTTPListenAddress),
+		getPortFromString(tSettings.Coinbase.GRPCListenAddress),
+		getPortFromString(tSettings.SubtreeValidation.GRPCListenAddress),
+		getPortFromString(tSettings.Legacy.GRPCListenAddress),
+		getPortFromString(tSettings.Propagation.HTTPListenAddress),
+		getPortFromString(tSettings.Propagation.GRPCListenAddress),
+		getPortFromString(tSettings.Faucet.HTTPListenAddress),
+		getPortFromURL(tSettings.RPC.RPCListenerURL),
+	}
+
+	// remove all where port == 0
+	ports = removeZeros(ports)
+
+	return ports
+}
+
+func removeZeros(ports []int) []int {
+	var result []int
+
+	for _, port := range ports {
+		if port != 0 {
+			result = append(result, port)
+		}
+	}
+
+	return result
+}
+
+func getPortFromString(address string) int {
+	if address == "" {
+		return 0
+	}
+
+	if !strings.Contains(address, ":") {
+		return 0
+	}
+
+	portString := strings.Split(address, ":")[1]
+
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		return 0
+	}
+
+	return port
+}
+
+func getPortFromURL(url *url.URL) int {
+	port, err := strconv.Atoi(url.Port())
+	if err != nil {
+		return 0
+	}
+
+	return port
 }
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
@@ -737,27 +798,33 @@ func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func WaitForHealthLiveness(port int, timeout time.Duration) error {
-	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	timeoutElapsed := time.After(timeout)
 
 	var err error
 
-	for {
-		select {
-		case <-timeoutElapsed:
-			return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
-		default:
-			_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
-			if err != nil {
-				time.Sleep(100 * time.Millisecond)
+	for _, port := range ports {
+		healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
 
-				continue
+	out:
+		for {
+			select {
+			case <-timeoutElapsed:
+				return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
+			default:
+				_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
+				if err != nil {
+					time.Sleep(100 * time.Millisecond)
+
+					continue
+				}
+
+				break out
 			}
-
-			return nil
 		}
 	}
+
+	return nil
 }
 
 func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {

@@ -14,3 +14,6 @@ scripts/
 data.zip
 test/data
 test/utils/data
+test/model/big-test-generated_test_data
+*.log
+*.out

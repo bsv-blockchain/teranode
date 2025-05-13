@@ -246,6 +246,10 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
+	height, _, err := td.BlockchainClient.GetBestHeightAndTime(td.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), height)
+
 	// Generate initial blocks
 	// CSVHeight is the block height at which the CSV rules are activated including lock time
 	_, err = td.CallRPC("generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
@@ -482,7 +486,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 
 func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
+		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
 	})
 

@@ -28,6 +28,8 @@ func (l *ErrorTestLogger) EnableVerbose() {
 }
 
 func (l *ErrorTestLogger) SkipCancelOnFail(skip bool) {
+	l.t.Helper()
+
 	l.skipCancelOnFail.Store(skip)
 }
 
@@ -38,10 +40,14 @@ func (l *ErrorTestLogger) LogLevel() int {
 func (l *ErrorTestLogger) SetLogLevel(level string) {}
 
 func (l *ErrorTestLogger) New(service string, options ...Option) Logger {
+	l.t.Helper()
+
 	return l
 }
 
 func (l *ErrorTestLogger) Duplicate(options ...Option) Logger {
+	l.t.Helper()
+
 	return l
 }
 
@@ -58,6 +64,8 @@ func (l *ErrorTestLogger) Warnf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
+	l.t.Helper()
+
 	_, file, line, _ := runtime.Caller(2)
 
 	prefix := fmt.Sprintf("%s:%d: [ERROR] %s ", file, line, format)
@@ -76,6 +84,8 @@ func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
+	l.t.Helper()
+
 	_, file, line, _ := runtime.Caller(2)
 
 	prefix := fmt.Sprintf("%s:%d: [FATAL] %s ", file, line, format)

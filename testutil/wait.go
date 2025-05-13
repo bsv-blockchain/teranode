@@ -22,7 +22,7 @@ func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait ti
 		return nil // Nothing to wait for
 	}
 
-	log.Printf("Waiting up to %v for ports %v on host '%s' to become available...", maxWait, ports, host)
+	// log.Printf("Waiting up to %v for ports %v on host '%s' to become available...", maxWait, ports, host)
 
 	ctxWait, cancelWait := context.WithTimeout(ctx, maxWait)
 	defer cancelWait()
@@ -97,7 +97,7 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 		return nil // Nothing to wait for
 	}
 
-	log.Printf("Waiting up to %v for ports [%v] on host '%s' to become free...", maxWait, ports, host)
+	// log.Printf("Waiting up to %v for ports [%v] on host '%s' to become free...", maxWait, ports, host)
 
 	ctxWait, cancelWait := context.WithTimeout(ctx, maxWait)
 	defer cancelWait()
@@ -139,7 +139,7 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 						// Error dialing means the port is likely free
 						portsStillBound[port] = false
 
-						log.Printf("Port %d on host '%s' is now free.", port, host)
+						// log.Printf("Port %d on host '%s' is now free.", port, host)
 					} else {
 						// Connection succeeded, port is still bound
 						conn.Close() // Close the successful connection immediately
@@ -154,7 +154,7 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 			if numStillBound == 0 {
 				allFree = true
 
-				log.Printf("All specified ports [%v] on host '%s' are now free.", ports, host)
+				log.Printf("All specified ports %v on host '%s' are now free.", ports, host)
 			} else {
 				log.Printf("Still waiting for ports to become free on host '%s': %v", host, nextPortsStillBoundLog)
 			}

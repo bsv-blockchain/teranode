@@ -38,9 +38,8 @@ func TestOrphanTx(t *testing.T) {
 	defer node1.Stop(t)
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableP2P:         true,
-		SkipRemoveDataDir: true,
-		UseTracing:        false,
+		EnableP2P:  true,
+		UseTracing: false,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -123,11 +122,11 @@ func TestOrphanTx(t *testing.T) {
 	node1.Stop(t)
 	node1.ResetServiceManagerContext(t)
 	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:  true,
-		EnableP2P:  true,
-		UseTracing: false,
+		EnableRPC:         true,
+		EnableP2P:         true,
+		UseTracing:        false,
 		SkipRemoveDataDir: true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
@@ -178,7 +177,7 @@ func TestOrphanTx(t *testing.T) {
 	assert.Equal(t, childtxFromNode1.String(), childtxFromNode2.String())
 
 	_, err = node1.CallRPC("generate", []any{1})
-	require.NoError(t, err)	
+	require.NoError(t, err)
 
 	utxo, err := node1.UtxoStore.Get(node1.Ctx, childtx.TxIDChainHash())
 	require.NoError(t, err)
@@ -199,7 +198,7 @@ func TestOrphanTx(t *testing.T) {
 
 	err = block3.CheckMerkleRoot(node1.Ctx)
 	require.NoError(t, err)
-	
+
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return block3.SubTreesFromBytes(subtreeHash[:])
 	}
@@ -220,7 +219,7 @@ func TestOrphanTx(t *testing.T) {
 			}
 		}
 	}
-	
+
 	require.False(t, blFound)
 
 	// get the block height on node2
@@ -264,7 +263,8 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	require.NoError(t, err)
 
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../../docker-compose-host.yml",
+		Path:        "../../",
+		ComposeFile: "docker-compose-host.yml",
 	})
 	require.NoError(t, err)
 
@@ -276,7 +276,7 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 
 	// tc.StopNode(t, "teranode-1")
 	// tc.StartNode(t, "teranode-1")
-	
+
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 101, 20*time.Second)
 	require.NoError(t, err)
 
@@ -343,17 +343,17 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	err = childTx.AddP2PKHOutputFromPubKeyBytes(privKey.PrivKey.PubKey().SerialiseCompressed(), 1000)
 	require.NoError(t, err)
 
-	require.NoError(t, childTx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey.PrivKey}))	
+	require.NoError(t, childTx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey.PrivKey}))
 
 	// Check that the transaction is signed
 	assert.Greater(t, len(childTx.Inputs[0].UnlockingScript.Bytes()), 0)
-	
+
 	err = node1.PropagationClient.ProcessTransaction(t.Context(), childTx)
 	require.NoError(t, err)
 
 	err = node2.PropagationClient.ProcessTransaction(t.Context(), childTx)
 	require.NoError(t, err)
-	
+
 	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 18090), childTx.TxIDChainHash().String())
 	require.NoError(t, err)
 

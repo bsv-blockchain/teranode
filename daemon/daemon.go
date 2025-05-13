@@ -526,7 +526,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
-		txStore, err := GetTxStore(createLogger("txs"))
+		txStore, err := GetTxStore(createLogger("txs"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -536,7 +536,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
-		blockPersisterStore, err := GetBlockPersisterStore(createLogger("bp"))
+		blockPersisterStore, err := GetBlockPersisterStore(createLogger("bp"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -620,7 +620,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startBlockPersister {
-		blockStore, err := GetBlockStore(createLogger("bps"))
+		blockStore, err := GetBlockStore(createLogger("bps"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -653,7 +653,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	}
 
 	if startUTXOPersister {
-		blockStore, err := GetBlockStore(createLogger("bps"))
+		blockStore, err := GetBlockStore(createLogger("bps"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -676,7 +676,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// blockAssembly
 	if startBlockAssembly {
 		if tSettings.BlockAssembly.GRPCListenAddress != "" {
-			txStore, err := GetTxStore(createLogger("txs"))
+			txStore, err := GetTxStore(createLogger("txs"), tSettings)
 			if err != nil {
 				return err
 			}
@@ -716,7 +716,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
-		txStore, err := GetTxStore(createLogger("txs"))
+		txStore, err := GetTxStore(createLogger("txs"), tSettings)
 		if err != nil {
 			return err
 		}
@@ -774,7 +774,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				return err
 			}
 
-			txStore, err := GetTxStore(createLogger("txs"))
+			txStore, err := GetTxStore(createLogger("txs"), tSettings)
 			if err != nil {
 				return err
 			}
@@ -859,7 +859,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 	// propagation
 	if startPropagation {
 		if tSettings.Propagation.GRPCListenAddress != "" {
-			txStore, err := GetTxStore(createLogger("txs"))
+			txStore, err := GetTxStore(createLogger("txs"), tSettings)
 			if err != nil {
 				return err
 			}
@@ -902,7 +902,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
-		tempStore, err := GetTempStore(logger)
+		tempStore, err := GetTempStore(logger, tSettings)
 		if err != nil {
 			return err
 		}

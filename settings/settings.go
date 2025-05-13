@@ -52,6 +52,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 		UseCgoVerifier:             getBool("use_cgo_verifier", true, alternativeContext...),
 		UseOtelTracing:             getBool("use_otel_tracing", false, alternativeContext...),
 		GRPCResolver:               getString("grpc_resolver", "", alternativeContext...),
+		GRPCMaxRetries:             getInt("grpc_max_retries", 40, alternativeContext...),
+		GRPCRetryBackoff:           getDuration("grpc_retry_backoff", 250*time.Millisecond, alternativeContext...),
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
 		TracingCollectorURL:        getURL("tracing_collector_url", "", alternativeContext...),
@@ -145,7 +147,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
-			PersisterStore:                        getString("blockPersister_blocksFile", "./data/blocks.txte", alternativeContext...),
+			PersisterStore:                        getURL("blockPersisterStore", "file://./data/blockstore", alternativeContext...),
 			StateFile:                             getString("blockPersister_stateFile", "file://./data/blockpersister_state.txt", alternativeContext...),
 			PersisterHTTPListenAddress:            getString("blockPersister_httpListenAddress", ":8083", alternativeContext...),
 			CheckDuplicateTransactionsConcurrency: getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
@@ -386,6 +388,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PercentageMissingGetFullData:              getFloat64("subtreevalidation_percentageMissingGetFullData", 20, alternativeContext...),
 		},
 		Legacy: LegacySettings{
+			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),
 			ListenAddresses:                  getMultiString("legacy_listen_addresses", "|", []string{}, alternativeContext...),
 			ConnectPeers:                     getMultiString("legacy_connect_peers", "|", []string{}, alternativeContext...),
 			OrphanEvictionDuration:           getDuration("legacy_orphanEvictionDuration", 10*time.Minute, alternativeContext...),
@@ -402,6 +405,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:                getString("legacy_grpcListenAddress", "", alternativeContext...),
 			SavePeers:                        getBool("legacy_savePeers", false, alternativeContext...), // by default we do not save the peers
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
+			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:        getString("ipv6_addresses", "", alternativeContext...),

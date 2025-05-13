@@ -100,7 +100,8 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 	for {
 		baConn, err = util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-			MaxRetries: 3,
+			MaxRetries:   tSettings.GRPCMaxRetries,
+			RetryBackoff: tSettings.GRPCRetryBackoff,
 		}, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("failed to init blockchain service connection for '%s'", source, err)

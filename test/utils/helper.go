@@ -51,8 +51,23 @@ var allowedHosts = []string{
 	"localhost:16092",
 }
 
+func CallRPC(url string, method string, params []interface{}) (body string, err error) {
+	for i := 0; i < 10; i++ {
+		body, err = callRPC(url, method, params)
+		if err != nil && strings.Contains(err.Error(), "Loading ") {
+			// special case for svnode - it takes a second to load wallets and addresses
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		break
+	}
+
+	return body, err
+}
+
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
-func CallRPC(url string, method string, params []interface{}) (string, error) {
+func callRPC(url string, method string, params []interface{}) (string, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
@@ -85,10 +100,10 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	defer resp.Body.Close()
 
-	// Check the status code
-	if resp.StatusCode != http.StatusOK {
-		return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
-	}
+	// // Check the status code
+	// if resp.StatusCode != http.StatusOK {
+	// 	return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
+	// }
 
 	// Read the response body
 	body, err := io.ReadAll(resp.Body)

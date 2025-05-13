@@ -158,9 +158,7 @@ func (q *Quorum) autoReleaseLock(ctx context.Context, cancel context.CancelFunc,
 		for {
 			select {
 			case <-ctx.Done():
-				if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
-					q.logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
-				}
+				releaseLock(q.logger, lockFile)
 
 				return
 			case <-ticker.C:

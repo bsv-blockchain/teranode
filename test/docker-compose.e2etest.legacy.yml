@@ -1,5 +1,5 @@
 x-teranode-base: &teranode-base
-  image: teranode:latest
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
   depends_on:
     - postgres
     - kafka-shared
@@ -14,19 +14,27 @@ x-aerospike-base: &aerospike-base
     - teranode-network
   command: --config-file /etc/aerospike.conf
 
+x-blobblockstore-base: &blobblockstore-base
+  build:
+    context: ..
+    dockerfile: test/utils/cmd/blob/server/Dockerfile
+  image: blobserver
+  networks:
+    - teranode-network
+
 networks:
   teranode-network:
     name: teranode-network-test-${TEST_ID:-default}
 
 services:
   teranode-builder:
-    image: teranode:latest
+    image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
     networks:
       - teranode-network
     entrypoint: [ "pwd" ]
@@ -263,3 +271,96 @@ services:
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
       - ./data/test/${TEST_ID:-default}/teranode3/external:/app/data/teranode3/external
+
+  blobblockstore1:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore1
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blobblockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/blobblockstore:/app/data/blobblockstore
+
+  blobsubtreestore1:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore1
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
+
+  blobblockstore2:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore2
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blobblockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/blobblockstore:/app/data/blobblockstore
+
+  blobsubtreestore2:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore2
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
+
+  blobblockstore3:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobblockstore3
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/blobblockstore"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/blobblockstore:/app/data/blobblockstore
+
+  blobsubtreestore3:
+    <<: *blobblockstore-base
+    container_name: ${TEST_ID:-undefined}-http-blobsubtreestore3
+    environment:
+      BSERVER_URL: ":8080"
+      BSERVER_SUBDIR: "data/subtreestore"
+      BSERVER_HASHPREFIX: "2"
+    ports:
+      - "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - teranode1
+    volumes:
+      - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore

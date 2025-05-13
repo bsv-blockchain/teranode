@@ -20,11 +20,12 @@ var (
 
 func TestUtxoStore(t *testing.T) {
 	_, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		ComposeFile: "../../docker-compose-host.yml",
+		Path:        "../..",
+		ComposeFile: "docker-compose-host.yml",
 	})
 	require.NoError(t, err)
 
-	settingsNode1 := settings.NewSettings("docker.host.teranode1")
+	settingsNode1 := settings.NewSettings("docker.host.teranode1.daemon")
 	settingsNode1.Propagation.GRPCAddresses = []string{"localhost:8084", "localhost:28084", "localhost:38084"}
 	utxoStore, err := url.Parse("postgres://miner1:miner1@localhost:15432/teranode1")
 	require.NoError(t, err)
@@ -35,7 +36,7 @@ func TestUtxoStore(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1",
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	t.Cleanup(func() {

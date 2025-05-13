@@ -28,6 +28,8 @@ type Settings struct {
 	PostgresCheckAddress     string
 	UseCgoVerifier           bool
 	GRPCResolver             string
+	GRPCMaxRetries           int
+	GRPCRetryBackoff         time.Duration
 	SecurityLevelGRPC        int
 	UsePrometheusGRPCMetrics bool
 	TracingCollectorURL      *url.URL
@@ -124,7 +126,7 @@ type AssetSettings struct {
 
 type BlockSettings struct {
 	MinedCacheMaxMB                       int
-	PersisterStore                        string
+	PersisterStore                        *url.URL
 	PersisterHTTPListenAddress            string
 	StateFile                             string
 	CheckDuplicateTransactionsConcurrency int
@@ -385,6 +387,7 @@ type SubtreeValidationSettings struct {
 }
 
 type LegacySettings struct {
+	WorkingDir                       string
 	ListenAddresses                  []string
 	ConnectPeers                     []string
 	OrphanEvictionDuration           time.Duration
@@ -401,6 +404,7 @@ type LegacySettings struct {
 	GRPCListenAddress                string
 	SavePeers                        bool
 	AllowSyncCandidateFromLocalPeers bool
+	TempStore                        *url.URL
 }
 
 type PropagationSettings struct {

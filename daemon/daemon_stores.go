@@ -15,7 +15,6 @@ import (
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/ordishs/gocore"
 )
 
 var (
@@ -138,19 +137,17 @@ func GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *s
 // GetTxStore returns the main transaction store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This function ensures only one
 // instance of the transaction store exists.
-func GetTxStore(logger ulogger.Logger) (blob.Store, error) {
+func GetTxStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
 	if mainTxstore != nil {
 		return mainTxstore, nil
 	}
 
-	txStoreURL, err, found := gocore.Config().GetURL("txstore")
-	if err != nil {
-		return nil, errors.NewConfigurationError("txstore setting error", err)
+	txStoreURL := tSettings.Block.TxStore
+	if txStoreURL == nil {
+		return nil, errors.NewConfigurationError("txstore config not found")
 	}
 
-	if !found {
-		return nil, errors.NewConfigurationError("no txstore setting found")
-	}
+	var err error
 
 	hashPrefix := 2
 	if txStoreURL.Query().Get("hashPrefix") != "" {
@@ -203,19 +200,17 @@ func GetSubtreeStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.
 // GetTempStore returns the main temporary store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings, defaulting to "./tmp" if not specified.
 // This store is used for temporary data storage during processing.
-func GetTempStore(logger ulogger.Logger) (blob.Store, error) {
+func GetTempStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
 	if mainTempStore != nil {
 		return mainTempStore, nil
 	}
 
-	tempStoreURL, err, found := gocore.Config().GetURL("temp_store", "file://./tmp")
-	if err != nil {
-		return nil, errors.NewConfigurationError("temp_store setting error", err)
-	}
-
-	if !found {
+	tempStoreURL := tSettings.Legacy.TempStore
+	if tempStoreURL == nil {
 		return nil, errors.NewConfigurationError("temp_store config not found")
 	}
+
+	var err error
 
 	mainTempStore, err = blob.NewStore(logger, tempStoreURL)
 	if err != nil {
@@ -228,19 +223,18 @@ func GetTempStore(logger ulogger.Logger) (blob.Store, error) {
 // GetBlockStore returns the main block store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This store is responsible for
 // persisting blockchain blocks.
-func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
+func GetBlockStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
 	if mainBlockStore != nil {
 		return mainBlockStore, nil
 	}
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil {
-		return nil, errors.NewConfigurationError("blockstore setting error", err)
-	}
+	blockStoreURL := tSettings.Block.BlockStore
 
-	if !found {
+	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
+
+	var err error
 
 	hashPrefix := 2
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
@@ -261,19 +255,18 @@ func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
 // GetBlockPersisterStore returns the main block persister store instance. If the store hasn't been
 // initialized yet, it creates a new one using the configured URL from settings. This store is
 // specifically used for block persistence operations.
-func GetBlockPersisterStore(logger ulogger.Logger) (blob.Store, error) {
+func GetBlockPersisterStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
 	if mainBlockPersisterStore != nil {
 		return mainBlockPersisterStore, nil
 	}
 
-	blockStoreURL, err, found := gocore.Config().GetURL("blockPersisterStore")
-	if err != nil {
-		return nil, errors.NewConfigurationError("blockPersisterStore setting error", err)
-	}
+	blockStoreURL := tSettings.Block.PersisterStore
 
-	if !found {
+	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")
 	}
+
+	var err error
 
 	hashPrefix := 2
 	if blockStoreURL.Query().Get("hashPrefix") != "" {

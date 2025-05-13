@@ -166,7 +166,7 @@ func TestDaemon_Start_Basic(t *testing.T) {
 
 	tSettings.BlockChain.StoreURL = persistentStore
 
-	tSettings.Kafka.BlocksFinalConfig.Scheme = memoryScheme
+	tSettings.Kafka.BlocksFinalConfig.Scheme = "memory"
 
 	// Create a ready channel
 	readyCh := make(chan struct{})

@@ -1,5 +1,5 @@
 x-teranode-base: &teranode-base
-  image: teranode:latest
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
   depends_on:
     - postgres
     - kafka-shared
@@ -22,13 +22,13 @@ x-blobblockstore-base: &blobblockstore-base
 
 services:
   teranode-builder:
-    image: teranode:latest
+    image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
     build:
       context: ..
       dockerfile: Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-build-866edae
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:base-run-866edae
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
     networks:
       - e2etest
     entrypoint: [ "pwd" ]

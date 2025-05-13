@@ -332,7 +332,8 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 //   - error: Error if connection fails
 func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSettings *settings.Settings) (*grpc.ClientConn, error) {
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
-		MaxRetries: 3,
+		MaxRetries:   tSettings.GRPCMaxRetries,
+		RetryBackoff: tSettings.GRPCRetryBackoff,
 	}, tSettings)
 	if err != nil {
 		return nil, err

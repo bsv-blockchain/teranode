@@ -33,7 +33,7 @@ func TestMoveUp(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode2",
+		SettingsContext: "docker.host.teranode2.daemon",
 	})
 
 	defer node2.Stop(t)
@@ -46,7 +46,7 @@ func TestMoveUp(t *testing.T) {
 		EnableP2P:         true,
 		SkipRemoveDataDir: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1",
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer node1.Stop(t)
@@ -77,7 +77,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode2",
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -100,12 +100,12 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1",
+		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
-  
+
 	// // set run state
 	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
 	// require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode2",
+		SettingsContext:   "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -158,7 +158,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode2",
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -177,7 +177,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1",
+		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -196,7 +196,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode2",
+		SettingsContext:   "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -227,7 +227,7 @@ func TestTDRestart(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1",
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	// err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -248,7 +248,7 @@ func TestTDRestart(t *testing.T) {
 		EnableP2P:         false,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1",
+		SettingsContext:   "docker.host.teranode1.daemon",
 	})
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
@@ -376,7 +376,7 @@ func TestInvalidBlock(t *testing.T) {
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		SettingsContext: "docker.host.teranode1",
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	time.Sleep(1 * time.Second)
@@ -410,7 +410,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode2",
+		SettingsContext: "docker.host.teranode2.daemon",
 	})
 	t.Cleanup(func() { node2.Stop(t) })
 
@@ -422,7 +422,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false, // Start without P2P to allow separate chain
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1",
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 	t.Cleanup(func() { node1.Stop(t) })
 
@@ -438,7 +438,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableP2P:         true, // Enable P2P to trigger reorg
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1",
+		SettingsContext:   "docker.host.teranode1.daemon",
 	})
 	t.Cleanup(func() { node1.Stop(t) })
 

@@ -31,7 +31,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (ClientI, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
-		MaxRetries: 3,
+		MaxRetries:   tSettings.GRPCMaxRetries,
+		RetryBackoff: tSettings.GRPCRetryBackoff,
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init peer service connection ", err)

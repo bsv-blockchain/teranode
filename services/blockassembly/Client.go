@@ -119,7 +119,8 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 //   - error: Any error encountered during creation
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockAssemblyGrpcAddress string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
+		MaxRetries:   tSettings.GRPCMaxRetries,
+		RetryBackoff: tSettings.GRPCRetryBackoff,
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)

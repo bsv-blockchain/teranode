@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,13 +24,17 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/testutil"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
 type TestContainer struct {
+	Config     TestContainersConfig
 	Compose    tc.ComposeStack
 	Ctx        context.Context
 	Identifier tc.StackIdentifier
@@ -35,17 +42,49 @@ type TestContainer struct {
 }
 
 type TestContainersConfig struct {
-	ComposeFile string
+	Path               string
+	ComposeFile        string
+	Profiles           []string
+	HealthServicePorts []ServicePort
+	ServicesToWaitFor  []ServicePort
+}
+
+type ServicePort struct {
+	ServiceName string
+	Port        int
+	IsMapped    bool
 }
 
 func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer, error) {
+	err := os.RemoveAll(filepath.Join(config.Path, "data"))
+	require.NoError(t, err)
+
+	// Wait for directory removal to complete
+	err = helper.WaitForDirRemoval(filepath.Join(config.Path, "data"), 2*time.Second)
+	require.NoError(t, err)
+
+	// Ensure the required Docker mount paths exist
+	requiredDirs := []string{
+		filepath.Join(config.Path, "data/test/default/legacy/svnode1-data"),
+		filepath.Join(config.Path, "data/test/default/legacy/svnode2-data"),
+		filepath.Join(config.Path, "data/test/default/legacy/svnode3-data"),
+		filepath.Join(config.Path, "data/aerospike1/logs"),
+		filepath.Join(config.Path, "data/aerospike2/logs"),
+		filepath.Join(config.Path, "data/aerospike3/logs"),
+	}
+	for _, dir := range requiredDirs {
+		err = os.MkdirAll(dir, 0755)
+		require.NoError(t, err)
+	}
+
 	identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
 	ctx, cancel := context.WithCancel(context.Background())
 
-	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(config.ComposeFile), identifier)
+	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(filepath.Join(config.Path, config.ComposeFile)), tc.WithProfiles(config.Profiles...), identifier)
 	require.NoError(t, err)
 
 	container := &TestContainer{
+		Config:     config,
 		Compose:    compose,
 		Ctx:        ctx,
 		Identifier: identifier,
@@ -54,37 +93,43 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 
 	require.NoError(t, compose.Up(ctx))
 
-	time.Sleep(30 * time.Second)
+	services := compose.Services()
+	t.Logf("Services: %v", services)
 
-	// services := []string{"teranode-1", "teranode-2", "teranode-3"}
-	// ports := []string{"18000", "28000", "38000"}
+	ports := getPorts(ctx, t, compose, config.HealthServicePorts)
+	require.NoError(t, daemon.WaitForHealthLiveness(ports, 10*time.Second))
 
-	// for i, serviceName := range services {
-	// 	port := ports[i]
-	// 	t1, err := compose.ServiceContainer(ctx, serviceName)
-	// 	require.NoError(t, err)
-
-	// 	for i := 0; i < 3; i++ {
-	// 		var t1Port nat.Port
-
-	// 		t1Port, err = t1.MappedPort(ctx, nat.Port(port))
-	// 		if err != nil {
-	// 			t.Fatalf("Failed to get mapped port for %s: %v", serviceName, err)
-	// 		}
-
-	// 		err = WaitForHealthLiveness(t1Port.Int(), 3*time.Second)
-
-	// 		if err == nil {
-	// 			break
-	// 		}
-
-	// 		t.Logf("Waiting for %s to start...", serviceName)
-	// 	}
-
-	// 	require.NoError(t, err)
-	// }
+	ports = getPorts(ctx, t, compose, config.ServicesToWaitFor)
+	require.NoError(t, testutil.WaitForPortsReady(ctx, "localhost", ports, 10*time.Second, 1*time.Second))
 
 	return container, nil
+}
+
+func getPorts(ctx context.Context, t *testing.T, compose tc.ComposeStack, servicePorts []ServicePort) []int {
+	ports := []int{}
+
+	for _, servicePort := range servicePorts {
+		t1, err := compose.ServiceContainer(ctx, servicePort.ServiceName)
+		if err != nil {
+			t.Logf("Failed to get service container for %s: %v", servicePort.ServiceName, err)
+			continue
+		}
+
+		var mappedPort int
+
+		if servicePort.IsMapped {
+			p, err := t1.MappedPort(ctx, nat.Port(strconv.Itoa(servicePort.Port)))
+			require.NoError(t, err)
+
+			mappedPort = p.Int()
+		} else {
+			mappedPort = servicePort.Port
+		}
+
+		ports = append(ports, mappedPort)
+	}
+
+	return ports
 }
 
 // TestDaemonClients holds a set of clients for a specific node configuration
@@ -240,6 +285,32 @@ func (tc *TestContainer) StartNode(t *testing.T, nodeName string) {
 
 	require.NoError(t, node.Start(tc.Ctx))
 	time.Sleep(10 * time.Second)
+}
+
+func (tc *TestContainer) Cleanup(t *testing.T) {
+	err := tc.Compose.Down(tc.Ctx)
+	require.NoError(t, err)
+
+	// Wait for configured health check and service ports to be free before continuing
+	portsToWaitFor := []int{}
+
+	// Add ports from HealthServicePorts
+	for _, healthService := range tc.Config.HealthServicePorts {
+		portsToWaitFor = append(portsToWaitFor, healthService.Port)
+	}
+
+	// Add ports from ServicesToWaitFor
+	for _, service := range tc.Config.ServicesToWaitFor {
+		portsToWaitFor = append(portsToWaitFor, service.Port)
+	}
+
+	if len(portsToWaitFor) > 0 {
+		// t.Logf("Waiting for host ports %v to become available after compose down...", portsToWaitFor)
+		err = helper.WaitForPortsToBeAvailable(tc.Ctx, portsToWaitFor, 30*time.Second)
+		require.NoError(t, err, "Ports %v did not become available after cleanup", portsToWaitFor)
+	} else {
+		t.Logf("No health check or fixed mapped ports found in config to check during cleanup.")
+	}
 }
 
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
