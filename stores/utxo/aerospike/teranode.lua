@@ -523,21 +523,24 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     -- Check if all the UTXOs are spent and set the deleteAtHeight, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
     local totalExtraRecs = rec['totalExtraRecs']
-    local spentExtraRecs = rec['spentExtraRecs']
+    local spentExtraRecs = rec['spentExtraRecs'] or 0  -- Default to 0 if nil
     local existingDeleteAtHeight = rec['deleteAtHeight']
+    local newDeleteHeight = currentBlockHeight + blockHeightRetention
             
+    -- Handle conflicting transactions first
     if rec["conflicting"] then
         if not existingDeleteAtHeight then
             -- Set the deleteAtHeight for the record
-            rec['deleteAtHeight'] = currentBlockHeight + blockHeightRetention
+            rec['deleteAtHeight'] = newDeleteHeight
             if rec['external'] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
-        
+
         return ""
     end
 
+    -- Handle pagination records
     if totalExtraRecs == nil then
         -- This is a pagination record: check if all the UTXOs are spent
         if rec['spentUtxos'] == rec['recordUtxos'] then
@@ -550,24 +553,24 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     if spentExtraRecs == nil then
         spentExtraRecs = 0
     end
+    
+    -- This is a master record: only set deleteAtHeight if all UTXOs are spent and transaction is in at least one block
+    local allSpent = (totalExtraRecs == spentExtraRecs) and (rec['spentUtxos'] == rec['recordUtxos'])
+    local hasBlockIDs = blockIDs and list.size(blockIDs) > 0
 
-    -- This is a master record: only set deleteAtHeight if totalExtraRecs equals spentExtraRecs and blockIDs has at least one item and all UTXOs are spent
-    if totalExtraRecs == spentExtraRecs and blockIDs and list.size(blockIDs) > 0 and rec['spentUtxos'] == rec['recordUtxos'] then
-        if existingDeleteAtHeight == nil then
-            -- Set the deleteAtHeight for the record
-            rec['deleteAtHeight'] = currentBlockHeight + blockHeightRetention
+    -- Set or update deleteAtHeight if all UTXOs are spent and transaction is in at least one block
+    if allSpent and hasBlockIDs then
+        if not existingDeleteAtHeight or existingDeleteAtHeight < newDeleteHeight then
+            rec['deleteAtHeight'] = newDeleteHeight
             if rec['external'] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
-    else
-        -- Remove any existing deleteAtHeight
-        if existingDeleteAtHeight then
-            rec['deleteAtHeight'] = nil
-           
-            if rec['external'] then
-                return SIGNAL_DELETE_AT_HEIGHT_UNSET .. totalExtraRecs
-            end
+    -- Clear deleteAtHeight if conditions are no longer met
+    elseif existingDeleteAtHeight then
+        rec['deleteAtHeight'] = nil
+        if rec['external'] then
+            return SIGNAL_DELETE_AT_HEIGHT_UNSET .. totalExtraRecs
         end
     end
 
