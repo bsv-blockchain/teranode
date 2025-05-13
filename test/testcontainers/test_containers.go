@@ -239,6 +239,7 @@ func (tc *TestContainer) StartNode(t *testing.T, nodeName string) {
 	require.NoError(t, err)
 
 	require.NoError(t, node.Start(tc.Ctx))
+	time.Sleep(10 * time.Second)
 }
 
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
