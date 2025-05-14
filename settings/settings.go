@@ -141,7 +141,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPPublicAddress:       getString("asset_httpPublicAddress", "", alternativeContext...),
 			HTTPListenAddress:       getString("asset_httpListenAddress", ":8090", alternativeContext...),
 			HTTPPort:                getInt("ASSET_HTTP_PORT", 8090, alternativeContext...),
-			HTTPSPort:               getInt("asset_https_port", 443, alternativeContext...),
 			SignHTTPResponses:       getBool("asset_sign_http_responses", false, alternativeContext...),
 			EchoDebug:               getBool("ECHO_DEBUG", false, alternativeContext...),
 		},

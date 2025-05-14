@@ -119,7 +119,6 @@ type AssetSettings struct {
 	HTTPPublicAddress       string
 	HTTPListenAddress       string
 	HTTPPort                int
-	HTTPSPort               int
 	SignHTTPResponses       bool
 	EchoDebug               bool
 }
