@@ -177,10 +177,8 @@ func TestFileLoadDAHs(t *testing.T) {
 		f.cleanupExpiredFiles()
 
 		f.fileDAHsMu.Lock()
-		fileDAHs = f.fileDAHs
+		require.NotContains(t, f.fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 		f.fileDAHsMu.Unlock()
-
-		require.NotContains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 
 		err = f.Del(ctx, key)
 		require.Error(t, err)

@@ -10,27 +10,39 @@ import (
 // Data represents transaction metadata used in block assembly.
 type Data struct {
 	// TxIDChainHash is the transaction ID hash
-	TxIDChainHash *chainhash.Hash
+	TxIDChainHash chainhash.Hash
 
 	// Fee represents the transaction fee
 	Fee uint64
 
 	// Size represents the transaction size in bytes
 	Size uint64
+
+	// Parents is a list of parent transaction hashes
+	Parents []chainhash.Hash
 }
 
 func NewFromBytes(bytes []byte) (*Data, error) {
 	d := &Data{}
 
 	// read first 32 bytes as txIDChainHash
-	d.TxIDChainHash = &chainhash.Hash{}
-	copy(d.TxIDChainHash[:], bytes[:32])
+	d.TxIDChainHash = chainhash.Hash(bytes[:32])
 
 	// read next 8 bytes as fee
 	d.Fee = binary.LittleEndian.Uint64(bytes[32:40])
 
 	// read next 8 bytes as size
 	d.Size = binary.LittleEndian.Uint64(bytes[40:48])
+
+	// read remaining bytes as parents
+	parentsCount := (len(bytes) - 48) / 32
+	d.Parents = make([]chainhash.Hash, parentsCount)
+
+	for i := 0; i < parentsCount; i++ {
+		start := 48 + i*32
+		end := start + 32
+		d.Parents[i] = chainhash.Hash(bytes[start:end])
+	}
 
 	return d, nil
 }
@@ -49,6 +61,11 @@ func (d *Data) Bytes() []byte {
 	// write 8 bytes for size
 	binary.LittleEndian.PutUint64(b64, d.Size)
 	bytes = append(bytes, b64...)
+
+	// write parents
+	for _, parent := range d.Parents {
+		bytes = append(bytes, parent[:]...)
+	}
 
 	return bytes
 }

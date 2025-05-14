@@ -27,6 +27,7 @@ const (
 	BlockValidationAPI_SetTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/SetTxMeta"
 	BlockValidationAPI_DelTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/DelTxMeta"
 	BlockValidationAPI_SetMinedMulti_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SetMinedMulti"
+	BlockValidationAPI_ValidateBlock_FullMethodName = "/blockvalidation_api.BlockValidationAPI/ValidateBlock"
 )
 
 // BlockValidationAPIClient is the client API for BlockValidationAPI service.
@@ -42,6 +43,7 @@ type BlockValidationAPIClient interface {
 	SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error)
 	DelTxMeta(ctx context.Context, in *DelTxMetaRequest, opts ...grpc.CallOption) (*DelTxMetaResponse, error)
 	SetMinedMulti(ctx context.Context, in *SetMinedMultiRequest, opts ...grpc.CallOption) (*SetMinedMultiResponse, error)
+	ValidateBlock(ctx context.Context, in *ValidateBlockRequest, opts ...grpc.CallOption) (*ValidateBlockResponse, error)
 }
 
 type blockValidationAPIClient struct {
@@ -132,6 +134,16 @@ func (c *blockValidationAPIClient) SetMinedMulti(ctx context.Context, in *SetMin
 	return out, nil
 }
 
+func (c *blockValidationAPIClient) ValidateBlock(ctx context.Context, in *ValidateBlockRequest, opts ...grpc.CallOption) (*ValidateBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateBlockResponse)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_ValidateBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockValidationAPIServer is the server API for BlockValidationAPI service.
 // All implementations must embed UnimplementedBlockValidationAPIServer
 // for forward compatibility.
@@ -145,6 +157,7 @@ type BlockValidationAPIServer interface {
 	SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error)
 	DelTxMeta(context.Context, *DelTxMetaRequest) (*DelTxMetaResponse, error)
 	SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error)
+	ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
 
@@ -178,6 +191,9 @@ func (UnimplementedBlockValidationAPIServer) DelTxMeta(context.Context, *DelTxMe
 }
 func (UnimplementedBlockValidationAPIServer) SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetMinedMulti not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateBlock not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) mustEmbedUnimplementedBlockValidationAPIServer() {}
 func (UnimplementedBlockValidationAPIServer) testEmbeddedByValue()                            {}
@@ -344,6 +360,24 @@ func _BlockValidationAPI_SetMinedMulti_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockValidationAPI_ValidateBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).ValidateBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_ValidateBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).ValidateBlock(ctx, req.(*ValidateBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockValidationAPI_ServiceDesc is the grpc.ServiceDesc for BlockValidationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -382,6 +416,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetMinedMulti",
 			Handler:    _BlockValidationAPI_SetMinedMulti_Handler,
+		},
+		{
+			MethodName: "ValidateBlock",
+			Handler:    _BlockValidationAPI_ValidateBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

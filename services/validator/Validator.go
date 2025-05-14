@@ -428,7 +428,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 		// first we send the tx to the block assembler
 		if err = v.sendToBlockAssembler(setSpan, &blockassembly.Data{
-			TxIDChainHash: tx.TxIDChainHash(),
+			TxIDChainHash: *tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()),
 		}, spentUtxos); err != nil {
@@ -693,7 +693,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	}
 
-	if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.Parents); err != nil {
 		e := errors.NewServiceError("error calling blockAssembler Store()", err)
 		traceSpan.RecordError(e)
 

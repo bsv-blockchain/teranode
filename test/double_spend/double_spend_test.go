@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/test/txregistry"
 	"github.com/bitcoin-sv/teranode/test/utils"
@@ -154,6 +155,9 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	})
 	t.Run("🧨test_double_spend_with_frozen_tx", func(t *testing.T) {
 		testSingleDoubleSpendFrozenTx(t, utxoStore)
+	})
+	t.Run("test_double_spend_not_mined_for_long", func(t *testing.T) {
+		testSingleDoubleSpendNotMinedForLong(t, utxoStore)
 	})
 }
 
@@ -1109,4 +1113,51 @@ func testSingleDoubleSpendFrozenTx(t *testing.T, utxoStore string) {
 	// check that both transactions are still marked as conflicting in the subtrees
 	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], txA0)
 	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], txB0)
+}
+
+// testSingleDoubleSpendNotMinedForLong simulates a scenario where a transaction is not mined for a long time
+// and then a double spend transaction is created. It verifies that the original transaction was removed from the
+// block assembly before the double spend transaction was processed
+func testSingleDoubleSpendNotMinedForLong(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txA0, _, _, _ := setupDoubleSpendTest(t, utxoStore)
+	defer td.Stop(t)
+
+	txA1 := td.CreateTransaction(t, txA0)
+
+	// validate transaction and propagate it
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA1))
+
+	// remove the transaction from block assembly
+	// this creates a scenario where the transaction is not mined for a long time
+	require.NoError(t, td.BlockAssemblyClient.RemoveTx(t.Context(), txA1.TxIDChainHash()))
+
+	// verify that the transaction is not in block assembly
+	td.VerifyNotInBlockAssembly(t, txA1)
+
+	// generate 101 blocks and wait for them to be processed by block assembly
+	require.NoError(t, td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101}))
+
+	// verify that the transaction has not been mined
+	txMeta, err := td.UtxoStore.Get(t.Context(), txA1.TxIDChainHash())
+	require.NoError(t, err)
+	require.NotNil(t, txMeta)
+	require.Nil(t, txMeta.BlockIDs)
+
+	// get best block
+	bestBlockHeader, _, err := td.BlockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+
+	// get best block
+	bestBlock, err := td.BlockchainClient.GetBlock(t.Context(), bestBlockHeader.Hash())
+	require.NoError(t, err)
+
+	// wait for block assembly to process the blocks
+	td.WaitForBlockHeight(t, bestBlock, blockWait)
+
+	// verify that the transaction has been removed from the utxo store
+	txMeta, err = td.UtxoStore.Get(t.Context(), txA1.TxIDChainHash())
+	require.NoError(t, err)
+
+	assert.Nil(t, txMeta)
 }

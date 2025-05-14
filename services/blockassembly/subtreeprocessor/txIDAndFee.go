@@ -6,13 +6,15 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TxIDAndFee represents a transaction with its associated fee information and linking metadata.
 type TxIDAndFee struct {
-	node util.SubtreeNode           // The transaction node containing hash and fee information
-	time int64                      // Timestamp of when the transaction was added
-	next atomic.Pointer[TxIDAndFee] // Pointer to the next transaction in the queue
+	node    util.SubtreeNode           // The transaction node containing hash and fee information
+	parents []chainhash.Hash           // Slice of parent transaction hashes
+	time    int64                      // Timestamp of when the transaction was added
+	next    atomic.Pointer[TxIDAndFee] // Pointer to the next transaction in the queue
 }
 
 // TxIDAndFeeBatch manages batches of transactions for efficient processing.

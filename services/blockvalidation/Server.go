@@ -692,6 +692,61 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
+// ValidateBlock validates a block directly from the block bytes
+// without needing to fetch it from the network or the database.
+// This method is typically used for testing or when the block is already
+// available in memory, and no internal updates or database operations are needed.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - request: Contains the raw block data and height
+//
+// Returns:
+//   - A response indicating the validation result
+//   - An error if validation fails
+func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error) {
+	block, err := model.NewBlockFromBytes(request.Block, u.settings)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[Server:ValidateBlock] failed to create block from bytes", err))
+	}
+
+	block.Height = request.Height
+
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateBlock",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[Server:ValidateBlock][%s] validate block called for height %d", block.Hash().String(), request.Height),
+	)
+	defer deferFn()
+
+	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.PreviousBlockHeaderCount)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err))
+	}
+
+	blockHeaderIDs := make([]uint32, len(blockHeadersMeta))
+	for i, blockHeaderMeta := range blockHeadersMeta {
+		blockHeaderIDs[i] = blockHeaderMeta.ID
+	}
+
+	oldBlockIDsMap := &sync.Map{}
+
+	// only get the bloom filters for the current chain
+	bloomFilters := u.blockValidation.collectNecessaryBloomFilters(blockHeaders)
+
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, nil); !ok {
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
+	}
+
+	if err = u.blockValidation.checkOldBlockIDs(ctx, oldBlockIDsMap, block.String()); err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
+	}
+
+	return &blockvalidation_api.ValidateBlockResponse{
+		Ok:      true,
+		Message: fmt.Sprintf("Block %s is valid", block.String()),
+	}, nil
+}
+
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
@@ -1049,6 +1104,11 @@ func (u *Server) checkSecretMining(ctx context.Context, lastCommonAncestorBlockH
 
 	if lastCommonAncestorBlock == nil {
 		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block %s", lastCommonAncestorBlockHash.String())
+	}
+
+	if u.utxoStore.GetBlockHeight() < u.settings.BlockValidation.SecretMiningThreshold {
+		// if we are not far enough in the chain, we can ignore this check
+		return false, nil
 	}
 
 	// the last common ancestor block should not be more than X blocks behind the current block height in the utxo store

@@ -96,7 +96,7 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 
 	// subtreeProcessor handles the processing and organization of transaction subtrees
-	subtreeProcessor *subtreeprocessor.SubtreeProcessor
+	subtreeProcessor subtreeprocessor.Interface
 
 	// miningCandidateCh coordinates requests for mining candidates
 	miningCandidateCh chan chan *miningCandidateResponse
@@ -663,8 +663,8 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //
 // Parameters:
 //   - node: Transaction node to add
-func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
-	b.subtreeProcessor.Add(node)
+func (b *BlockAssembler) AddTx(node util.SubtreeNode, parents []chainhash.Hash) {
+	b.subtreeProcessor.Add(node, parents)
 }
 
 // RemoveTx removes a transaction from the block assembler.

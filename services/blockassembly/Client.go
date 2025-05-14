@@ -192,11 +192,17 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - bool: True if storage was successful
 //   - error: Any error encountered during storage
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error) {
+	parents := make([][]byte, len(parentTxHashes))
+	for i, parentHash := range parentTxHashes {
+		parents[i] = parentHash[:]
+	}
+
 	req := &blockassembly_api.AddTxRequest{
-		Txid: hash[:],
-		Fee:  fee,
-		Size: size,
+		Txid:    hash[:],
+		Fee:     fee,
+		Size:    size,
+		Parents: parents,
 	}
 
 	if s.batchSize == 0 {
@@ -417,7 +423,28 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 //
 // Returns:
 //   - blockassembly_api.BlockAssemblyAPIClient: The gRPC client instance
-
 func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient {
 	return s.client
+}
+
+// GetBlockAssemblyBlockCandidate retrieves the current block candidate in block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *model.Block: Block candidate
+//   - error: Any error encountered during retrieval
+func (s *Client) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
+	resp, err := s.client.GetBlockAssemblyBlockCandidate(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	block, err := model.NewBlockFromBytes(resp.Block, nil)
+	if err != nil {
+		return nil, errors.NewServiceError("failed to create block from bytes", err)
+	}
+
+	return block, nil
 }

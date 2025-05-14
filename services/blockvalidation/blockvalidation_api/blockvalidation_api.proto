@@ -16,6 +16,7 @@ service BlockValidationAPI {
   rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
   rpc DelTxMeta (DelTxMetaRequest) returns (DelTxMetaResponse) {}
   rpc SetMinedMulti (SetMinedMultiRequest) returns (SetMinedMultiResponse) {}
+  rpc ValidateBlock (ValidateBlockRequest) returns (ValidateBlockResponse) {}
 }
 
 // swagger:model EmptyMessage
@@ -90,4 +91,16 @@ message SetMinedMultiRequest {
 // swagger:model SetMinedMultiResponse
 message SetMinedMultiResponse {
   bool ok = 1;
+}
+
+// swagger:model ValidateBlockRequest
+message ValidateBlockRequest {
+  bytes block = 1;
+  uint32 height = 2;
+}
+
+// swagger:model ValidateBlockResponse
+message ValidateBlockResponse {
+  bool ok = 1;
+  string message = 2;
 }

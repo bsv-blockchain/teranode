@@ -890,12 +890,20 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			})
 		}()
 	} else {
-		blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, 100)
+		// get all 100 previous block headers on the main chain
+		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+
+		blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 			u.ReValidateBlock(block, baseURL)
 
-			return errors.NewServiceError("[ValidateBlock][%s] failed to get block header ids", block.String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
+		}
+
+		blockHeaderIDs := make([]uint32, len(blockHeadersMeta))
+		for i, blockHeaderMeta := range blockHeadersMeta {
+			blockHeaderIDs[i] = blockHeaderMeta.ID
 		}
 
 		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaderIDs DONE", block.Header.Hash().String())

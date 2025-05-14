@@ -20,17 +20,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BlockAssemblyAPI_HealthGRPC_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
-	BlockAssemblyAPI_AddTx_FullMethodName                    = "/blockassembly_api.BlockAssemblyAPI/AddTx"
-	BlockAssemblyAPI_RemoveTx_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
-	BlockAssemblyAPI_AddTxBatch_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
-	BlockAssemblyAPI_GetMiningCandidate_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
-	BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/GetCurrentDifficulty"
-	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
-	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
-	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
-	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName    = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
-	BlockAssemblyAPI_GenerateBlocks_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
+	BlockAssemblyAPI_HealthGRPC_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
+	BlockAssemblyAPI_AddTx_FullMethodName                          = "/blockassembly_api.BlockAssemblyAPI/AddTx"
+	BlockAssemblyAPI_RemoveTx_FullMethodName                       = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
+	BlockAssemblyAPI_AddTxBatch_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
+	BlockAssemblyAPI_GetMiningCandidate_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
+	BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/GetCurrentDifficulty"
+	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
+	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
+	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
+	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName          = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
+	BlockAssemblyAPI_GenerateBlocks_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
+	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
+	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -62,7 +64,7 @@ type BlockAssemblyAPIClient interface {
 	GetCurrentDifficulty(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetCurrentDifficultyResponse, error)
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.
-	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
+	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	// DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
 	// Ensures transaction uniqueness within blocks.
 	DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
@@ -75,6 +77,12 @@ type BlockAssemblyAPIClient interface {
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(ctx context.Context, in *GenerateBlocksRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// CheckBlockAssembly checks the current state of block assembly.
+	// This verifies that the block assembly and subtree processor are functioning correctly.
+	CheckBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*OKResponse, error)
+	// CheckBlockAssembly checks the current state of block assembly.
+	// This verifies that the block assembly and subtree processor are functioning correctly.
+	GetBlockAssemblyBlockCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyBlockCandidateResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -145,9 +153,9 @@ func (c *blockAssemblyAPIClient) GetCurrentDifficulty(ctx context.Context, in *E
 	return out, nil
 }
 
-func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error) {
+func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*OKResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SubmitMiningSolutionResponse)
+	out := new(OKResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_SubmitMiningSolution_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -195,6 +203,26 @@ func (c *blockAssemblyAPIClient) GenerateBlocks(ctx context.Context, in *Generat
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) CheckBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*OKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OKResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_CheckBlockAssembly_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) GetBlockAssemblyBlockCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyBlockCandidateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockAssemblyBlockCandidateResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility.
@@ -224,7 +252,7 @@ type BlockAssemblyAPIServer interface {
 	GetCurrentDifficulty(context.Context, *EmptyMessage) (*GetCurrentDifficultyResponse, error)
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.
-	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
+	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*OKResponse, error)
 	// DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
 	// Ensures transaction uniqueness within blocks.
 	DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
@@ -237,6 +265,12 @@ type BlockAssemblyAPIServer interface {
 	// GenerateBlocks creates new blocks (typically for testing purposes).
 	// Allows specification of block count and recipient address.
 	GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error)
+	// CheckBlockAssembly checks the current state of block assembly.
+	// This verifies that the block assembly and subtree processor are functioning correctly.
+	CheckBlockAssembly(context.Context, *EmptyMessage) (*OKResponse, error)
+	// CheckBlockAssembly checks the current state of block assembly.
+	// This verifies that the block assembly and subtree processor are functioning correctly.
+	GetBlockAssemblyBlockCandidate(context.Context, *EmptyMessage) (*GetBlockAssemblyBlockCandidateResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -265,7 +299,7 @@ func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *
 func (UnimplementedBlockAssemblyAPIServer) GetCurrentDifficulty(context.Context, *EmptyMessage) (*GetCurrentDifficultyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCurrentDifficulty not implemented")
 }
-func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error) {
+func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*OKResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitMiningSolution not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error) {
@@ -279,6 +313,12 @@ func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context
 }
 func (UnimplementedBlockAssemblyAPIServer) GenerateBlocks(context.Context, *GenerateBlocksRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GenerateBlocks not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) CheckBlockAssembly(context.Context, *EmptyMessage) (*OKResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBlockAssembly not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyBlockCandidate(context.Context, *EmptyMessage) (*GetBlockAssemblyBlockCandidateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockAssemblyBlockCandidate not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -499,6 +539,42 @@ func _BlockAssemblyAPI_GenerateBlocks_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_CheckBlockAssembly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).CheckBlockAssembly(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_CheckBlockAssembly_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).CheckBlockAssembly(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyBlockCandidate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyBlockCandidate(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -549,6 +625,14 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GenerateBlocks",
 			Handler:    _BlockAssemblyAPI_GenerateBlocks_Handler,
+		},
+		{
+			MethodName: "CheckBlockAssembly",
+			Handler:    _BlockAssemblyAPI_CheckBlockAssembly_Handler,
+		},
+		{
+			MethodName: "GetBlockAssemblyBlockCandidate",
+			Handler:    _BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

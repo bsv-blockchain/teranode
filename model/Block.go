@@ -330,7 +330,7 @@ type MinedBlockStore interface {
 }
 
 func (b *Block) String() string {
-	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
+	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, b.TransactionCount, b.SizeInBytes)
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *sync.Map,
@@ -620,9 +620,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			var parentTxHashes []chainhash.Hash
 
-			bloomStats.mu.Lock()
-			bloomStats.QueryCounter += uint64(len(subtree.Nodes))
-			bloomStats.mu.Unlock()
+			if bloomStats != nil {
+				bloomStats.mu.Lock()
+				bloomStats.QueryCounter += uint64(len(subtree.Nodes))
+				bloomStats.mu.Unlock()
+			}
 
 			for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
 				// ignore the very first transaction, is coinbase
@@ -693,9 +695,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 					if filter.Filter.Has(n64) {
 						// we have a match, check the txMetaStore
-						bloomStats.mu.Lock()
-						bloomStats.PositiveCounter++
-						bloomStats.mu.Unlock()
+						if bloomStats != nil {
+							bloomStats.mu.Lock()
+							bloomStats.PositiveCounter++
+							bloomStats.mu.Unlock()
+						}
 
 						// there is a chance that the bloom filter has a false positive, but the txMetaStore has pruned
 						// the transaction. This will cause the block to be incorrectly invalidated, but this is the safe
@@ -715,9 +719,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							}
 						}
 
-						bloomStats.mu.Lock()
-						bloomStats.FalsePositiveCounter++
-						bloomStats.mu.Unlock()
+						if bloomStats != nil {
+							bloomStats.mu.Lock()
+							bloomStats.FalsePositiveCounter++
+							bloomStats.mu.Unlock()
+						}
 					}
 				}
 

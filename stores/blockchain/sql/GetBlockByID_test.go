@@ -30,6 +30,8 @@ func TestGetBlockByID(t *testing.T) {
 		newBlockID, _, err := store.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
+		block1.ID = uint32(newBlockID) //nolint:gosec
+
 		// Retrieve the block by ID
 		retrievedBlock, err := store.GetBlockByID(context.Background(), newBlockID)
 		require.NoError(t, err)
@@ -39,6 +41,8 @@ func TestGetBlockByID(t *testing.T) {
 		// Insert a block into the database
 		newBlockID, _, err = store.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
+
+		block2.ID = uint32(newBlockID) //nolint:gosec
 
 		// Retrieve the block by ID
 		retrievedBlock, err = store.GetBlockByID(context.Background(), newBlockID)

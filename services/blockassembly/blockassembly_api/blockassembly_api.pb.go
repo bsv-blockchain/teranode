@@ -561,28 +561,28 @@ func (x *SubmitMiningSolutionRequest) GetVersion() uint32 {
 	return 0
 }
 
-// Response indicating whether the submission of a mining solution was successful.
-type SubmitMiningSolutionResponse struct {
+// Response indicating whether the call was successful.
+type OKResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"` // true if the solution was successfully submitted
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"` // true if the call was successful
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SubmitMiningSolutionResponse) Reset() {
-	*x = SubmitMiningSolutionResponse{}
+func (x *OKResponse) Reset() {
+	*x = OKResponse{}
 	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SubmitMiningSolutionResponse) String() string {
+func (x *OKResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SubmitMiningSolutionResponse) ProtoMessage() {}
+func (*OKResponse) ProtoMessage() {}
 
-func (x *SubmitMiningSolutionResponse) ProtoReflect() protoreflect.Message {
+func (x *OKResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -594,12 +594,12 @@ func (x *SubmitMiningSolutionResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SubmitMiningSolutionResponse.ProtoReflect.Descriptor instead.
-func (*SubmitMiningSolutionResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use OKResponse.ProtoReflect.Descriptor instead.
+func (*OKResponse) Descriptor() ([]byte, []int) {
 	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *SubmitMiningSolutionResponse) GetOk() bool {
+func (x *OKResponse) GetOk() bool {
 	if x != nil {
 		return x.Ok
 	}
@@ -821,6 +821,51 @@ func (x *GenerateBlocksRequest) GetMaxTries() int32 {
 	return 0
 }
 
+// Response for the GetBlockAssemblyBlockCandidate method.
+type GetBlockAssemblyBlockCandidateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Block         []byte                 `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"` // the block candidate in block assembly
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBlockAssemblyBlockCandidateResponse) Reset() {
+	*x = GetBlockAssemblyBlockCandidateResponse{}
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBlockAssemblyBlockCandidateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBlockAssemblyBlockCandidateResponse) ProtoMessage() {}
+
+func (x *GetBlockAssemblyBlockCandidateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBlockAssemblyBlockCandidateResponse.ProtoReflect.Descriptor instead.
+func (*GetBlockAssemblyBlockCandidateResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetBlockAssemblyBlockCandidateResponse) GetBlock() []byte {
+	if x != nil {
+		return x.Block
+	}
+	return nil
+}
+
 var File_services_blockassembly_blockassembly_api_blockassembly_api_proto protoreflect.FileDescriptor
 
 const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc = "" +
@@ -862,8 +907,9 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\aversion\x18\x05 \x01(\rH\x01R\aversion\x88\x01\x01B\a\n" +
 	"\x05_timeB\n" +
 	"\n" +
-	"\b_version\".\n" +
-	"\x1cSubmitMiningSolutionResponse\x12\x0e\n" +
+	"\b_version\"\x1c\n" +
+	"\n" +
+	"OKResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xe8\x02\n" +
 	"\fStateMessage\x12.\n" +
 	"\x12blockAssemblyState\x18\x01 \x01(\tR\x12blockAssemblyState\x124\n" +
@@ -887,7 +933,9 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\bmaxTries\x18\x03 \x01(\x05H\x01R\bmaxTries\x88\x01\x01B\n" +
 	"\n" +
 	"\b_addressB\v\n" +
-	"\t_maxTries2\x9f\b\n" +
+	"\t_maxTries\">\n" +
+	"&GetBlockAssemblyBlockCandidateResponse\x12\x14\n" +
+	"\x05block\x18\x01 \x01(\fR\x05block2\xe5\t\n" +
 	"\x10BlockAssemblyAPI\x12R\n" +
 	"\n" +
 	"HealthGRPC\x12\x1f.blockassembly_api.EmptyMessage\x1a!.blockassembly_api.HealthResponse\"\x00\x12L\n" +
@@ -896,12 +944,14 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\n" +
 	"AddTxBatch\x12$.blockassembly_api.AddTxBatchRequest\x1a%.blockassembly_api.AddTxBatchResponse\"\x00\x12\\\n" +
 	"\x12GetMiningCandidate\x12,.blockassembly_api.GetMiningCandidateRequest\x1a\x16.model.MiningCandidate\"\x00\x12j\n" +
-	"\x14GetCurrentDifficulty\x12\x1f.blockassembly_api.EmptyMessage\x1a/.blockassembly_api.GetCurrentDifficultyResponse\"\x00\x12y\n" +
-	"\x14SubmitMiningSolution\x12..blockassembly_api.SubmitMiningSolutionRequest\x1a/.blockassembly_api.SubmitMiningSolutionResponse\"\x00\x12^\n" +
+	"\x14GetCurrentDifficulty\x12\x1f.blockassembly_api.EmptyMessage\x1a/.blockassembly_api.GetCurrentDifficultyResponse\"\x00\x12g\n" +
+	"\x14SubmitMiningSolution\x12..blockassembly_api.SubmitMiningSolutionRequest\x1a\x1d.blockassembly_api.OKResponse\"\x00\x12^\n" +
 	"\x18DeDuplicateBlockAssembly\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12X\n" +
 	"\x12ResetBlockAssembly\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12[\n" +
 	"\x15GetBlockAssemblyState\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1f.blockassembly_api.StateMessage\"\x00\x12]\n" +
-	"\x0eGenerateBlocks\x12(.blockassembly_api.GenerateBlocksRequest\x1a\x1f.blockassembly_api.EmptyMessage\"\x00B\x16Z\x14./;blockassembly_apib\x06proto3"
+	"\x0eGenerateBlocks\x12(.blockassembly_api.GenerateBlocksRequest\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12V\n" +
+	"\x12CheckBlockAssembly\x12\x1f.blockassembly_api.EmptyMessage\x1a\x1d.blockassembly_api.OKResponse\"\x00\x12~\n" +
+	"\x1eGetBlockAssemblyBlockCandidate\x12\x1f.blockassembly_api.EmptyMessage\x1a9.blockassembly_api.GetBlockAssemblyBlockCandidateResponse\"\x00B\x16Z\x14./;blockassembly_apib\x06proto3"
 
 var (
 	file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescOnce sync.Once
@@ -915,27 +965,28 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDe
 	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescData
 }
 
-var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_goTypes = []any{
-	(*EmptyMessage)(nil),                 // 0: blockassembly_api.EmptyMessage
-	(*HealthResponse)(nil),               // 1: blockassembly_api.HealthResponse
-	(*NewChaintipAndHeightRequest)(nil),  // 2: blockassembly_api.NewChaintipAndHeightRequest
-	(*AddTxRequest)(nil),                 // 3: blockassembly_api.AddTxRequest
-	(*AddTxBatchRequest)(nil),            // 4: blockassembly_api.AddTxBatchRequest
-	(*GetMiningCandidateRequest)(nil),    // 5: blockassembly_api.GetMiningCandidateRequest
-	(*RemoveTxRequest)(nil),              // 6: blockassembly_api.RemoveTxRequest
-	(*AddTxResponse)(nil),                // 7: blockassembly_api.AddTxResponse
-	(*AddTxBatchResponse)(nil),           // 8: blockassembly_api.AddTxBatchResponse
-	(*SubmitMiningSolutionRequest)(nil),  // 9: blockassembly_api.SubmitMiningSolutionRequest
-	(*SubmitMiningSolutionResponse)(nil), // 10: blockassembly_api.SubmitMiningSolutionResponse
-	(*StateMessage)(nil),                 // 11: blockassembly_api.StateMessage
-	(*GetCurrentDifficultyResponse)(nil), // 12: blockassembly_api.GetCurrentDifficultyResponse
-	(*GenerateBlocksRequest)(nil),        // 13: blockassembly_api.GenerateBlocksRequest
-	(*timestamppb.Timestamp)(nil),        // 14: google.protobuf.Timestamp
-	(*model.MiningCandidate)(nil),        // 15: model.MiningCandidate
+	(*EmptyMessage)(nil),                           // 0: blockassembly_api.EmptyMessage
+	(*HealthResponse)(nil),                         // 1: blockassembly_api.HealthResponse
+	(*NewChaintipAndHeightRequest)(nil),            // 2: blockassembly_api.NewChaintipAndHeightRequest
+	(*AddTxRequest)(nil),                           // 3: blockassembly_api.AddTxRequest
+	(*AddTxBatchRequest)(nil),                      // 4: blockassembly_api.AddTxBatchRequest
+	(*GetMiningCandidateRequest)(nil),              // 5: blockassembly_api.GetMiningCandidateRequest
+	(*RemoveTxRequest)(nil),                        // 6: blockassembly_api.RemoveTxRequest
+	(*AddTxResponse)(nil),                          // 7: blockassembly_api.AddTxResponse
+	(*AddTxBatchResponse)(nil),                     // 8: blockassembly_api.AddTxBatchResponse
+	(*SubmitMiningSolutionRequest)(nil),            // 9: blockassembly_api.SubmitMiningSolutionRequest
+	(*OKResponse)(nil),                             // 10: blockassembly_api.OKResponse
+	(*StateMessage)(nil),                           // 11: blockassembly_api.StateMessage
+	(*GetCurrentDifficultyResponse)(nil),           // 12: blockassembly_api.GetCurrentDifficultyResponse
+	(*GenerateBlocksRequest)(nil),                  // 13: blockassembly_api.GenerateBlocksRequest
+	(*GetBlockAssemblyBlockCandidateResponse)(nil), // 14: blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	(*timestamppb.Timestamp)(nil),                  // 15: google.protobuf.Timestamp
+	(*model.MiningCandidate)(nil),                  // 16: model.MiningCandidate
 }
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdxs = []int32{
-	14, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	15, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 1: blockassembly_api.AddTxBatchRequest.txRequests:type_name -> blockassembly_api.AddTxRequest
 	0,  // 2: blockassembly_api.BlockAssemblyAPI.HealthGRPC:input_type -> blockassembly_api.EmptyMessage
 	3,  // 3: blockassembly_api.BlockAssemblyAPI.AddTx:input_type -> blockassembly_api.AddTxRequest
@@ -948,19 +999,23 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	0,  // 10: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:input_type -> blockassembly_api.EmptyMessage
 	0,  // 11: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:input_type -> blockassembly_api.EmptyMessage
 	13, // 12: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:input_type -> blockassembly_api.GenerateBlocksRequest
-	1,  // 13: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
-	7,  // 14: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
-	0,  // 15: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
-	8,  // 16: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
-	15, // 17: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
-	12, // 18: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
-	10, // 19: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.SubmitMiningSolutionResponse
-	0,  // 20: blockassembly_api.BlockAssemblyAPI.DeDuplicateBlockAssembly:output_type -> blockassembly_api.EmptyMessage
-	0,  // 21: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
-	11, // 22: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
-	0,  // 23: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
-	13, // [13:24] is the sub-list for method output_type
-	2,  // [2:13] is the sub-list for method input_type
+	0,  // 13: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
+	0,  // 14: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
+	1,  // 15: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
+	7,  // 16: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
+	0,  // 17: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
+	8,  // 18: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
+	16, // 19: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
+	12, // 20: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
+	10, // 21: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.OKResponse
+	0,  // 22: blockassembly_api.BlockAssemblyAPI.DeDuplicateBlockAssembly:output_type -> blockassembly_api.EmptyMessage
+	0,  // 23: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
+	11, // 24: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
+	0,  // 25: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
+	10, // 26: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:output_type -> blockassembly_api.OKResponse
+	14, // 27: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:output_type -> blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	15, // [15:28] is the sub-list for method output_type
+	2,  // [2:15] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -979,7 +1034,7 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_init(
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc), len(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

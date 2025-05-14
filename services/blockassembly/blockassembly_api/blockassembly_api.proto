@@ -40,7 +40,7 @@ service BlockAssemblyAPI {
 
   // SubmitMiningSolution submits a solved block to the network.
   // Includes the proof-of-work solution and block details.
-  rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
+  rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (OKResponse) {}
 
   // DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
   // Ensures transaction uniqueness within blocks.
@@ -57,6 +57,14 @@ service BlockAssemblyAPI {
   // GenerateBlocks creates new blocks (typically for testing purposes).
   // Allows specification of block count and recipient address.
   rpc GenerateBlocks (GenerateBlocksRequest) returns (EmptyMessage) {}
+
+  // CheckBlockAssembly checks the current state of block assembly.
+  // This verifies that the block assembly and subtree processor are functioning correctly.
+  rpc CheckBlockAssembly (EmptyMessage) returns (OKResponse) {}
+
+  // CheckBlockAssembly checks the current state of block assembly.
+  // This verifies that the block assembly and subtree processor are functioning correctly.
+  rpc GetBlockAssemblyBlockCandidate (EmptyMessage) returns (GetBlockAssemblyBlockCandidateResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -119,9 +127,9 @@ message SubmitMiningSolutionRequest {
   optional uint32 version = 5; // the version of the block
 }
 
-// Response indicating whether the submission of a mining solution was successful.
-message SubmitMiningSolutionResponse {
-  bool ok = 1; // true if the solution was successfully submitted
+// Response indicating whether the call was successful.
+message OKResponse {
+  bool ok = 1; // true if the call was successful
 }
 
 // Message containing the state of the block assembly service.
@@ -147,4 +155,9 @@ message GenerateBlocksRequest {
   int32 count = 1; // the number of blocks to generate
   optional string address = 2; // the address to send the generated blocks to
   optional int32 maxTries = 3; // the maximum number of attempts to generate a block
+}
+
+// Response for the GetBlockAssemblyBlockCandidate method.
+message GetBlockAssemblyBlockCandidateResponse {
+  bytes block = 1; // the block candidate in block assembly
 }

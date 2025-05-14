@@ -5,21 +5,13 @@ package blockassembly
 import (
 	"context"
 	"encoding/binary"
-	"net/url"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
-	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
-	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
-	"github.com/bitcoin-sv/teranode/tracing"
-	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,14 +19,12 @@ import (
 // go test -v -tags test_blockassembly ./test/...
 
 func TestServer_Performance(t *testing.T) {
-	// Create a single blockassembly grpc server for multiple test case here
-	// because there are only 1 possible port for ba server
-	// We accumulated measurement for each test case and run them sequentially
-
-	ba, err := initMockedServer(t)
-	require.NoError(t, err)
-
 	t.Run("GetMiningCandidate", func(t *testing.T) {
+		ba, cancelCtx, err := initMockedServer(t)
+		require.NoError(t, err)
+
+		defer cancelCtx()
+
 		ctx := context.Background()
 		miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 		require.NoError(t, err)
@@ -47,10 +37,11 @@ func TestServer_Performance(t *testing.T) {
 		assert.NotEmpty(t, miningCandidate.Version)
 	})
 
-	prevTxCount := uint64(0)
-	prevSubtreeCount := 0
-
 	t.Run("1_million_txs_-_1_by_1", func(t *testing.T) {
+		ba, cancelCtx, err := initMockedServer(t)
+		require.NoError(t, err)
+
+		defer cancelCtx()
 
 		startingTxCount := ba.TxCount()
 		assert.Equal(t, uint64(1), startingTxCount)
@@ -95,18 +86,26 @@ func TestServer_Performance(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		prevTxCount = ba.TxCount()
-		prevSubtreeCount = ba.SubtreeCount()
-
-		assert.Equal(t, uint64(1_048_576+startingTxCount), prevTxCount)
-		assert.Equal(t, 33, prevSubtreeCount)
-		prevSubtreeCount -= 1 // Decrement 1 so the next test accumulate with it has already decrease 1
+		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+		assert.Equal(t, 1025, ba.SubtreeCount())
 	})
 
-	t.Run("1_million_txs_-_in_batches", func(t *testing.T) {
-		var wg sync.WaitGroup
-		startingTxCount := ba.TxCount()
+	var txRequestPool = sync.Pool{
+		New: func() any {
+			return &blockassembly_api.AddTxRequest{}
+		},
+	}
 
+	t.Run("1_million_txs_-_1_by_1 with sync pool", func(t *testing.T) {
+		ba, cancelCtx, err := initMockedServer(t)
+		require.NoError(t, err)
+
+		defer cancelCtx()
+
+		startingTxCount := ba.TxCount()
+		assert.Equal(t, uint64(1), startingTxCount)
+
+		var wg sync.WaitGroup
 		for n := uint64(0); n < 1_024; n++ {
 			bytesN := make([]byte, 8)
 			binary.LittleEndian.PutUint64(bytesN, n)
@@ -119,16 +118,64 @@ func TestServer_Performance(t *testing.T) {
 				txid := make([]byte, 32)
 				bytesI := make([]byte, 8)
 
-				requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
-
 				for i := uint64(0); i < 1_024; i++ {
 					// set the n and i as bytes to the txid
 					binary.LittleEndian.PutUint64(bytesI, i)
 
 					copy(txid[0:8], bytesN)
 					copy(txid[8:16], bytesI)
+
+					requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
+					requestObject.Txid = txid[:]
+					requestObject.Fee = i
+					requestObject.Size = i
+					requestObject.Locktime = 0
+					requestObject.Utxos = nil
+
+					_, _ = ba.AddTx(context.Background(), requestObject)
+
+					requestObject.Txid = nil
+					requestObject.Utxos = nil
+					txRequestPool.Put(requestObject)
+				}
+			}(bytesN)
+		}
+
+		wg.Wait()
+
+		for {
+			if ba.TxCount() >= 1_048_576+startingTxCount {
+				break
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+		assert.Equal(t, 1025, ba.SubtreeCount())
+	})
+
+	t.Run("1_million_txs_-_in_batches", func(t *testing.T) {
+		ba, cancelCtx, err := initMockedServer(t)
+		require.NoError(t, err)
+
+		defer cancelCtx()
+
+		var wg sync.WaitGroup
+		startingTxCount := ba.TxCount()
+
+		for n := uint64(0); n < 1_024; n++ {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
+
+				for i := uint64(0); i < 1_024; i++ {
+					txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
 					requests = append(requests, &blockassembly_api.AddTxRequest{
-						Txid:     txid,
+						Txid:     txid[:],
 						Fee:      i,
 						Size:     i,
 						Locktime: 0,
@@ -140,7 +187,7 @@ func TestServer_Performance(t *testing.T) {
 					TxRequests: requests,
 				})
 				require.NoError(t, err)
-			}(bytesN)
+			}()
 		}
 		wg.Wait()
 
@@ -148,52 +195,67 @@ func TestServer_Performance(t *testing.T) {
 			if ba.TxCount() >= startingTxCount+1_048_576 {
 				break
 			}
+
+			time.Sleep(10 * time.Millisecond)
 		}
 
-		assert.Equal(t, prevSubtreeCount+33, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
+		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+		assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
 	})
-}
 
-func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, error) {
-	memStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+	t.Run("1_million_txs_-_in_batches with sync pool", func(t *testing.T) {
+		ba, cancelCtx, err := initMockedServer(t)
+		require.NoError(t, err)
 
-	tracing.SetGlobalMockTracer()
+		defer cancelCtx()
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Policy.BlockMaxSize = 1000000
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+		var wg sync.WaitGroup
+		startingTxCount := ba.TxCount()
 
-	tSettings.BlockAssembly.ResetWaitCount = 0
-	tSettings.BlockAssembly.ResetWaitDuration = 0
+		for n := uint64(0); n < 1_024; n++ {
+			wg.Add(1)
 
-	blockchainStoreURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
-	if err != nil {
-		return nil, err
-	}
+			go func() {
+				defer wg.Done()
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
-	if err != nil {
-		return nil, err
-	}
+				requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
 
-	ctx := context.Background()
-	ba := blockassembly.New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, memStore, blockchainClient)
+				for i := uint64(0); i < 1_024; i++ {
+					txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
 
-	err = ba.Init(ctx)
-	require.NoError(t, err)
+					requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
+					requestObject.Txid = txid[:]
+					requestObject.Fee = i
+					requestObject.Size = i
+					requestObject.Locktime = 0
+					requestObject.Utxos = nil
 
-	readyCh := make(chan struct{}, 1)
+					requests = append(requests, requestObject)
+				}
 
-	go func() {
-		err = ba.Start(ctx, readyCh)
-		if err != nil {
-			panic(err)
+				_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+					TxRequests: requests,
+				})
+				require.NoError(t, err)
+
+				for _, request := range requests {
+					request.Txid = nil
+					request.Utxos = nil
+					txRequestPool.Put(request)
+				}
+			}()
 		}
-	}()
+		wg.Wait()
 
-	<-readyCh
+		for {
+			if ba.TxCount() >= startingTxCount+1_048_576 {
+				break
+			}
 
-	return ba, nil
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+		assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
+	})
 }

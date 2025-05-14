@@ -39,8 +39,9 @@ type Job struct {
 
 // NewSubtreeRequest encapsulates a request to process a new subtree.
 type NewSubtreeRequest struct {
-	Subtree *util.Subtree // The subtree to process
-	ErrChan chan error    // Channel for error reporting
+	Subtree     *util.Subtree                                     // The subtree to process
+	ParentTxMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash] // Map of parent transactions
+	ErrChan     chan error                                        // Channel for error reporting
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -129,6 +130,9 @@ type SubtreeProcessor struct {
 	// lengthCh receives requests for the current length of the processor
 	lengthCh chan chan int
 
+	// checkSubtreeProcessorCh is used to check the subtree processor state
+	checkSubtreeProcessorCh chan chan error
+
 	// newSubtreeChan receives notifications about new subtrees
 	newSubtreeChan chan NewSubtreeRequest
 
@@ -155,6 +159,9 @@ type SubtreeProcessor struct {
 
 	// queue manages the transaction processing queue
 	queue *LockFreeQueue
+
+	// currentTxMap tracks transactions currently held in the subtree processor
+	currentTxMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash]
 
 	// removeMap tracks transactions marked for removal
 	removeMap *util.SwissMap
@@ -280,12 +287,14 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		resetCh:                   make(chan *resetBlocks),
 		removeTxCh:                make(chan chainhash.Hash),
 		lengthCh:                  make(chan chan int),
+		checkSubtreeProcessorCh:   make(chan chan error),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
 		currentSubtree:            firstSubtree,
 		batcher:                   NewTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 		queue:                     queue,
+		currentTxMap:              util.NewSyncedMap[chainhash.Hash, []chainhash.Hash](),
 		removeMap:                 util.NewSwissMap(0),
 		blockchainClient:          blockchainClient,
 		subtreeStore:              subtreeStore,
@@ -412,6 +421,13 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				// return the length of the current subtree
 				lengthCh <- stp.currentSubtree.Length()
 
+			case errCh := <-stp.checkSubtreeProcessorCh:
+				stp.setCurrentRunningState(StateCheckSubtreeProcessor)
+
+				stp.checkSubtreeProcessor(errCh)
+
+				stp.setCurrentRunningState(StateRunning)
+
 			default:
 				stp.setCurrentRunningState(StateDequeue)
 
@@ -442,8 +458,21 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 						continue
 					}
 
-					err = stp.addNode(txReq.node, false)
-					if err != nil {
+					// check if the tx is already in the currentTxMap
+					if _, ok := stp.currentTxMap.Get(txReq.node.Hash); ok {
+						stp.logger.Warnf("[SubtreeProcessor] error adding node: tx %s already in currentTxMap", txReq.node.Hash.String())
+						continue
+					}
+
+					// check parents
+					// for _, parent := range txReq.parents {
+					// 	if _, ok := stp.currentTxMap.Get(parent); !ok {
+					// 		stp.logger.Errorf("[SubtreeProcessor] error adding node: parent %s not found in currentTxMap", parent.String())
+					// 		continue
+					// 	}
+					// }
+
+					if err = stp.addNode(txReq.node, txReq.parents, false); err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					} else {
 						stp.txCount.Add(1)
@@ -657,6 +686,14 @@ func (stp *SubtreeProcessor) GetCurrentSubtree() *util.Subtree {
 	return stp.currentSubtree
 }
 
+// GetCurrentTxMap returns the map of transactions currently held in the subtree processor.
+//
+// Returns:
+//   - *util.SyncedMap[chainhash.Hash, []chainhash.Hash]: Map of transactions
+func (stp *SubtreeProcessor) GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, []chainhash.Hash] {
+	return stp.currentTxMap
+}
+
 // GetChainedSubtrees returns all completed subtrees in the chain.
 //
 // Returns:
@@ -785,6 +822,8 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 		stp.currentItemsPerFile = newSize
 	}
 
+	prometheusSubtreeProcessorDynamicSubtreeSize.Set(float64(newSize))
+
 	// Reset intervals for next block
 	stp.blockIntervals = make([]time.Duration, 0)
 }
@@ -807,7 +846,7 @@ func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeade
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, parents []chainhash.Hash, skipNotification bool) (err error) {
 	stp.Lock()
 	defer stp.Unlock()
 
@@ -826,6 +865,18 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 	err = stp.currentSubtree.AddSubtreeNode(node)
 	if err != nil {
 		return errors.NewProcessingError("error adding node to subtree", err)
+	}
+
+	// parent can only be set to nil, when they are already in the map
+	if parents == nil {
+		var ok bool
+
+		parents, ok = stp.currentTxMap.Get(node.Hash)
+		if !ok || parents == nil {
+			return errors.NewProcessingError("error adding node to subtree: parents not found in currentTxMap")
+		}
+	} else {
+		stp.currentTxMap.Set(node.Hash, parents)
 	}
 
 	if stp.currentSubtree.IsComplete() {
@@ -849,8 +900,8 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 		}
 
 		if !skipNotification {
-			// Send the subtree to the newSubtreeChan
-			stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree}
+			// Send the subtree to the newSubtreeChan, including a reference to the parent transactions map
+			stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree, ParentTxMap: stp.currentTxMap}
 		}
 	}
 
@@ -861,8 +912,8 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, skipNotification boo
 //
 // Parameters:
 //   - node: Transaction node to add
-func (stp *SubtreeProcessor) Add(node util.SubtreeNode) {
-	stp.queue.enqueue(&TxIDAndFee{node: node})
+func (stp *SubtreeProcessor) Add(node util.SubtreeNode, parents []chainhash.Hash) {
+	stp.queue.enqueue(&TxIDAndFee{node: node, parents: parents})
 }
 
 // Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.
@@ -913,6 +964,9 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 	}
 
 	if foundIndex >= 0 {
+		// remove tx from the currentTxMap
+		stp.currentTxMap.Delete(hash)
+
 		// we found the transaction in a subtree
 		if foundSubtreeIndex == -1 {
 			// it was found in the current tree, remove it from there
@@ -924,13 +978,13 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 		// this is a bit more complex, as we need to remove the transaction from the subtree it is in and then make sure
 		// the subtrees are chained correctly again
 		if err := stp.chainedSubtrees[foundSubtreeIndex].RemoveNodeAtIndex(foundIndex); err != nil {
-			return errors.NewProcessingError("error removing node from subtree", err)
+			return errors.NewProcessingError("[SubtreeProcessor][removeTxFromSubtrees][%s] error removing node from subtree", hash.String(), err)
 		}
 
 		// all the chained subtrees should be complete, as we now have a hole in the one we just removed from
 		// we need to fill them up all again, including the current subtree
 		if err := stp.reChainSubtrees(foundSubtreeIndex); err != nil {
-			return errors.NewProcessingError("error rechaining subtrees", err)
+			return errors.NewProcessingError("[SubtreeProcessor][removeTxFromSubtrees][%s] error rechaining subtrees", hash.String(), err)
 		}
 	}
 
@@ -962,17 +1016,105 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 
 	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 
+	var (
+		parents []chainhash.Hash
+		found   bool
+	)
+
 	// add the nodes from the original subtrees to the new subtrees
 	for _, subtree := range originalSubtrees {
 		for _, node := range subtree.Nodes {
 			// this adds to the current subtree
-			if err := stp.addNode(node, true); err != nil {
+			parents, found = stp.currentTxMap.Get(node.Hash)
+			if !found {
+				// this should not happen, but if it does, we need to add the parents to the currentTxMap
+				return errors.NewProcessingError("error getting parents from currentTxMap")
+			}
+
+			if err = stp.addNode(node, parents, true); err != nil {
 				return errors.NewProcessingError("error adding node to subtree", err)
 			}
 		}
 	}
 
 	return nil
+}
+
+// CheckSubtreeProcessor checks the integrity of the subtree processor.
+// It verifies that all transactions in the current transaction map
+// are present in the subtrees and that the size of the current transaction map
+// matches the expected transaction count.
+//
+// Returns:
+//   - error: Any error encountered during the check
+func (stp *SubtreeProcessor) CheckSubtreeProcessor() error {
+	errCh := make(chan error)
+
+	stp.checkSubtreeProcessorCh <- errCh
+
+	return <-errCh
+}
+
+// checkSubtreeProcessor performs a check on the subtree processor's state.
+func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
+	stp.logger.Infof("[SubtreeProcessor] checking subtree processor")
+
+	// check all the transactions in the currentTxMap are in the subtrees
+	for subtreeIdx, subtree := range stp.chainedSubtrees {
+		for nodeIdx, node := range subtree.Nodes {
+			if node.Hash.Equal(util.CoinbasePlaceholderHashValue) {
+				// check that the coinbase placeholder is in the first subtree
+				if subtreeIdx != 0 || nodeIdx != 0 {
+					errCh <- errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first subtree %d", subtreeIdx)
+
+					break
+				}
+
+				continue
+			}
+
+			if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
+				errCh <- errors.NewSubtreeError("[SubtreeProcessor] tx %s from subtree %d not in currentTxMap", node.Hash.String(), subtreeIdx)
+
+				break
+			}
+		}
+	}
+
+	// check all the transactions in the subtrees are in the currentTxMap
+	for nodeIdx, node := range stp.currentSubtree.Nodes {
+		if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
+			if node.Hash.Equal(util.CoinbasePlaceholderHashValue) {
+				// check that the coinbase placeholder is in the first subtree
+				if nodeIdx != 0 {
+					errCh <- errors.NewSubtreeError("[SubtreeProcessor] coinbase placeholder not in first node of subtree %d", nodeIdx)
+
+					break
+				}
+
+				continue
+			}
+
+			errCh <- errors.NewSubtreeError("[SubtreeProcessor] tx %s from currentSubtree not in currentTxMap", node.Hash.String())
+
+			break
+		}
+	}
+
+	// make sure we have an up2date count of the transactions
+	stp.setTxCountFromSubtrees()
+
+	// check that the size of the currentTxMap is equal to the sum of all the subtrees - coinbase placeholder
+	currentTxMapSize := stp.currentTxMap.Length()
+	txCount := stp.TxCount()
+
+	if currentTxMapSize != int(txCount)-1 { // nolint:gosec
+		errCh <- errors.NewSubtreeError("[SubtreeProcessor] currentTxMap size %d does not match txCount %d", currentTxMapSize, txCount-1)
+	}
+
+	errCh <- nil
+
+	stp.logger.Infof("[SubtreeProcessor] check subtree processor DONE")
 }
 
 // GetCompletedSubtreesForMiningCandidate retrieves all completed subtrees for block mining.
@@ -1020,11 +1162,11 @@ func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 //
 // Returns:
 //   - error: Any error encountered during reorganization
-func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error {
+func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error {
 	errChan := make(chan error)
 	stp.reorgBlockChan <- reorgBlocksRequest{
 		moveBackBlocks:    moveBackBlocks,
-		moveForwardBlocks: modeUpBlocks,
+		moveForwardBlocks: moveForwardBlocks,
 		errChan:           errChan,
 	}
 
@@ -1062,7 +1204,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// announce all the subtrees to the network
 	// this will also store it by the Server in the subtree store
 	for _, subtree := range stp.chainedSubtrees {
-		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree}
+		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree, ParentTxMap: stp.currentTxMap}
 	}
 
 	stp.setTxCountFromSubtrees()
@@ -1161,6 +1303,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	// get all the subtrees in parallel
 	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
 	subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
+	subtreeMetaParents := make([][][]chainhash.Hash, len(block.Subtrees))
 
 	for idx, subtreeHash := range block.Subtrees {
 		idx := idx
@@ -1178,13 +1321,24 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 
 			subtree := &util.Subtree{}
 
-			err = subtree.DeserializeFromReader(subtreeReader)
-			if err != nil {
+			if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
 				return errors.NewProcessingError("[moveBackBlock][%s] error deserializing subtree", block.String(), err)
 			}
 
 			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
+
+			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
+			if err != nil {
+				return errors.NewServiceError("[moveBackBlock][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
+			}
+
+			subtreeMeta, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+			if err != nil {
+				return errors.NewProcessingError("[moveBackBlock][%s] error deserializing subtree meta", block.String(), err)
+			}
+
+			subtreeMetaParents[idx] = subtreeMeta.ParentTxHashes
 
 			return nil
 		})
@@ -1207,11 +1361,15 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtreeNode); i++ {
-				_ = stp.addNode(subtreeNode[i], true)
+				if err = stp.addNode(subtreeNode[i], subtreeMetaParents[idx][i], true); err != nil {
+					return errors.NewProcessingError("[moveBackBlock][%s] error adding node to subtree", block.String(), err)
+				}
 			}
 		} else {
-			for _, node := range subtreeNode {
-				_ = stp.addNode(node, true)
+			for i, node := range subtreeNode {
+				if err = stp.addNode(node, subtreeMetaParents[idx][i], true); err != nil {
+					return errors.NewProcessingError("[moveBackBlock][%s] error adding node to subtree", block.String(), err)
+				}
 			}
 		}
 	}
@@ -1223,20 +1381,22 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
 			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-				_ = stp.addNode(node, true)
+				_ = stp.addNode(node, nil, true)
 			}
 		}
 	}
 
 	// add all the transactions from the last incomplete subtree
 	for _, node := range lastIncompleteSubtree.Nodes {
-		_ = stp.addNode(node, true)
+		_ = stp.addNode(node, nil, true)
 	}
 
 	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: add previous nodes to subtrees DONE", block.String(), len(block.Subtrees))
 
 	// we must set the current block header
 	stp.currentBlockHeader = block.Header
+
+	stp.setTxCountFromSubtrees()
 
 	prometheusSubtreeProcessorMoveBackBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
@@ -1271,6 +1431,7 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
+	currentTxMap := stp.currentTxMap
 
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
@@ -1283,84 +1444,10 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
-
-	var block *model.Block
-
 	for i := 0; i < len(blocks); i++ {
-		block = blocks[i]
-		// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
-		stp.logger.Infof("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
-
-		defer func() {
-			stp.logger.Infof("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees DONE in %s", block.String(), i, block.Hash(), len(block.Subtrees), time.Since(startTime).String())
-
-			err := recover()
-			if err != nil {
-				stp.logger.Errorf("[moveBackBlocks] with block %s: %s", block.String(), err)
-			}
-		}()
-
-		// get all the subtrees in parallel
-		stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v)  with %d subtrees: get subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
-		subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
-
-		for idx, subtreeHash := range block.Subtrees {
-			idx := idx
-			subtreeHash := subtreeHash
-
-			g.Go(func() error {
-				subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
-				if err != nil {
-					return errors.NewServiceError("[moveBackBlocks][%s], block %d (block hash: %v), error getting subtree %s", block.String(), i, block.Hash(), subtreeHash.String(), err)
-				}
-
-				defer func() {
-					_ = subtreeReader.Close()
-				}()
-
-				subtree := &util.Subtree{}
-
-				err = subtree.DeserializeFromReader(subtreeReader)
-				if err != nil {
-					return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error deserializing subtree", block.String(), i, block.Hash(), err)
-				}
-
-				// TODO add metrics about how many txs we are reading per second
-				subtreesNodes[idx] = subtree.Nodes
-
-				return nil
-			})
+		if err = stp.moveBackBlockProcessBlock(ctx, blocks[i], i, startTime, currentTxMap); err != nil {
+			return err
 		}
-
-		if err = g.Wait(); err != nil {
-			return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error getting subtrees", block.String(), i, block.Hash(), err)
-		}
-
-		stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees: get subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
-
-		stp.logger.Warnf("[moveBackBlocks][%s] with %d subtrees: create new subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
-		// run through the nodes of the subtrees in order and add to the new subtrees
-		for idx, subtreeNode := range subtreesNodes {
-			if idx == 0 {
-				// process coinbase utxos
-				if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
-					return errors.NewServiceError("[moveBackBlocks][%s], block %d (block hash: %v), error deleting utxos for tx %s", block.String(), i, block.Hash(), block.CoinbaseTx.String(), err)
-				}
-
-				// skip the first transaction of the first subtree (coinbase)
-				for i := 1; i < len(subtreeNode); i++ {
-					_ = stp.addNode(subtreeNode[i], true)
-				}
-			} else {
-				for _, node := range subtreeNode {
-					_ = stp.addNode(node, true)
-				}
-			}
-		}
-
-		stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees: create new subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
 	}
 
 	stp.logger.Warnf("[moveBackBlocks] add previous nodes to subtrees")
@@ -1369,34 +1456,138 @@ func (stp *SubtreeProcessor) moveBackBlocks(ctx context.Context, blocks []*model
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
 			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-				_ = stp.addNode(node, true)
+				// we can set parent to nil, since the old subtree is already in the map
+				if err = stp.addNode(node, nil, true); err != nil {
+					return errors.NewProcessingError("[moveBackBlocks] error adding node to subtree", err)
+				}
 			}
 		}
 	}
 
 	// add all the transactions from the last incomplete subtree
 	for _, node := range lastIncompleteSubtree.Nodes {
-		_ = stp.addNode(node, true)
+		// we can set parent to nil, since the old subtree is already in the map
+		if err = stp.addNode(node, nil, true); err != nil {
+			return errors.NewProcessingError("[moveBackBlocks] error adding node to subtree", err)
+		}
 	}
 
-	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: add previous nodes to subtrees DONE", block.String(), len(block.Subtrees))
+	lastBlock := blocks[len(blocks)-1]
+
+	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: add previous nodes to subtrees DONE", lastBlock.String(), len(lastBlock.Subtrees))
 
 	// we must set the current block header to the last block header we have added
-	stp.currentBlockHeader = block.Header
+	stp.currentBlockHeader = lastBlock.Header
 
 	prometheusSubtreeProcessorMoveBackBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	// Clear the block's processed timestamp
-	if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash(), true); err != nil {
+	if err = stp.blockchainClient.SetBlockProcessedAt(ctx, lastBlock.Header.Hash(), true); err != nil {
 		// Don't return error here, as this is not critical for the operation
-		stp.logger.Warnf("[moveBackBlock][%s] error clearing block processed_at timestamp: %v", block.String(), err)
+		stp.logger.Warnf("[moveBackBlock][%s] error clearing block processed_at timestamp: %v", lastBlock.String(), err)
 	}
 
 	return nil
 }
 
+func (stp *SubtreeProcessor) moveBackBlockProcessBlock(ctx context.Context, block *model.Block, i int, startTime time.Time,
+	currentTxMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash]) error {
+	// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
+	stp.logger.Infof("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+
+	defer func() {
+		stp.logger.Infof("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees DONE in %s", block.String(), i, block.Hash(), len(block.Subtrees), time.Since(startTime).String())
+
+		if err := recover(); err != nil {
+			stp.logger.Errorf("[moveBackBlocks] with block %s: %s", block.String(), err)
+		}
+	}()
+
+	// get all the subtrees in parallel
+	stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v)  with %d subtrees: get subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+	subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
+	subtreeMetaParents := make(map[int][][]chainhash.Hash)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+
+	for idx, subtreeHash := range block.Subtrees {
+		idx := idx
+		subtreeHash := subtreeHash
+
+		g.Go(func() error {
+			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
+			if err != nil {
+				return errors.NewServiceError("[moveBackBlocks][%s], block %d (block hash: %v), error getting subtree %s", block.String(), i, block.Hash(), subtreeHash.String(), err)
+			}
+
+			defer func() {
+				_ = subtreeReader.Close()
+			}()
+
+			subtree := &util.Subtree{}
+
+			if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
+				return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error deserializing subtree", block.String(), i, block.Hash(), err)
+			}
+
+			// TODO add metrics about how many txs we are reading per second
+			subtreesNodes[idx] = subtree.Nodes
+
+			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
+			if err != nil {
+				return errors.NewServiceError("[moveBackBlock][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
+			}
+
+			subtreeMeta, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+			if err != nil {
+				return errors.NewProcessingError("[moveBackBlock][%s] error deserializing subtree meta", block.String(), err)
+			}
+
+			subtreeMetaParents[idx] = subtreeMeta.ParentTxHashes
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error getting subtrees", block.String(), i, block.Hash(), err)
+	}
+
+	stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees: get subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
+
+	stp.logger.Warnf("[moveBackBlocks][%s] with %d subtrees: create new subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+
+	// run through the nodes of the subtrees in order and add to the new subtrees
+	for idx, subtreeNode := range subtreesNodes {
+		if idx == 0 {
+			// process coinbase utxos
+			if err := stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
+				return errors.NewServiceError("[moveBackBlocks][%s], block %d (block hash: %v), error deleting utxos for tx %s", block.String(), i, block.Hash(), block.CoinbaseTx.String(), err)
+			}
+
+			// skip the first transaction of the first subtree (coinbase)
+			for i := 1; i < len(subtreeNode); i++ {
+				if err := stp.addNode(subtreeNode[i], subtreeMetaParents[idx][i], true); err != nil {
+					return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error adding node to subtree", block.String(), i, block.Hash(), err)
+				}
+			}
+		} else {
+			for _, node := range subtreeNode {
+				if err := stp.addNode(node, subtreeMetaParents[idx][i], true); err != nil {
+					return errors.NewProcessingError("[moveBackBlocks][%s], block %d (block hash: %v), error adding node to subtree", block.String(), i, block.Hash(), err)
+				}
+			}
+		}
+	}
+
+	stp.logger.Warnf("[moveBackBlocks][%s], block %d (block hash: %v), with %d subtrees: create new subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
+
+	return nil
+}
+
 // moveForwardBlock cleans out all transactions that are in the current subtrees and also in the block
-// given. It is akin moving up the blockchain to the next block.
+// given. It is akin to moving up the blockchain to the next block.
 func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.Block, skipNotification bool) error {
 	if block == nil {
 		return errors.NewProcessingError("[moveForwardBlock] you must pass in a block to moveForwardBlock")
@@ -1412,8 +1603,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	defer func() {
 		deferFn()
 
-		err := recover()
-		if err != nil {
+		if err := recover(); err != nil {
 			// print the stack trace
 			stp.logger.Errorf("%s", debug.Stack())
 			stp.logger.Errorf("[moveForwardBlock][%s] with block: %s", block.String(), err)
@@ -1501,6 +1691,10 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	// reset the current subtree
 	currentSubtree := stp.currentSubtree
 
+	// reset the currentTxMap
+	currentTxMap := stp.currentTxMap
+	stp.currentTxMap = util.NewSyncedMap[chainhash.Hash, []chainhash.Hash]()
+
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
 		return errors.NewProcessingError("[moveForwardBlock][%s] error creating new subtree", block.String(), err)
@@ -1516,6 +1710,11 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 	stp.logger.Debugf("[moveForwardBlock][%s] processing remainder tx hashes into subtrees", block.String())
 
+	var (
+		nodeParents []chainhash.Hash
+		found       bool
+	)
+
 	if transactionMap != nil && transactionMap.Length() > 0 {
 		remainderSubtrees := make([]*util.Subtree, 0, len(chainedSubtrees)+1)
 
@@ -1526,7 +1725,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 		stp.logger.Debugf("[moveForwardBlock][%s] processRemainderTxHashes with %d subtrees", block.String(), len(chainedSubtrees))
 
-		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, losingTxHashesMap, skipNotification); err != nil {
+		if err = stp.processRemainderTxHashes(ctx, remainderSubtrees, transactionMap, losingTxHashesMap, currentTxMap, skipNotification); err != nil {
 			return errors.NewProcessingError("[moveForwardBlock][%s] error getting remainder tx hashes", block.String(), err)
 		}
 
@@ -1561,7 +1760,13 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 							stp.logger.Errorf("[moveForwardBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
 						}
 					} else {
-						_ = stp.addNode(node, skipNotification)
+						if nodeParents, found = currentTxMap.Get(node.Hash); !found {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error getting node parents from currentTxMap for %s", block.String(), node.Hash.String())
+						}
+
+						if err = stp.addNode(node, nodeParents, skipNotification); err != nil {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error adding node %s to subtree", block.String(), node.Hash.String(), err)
+						}
 					}
 				}
 			}
@@ -1576,7 +1781,13 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 							stp.logger.Errorf("[moveForwardBlock][%s] error removing tx from remove map: %s", block.String(), err.Error())
 						}
 					} else {
-						_ = stp.addNode(node, skipNotification)
+						if nodeParents, found = currentTxMap.Get(node.Hash); !found {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error getting node parents from currentTxMap for %s", block.String(), node.Hash.String())
+						}
+
+						if err = stp.addNode(node, nodeParents, skipNotification); err != nil {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error adding node %s to subtree", block.String(), node.Hash.String(), err)
+						}
 					}
 				}
 			}
@@ -1609,7 +1820,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	stp.adjustSubtreeSize()
 
 	// Mark the block as processed
-	if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
+	if err = stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
 		// Don't return error here, as this is not critical for the operation
 		stp.logger.Warnf("[moveForwardBlock][%s] error setting block processed_at timestamp: %v", block.String(), err)
 	}
@@ -1664,7 +1875,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap, losingTxHas
 			}
 
 			if !transactionMap.Exists(item.node.Hash) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(item.node.Hash)) {
-				_ = stp.addNode(item.node, skipNotification)
+				_ = stp.addNode(item.node, item.parents, skipNotification)
 			}
 
 			nrProcessed++
@@ -1729,7 +1940,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 				if err = deDuplicationMap.Put(node.Hash, subtreeSizeUint64); err != nil {
 					stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
 				} else {
-					_ = stp.addNode(node, false)
+					_ = stp.addNode(node, nil, false)
 				}
 			}
 		}
@@ -1744,10 +1955,12 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 			if err = deDuplicationMap.Put(node.Hash, uint64(nodeIdx)); err != nil { //nolint:gosec
 				stp.logger.Errorf("[DeDuplicateTransactions] found duplicate transaction in block assembly: %s - %v", node.Hash.String(), err)
 			} else {
-				_ = stp.addNode(node, false)
+				_ = stp.addNode(node, nil, false)
 			}
 		}
 	}
+
+	stp.setTxCountFromSubtrees()
 
 	stp.logger.Infof("[DeDuplicateTransactions] de-duplicating transactions DONE")
 }
@@ -1833,7 +2046,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*util.Subtree,
-	transactionMap, losingTxHashesMap util.TxMap, skipNotification bool) error {
+	transactionMap, losingTxHashesMap util.TxMap, currentTxMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash], skipNotification bool) error {
 	var hashCount atomic.Int64
 
 	// clean out the transactions from the old current subtree that were in the block
@@ -1878,7 +2091,12 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// add all found tx hashes to the final list, in order
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
-			_ = stp.addNode(node, skipNotification)
+			parents, ok := currentTxMap.Get(node.Hash)
+			if !ok {
+				return errors.NewProcessingError("[processRemainderTxHashes] error getting node parents from currentTxMap for %s", node.Hash.String())
+			}
+
+			_ = stp.addNode(node, parents, skipNotification)
 		}
 	}
 

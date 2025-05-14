@@ -34,7 +34,7 @@ type ClientI interface {
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error)
 
 	// RemoveTx removes a transaction from block assembly.
 	//
@@ -113,6 +113,16 @@ type ClientI interface {
 	//   - *blockassembly_api.StateMessage: Current state
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error)
+
+	// GetBlockAssemblyBlockCandidate retrieves the block candidate for block assembly.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//
+	// Returns:
+	//   - *model.Block: Block candidate
+	//   - error: Any error encountered during retrieval
+	GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error)
 }
 
 // Store defines the interface for block assembly storage operations.
@@ -128,7 +138,7 @@ type Store interface {
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error)
 
 	// RemoveTx removes a transaction from storage.
 	//
@@ -162,7 +172,7 @@ func (m Mock) Health(ctx context.Context, checkLiveness bool) (int, string, erro
 	return 0, "", nil
 }
 
-func (m Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+func (m Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error) {
 	// TODO implement me
 	panic("implement me")
 }
@@ -204,4 +214,8 @@ func (m Mock) ResetBlockAssembly(ctx context.Context) error {
 
 func (m Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return m.State, nil
+}
+
+func (m Mock) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
+	return nil, nil
 }

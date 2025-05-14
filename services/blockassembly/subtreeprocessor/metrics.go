@@ -24,6 +24,7 @@ var (
 	prometheusSubtreeProcessorCreateTransactionMapDuration prometheus.Histogram
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
+	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
 	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
 )
 
@@ -159,6 +160,15 @@ func _initPrometheusMetrics() {
 			Name:      "reset",
 			Help:      "Duration of resetting subtree processor",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorDynamicSubtreeSize = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "dynamic_subtree_size",
+			Help:      "Dynamic subtree size in number of transactions",
 		},
 	)
 

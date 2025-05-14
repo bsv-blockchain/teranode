@@ -170,6 +170,25 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 	return nil
 }
 
+func (s *Client) ValidateBlock(ctx context.Context, block *model.Block) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return err
+	}
+
+	req := &blockvalidation_api.ValidateBlockRequest{
+		Block:  blockBytes,
+		Height: block.Height,
+	}
+
+	_, err = s.apiClient.ValidateBlock(ctx, req)
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // Get retrieves subtree data using a flexible multi-channel approach.
 // It attempts HTTP retrieval first if configured, falling back to gRPC if necessary.
 //

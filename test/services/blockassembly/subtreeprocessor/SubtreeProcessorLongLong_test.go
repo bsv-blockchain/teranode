@@ -105,7 +105,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{})
 		}
 	}
 

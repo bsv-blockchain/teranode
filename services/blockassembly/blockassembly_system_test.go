@@ -550,6 +550,10 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	testHash2 := testTx2.TxIDChainHash()
 	testHash3 := testTx3.TxIDChainHash()
 
+	parents1 := getParentTxHashes(testTx1)
+	parents2 := getParentTxHashes(testTx2)
+	parents3 := getParentTxHashes(testTx3)
+
 	// Create and add Chain B block (lower difficulty)
 	t.Log("Creating Chain B block...")
 	chainBBits, _ := model.NewNBitFromString("207fffff")
@@ -601,15 +605,15 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222}, parents2)
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333}, parents3)
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -646,6 +650,16 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	t.Logf("Found %d transactions in subtrees", foundTxs)
 	assert.Equal(t, 3, foundTxs, "All transactions should be included in the mining candidate")
+}
+
+func getParentTxHashes(tx *bt.Tx) []chainhash.Hash {
+	parents := make([]chainhash.Hash, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		parents[i] = *input.PreviousTxIDChainHash()
+	}
+
+	return parents
 }
 
 // TestShouldHandleReorg verifies blockchain reorganization handling.
@@ -697,15 +711,16 @@ func TestShouldHandleReorg(t *testing.T) {
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111}, getParentTxHashes(testTx1))
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222}, getParentTxHashes(testTx2))
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333}, getParentTxHashes(testTx3))
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -854,15 +869,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	t.Log("Adding transactions...")
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111}, getParentTxHashes(testTx1))
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222}, getParentTxHashes(testTx2))
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333}, getParentTxHashes(testTx3))
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")

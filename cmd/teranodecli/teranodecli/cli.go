@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/cmd/aerospike_reader"
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset"
+	"github.com/bitcoin-sv/teranode/cmd/checkblocktemplate"
 	"github.com/bitcoin-sv/teranode/cmd/filereader"
 	"github.com/bitcoin-sv/teranode/cmd/getfsmstate"
 	"github.com/bitcoin-sv/teranode/cmd/seeder"
@@ -24,14 +25,15 @@ import (
 
 // commandHelp stores the command descriptions
 var commandHelp = map[string]string{
-	"filereader":      "File Reader",
-	"aerospikereader": "Aerospike Reader",
-	"seeder":          "Seeder",
-	"getfsmstate":     "Get the current FSM State",
-	"setfsmstate":     "Set the FSM State",
-	"settings":        "Settings",
-	"export-blocks":   "Export blockchain to CSV",
-	"import-blocks":   "Import blockchain from CSV",
+	"filereader":         "File Reader",
+	"aerospikereader":    "Aerospike Reader",
+	"seeder":             "Seeder",
+	"getfsmstate":        "Get the current FSM State",
+	"setfsmstate":        "Set the FSM State",
+	"settings":           "Settings",
+	"export-blocks":      "Export blockchain to CSV",
+	"import-blocks":      "Import blockchain from CSV",
+	"checkblocktemplate": "Check block template",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -273,6 +275,17 @@ func Start(args []string, version, commit string) {
 			}
 
 			fmt.Printf("Imported blockchain from %s\n", *filePath)
+
+			return nil
+		}
+	case "checkblocktemplate":
+		cmd.Execute = func(args []string) error {
+			blockTemplate, err := checkblocktemplate.CheckBlockTemplate(logger, tSettings)
+			if err != nil {
+				return errors.NewProcessingError("Failed to check block template: %v", err)
+			}
+
+			fmt.Printf("Checked block template successfully: %s\n", blockTemplate.String())
 
 			return nil
 		}

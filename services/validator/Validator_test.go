@@ -601,9 +601,10 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 }
 
 type txFeeSize struct {
-	txHash *chainhash.Hash
-	fee    uint64
-	size   uint64
+	txHash  *chainhash.Hash
+	fee     uint64
+	size    uint64
+	parents []chainhash.Hash
 }
 
 type MockBlockAssemblyStore struct {
@@ -612,7 +613,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs  []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, parents []chainhash.Hash) (bool, error) {
 	if s.returnError != nil {
 		return false, s.returnError
 	}
@@ -622,9 +623,10 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash: hash,
-		fee:    fee,
-		size:   size,
+		txHash:  hash,
+		fee:     fee,
+		size:    size,
+		parents: parents,
 	})
 
 	return true, nil
