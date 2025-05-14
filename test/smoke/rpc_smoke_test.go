@@ -25,7 +25,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		// KillTeranode:            true,
-		// EnableFullLogging:       true,
+		// EnableFullLogging: true,
 		SettingsContext: "dev.system.test",
 	})
 
@@ -89,7 +89,7 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	_, err = td.CallRPC("generate", []any{101})
@@ -167,14 +167,14 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	t.Logf("getInfo: %+v", getInfo)
 
 	assert.Equal(t, int(202), getInfo.Result.Blocks)
-	assert.Equal(t, int(1), getInfo.Result.Connections)
-	assert.Equal(t, float64(1), getInfo.Result.Difficulty)
+	assert.Equal(t, int(0), getInfo.Result.Connections)
+	assert.Equal(t, float64(4.6565423739069247e-10), getInfo.Result.Difficulty)
 	assert.Equal(t, int(70016), getInfo.Result.ProtocolVersion)
-	assert.Equal(t, "host:port", getInfo.Result.Proxy)
-	assert.Equal(t, float64(100), getInfo.Result.RelayFee)
+	assert.Equal(t, "", getInfo.Result.Proxy)
+	assert.Equal(t, float64(0), getInfo.Result.RelayFee)
 	assert.False(t, getInfo.Result.Stn)
 	assert.False(t, getInfo.Result.TestNet)
-	assert.Equal(t, int(1), getInfo.Result.TimeOffset)
+	assert.Equal(t, int(0), getInfo.Result.TimeOffset)
 	assert.Equal(t, int(1), getInfo.Result.Version)
 	assert.Nil(t, getInfo.Error)
 	assert.Equal(t, int(0), getInfo.ID)
@@ -396,7 +396,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxTxSizePolicy")
 	require.Contains(t, err.Error(), "transaction size in bytes is greater than max tx size policy", "Expected error message to indicate transaction size policy violation")
 
-	//now try add a block with the transaction
+	// now try add a block with the transaction
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
 	require.NoError(t, err)
@@ -478,7 +478,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxScriptSizePolicy")
 	require.Contains(t, err.Error(), "Script is too big", "Expected error message to indicate script size violation")
 
-	//now try add a block with the transaction
+	// now try add a block with the transaction
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
 	require.NoError(t, err)
@@ -553,7 +553,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	delay := tSettings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	// Generate one block to include TX1
@@ -598,7 +598,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	// Wait for transaction to be processed if there's a delay window
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	// Generate one block to include TX2

@@ -498,7 +498,7 @@ func TestSendBestBlockMessage(t *testing.T) {
 
 	t.Logf("Connected to: %s\n", connectionString)
 
-	msgBytes, err := json.Marshal(BestBlockMessage{PeerID: node1.HostID().String()})
+	msgBytes, err := json.Marshal(BestBlockRequestMessage{PeerID: node1.HostID().String()})
 	if err != nil {
 		t.Logf("[sendBestBlockMessage] json marshal error: %v", err)
 	}

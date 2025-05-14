@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -48,7 +47,7 @@ type Server struct {
 	settings                      *settings.Settings        // Configuration settings
 	bitcoinProtocolID             string                    // Bitcoin protocol identifier
 	blockchainClient              blockchain.ClientI        // Client for blockchain interactions
-	blockValidationClient         *blockvalidation.Client   // Client for block validation
+	blockValidationClient         blockvalidation.Interface // Client for block validation
 	AssetHTTPAddressURL           string                    // HTTP address URL for assets
 	e                             *echo.Echo                // Echo server instance
 	notificationCh                chan *notificationMsg     // Channel for notifications
@@ -58,13 +57,12 @@ type Server struct {
 	banList                       BanListI                  // List of banned peers
 	banChan                       chan BanEvent             // Channel for ban events
 	banManager                    *PeerBanManager           // Manager for peer banning
-	bestBlockMessageReceived      atomic.Bool               // Flag to indicate if best block message has been processed
 	gCtx                          context.Context
 	blockTopicName                string
 	subtreeTopicName              string
-	bestBlockTopicName            string
 	miningOnTopicName             string
 	rejectedTxTopicName           string
+	handshakeTopicName            string // pubsub topic for version/verack
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -104,9 +102,9 @@ func NewServer(
 		return nil, errors.NewConfigurationError("p2p_subtree_topic not set in config")
 	}
 
-	bbtn := tSettings.P2P.BestBlockTopic
-	if bbtn == "" {
-		return nil, errors.NewConfigurationError("p2p_bestblock_topic not set in config")
+	htn := tSettings.P2P.HandshakeTopic
+	if htn == "" {
+		return nil, errors.NewConfigurationError("p2p_handshake_topic not set in config")
 	}
 
 	miningOntn := tSettings.P2P.MiningOnTopic
@@ -166,13 +164,12 @@ func NewServer(
 		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
 		subtreeKafkaProducerClient:    subtreeKafkaProducerClient,
 		blocksKafkaProducerClient:     blocksKafkaProducerClient,
-		bestBlockMessageReceived:      atomic.Bool{},
 		gCtx:                          ctx,
 		blockTopicName:                fmt.Sprintf("%s-%s", topicPrefix, btn),
 		subtreeTopicName:              fmt.Sprintf("%s-%s", topicPrefix, stn),
-		bestBlockTopicName:            fmt.Sprintf("%s-%s", topicPrefix, bbtn),
 		miningOnTopicName:             fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
 		rejectedTxTopicName:           fmt.Sprintf("%s-%s", topicPrefix, rtn),
+		handshakeTopicName:            fmt.Sprintf("%s-%s", topicPrefix, htn),
 	}
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
@@ -326,8 +323,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	err = s.P2PNode.Start(
 		ctx,
-		s.receiveBestBlockStreamHandler,
-		s.bestBlockTopicName,
+		s.receiveHandshakeStreamHandler,
+		s.handshakeTopicName,
 		s.blockTopicName,
 		s.subtreeTopicName,
 		s.miningOnTopicName,
@@ -337,16 +334,27 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return errors.NewServiceError("error starting p2p node", err)
 	}
 
-	_ = s.P2PNode.SetTopicHandler(ctx, s.bestBlockTopicName, s.handleBestBlockTopic)
 	_ = s.P2PNode.SetTopicHandler(ctx, s.blockTopicName, s.handleBlockTopic)
 	_ = s.P2PNode.SetTopicHandler(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
 	_ = s.P2PNode.SetTopicHandler(ctx, s.miningOnTopicName, s.handleMiningOnTopic)
+	_ = s.P2PNode.SetTopicHandler(ctx, s.handshakeTopicName, s.handleHandshakeTopic)
 
 	go s.blockchainSubscriptionListener(ctx)
 
 	go s.listenForBanEvents(ctx)
 
-	s.sendBestBlockMessage(ctx)
+	// Disconnect any pre-existing banned peers at startup
+	go func() {
+		for _, banned := range s.banList.ListBanned() {
+			s.handleBanEvent(ctx, BanEvent{Action: banActionAdd, IP: banned})
+		}
+	}()
+
+	// Set up the peer connected callback to announce our best block when a new peer connects
+	s.P2PNode.SetPeerConnectedCallback(s.P2PNodeConnected)
+
+	// Send initial handshake (version)
+	s.sendHandshake(ctx)
 
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "p2p", s.settings.P2P.GRPCListenAddress, func(server *grpc.Server) {
@@ -361,53 +369,94 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
-func (s *Server) sendBestBlockMessage(ctx context.Context) {
-	msgBytes, err := json.Marshal(BestBlockMessage{PeerID: s.P2PNode.HostID().String()})
-	if err != nil {
-		s.logger.Errorf("[sendBestBlockMessage][p2p-handshake] json marshal error: %v", err)
+func (s *Server) sendHandshake(ctx context.Context) {
+	localHeight := uint32(0)
+	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+		localHeight = bhMeta.Height
+	}
 
+	msg := HandshakeMessage{
+		Type:       "version",
+		PeerID:     s.P2PNode.HostID().String(),
+		BestHeight: localHeight,
+		UserAgent:  s.bitcoinProtocolID,
+		Services:   0,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		s.logger.Errorf("[sendHandshake][p2p-handshake] json marshal error: %v", err)
 		return
 	}
 
 	go func() {
-		deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		for {
-			select {
-			case <-deadline.Done():
-				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] timeout waiting for best block response")
-
-				return
-			case <-ctx.Done():
-				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] context done")
-
-				return
-			default:
-				if s.bestBlockMessageReceived.Load() {
-					s.logger.Infof("[sendBestBlockMessage][p2p-handshake] best block message processed")
-
-					return
-				}
-
-				if len(s.P2PNode.CurrentlyConnectedPeers()) == 0 {
-					time.Sleep(5 * time.Second)
-					continue
-				}
-
-				s.logger.Infof("[sendBestBlockMessage][p2p-handshake] publishing best block request message %s on topic %s", string(msgBytes), s.bestBlockTopicName)
-
-				if err := s.P2PNode.Publish(ctx, s.bestBlockTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[sendBestBlockMessage][p2p-handshake] publish error: %v", err)
-				}
-
-				time.Sleep(1 * time.Second)
-			}
+		if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, msgBytes); err != nil {
+			s.logger.Errorf("[sendHandshake][p2p-handshake] publish error: %v", err)
 		}
 	}()
 }
 
-func (s *Server) receiveBestBlockStreamHandler(ns network.Stream) {
+func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string) {
+	var hs HandshakeMessage
+	if err := json.Unmarshal(m, &hs); err != nil {
+		s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json unmarshal error: %v", err)
+		return
+	}
+
+	if hs.PeerID == s.P2PNode.HostID().String() {
+		return // ignore self
+	}
+	// update peer height
+	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
+		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+	}
+
+	if hs.Type == "version" {
+		// reply with verack
+		localHeight := uint32(0)
+		if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+			localHeight = bhMeta.Height
+		}
+
+		ack := HandshakeMessage{
+			Type:       "verack",
+			PeerID:     s.P2PNode.HostID().String(),
+			BestHeight: localHeight,
+			UserAgent:  s.bitcoinProtocolID,
+			Services:   0,
+		}
+
+		ackBytes, err := json.Marshal(ack)
+		if err != nil {
+			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json marshal error: %v", err)
+			return
+		}
+		// if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, ackBytes); err != nil {
+		// 	s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] publish error: %v", err)
+		// }
+		// Decode the 'from' peer ID string just before sending the response
+		requesterPID, err := peer.Decode(from)
+		if err != nil {
+			s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding requester peerId '%s': %v", from, err)
+			return
+		}
+
+		// send best block to the requester using the decoded peer.ID
+		err = s.P2PNode.SendToPeer(ctx, requesterPID, ackBytes)
+		if err != nil {
+			s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
+			return
+		}
+	} else if hs.Type == "verack" {
+		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d agent=%s services=%d", hs.PeerID, hs.BestHeight, hs.UserAgent, hs.Services)
+		// update peer height
+		if peerID2, err := peer.Decode(hs.PeerID); err == nil {
+			s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+		}
+	}
+}
+
+func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 	defer ns.Close()
 	s.logger.Infof("[streamHandler][%s][p2p-handshake]", s.P2PNode.GetProcessName())
 
@@ -441,8 +490,13 @@ func (s *Server) receiveBestBlockStreamHandler(ns network.Stream) {
 
 	s.P2PNode.UpdateBytesReceived(uint64(len(buf)))
 	s.P2PNode.UpdateLastReceived()
-	s.handleBlockTopic(s.gCtx, buf, ns.Conn().RemotePeer().String())
-	s.bestBlockMessageReceived.Store(true)
+	s.handleHandshakeTopic(s.gCtx, buf, ns.Conn().RemotePeer().String())
+}
+
+func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
+	s.logger.Infof("[P2PNodeConnected] Peer connected: %s", peerID.String())
+	// Send handshake (version) when a new peer connects
+	s.sendHandshake(ctx)
 }
 
 func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
@@ -645,75 +699,6 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string) {
-	var (
-		bestBlockMessage BestBlockMessage
-		err              error
-	)
-
-	// Decode the incoming message first
-	err = json.Unmarshal(m, &bestBlockMessage)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json unmarshal error: %v", err)
-		return
-	}
-
-	// Check if the message is from self
-	if bestBlockMessage.PeerID == s.P2PNode.HostID().String() {
-		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from self %s", bestBlockMessage.PeerID)
-		return
-	}
-
-	// Check if the peer is banned
-	if s.banList.IsBanned(bestBlockMessage.PeerID) {
-		s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] ignoring p2p best block notification from banned peer %s", bestBlockMessage.PeerID)
-		return
-	}
-
-	// Log using the PeerID from the message after successful decode
-	s.logger.Debugf("[handleBestBlockTopic][p2p-handshake] got p2p best block notification from %s", bestBlockMessage.PeerID)
-
-	// get best block from blockchain service
-	// This should only be reached if the message is valid and from an allowed, non-self peer
-	bh, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
-		return
-	}
-
-	if bh == nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error getting best block header: %v", err)
-		return
-	}
-
-	blockMessage := BlockMessage{
-		Hash:       bh.Hash().String(),
-		Height:     bhMeta.Height,
-		DataHubURL: s.AssetHTTPAddressURL,
-		PeerID:     s.P2PNode.HostID().String(),
-	}
-
-	msgBytes, err := json.Marshal(blockMessage)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] json marshal error: %v", err)
-		return
-	}
-
-	// Decode the 'from' peer ID string just before sending the response
-	requesterPID, err := peer.Decode(from)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding requester peerId '%s': %v", from, err)
-		return
-	}
-
-	// send best block to the requester using the decoded peer.ID
-	err = s.P2PNode.SendToPeer(ctx, requesterPID, msgBytes)
-	if err != nil {
-		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
-		return
-	}
-}
-
 func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Debugf("[handleBlockTopic] got p2p block notification")
 
@@ -747,10 +732,14 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	// is it from a banned peer
-	if s.banList.IsBanned(from) {
-		s.logger.Debugf("[handleBlockTopic] got p2p block notification from banned peer %s", from)
-		return
+	// Skip notifications from banned peers by IP
+	if pid, err := peer.Decode(from); err == nil {
+		for _, ip := range s.P2PNode.GetPeerIPs(pid) {
+			if s.banList.IsBanned(ip) {
+				s.logger.Debugf("[handleBlockTopic] ignoring block notification from banned peer %s (ip %s)", from, ip)
+				return
+			}
+		}
 	}
 
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
@@ -809,9 +798,20 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 	}
 
 	// is it from a banned peer
-	if s.banList.IsBanned(from) {
-		s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification from banned peer %s", from)
+	// get the ip address of the peer
+	peerID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("[handleSubtreeTopic] error decoding peer ID %s: %v", from, err)
 		return
+	}
+
+	// get the ip address of the peer
+	peerIPs := s.P2PNode.GetPeerIPs(peerID)
+	for _, ip := range peerIPs {
+		if s.banList.IsBanned(ip) {
+			s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification from banned peer %s", from)
+			return
+		}
 	}
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
@@ -858,12 +858,24 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 	}
 
 	// is it from a banned peer
-	if s.banList.IsBanned(from) {
-		s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
+	peerID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("[handleMiningOnTopic] error decoding peer ID %s: %v", from, err)
 		return
 	}
 
+	peerIPs := s.P2PNode.GetPeerIPs(peerID)
+	for _, ip := range peerIPs {
+		if s.banList.IsBanned(ip) {
+			s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
+			return
+		}
+	}
+
 	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerID)
+
+	// add height to peer info
+	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp:    time.Now().UTC().Format(isoFormat),
@@ -907,8 +919,13 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			continue
 		}
 
+		banScore, _, _ := s.banManager.GetBanScore(sp.Addrs[0].String())
+
 		resp.Peers = append(resp.Peers, &p2p_api.Peer{
-			Addr: sp.Addrs[0].String(),
+			Id:            sp.ID.String(),
+			Addr:          sp.Addrs[0].String(),
+			CurrentHeight: sp.CurrentHeight,
+			Banscore:      int32(banScore), //nolint:gosec
 		})
 	}
 
@@ -949,27 +966,6 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	s.banManager.AddScore(req.PeerId, ReasonInvalidSubtree) // todo: add reason dynamically
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
-}
-
-// contains checks if a slice of strings contains a specific string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		bootstrapAddr, err := ma.NewMultiaddr(s)
-		if err != nil {
-			continue
-		}
-
-		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
-		if err != nil {
-			continue
-		}
-
-		if peerInfo.ID.String() == item {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
@@ -1109,4 +1105,25 @@ func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason 
 			h.server.logger.Warnf("Failed to disconnect banned peer %s: %v", peerID, err)
 		}
 	}
+}
+
+// contains checks if a slice of strings contains a specific string.
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		bootstrapAddr, err := ma.NewMultiaddr(s)
+		if err != nil {
+			continue
+		}
+
+		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
+		if err != nil {
+			continue
+		}
+
+		if peerInfo.ID.String() == item {
+			return true
+		}
+	}
+
+	return false
 }

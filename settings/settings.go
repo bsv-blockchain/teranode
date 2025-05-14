@@ -331,6 +331,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			OptimiseRetries:    getBool("p2p_optimise_retries", false, alternativeContext...),
 			BanThreshold:       getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:        getDuration("p2p_ban_duration", 24*time.Hour),
+			HandshakeTopic:     getString("p2p_handshake_topic", "", alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

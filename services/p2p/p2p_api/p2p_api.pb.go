@@ -24,7 +24,7 @@ const (
 
 type Peer struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               int32                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Addr             string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
 	AddrLocal        string                 `protobuf:"bytes,3,opt,name=addrLocal,proto3" json:"addrLocal,omitempty"`
 	Services         string                 `protobuf:"bytes,4,opt,name=services,proto3" json:"services,omitempty"`
@@ -85,11 +85,11 @@ func (*Peer) Descriptor() ([]byte, []int) {
 	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Peer) GetId() int32 {
+func (x *Peer) GetId() string {
 	if x != nil {
 		return x.Id
 	}
-	return 0
+	return ""
 }
 
 func (x *Peer) GetAddr() string {
@@ -780,7 +780,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\n" +
 	"\"services/p2p/p2p_api/p2p_api.proto\x12\ap2p_api\x1a\x1bgoogle/protobuf/empty.proto\"\xb0\x06\n" +
 	"\x04Peer\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x05R\x02id\x12\x12\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1c\n" +
 	"\taddrLocal\x18\x03 \x01(\tR\taddrLocal\x12\x1a\n" +
 	"\bservices\x18\x04 \x01(\tR\bservices\x12\x1a\n" +

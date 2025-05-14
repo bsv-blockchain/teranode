@@ -247,6 +247,7 @@ func (b *BanList) IsBanned(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		// Not a valid IP address - no need to log this for test cases
+		b.logger.Errorf("Invalid IP address passed to IsBanned: %s", ipStr)
 		return false
 	}
 

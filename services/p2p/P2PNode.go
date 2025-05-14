@@ -55,6 +55,9 @@ type P2PNodeI interface {
 	CurrentlyConnectedPeers() []PeerInfo
 	DisconnectPeer(ctx context.Context, peerID peer.ID) error
 	SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
+	SetPeerConnectedCallback(callback func(context.Context, peer.ID))
+
+	UpdatePeerHeight(peerID peer.ID, height int32)
 
 	// Stats methods
 	LastSend() time.Time
@@ -80,12 +83,14 @@ type P2PNode struct {
 	bitcoinProtocolID string
 	handlerByTopic    map[string]Handler
 	startTime         time.Time
+	onPeerConnected   func(context.Context, peer.ID)
 
 	// The following variables must only be used atomically.
 	bytesReceived uint64
 	bytesSent     uint64
 	lastRecv      int64
 	lastSend      int64
+	peerHeights   sync.Map
 }
 
 type Handler func(ctx context.Context, msg []byte, from string)
@@ -178,12 +183,19 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
+		peerHeights:       sync.Map{},
 	}
 
 	// Set up connection notifications
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Debugf("[P2PNode] Peer connected: %s", conn.RemotePeer().String())
+			peerID := conn.RemotePeer()
+			node.logger.Debugf("[P2PNode] Peer connected: %s", peerID.String())
+
+			// Notify any connection handlers about the new peer
+			if node.onPeerConnected != nil {
+				go node.onPeerConnected(context.Background(), peerID)
+			}
 		},
 		DisconnectedF: func(n network.Network, conn network.Conn) {
 			node.logger.Debugf("[P2PNode] Peer disconnected: %s", conn.RemotePeer().String())
@@ -434,6 +446,7 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 					if !errors.Is(err, context.Canceled) {
 						s.logger.Errorf("[P2PNode][SetTopicHandler] error getting msg from %s topic: %v", topicName, err)
 					}
+
 					continue
 				}
 
@@ -1007,8 +1020,9 @@ func (s *P2PNode) BytesReceived() uint64 {
 }
 
 type PeerInfo struct {
-	ID    peer.ID
-	Addrs []multiaddr.Multiaddr
+	ID            peer.ID
+	Addrs         []multiaddr.Multiaddr
+	CurrentHeight int32
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
@@ -1018,11 +1032,27 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 	// Create a slice with zero initial length but with capacity for all peers
 	peers := make([]PeerInfo, 0, len(peerIDs))
 
+	// print out peer heights
+	for _, peerID := range peerIDs {
+		var height int32
+		if h, ok := s.peerHeights.Load(peerID); ok {
+			height = h.(int32)
+		}
+
+		fmt.Printf("[P2PNode] Peer height: %s %d\n", peerID.String(), height)
+	}
+
 	// Add each peer to the slice
 	for _, peerID := range peerIDs {
+		var height int32
+		if h, ok := s.peerHeights.Load(peerID); ok {
+			height = h.(int32)
+		}
+
 		peers = append(peers, PeerInfo{
-			ID:    peerID,
-			Addrs: s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			ID:            peerID,
+			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			CurrentHeight: height,
 		})
 	}
 
@@ -1038,9 +1068,15 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 
 	// Add each peer to the slice
 	for _, peerID := range peerIDs {
+		var height int32
+		if h, ok := s.peerHeights.Load(peerID); ok {
+			height = h.(int32)
+		}
+
 		peers = append(peers, PeerInfo{
-			ID:    peerID,
-			Addrs: s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			ID:            peerID,
+			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			CurrentHeight: height,
 		})
 	}
 
@@ -1049,6 +1085,11 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 
 func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 	return s.host.Network().ClosePeer(peerID)
+}
+
+func (s *P2PNode) UpdatePeerHeight(peerID peer.ID, height int32) {
+	fmt.Printf("[P2PNode] UpdatePeerHeight: %s %d\n", peerID.String(), height)
+	s.peerHeights.Store(peerID, height)
 }
 
 // TODO: remove
@@ -1088,9 +1129,9 @@ func (s *P2PNode) UpdateLastReceived() {
 }
 
 func (s *P2PNode) GetPeerIPs(peerID peer.ID) []string {
-	var ips []string
+	addrs := s.host.Network().Peerstore().PeerInfo(peerID).Addrs
+	ips := make([]string, 0, len(addrs))
 
-	addrs := s.host.Peerstore().Addrs(peerID)
 	for _, addr := range addrs {
 		ip := extractIPFromMultiaddr(addr)
 		if ip != "" {
@@ -1099,6 +1140,11 @@ func (s *P2PNode) GetPeerIPs(peerID peer.ID) []string {
 	}
 
 	return ips
+}
+
+// SetPeerConnectedCallback sets a callback function to be called when a new peer connects
+func (s *P2PNode) SetPeerConnectedCallback(callback func(context.Context, peer.ID)) {
+	s.onPeerConnected = callback
 }
 
 func extractIPFromMultiaddr(maddr multiaddr.Multiaddr) string {

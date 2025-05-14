@@ -320,6 +320,7 @@ type P2PSettings struct {
 	StaticPeers []string
 
 	SubtreeTopic string
+	HandshakeTopic string // new pubsub topic for version/verack handshake
 
 	DHTProtocolID   string
 	DHTUsePrivate   bool

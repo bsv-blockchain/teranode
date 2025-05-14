@@ -1,6 +1,6 @@
 package p2p
 
-type BestBlockMessage struct {
+type BestBlockRequestMessage struct {
 	PeerID string
 }
 
@@ -31,4 +31,13 @@ type RejectedTxMessage struct {
 	TxID   string
 	Reason string
 	PeerID string
+}
+
+// HandshakeMessage carries version/verack info between peers
+type HandshakeMessage struct {
+	Type       string `json:"type"`
+	PeerID     string `json:"peerID"`
+	BestHeight uint32 `json:"bestHeight"`
+	UserAgent  string `json:"userAgent"`
+	Services   uint64 `json:"services"`
 }

@@ -6,7 +6,7 @@ import "google/protobuf/empty.proto";
 package p2p_api;
 
 message Peer {
-  int32 id = 1;
+  string id = 1;
   string addr = 2;
   string addrLocal = 3;
   string services = 4;

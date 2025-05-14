@@ -324,16 +324,11 @@ func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*p
 }
 
 func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
-	// remove from the ban list
-	err := s.server.banList.Remove(ctx, peer.Addr)
-	if err != nil {
-		return &peer_api.UnbanPeerResponse{Ok: false}, err
-	}
-
+	// put the unban request on the unbanPeer channel
 	s.server.unbanPeer <- unbanPeerReq{addr: bannedPeerAddr(peer.Addr)}
-	s.logger.Infof("Unbanned peer %s", peer.Addr)
+	s.logger.Infof("Unban requested for peer %s", peer.Addr)
 
-	return &peer_api.UnbanPeerResponse{Ok: true}, nil
+	return &peer_api.UnbanPeerResponse{Ok: true}, nil // ok means the request was received and processed, but no necessarily successfully
 }
 
 func (s *Server) banPeer(peerAddr string, until int64) error {

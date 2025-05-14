@@ -100,7 +100,6 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/ice/v2 v2.3.37 // indirect
@@ -134,6 +133,7 @@ require (
 	github.com/felixge/fgprof v0.9.5
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
 	github.com/ordishs/go-bitcoin v1.0.86
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
 	gotest.tools v2.2.0+incompatible
 )

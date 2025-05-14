@@ -28,8 +28,12 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	cache "github.com/patrickmn/go-cache"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+// live items expire after 10s, cleanup runs every minute
+var rpcCallCache = cache.New(10*time.Second, time.Minute)
 
 // handleGetBlock implements the getblock command.
 func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
@@ -286,12 +290,18 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	)
 	defer deferFn()
 
+	if cached, found := rpcCallCache.Get("getbestblockhash"); found {
+		return cached.(string), nil
+	}
+
 	bh, _, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	hash := bh.Hash()
+
+	rpcCallCache.Set("getbestblockhash", hash.String(), cache.DefaultExpiration)
 
 	return hash.String(), nil
 }
@@ -680,6 +690,10 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	)
 	defer deferFn()
 
+	if cached, found := rpcCallCache.Get("getpeerinfo"); found {
+		return cached, nil
+	}
+
 	peerCount := 0
 
 	var legacyPeerInfo *peer_api.GetPeersResponse
@@ -750,13 +764,27 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	if newPeerInfo != nil {
 		for _, p := range newPeerInfo.Peers {
 			info := &bsvjson.GetPeerInfoResult{
-				// ID:        p.Id,
-				Addr: p.Addr,
-				// AddrLocal: p.AddrLocal,
+				PeerID:         p.Id,
+				Addr:           p.Addr,
+				ServicesStr:    p.Services,
+				Inbound:        p.Inbound,
+				StartingHeight: p.StartingHeight,
+				LastSend:       p.LastSend,
+				LastRecv:       p.LastRecv,
+				BytesSent:      p.BytesSent,
+				BytesRecv:      p.BytesReceived,
+				ConnTime:       p.ConnTime,
+				PingTime:       float64(p.PingTime),
+				TimeOffset:     p.TimeOffset,
+				Version:        p.Version,
+				SubVer:         p.SubVer,
+				CurrentHeight:  p.CurrentHeight,
 			}
 			infos = append(infos, info)
 		}
 	}
+
+	rpcCallCache.Set("getpeerinfo", infos, 10*time.Second)
 
 	// return peerInfo, nil
 	return infos, nil
@@ -786,6 +814,10 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	)
 	defer deferFn()
 
+	if cached, found := rpcCallCache.Get("getblockchaininfo"); found {
+		return cached.(map[string]interface{}), nil
+	}
+
 	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		s.logger.Errorf("error getting best block header: %v", err)
@@ -809,6 +841,8 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		"softforks":            []interface{}{},
 	}
 
+	rpcCallCache.Set("getblockchaininfo", jsonMap, 10*time.Second)
+
 	return jsonMap, nil
 }
 
@@ -821,6 +855,11 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	)
 	defer deferFn()
 
+	// use a cache that expires after 10 seconds
+	if cached, found := rpcCallCache.Get("getinfo"); found {
+		return cached.(map[string]interface{}), nil
+	}
+
 	height, _, err := s.blockchainClient.GetBestHeightAndTime(ctx)
 	if err != nil {
 		s.logger.Errorf("error getting best height and time: %v", err)
@@ -828,19 +867,44 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		height = 0
 	}
 
+	difficulty, err := s.blockAssemblyClient.GetCurrentDifficulty(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	p2pConnections, err := s.p2pClient.GetPeers(ctx)
+	if err != nil {
+		// not critical - p2p service may not be running, so log as info
+		s.logger.Infof("error getting p2p peer info: %v", err)
+	}
+
+	legacyConnections, err := s.peerClient.GetPeers(ctx)
+	if err != nil {
+		// not critical - legacy service may not be running, so log as info
+		s.logger.Infof("error getting legacy peer info: %v", err)
+	}
+
+	connectionCount := 0
+	if p2pConnections != nil {
+		connectionCount += len(p2pConnections.Peers)
+	}
+
+	if legacyConnections != nil {
+		connectionCount += len(legacyConnections.Peers)
+	}
+
 	jsonMap := map[string]interface{}{
 		"version":         1,                                             // the version of the server
 		"protocolversion": wire.ProtocolVersion,                          // the latest supported protocol version
 		"blocks":          height,                                        // the number of blocks processed
-		"timeoffset":      1,                                             // the time offset
-		"connections":     1,                                             // the number of connected peers
-		"proxy":           "host:port",                                   // the proxy used by the server
-		"difficulty":      1,                                             // the current target difficulty
+		"connections":     connectionCount,                               // the number of connected peers
+		"difficulty":      difficulty,                                    // the current target difficulty
 		"testnet":         s.settings.ChainCfgParams.Net == wire.TestNet, // whether or not server is using testnet
 		"stn":             s.settings.ChainCfgParams.Net == wire.STN,     // whether or not server is using stn
-		"relayfee":        100,                                           // the minimum relay fee for non-free transactions in BSV/KB
 
 	}
+
+	rpcCallCache.Set("getinfo", jsonMap, cache.DefaultExpiration)
 
 	return jsonMap, nil
 }
@@ -1168,7 +1232,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			}
 		}
 
-		if !resp.Ok {
+		if resp == nil || !resp.Ok {
 			if !success {
 				return nil, &bsvjson.RPCError{
 					Code:    bsvjson.ErrRPCInvalidParameter,
@@ -1209,7 +1273,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			}
 		}
 
-		if !resp.Ok {
+		if resp == nil || !resp.Ok {
 			if !success {
 				return nil, &bsvjson.RPCError{
 					Code:    bsvjson.ErrRPCInvalidParameter,
@@ -1283,7 +1347,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, err
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{&utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
 		return nil, err
 	}
 
@@ -1307,7 +1371,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{&utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
 		return nil, err
 	}
 

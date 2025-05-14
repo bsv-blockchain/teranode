@@ -250,29 +250,30 @@ type GetNetworkInfoResult struct {
 
 // GetPeerInfoResult models the data returned from the getpeerinfo command.
 type GetPeerInfoResult struct {
-	ID             int32   `json:"id"`
+	ID             int32   `json:"id,omitempty"`
+	PeerID         string  `json:"peerid,omitempty"`
 	Addr           string  `json:"addr"`
 	AddrLocal      string  `json:"addrlocal,omitempty"`
-	Services       string  `json:"services"`
-	ServicesStr    string  `json:"servicesStr"`
-	RelayTxes      bool    `json:"relaytxes"`
-	LastSend       int64   `json:"lastsend"`
-	LastRecv       int64   `json:"lastrecv"`
-	BytesSent      uint64  `json:"bytessent"`
-	BytesRecv      uint64  `json:"bytesrecv"`
-	ConnTime       int64   `json:"conntime"`
-	TimeOffset     int64   `json:"timeoffset"`
-	PingTime       float64 `json:"pingtime"`
+	Services       string  `json:"services,omitempty"`
+	ServicesStr    string  `json:"servicesStr,omitempty"`
+	RelayTxes      bool    `json:"relaytxes,omitempty"`
+	LastSend       int64   `json:"lastsend,omitempty"`
+	LastRecv       int64   `json:"lastrecv,omitempty"`
+	BytesSent      uint64  `json:"bytessent,omitempty"`
+	BytesRecv      uint64  `json:"bytesrecv,omitempty"`
+	ConnTime       int64   `json:"conntime,omitempty"`
+	TimeOffset     int64   `json:"timeoffset,omitempty"`
+	PingTime       float64 `json:"pingtime,omitempty"`
 	PingWait       float64 `json:"pingwait,omitempty"`
-	Version        uint32  `json:"version"`
-	SubVer         string  `json:"subver"`
-	Inbound        bool    `json:"inbound"`
+	Version        uint32  `json:"version,omitempty"`
+	SubVer         string  `json:"subver,omitempty"`
+	Inbound        bool    `json:"inbound,omitempty"`
 	StartingHeight int32   `json:"startingheight"`
 	CurrentHeight  int32   `json:"currentheight,omitempty"`
-	BanScore       int32   `json:"banscore"`
-	Whitelisted    bool    `json:"whitelisted"`
-	FeeFilter      int64   `json:"feefilter"`
-	SyncNode       bool    `json:"syncnode"`
+	BanScore       int32   `json:"banscore,omitempty"`
+	Whitelisted    bool    `json:"whitelisted,omitempty"`
+	FeeFilter      int64   `json:"feefilter,omitempty"`
+	SyncNode       bool    `json:"syncnode,omitempty"`
 }
 
 // GetRawMempoolVerboseResult models the data returned from the getrawmempool
