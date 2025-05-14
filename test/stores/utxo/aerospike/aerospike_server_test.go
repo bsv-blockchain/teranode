@@ -1779,6 +1779,12 @@ func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy,
 	require.NoError(t, err)
 }
 
+type mockIndexWaiter struct{}
+
+func (m *mockIndexWaiter) WaitForIndexReady(ctx context.Context, indexName string) error {
+	return nil
+}
+
 func TestAerospikeCleanupService(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
@@ -1798,6 +1804,7 @@ func TestAerospikeCleanupService(t *testing.T) {
 		Set:            store.GetName(),
 		MaxJobsHistory: 50,
 		WorkerCount:    2,
+		IndexWaiter:    &mockIndexWaiter{},
 	})
 	require.NoError(t, err)
 

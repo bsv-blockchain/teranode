@@ -58,10 +58,13 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,6 +74,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -127,6 +131,9 @@ type Store struct {
 	externalStore      blob.Store
 	utxoBatchSize      int
 	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	indexName          string
+	indexMutex         sync.Mutex // Mutex for index creation operations
+	indexOnce          sync.Once  // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -195,6 +202,27 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalStore:   externalStore,
 		utxoBatchSize:   utxoBatchSize,
 		externalTxCache: externalTxCache,
+	}
+
+	// Ensure index creation/wait is only done once per process
+	if s.indexName != "" {
+		s.indexOnce.Do(func() {
+			if s.client != nil && s.client.Client != nil {
+				exists, err := s.indexExists(s.indexName)
+				if err != nil {
+					s.logger.Errorf("Failed to check index existence: %v", err)
+					return
+				}
+
+				if !exists {
+					// Only one process should try to create the index
+					err := s.CreateIndexIfNotExists(ctx, cleanup.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
+					if err != nil {
+						s.logger.Errorf("Failed to create index: %v", err)
+					}
+				}
+			}
+		})
 	}
 
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
@@ -344,10 +372,130 @@ func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
 		return 0
 	}
 
-	if s.utxoBatchSize > int(^uint32(0)) {
+	// Check if utxoBatchSize exceeds the maximum value of uint32
+	if s.utxoBatchSize > math.MaxUint32 {
 		s.logger.Errorf("utxoBatchSize (%d) exceeds uint32 max value", s.utxoBatchSize)
 		return 0
 	}
 
 	return vout % uint32(s.utxoBatchSize)
+}
+
+// CreateIndexIfNotExists creates an index only if it doesn't already exist
+// This method allows one caller to create the index in the background while
+// other callers can immediately continue without waiting
+func (s *Store) CreateIndexIfNotExists(ctx context.Context, indexName, binName string, indexType aerospike.IndexType) error {
+	if s.client.Client == nil {
+		return nil // For unit tests, we don't have a client
+	}
+
+	// First, check if the index already exists without a lock
+	exists, err := s.indexExists(indexName)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		return nil
+	}
+
+	// Check if the index exists again but this time with a lock
+	s.indexMutex.Lock()
+
+	exists, err = s.indexExists(indexName)
+	if err != nil {
+		s.indexMutex.Unlock()
+		return err
+	}
+
+	if exists {
+		s.indexMutex.Unlock()
+		return nil
+	}
+
+	// Create the index (synchronously)
+	policy := aerospike.NewWritePolicy(0, 0)
+
+	s.logger.Infof("Creating index %s:%s:%s", s.namespace, s.setName, indexName)
+
+	if _, err := s.client.CreateIndex(policy, s.namespace, s.setName, indexName, binName, indexType); err != nil {
+		s.logger.Errorf("Failed to create index %s:%s:%s: %v", s.namespace, s.setName, indexName, err)
+		s.indexMutex.Unlock()
+
+		return err
+	}
+
+	// Unlock the mutex and allow the index to continue being created in the background
+	s.indexMutex.Unlock()
+
+	return nil
+}
+
+// waitForIndexReady polls Aerospike until the index is ready or times out
+func (s *Store) waitForIndexReady(ctx context.Context, indexName string) error {
+	if s.client.Client == nil {
+		return nil // For unit tests, we don't have a client
+	}
+
+	s.logger.Infof("Waiting for index %s:%s:%s to be built", s.namespace, s.setName, indexName)
+
+	start := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		default:
+			// Query index status
+			node, err := s.client.Client.Cluster().GetRandomNode()
+			if err != nil {
+				return err
+			}
+
+			policy := aerospike.NewInfoPolicy()
+
+			infoMap, err := node.RequestInfo(policy, "sindex")
+			if err != nil {
+				return err
+			}
+
+			for _, v := range infoMap {
+				if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.setName)) && strings.Contains(v, "RW") {
+					s.logger.Infof("Index %s:%s:%s built in %s", s.namespace, s.setName, indexName, time.Since(start))
+
+					return nil // Index is ready
+				}
+			}
+
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+// indexExists checks if an index with the given name exists in the namespace
+func (s *Store) indexExists(indexName string) (bool, error) {
+	// Get a random node from the cluster
+	node, err := s.client.Client.Cluster().GetRandomNode()
+	if err != nil {
+		return false, err
+	}
+
+	// Create an info policy
+	policy := aerospike.NewInfoPolicy()
+
+	// Request index information from the node
+	infoMap, err := node.RequestInfo(policy, "sindex")
+	if err != nil {
+		return false, err
+	}
+
+	// Parse the response to check for the index
+	for _, v := range infoMap {
+		if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.setName)) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

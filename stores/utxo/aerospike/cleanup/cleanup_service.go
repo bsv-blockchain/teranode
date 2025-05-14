@@ -2,8 +2,6 @@ package cleanup
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +18,8 @@ import (
 
 // Ensure Store implements the Cleanup Service interface
 var _ cleanup.Service = (*Service)(nil)
+
+var IndexName, _ = gocore.Config().Get("cleanup_IndexName", "cleanup_dah_index")
 
 // Constants for the cleanup service
 const (
@@ -43,6 +43,9 @@ type Options struct {
 	// Ctx is the context to use to signal shutdown
 	Ctx context.Context
 
+	// IndexWaiter is used to wait for Aerospike indexes to be built
+	IndexWaiter IndexWaiter
+
 	// Client is the Aerospike client to use
 	Client *uaerospike.Client
 
@@ -61,15 +64,13 @@ type Options struct {
 
 // Service manages background jobs for cleaning up records based on block height
 type Service struct {
-	logger     ulogger.Logger
-	client     *uaerospike.Client
-	namespace  string
-	set        string
-	jobManager *cleanup.JobManager
-	ctx        context.Context
-	indexMutex sync.Mutex // Mutex for index creation operations
-
-	indexOnce sync.Once // Ensures index creation/wait is only done once per process
+	logger      ulogger.Logger
+	client      *uaerospike.Client
+	namespace   string
+	set         string
+	jobManager  *cleanup.JobManager
+	ctx         context.Context
+	indexWaiter IndexWaiter
 }
 
 // NewService creates a new cleanup service
@@ -80,6 +81,10 @@ func NewService(opts Options) (*Service, error) {
 
 	if opts.Client == nil {
 		return nil, errors.NewProcessingError("client is required")
+	}
+
+	if opts.IndexWaiter == nil {
+		return nil, errors.NewProcessingError("index waiter is required")
 	}
 
 	if opts.Namespace == "" {
@@ -100,11 +105,12 @@ func NewService(opts Options) (*Service, error) {
 	})
 
 	service := &Service{
-		logger:    opts.Logger,
-		client:    opts.Client,
-		namespace: opts.Namespace,
-		set:       opts.Set,
-		ctx:       opts.Ctx,
+		logger:      opts.Logger,
+		client:      opts.Client,
+		namespace:   opts.Namespace,
+		set:         opts.Set,
+		ctx:         opts.Ctx,
+		indexWaiter: opts.IndexWaiter,
 	}
 
 	// Create the job processor function
@@ -142,29 +148,8 @@ func (s *Service) Start(ctx context.Context) {
 		ctx = context.Background()
 	}
 
-	indexName, _ := gocore.Config().Get("cleanup_IndexName", "cleanup_dah_index")
-
-	// Ensure index creation/wait is only done once per process
-	s.indexOnce.Do(func() {
-		if s.client != nil && s.client.Client != nil {
-			exists, err := s.indexExists(indexName)
-			if err != nil {
-				s.logger.Errorf("Failed to check index existence: %v", err)
-				return
-			}
-
-			if !exists {
-				// Only one process should try to create the index
-				err := s.CreateIndexIfNotExists(ctx, indexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
-				if err != nil {
-					s.logger.Errorf("Failed to create index: %v", err)
-				}
-			}
-		}
-	})
-
 	// All processes wait for the index to be built
-	if err := s.waitForIndexBuilt(ctx, indexName); err != nil {
+	if err := s.indexWaiter.WaitForIndexReady(ctx, IndexName); err != nil {
 		s.logger.Errorf("Timeout or error waiting for index to be built: %v", err)
 	}
 
@@ -195,6 +180,7 @@ func (s *Service) UpdateBlockHeight(blockHeight uint32, done ...chan string) err
 
 	// Pass the done channel to the job manager
 	var doneChan chan string
+
 	if len(done) > 0 {
 		doneChan = done[0]
 	}
@@ -308,125 +294,6 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 	}
 
 	s.logger.Infof("Worker %d completed cleanup job for block height %d in %v", workerID, job.BlockHeight, job.Ended.Sub(job.Started))
-}
-
-// CreateIndexIfNotExists creates an index only if it doesn't already exist
-// This method allows one caller to create the index in the background while
-// other callers can immediately continue without waiting
-func (s *Service) CreateIndexIfNotExists(ctx context.Context, indexName, binName string, indexType aerospike.IndexType) error {
-	if s.client.Client == nil {
-		return nil // For unit tests, we don't have a client
-	}
-
-	// First, check if the index already exists without a lock
-	exists, err := s.indexExists(indexName)
-	if err != nil {
-		return err
-	}
-
-	if exists {
-		return nil
-	}
-
-	// Check if the index exists again but this time with a lock
-	s.indexMutex.Lock()
-
-	exists, err = s.indexExists(indexName)
-	if err != nil {
-		s.indexMutex.Unlock()
-		return err
-	}
-
-	if exists {
-		s.indexMutex.Unlock()
-		return nil
-	}
-
-	// Create the index (synchronously)
-	policy := aerospike.NewWritePolicy(0, 0)
-
-	s.logger.Infof("Creating index %s:%s:%s", s.namespace, s.set, indexName)
-
-	if _, err := s.client.CreateIndex(policy, s.namespace, s.set, indexName, binName, indexType); err != nil {
-		s.logger.Errorf("Failed to create index %s:%s:%s: %v", s.namespace, s.set, indexName, err)
-		s.indexMutex.Unlock()
-
-		return err
-	}
-
-	// Unlock the mutex and allow the index to continue being created in the background
-	s.indexMutex.Unlock()
-
-	return nil
-}
-
-// waitForIndexBuilt polls Aerospike until the index is ready or times out
-func (s *Service) waitForIndexBuilt(ctx context.Context, indexName string) error {
-	if s.client.Client == nil {
-		return nil // For unit tests, we don't have a client
-	}
-
-	s.logger.Infof("Waiting for index %s:%s:%s to be built", s.namespace, s.set, indexName)
-
-	start := time.Now()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-
-		default:
-			// Query index status
-			node, err := s.client.Client.Cluster().GetRandomNode()
-			if err != nil {
-				return err
-			}
-
-			policy := aerospike.NewInfoPolicy()
-
-			infoMap, err := node.RequestInfo(policy, "sindex")
-			if err != nil {
-				return err
-			}
-
-			for _, v := range infoMap {
-				if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.set)) && strings.Contains(v, "RW") {
-					s.logger.Infof("Index %s:%s:%s built in %s", s.namespace, s.set, indexName, time.Since(start))
-
-					return nil // Index is ready
-				}
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}
-}
-
-// indexExists checks if an index with the given name exists in the namespace
-func (s *Service) indexExists(indexName string) (bool, error) {
-	// Get a random node from the cluster
-	node, err := s.client.Client.Cluster().GetRandomNode()
-	if err != nil {
-		return false, err
-	}
-
-	// Create an info policy
-	policy := aerospike.NewInfoPolicy()
-
-	// Request index information from the node
-	infoMap, err := node.RequestInfo(policy, "sindex")
-	if err != nil {
-		return false, err
-	}
-
-	// Parse the response to check for the index
-	for _, v := range infoMap {
-		if strings.Contains(v, fmt.Sprintf("ns=%s:indexname=%s:set=%s", s.namespace, indexName, s.set)) {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }
 
 // GetJobs returns a copy of the current jobs list (primarily for testing)
