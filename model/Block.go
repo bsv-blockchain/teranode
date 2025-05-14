@@ -354,7 +354,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := util.SafeInt64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
-		return false, errors.NewBlockInvalidError("failed to convert two hours to the future timestamp to uint32", err)
+		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.Hash().String(), err)
 	}
 
 	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
@@ -533,7 +533,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 
 	transactionCountUint32, err := util.SafeUint64ToUint32(b.TransactionCount)
 	if err != nil {
-		return errors.NewBlockInvalidError("failed to convert transaction count to int", err)
+		return errors.NewProcessingError("[BLOCK][%s] failed to convert transaction count to int", b.Hash().String(), err)
 	}
 
 	b.txMap = util.NewSplitSwissMapUint64(transactionCountUint32)
@@ -776,11 +776,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return errors.NewBlockInvalidError("[BLOCK][%s] error validating transaction order", b.Hash().String(), err)
-	}
-
-	return nil
+	// do not wrap the error again, the error is already wrapped
+	return g.Wait()
 }
 
 // checkConflictingTransactions checks whether the transactions in the block have conflicting transactions on the chain

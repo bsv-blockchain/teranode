@@ -844,21 +844,18 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
-				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
+				if errors.Is(err, errors.ErrBlockInvalid) {
+					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); invalidateBlockErr != nil {
+						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
+					}
+				} else {
 					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block, baseURL)
-				} else {
-					// TODO TEMP disable invalidation in the scaling test
-					//      Since the invalidation is disabled, here we are not invalidating the block
-					// 		Consider enabling the invalidation in the future
-					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
-					// }
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 				}
+
+				return
 			}
 
-			// TODO: Should we return error here?
 			// range over the oldBlockIDsMap to get txID - oldBlockID pairs
 			oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
 				txHash, ok := txID.(chainhash.Hash)
@@ -1144,14 +1141,13 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
-		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
-			// storage or service error, block is not really invalid, but we need to re-validate
-			return err
-		} else {
-			if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
+		if errors.Is(err, errors.ErrBlockInvalid) {
+			if invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
+				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}
 		}
+
+		return err
 	}
 
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block.String())
