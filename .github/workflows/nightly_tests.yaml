@@ -12,8 +12,10 @@ env:
   GO_VERSION: '1.24.1'
 
 permissions:
+  contents: read
+  pull-requests: read
   id-token: write
-  
+
 jobs:
   pull-image:
     runs-on: ubuntu-latest
@@ -251,13 +253,13 @@ jobs:
             test_func: "TestConcurrentTransactionsPropagationWithUtxoPostgres"
             test_filename: "tna2_pg_test.go"
 
-          #TNx postgres tests - tnb6 
+          #TNx postgres tests - tnb6
           - test_dir: "test/tnb/withdaemon"
             test_tags: "test_tnb"
             test_func: "TestUnspentTransactionOutputsWithPostgres"
             test_filename: "tnb6_pg_test.go"
 
-          #TNx postgres tests - tnb7 
+          #TNx postgres tests - tnb7
           - test_dir: "test/tnb/withdaemon"
             test_tags: "test_tnb"
             test_func: "TestValidatedTxShouldSpendInputsWithPostgres"
