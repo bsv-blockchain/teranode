@@ -1,4 +1,4 @@
-//go:build test_smoke_rpc || test_rpc || debug
+//go:build test_smoke_rpc || test_rpc || debug || test_docker_daemon
 
 package smoke
 
