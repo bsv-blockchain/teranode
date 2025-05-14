@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	stv "github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
@@ -60,7 +61,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
-	if utxoStore, err := txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 2048); err != nil {
+	if utxoStore, err := txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 2048); err != nil {
 		subtreeValidation.SetUutxoStore(utxoStore)
 	} else {
 		require.NoError(t, err)

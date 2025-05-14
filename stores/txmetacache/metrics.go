@@ -18,6 +18,7 @@ var (
 	prometheusBlockValidationTxMetaCacheTrims              prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheMapSize            prometheus.Gauge
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheHitOldTx           prometheus.Gauge
 )
 
 var (
@@ -107,6 +108,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "tx_meta_cache",
 			Name:      "total_elements_added",
 			Help:      "Number of total number of elements added to the txmetacache",
+		},
+	)
+
+	prometheusBlockValidationTxMetaCacheHitOldTx = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "hit_old_tx",
+			Help:      "Number of hits on old txs in the tx meta cache",
 		},
 	)
 }

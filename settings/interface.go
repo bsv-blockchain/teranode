@@ -377,6 +377,7 @@ type SubtreeValidationSettings struct {
 	SubtreeValidationAbandonThreshold         int
 	TxMetaCacheEnabled                        bool
 	TxMetaCacheMaxMB                          int
+	TxMetaCacheNoOfBlocksToKeep               uint32
 	ValidationMaxRetries                      int
 	ValidationRetrySleep                      string
 	TxChanBufferSize                          int

@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"context"
+	"encoding/binary"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ type metrics struct {
 	hits       atomic.Uint64
 	misses     atomic.Uint64
 	evictions  atomic.Uint64
+	hitOldTx   atomic.Uint64
 }
 
 // CachedData struct for the cached transaction metadata
@@ -35,10 +37,11 @@ type CachedData struct {
 }
 
 type TxMetaCache struct {
-	utxoStore utxo.Store
-	cache     *ImprovedCache
-	metrics   metrics
-	logger    ulogger.Logger
+	utxoStore                     utxo.Store
+	cache                         *ImprovedCache
+	metrics                       metrics
+	logger                        ulogger.Logger
+	noOfBlocksToKeepInTxMetaCache uint32
 }
 
 type CacheStats struct {
@@ -58,6 +61,7 @@ const (
 
 func NewTxMetaCache(
 	ctx context.Context,
+	tSettings *settings.Settings,
 	logger ulogger.Logger,
 	utxoStore utxo.Store,
 	bucketType BucketType,
@@ -83,10 +87,11 @@ func NewTxMetaCache(
 	}
 
 	m := &TxMetaCache{
-		utxoStore: utxoStore,
-		cache:     cache,
-		metrics:   metrics{},
-		logger:    logger,
+		utxoStore:                     utxoStore,
+		cache:                         cache,
+		metrics:                       metrics{},
+		logger:                        logger,
+		noOfBlocksToKeepInTxMetaCache: tSettings.SubtreeValidation.TxMetaCacheNoOfBlocksToKeep,
 	}
 
 	go func() {
@@ -107,6 +112,7 @@ func NewTxMetaCache(
 					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
 					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
 					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
+					prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(m.metrics.hitOldTx.Load()))
 				}
 			}
 		}
@@ -117,8 +123,8 @@ func NewTxMetaCache(
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	txMeta.Tx = nil
-	err := t.cache.Set(hash[:], txMeta.MetaBytes())
 
+	err := t.cache.Set(hash[:], t.appendHeightToValue(txMeta.Bytes()))
 	if err != nil {
 		return err
 	}
@@ -129,7 +135,7 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 }
 
 func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
-	err := t.cache.Set(key, txMetaBytes)
+	err := t.cache.Set(key, t.appendHeightToValue(txMetaBytes))
 	if err != nil {
 		return err
 	}
@@ -140,7 +146,12 @@ func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 }
 
 func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
-	err := t.cache.SetMulti(keys, values)
+	valuesWithHeight := make([][]byte, len(values))
+	for i, value := range values {
+		valuesWithHeight[i] = t.appendHeightToValue(value)
+	}
+
+	err := t.cache.SetMulti(keys, valuesWithHeight)
 	if err != nil {
 		return err
 	}
@@ -166,6 +177,13 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *me
 		return nil
 	}
 
+	if !t.returnValue(cachedBytes) {
+		t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
+		t.metrics.hitOldTx.Add(1)
+
+		return nil
+	}
+
 	t.metrics.hits.Add(1)
 
 	txmetaData := meta.Data{}
@@ -176,13 +194,24 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *me
 
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
-	_ = t.cache.Get(&cachedBytes, hash[:])
+	err := t.cache.Get(&cachedBytes, hash[:])
+
+	if err != nil {
+		return nil, err
+	}
 
 	if len(cachedBytes) > 0 {
+
+		if !t.returnValue(cachedBytes) {
+			t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
+			t.metrics.hitOldTx.Add(1)
+
+			return nil, nil
+		}
+
 		t.metrics.hits.Add(1)
 
 		txmetaData := meta.Data{}
-
 		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
 
 		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
@@ -191,6 +220,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 	}
 
 	t.metrics.misses.Add(1)
+	t.logger.Warnf("txMetaCache GetMeta miss for %s", hash.String())
 
 	txMeta, err := t.utxoStore.GetMeta(ctx, hash)
 	if err != nil {
@@ -210,12 +240,21 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
-	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
-		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
+
+	err := t.cache.Get(&cachedBytes, hash[:])
+	if err != nil {
+		return nil, err
 	}
 
 	// if found in cache
 	if len(cachedBytes) > 0 {
+		if !t.returnValue(cachedBytes) {
+			t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
+			t.metrics.hitOldTx.Add(1)
+
+			return nil, nil
+		}
+
 		t.metrics.hits.Add(1)
 
 		txmetaData := meta.Data{}
@@ -226,6 +265,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...f
 
 	// if not found in the cache, add it to the cache, record cache miss
 	t.metrics.misses.Add(1)
+	t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
+
 	txMeta, err := t.utxoStore.Get(ctx, hash)
 
 	if err != nil {
@@ -299,51 +340,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
-	// do not update the aerospike tx meta store, it kills the aerospike server
-	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
-	// if err != nil {
-	//   return err
-	// }
-	for _, hash := range hashes {
-		err = t.setMinedInCache(ctx, hash, minedBlockInfo)
-		if err != nil {
-			return err
-		}
-	}
-
-	// call improved cache setmulti
-
-	return nil
-}
-
-func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
-	err = t.setMinedInCacheParallel(ctx, hashes, blockID)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
-	if err != nil {
-		return err
-	}
-
-	err = t.setMinedInCache(ctx, hash, minedBlockInfo)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	var txMeta *meta.Data
-	txMeta, err = t.Get(ctx, hash)
 
+	txMeta, err = t.Get(ctx, hash)
 	if err != nil {
 		txMeta, err = t.utxoStore.Get(ctx, hash)
 	}
@@ -364,6 +364,45 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	if len(txMeta.BlockIDs) == 0 {
 		txMeta.Tx = nil
 		_ = t.SetCache(hash, txMeta)
+	}
+
+	return nil
+}
+
+func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
+	if err != nil {
+		return err
+	}
+
+	err = t.setMinedInCache(ctx, hash, minedBlockInfo)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
+	// do not update the aerospike tx meta store, it kills the aerospike server
+	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
+	// if err != nil {
+	//   return err
+	// }
+	for _, hash := range hashes {
+		err = t.setMinedInCache(ctx, hash, minedBlockInfo)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
+	err = t.setMinedInCacheParallel(ctx, hashes, blockID)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -411,6 +450,42 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	t.metrics.evictions.Add(1)
 
 	return nil
+}
+
+// appendHeightToValue appends the current block height to the end of the txMetaBytes
+func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
+	height := t.utxoStore.GetBlockHeight()
+	valueWithHeight := make([]byte, len(txMetaBytes)+4)
+	copy(valueWithHeight, txMetaBytes)
+	binary.BigEndian.PutUint32(valueWithHeight[len(txMetaBytes):], height)
+
+	return valueWithHeight
+}
+
+// readHeightFromValue reads the encoded height from the end of the value
+func readHeightFromValue(value []byte) uint32 {
+	return binary.BigEndian.Uint32(value[len(value)-4:])
+}
+
+func (t *TxMetaCache) returnValue(valueBytes []byte) bool {
+	// if the block height is less than the noOfBlocksToKeepInTxMetaCache, we should return the value
+	if t.utxoStore.GetBlockHeight() <= t.noOfBlocksToKeepInTxMetaCache {
+		return true
+	}
+
+	// calculate the block height to keep in cache
+	blockHeightToKeepInCacheThreshold := t.utxoStore.GetBlockHeight() - t.noOfBlocksToKeepInTxMetaCache
+
+	// check the height of the tx
+	valueHeight := readHeightFromValue(valueBytes)
+
+	// if the tx is too old we are not returning it
+	if valueHeight < blockHeightToKeepInCacheThreshold {
+		return false
+	}
+
+	// if the tx is not too old, we return the value
+	return true
 }
 
 func (t *TxMetaCache) GetCacheStats() *CacheStats {

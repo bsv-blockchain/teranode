@@ -379,6 +379,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeValidationAbandonThreshold:         getInt("subtreevalidation_subtree_validation_abandon_threshold", 1, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
 			TxMetaCacheMaxMB:                          getInt("txMetaCacheMaxMB", 256, alternativeContext...),
+			TxMetaCacheNoOfBlocksToKeep:               getUint32("txMetaCacheNoOfBlocksToKeep", 5, alternativeContext...),
 			ValidationMaxRetries:                      getInt("subtreevalidation_validation_max_retries", 30, alternativeContext...),
 			ValidationRetrySleep:                      getString("subtreevalidation_validation_retry_sleep", "5s", alternativeContext...),
 			TxChanBufferSize:                          getInt("subtreevalidation_txChanBufferSize", 0, alternativeContext...),

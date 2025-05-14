@@ -128,7 +128,7 @@ func New(
 
 		var err error
 
-		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, logger, utxoStore, txmetacache.Unallocated)
+		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
 		if err != nil {
 			logger.Errorf("Failed to create tx meta cache: %v", err)
 		}
