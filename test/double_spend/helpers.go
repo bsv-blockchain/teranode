@@ -21,6 +21,7 @@ import (
 
 func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
+		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(tSettings *settings.Settings) {
 			url, err := url.Parse(utxoStoreOverride)
 			require.NoError(t, err)

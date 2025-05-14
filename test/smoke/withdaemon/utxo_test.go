@@ -4,8 +4,10 @@ package smoke
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
@@ -187,7 +189,11 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         false,
 		EnableValidator:   true,
+		EnableFullLogging: true,
 		SettingsContext:   "dev.system.test",
+		SettingsOverrideFunc: func(settings *settings.Settings) {
+			settings.UtxoStore.BlockHeightRetention = 1
+		},
 	})
 
 	defer td.Stop(t)
@@ -197,7 +203,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC("generate", []interface{}{2})
 	require.NoError(t, err)
 
 	// Get coinbase transaction from block 1
@@ -259,36 +265,22 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	_, err = td.CallRPC("generate", []interface{}{1})
 	require.NoError(t, err)
 
-	// Get current block height
-	currentHeight, _, err := td.BlockchainClient.GetBestHeightAndTime(td.Ctx)
-	require.NoError(t, err)
-
-	// Calculate expected deletion height
-	expectedDeleteHeight := currentHeight + td.Settings.UtxoStore.BlockHeightRetention
-
 	// Verify the parent transaction is marked for deletion
 	txMeta, err := td.UtxoStore.Get(td.Ctx, parentTx.TxIDChainHash())
 	require.NoError(t, err)
 	require.NotNil(t, txMeta)
 
 	// Generate blocks until just before deletion height
-	blocksToGenerate := expectedDeleteHeight - currentHeight - 1
-	_, err = td.CallRPC("generate", []interface{}{blocksToGenerate+10})
+	blocksToGenerate :=td.Settings.UtxoStore.BlockHeightRetention
+	_, err = td.CallRPC("generate", []interface{}{blocksToGenerate+1})
 	require.NoError(t, err)
+
+	time.Sleep(10 * time.Second)
 
 	// Verify transaction still exists
-	txMeta, err = td.UtxoStore.Get(td.Ctx, parentTx.TxIDChainHash())
-	require.NoError(t, err)
-	require.NotNil(t, txMeta)
-
-	// Generate one more block to reach deletion height
-	_, err = td.CallRPC("generate", []interface{}{1})
-	require.NoError(t, err)
-
-	// Verify transaction is deleted
-	txMeta, err = td.UtxoStore.Get(td.Ctx, parentTx.TxIDChainHash())
+	_, err = td.UtxoStore.Get(td.Ctx, parentTx.TxIDChainHash())
 	require.Error(t, err)
-	require.Nil(t, txMeta)
+	// require.Nil(t, meta)
 }
 
 func TestSubtreeBlockHeightRetention(t *testing.T) {

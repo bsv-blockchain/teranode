@@ -756,6 +756,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		subtreeBytes,
 		options.WithFileExtension("subtreeToCheck"),
 		options.WithDeleteAt(100),
+		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
 		return nil, err
@@ -772,6 +773,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		subtreeDataBytes,
 		options.WithFileExtension("subtreeData"),
 		options.WithDeleteAt(100),
+		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
 		return nil, err
