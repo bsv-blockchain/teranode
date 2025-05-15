@@ -38,6 +38,8 @@ type HandshakeMessage struct {
 	Type       string `json:"type"`
 	PeerID     string `json:"peerID"`
 	BestHeight uint32 `json:"bestHeight"`
+	BestHash   string `json:"bestHash"`
+	DataHubURL string `json:"dataHubURL"`
 	UserAgent  string `json:"userAgent"`
 	Services   uint64 `json:"services"`
 }

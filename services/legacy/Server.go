@@ -346,11 +346,11 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 	}
 
 	if foundPeer == nil {
-		s.logger.Warnf("Attempted to ban peer %s but peer not found", peerAddr)
-		return errors.New(errors.ERR_INVALID_IP, "tried to ban peer but peer not found")
+		s.logger.Warnf("Attempted to ban legacy peer %s but peer not found", peerAddr)
+		return errors.New(errors.ERR_INVALID_IP, "tried to ban legacy peer but peer not found")
 	}
 	s.server.banPeerForDuration <- &banPeerForDurationMsg{peer: foundPeer, until: until}
-	s.logger.Infof("Banned peer %s for %d seconds", peerAddr, until)
+	s.logger.Infof("Banned legacypeer %s for %d seconds", peerAddr, until)
 
 	return nil
 }

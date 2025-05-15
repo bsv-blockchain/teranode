@@ -183,6 +183,12 @@ type unbanPeerReq struct {
 	addr bannedPeerAddr
 }
 
+// a struct to represent a query to check if a peer is banned
+type isPeerBannedMsg struct {
+	addr  string
+	reply chan bool
+}
+
 // peerState maintains state of inbound, persistent, outbound peers as well
 // as banned peers and outbound groups.
 type peerState struct {
@@ -650,6 +656,29 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
 	)
+
+	// Check if this peer is banned
+	host, _, err := net.SplitHostPort(sp.Addr())
+	if err == nil {
+		// Use a channel to get the response from the query
+		respChan := make(chan bool)
+
+		// Create a proper query message to check if the peer is banned
+		sp.server.query <- &isPeerBannedMsg{
+			addr:  host,
+			reply: respChan,
+		}
+
+		// Wait for the response
+		isBanned := <-respChan
+		if isBanned {
+			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
+				msg.BlockHash().String(), sp.Addr())
+			return
+		}
+	} else {
+		sp.server.logger.Errorf("Error splitting host and port in OnBlock: %v", err)
+	}
 
 	// Convert the raw MsgBlock to a bsvutil.Block which provides some
 	// convenience methods and things such as hash caching.
@@ -1847,6 +1876,16 @@ type removeNodeMsg struct {
 // goroutines related to peer state.
 func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	switch msg := querymsg.(type) {
+	case *isPeerBannedMsg:
+		// Check if the peer is banned
+		banEnd, ok := state.banned.Get(msg.addr)
+		if ok && time.Now().Before(banEnd) {
+			// Peer is banned
+			msg.reply <- true
+		} else {
+			// Peer is not banned
+			msg.reply <- false
+		}
 	case getConnCountMsg:
 		nconnected := int32(0)
 

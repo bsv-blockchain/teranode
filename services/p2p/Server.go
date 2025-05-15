@@ -371,14 +371,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 func (s *Server) sendHandshake(ctx context.Context) {
 	localHeight := uint32(0)
-	if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+	bestHash := ""
+
+	if header, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
 		localHeight = bhMeta.Height
+		bestHash = header.Hash().String()
 	}
 
 	msg := HandshakeMessage{
 		Type:       "version",
 		PeerID:     s.P2PNode.HostID().String(),
 		BestHeight: localHeight,
+		BestHash:   bestHash,
+		DataHubURL: s.AssetHTTPAddressURL,
 		UserAgent:  s.bitcoinProtocolID,
 		Services:   0,
 	}
@@ -414,14 +419,19 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 	if hs.Type == "version" {
 		// reply with verack
 		localHeight := uint32(0)
-		if _, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+		bestHash := ""
+
+		if header, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
 			localHeight = bhMeta.Height
+			bestHash = header.Hash().String()
 		}
 
 		ack := HandshakeMessage{
 			Type:       "verack",
 			PeerID:     s.P2PNode.HostID().String(),
 			BestHeight: localHeight,
+			BestHash:   bestHash,
+			DataHubURL: s.AssetHTTPAddressURL,
 			UserAgent:  s.bitcoinProtocolID,
 			Services:   0,
 		}
@@ -448,7 +458,56 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 			return
 		}
 	} else if hs.Type == "verack" {
-		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d agent=%s services=%d", hs.PeerID, hs.BestHeight, hs.UserAgent, hs.Services)
+		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d",
+			hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
+
+		// Get our best block for comparison
+		localHeight := uint32(0)
+
+		var localMeta *model.BlockHeaderMeta
+
+		_, localMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err == nil && localMeta != nil {
+			localHeight = localMeta.Height
+
+			// If we have a higher block than the peer who just connected
+			if localHeight > hs.BestHeight {
+				s.logger.Infof("[handleHandshakeTopic][p2p-handshake] our height (%d) is higher than peer %s (%d)",
+					localHeight, hs.PeerID, hs.BestHeight)
+			}
+		}
+
+		// Check if peer has a higher height and valid hash
+		if hs.BestHash != "" && hs.BestHeight > localHeight {
+			s.logger.Infof("[handleHandshakeTopic][p2p-handshake] peer %s has higher block (%s) at height %d > %d, sending to Kafka",
+				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+
+			// Send peer's block info to Kafka if we have a producer client
+			if s.blocksKafkaProducerClient != nil {
+				hash, err := chainhash.NewHashFromStr(hs.BestHash)
+				if err != nil {
+					s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error getting chainhash from string %s: %v", hs.BestHash, err)
+				} else {
+					msg := &kafkamessage.KafkaBlockTopicMessage{
+						Hash: hash.String(),
+						URL:  hs.DataHubURL,
+					}
+
+					value, err := proto.Marshal(msg)
+					if err != nil {
+						s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error marshaling KafkaBlockTopicMessage: %v", err)
+					} else {
+						s.blocksKafkaProducerClient.Publish(&kafka.Message{
+							Value: value,
+						})
+					}
+				}
+			}
+		} else if hs.BestHash != "" && hs.BestHeight > 0 {
+			s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] peer %s has block %s at height %d (our height: %d), not requesting",
+				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+		}
+
 		// update peer height
 		if peerID2, err := peer.Decode(hs.PeerID); err == nil {
 			s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
