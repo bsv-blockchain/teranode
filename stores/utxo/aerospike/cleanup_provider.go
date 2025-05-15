@@ -31,11 +31,11 @@ func (s *Store) GetCleanupService() (cleanup.Service, error) {
 
 	// Create options for the cleanup service
 	opts := aerocleanup.Options{
-		Logger:    s.logger,
-		Client:    s.client,
-		Namespace: s.namespace,
-		Set:       s.setName,
-		// Use default values for WorkerCount and MaxJobsHistory
+		Logger:      s.logger,
+		Client:      s.client,
+		Namespace:   s.namespace,
+		Set:         s.setName,
+		IndexWaiter: s,
 	}
 
 	// Create a new cleanup service
