@@ -476,15 +476,30 @@ func TestServerHandlers(t *testing.T) {
 	})
 
 	t.Run("Test sendHandshakeMessage behaviour", func(t *testing.T) {
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		mockP2PNode := new(MockServerP2PNode)
 		mockBlockchainClient := new(blockchain.Mock)
-		header := &model.BlockHeader{}
-		meta := &model.BlockHeaderMeta{Height: 123}
-		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
 
 		pid, _ := peer.Decode("QmTestPeerID")
 		mockP2PNode.On("HostID").Return(pid)
+
+		// Create a valid BlockHeader with initialized fields
+		prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+		validHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: merkleRoot,
+			Timestamp:      1231006505,
+			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Nonce:          2083236893,
+		}
+
+		meta := &model.BlockHeaderMeta{Height: 123}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil)
 
 		called := make(chan struct{}, 1)
 
@@ -519,6 +534,7 @@ func TestServerHandlers(t *testing.T) {
 		assert.Equal(t, "version", hs.Type)
 		assert.Equal(t, pid.String(), hs.PeerID)
 		assert.Equal(t, uint32(123), hs.BestHeight)
+		assert.NotEmpty(t, hs.BestHash)
 		assert.Equal(t, "test-agent", hs.UserAgent)
 		assert.Equal(t, uint64(0), hs.Services)
 	})
@@ -1589,6 +1605,25 @@ func TestHandshakeFlow(t *testing.T) {
 		// Create mock P2PNode
 		mockP2PNode := new(MockServerP2PNode)
 
+		// Create mock blockchain client
+		mockBlockchainClient := new(blockchain.Mock)
+
+		// Setup mock blockchain client to return a valid response for GetBestBlockHeader
+		prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+		validHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: merkleRoot,
+			Timestamp:      1231006505,
+			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Nonce:          2083236893,
+		}
+
+		meta := &model.BlockHeaderMeta{Height: 150} // Our height is lower than the peer's
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil)
+
 		// Setup self peer ID
 		selfPeerIDStr := "12D3KooWJpBNhwgvoZ15EB1JwRTRpxgM9NVaqpDtWZXfTf6CpCQd"
 		selfPeerID, err := peer.Decode(selfPeerIDStr)
@@ -1604,10 +1639,11 @@ func TestHandshakeFlow(t *testing.T) {
 
 		// Create server with mocks
 		server := &Server{
-			P2PNode:        mockP2PNode,
-			gCtx:           ctx,
-			notificationCh: make(chan *notificationMsg, 10),
-			logger:         ulogger.New("test-server"),
+			P2PNode:          mockP2PNode,
+			blockchainClient: mockBlockchainClient,
+			gCtx:             ctx,
+			notificationCh:   make(chan *notificationMsg, 10),
+			logger:           ulogger.New("test-server"),
 		}
 
 		// Create a verack handshake message
