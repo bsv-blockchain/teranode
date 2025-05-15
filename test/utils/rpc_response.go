@@ -105,7 +105,7 @@ type GetBlockByHeightResponse struct {
 		Hash              string                 `json:"hash"`
 		Confirmations     int                    `json:"confirmations"`
 		Size              int                    `json:"size"`
-		Height            int                    `json:"height"`
+		Height            uint32                 `json:"height"`
 		Version           int                    `json:"version"`
 		VersionHex        string                 `json:"versionHex"`
 		Merkleroot        string                 `json:"merkleroot"`

@@ -112,8 +112,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	if !opts.SkipRemoveDataDir {
-		t.Logf("Removing data directory: %s", path)
-		err := os.RemoveAll(path)
+		absPath, err := filepath.Abs(path)
+		require.NoError(t, err)
+
+		t.Logf("Removing data directory: %s", absPath)
+		err = os.RemoveAll(absPath)
 		require.NoError(t, err)
 	}
 
@@ -124,8 +127,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 	tSettings.ChainCfgParams.CoinbaseMaturity = 1
 
-	t.Logf("Creating data directory: %s", path)
-	err := os.MkdirAll(path, 0755)
+	absPath, err := filepath.Abs(path)
+	require.NoError(t, err)
+	t.Logf("Creating data directory: %s", absPath)
+
+	err = os.MkdirAll(absPath, 0755)
 	require.NoError(t, err)
 
 	quorumPath := tSettings.SubtreeValidation.QuorumPath
@@ -615,6 +621,121 @@ func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTx
 	require.NoError(t, err)
 
 	return tx
+}
+
+// CreateTransaction creates a new transaction with configurable options
+// At least one parent transaction must be provided using WithParentTx or WithParentTxs
+func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...TxOption) *bt.Tx {
+	// Initialize options with defaults
+	opts := &TxOptions{}
+
+	// Apply all provided options
+	for _, option := range options {
+		option(opts)
+	}
+
+	if !opts.skipCheck {
+		// Ensure we have at least one parent transaction
+		require.GreaterOrEqual(t, len(opts.inputs), 1, "No inputs - need at least one input")
+		require.GreaterOrEqual(t, len(opts.outputs), 1, "No outputs - need at least one output")
+	}
+
+	tx := bt.NewTx()
+
+	inputs := make([]*bt.UTXO, 0, len(opts.inputs))
+
+	for _, input := range opts.inputs {
+		inputs = append(inputs, &bt.UTXO{
+			TxIDHash:      input.tx.TxIDChainHash(),
+			Vout:          input.vout,
+			LockingScript: input.tx.Outputs[input.vout].LockingScript,
+			Satoshis:      input.tx.Outputs[input.vout].Satoshis,
+		})
+	}
+
+	// Create UTXO from parent transaction
+	err := tx.FromUTXOs(inputs...)
+	require.NoError(t, err)
+
+	// Create a bt.Output for each opts.output.
+	// If a script is not nil, use it
+	// If a pubKey is not nil, create a P2PKH script from it
+	// If both are nil, use the public key from the TestDaemon's private key
+	for _, output := range opts.outputs {
+		script := output.script
+		if script == nil {
+			var err error
+
+			pubKey := output.pubKey
+			if pubKey == nil {
+				pubKey = td.privKey.PubKey()
+			}
+
+			script, err = bscript.NewP2PKHFromPubKeyBytes(pubKey.SerialiseCompressed())
+			require.NoError(t, err)
+		}
+
+		tx.AddOutput(&bt.Output{
+			Satoshis:      output.amount,
+			LockingScript: script,
+		})
+	}
+
+	// Sign the transaction with each private key that we know about
+	privKeys := make(map[*bec.PrivateKey]struct{})
+
+	for _, input := range opts.inputs {
+		if input.privKey != nil {
+			privKeys[input.privKey] = struct{}{}
+		} else {
+			privKeys[td.privKey] = struct{}{}
+		}
+	}
+
+	for privKey := range privKeys {
+		err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privKey})
+		require.NoError(t, err)
+	}
+
+	// Check the transaction is signed
+	for i, input := range tx.Inputs {
+		require.GreaterOrEqual(t, len(*input.UnlockingScript), 1, "Input %d is not signed", i)
+	}
+
+	return tx
+}
+
+func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T) *bt.Tx {
+	_, err := td.CallRPC("generate", []any{uint32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
+	require.NoError(t, err)
+
+	lastBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
+	require.NoError(t, err)
+
+	td.WaitForBlockHeight(t, lastBlock, 10*time.Second)
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+
+	return coinbaseTx
+}
+
+func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block {
+	// Get the current block height
+	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err)
+
+	_, err = td.CallRPC("generate", []any{blockCount})
+	require.NoError(t, err)
+
+	endHeight := meta.Height + blockCount
+
+	lastBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, endHeight)
+	require.NoError(t, err)
+
+	return lastBlock
 }
 
 func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*util.Subtree, *model.Block) {
@@ -1160,4 +1281,14 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx
 func (td *TestDaemon) GetPrivateKey(t *testing.T) *bec.PrivateKey {
 	privKey := td.privKey
 	return privKey
+}
+
+func (td *TestDaemon) LogJSON(t *testing.T, label string, data interface{}) {
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		t.Errorf("Error marshaling JSON: %v", err)
+		return
+	}
+
+	t.Logf("\n%s:\n%s", label, string(jsonData))
 }

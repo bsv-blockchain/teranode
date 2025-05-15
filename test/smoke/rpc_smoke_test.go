@@ -21,11 +21,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldAllowFairTxUseRpc(t *testing.T) {
+func TestSendTxAndCheckState(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
-		// KillTeranode:            true,
-		// EnableFullLogging: true,
+		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
 	})
 
@@ -33,92 +31,48 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 		td.Stop(t)
 	}()
 
-	// set run state
-	err := td.BlockchainClient.Run(td.Ctx, "test")
-	require.NoError(t, err)
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t)
 
-	_, err = td.CallRPC("generate", []any{101})
-	require.NoError(t, err)
+	newTx := td.CreateTransactionWithOptions(t,
+		daemon.WithInput(coinbaseTx, 0),
+		daemon.WithP2PKHOutputs(1, 10000),
+	)
 
-	tSettings := td.Settings
-
-	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
-	require.NoError(t, err)
-
-	coinbaseTx := block1.CoinbaseTx
-
-	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
-	require.NoError(t, err)
-
-	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
-	require.NoError(t, err)
-
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err)
-
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	output := coinbaseTx.Outputs[0]
-	utxo := &bt.UTXO{
-		TxIDHash:      coinbaseTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: output.LockingScript,
-		Satoshis:      output.Satoshis,
-	}
-
-	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
-	require.NoError(t, err)
-
-	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
-	require.NoError(t, err)
-
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
-	require.NoError(t, err)
-
-	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
+	// t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
+	_, err := td.CallRPC("sendrawtransaction", []any{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
-	t.Logf("Transaction sent with RPC: %s\n", resp)
+	// t.Logf("Transaction sent with RPC: %s\n", resp)
 
 	// Wait for transaction to be processed
-	delay := tSettings.BlockAssembly.DoubleSpendWindow
+	delay := td.Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
-		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		// t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(delay * time.Millisecond)
 	}
 
-	_, err = td.CallRPC("generate", []any{101})
-	require.NoError(t, err, "Failed to generate blocks")
+	block := td.MineAndWait(t, 1)
 
-	t.Logf("Resp: %s", resp)
-
-	block102, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
+	err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
 	require.NoError(t, err)
 
-	err = block102.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
-	require.NoError(t, err)
-
-	err = block102.CheckMerkleRoot(td.Ctx)
+	err = block.CheckMerkleRoot(td.Ctx)
 	require.NoError(t, err)
 
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return block102.SubTreesFromBytes(subtreeHash[:])
+		return block.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	subtree, err := block102.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	subtree, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
 	require.NoError(t, err)
 
 	blFound := false
 	for i := 0; i < len(subtree); i++ {
 		st := subtree[i]
 		for _, node := range st.Nodes {
-			t.Logf("node.Hash: %s", node.Hash.String())
-			t.Logf("tx.TxIDChainHash().String(): %s", newTx.TxIDChainHash().String())
+			// t.Logf("node.Hash: %s", node.Hash.String())
+			// t.Logf("tx.TxIDChainHash().String(): %s", newTx.TxIDChainHash().String())
 
 			if node.Hash.String() == newTx.TxIDChainHash().String() {
 				blFound = true
@@ -129,24 +83,18 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 
 	assert.True(t, blFound, "TX not found in the blockstore")
 
-	resp, err = td.CallRPC("getblockchaininfo", []any{})
+	resp, err := td.CallRPC("getblockchaininfo", []any{})
 	require.NoError(t, err)
 
 	var blockchainInfo helper.BlockchainInfo
 	errJSON := json.Unmarshal([]byte(resp), &blockchainInfo)
+	require.NoError(t, errJSON)
 
-	if errJSON != nil {
-		t.Errorf("JSON decoding error: %v", errJSON)
-		return
-	}
-
-	block202, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 202)
-	require.NoError(t, err)
-	t.Logf("blockchainInfo: %+v", blockchainInfo)
-	assert.Equal(t, int(202), blockchainInfo.Result.Blocks)
-	assert.Equal(t, block202.Hash().String(), blockchainInfo.Result.BestBlockHash)
+	td.LogJSON(t, "blockchainInfo", blockchainInfo)
+	assert.Equal(t, int(td.Settings.ChainCfgParams.CoinbaseMaturity+2), blockchainInfo.Result.Blocks)
+	assert.Equal(t, block.Hash().String(), blockchainInfo.Result.BestBlockHash)
 	assert.Equal(t, "regtest", blockchainInfo.Result.Chain)
-	assert.Equal(t, "9601000000000000000000000000000000000000000000000000000000000000", blockchainInfo.Result.Chainwork)
+	assert.Equal(t, "0800000000000000000000000000000000000000000000000000000000000000", blockchainInfo.Result.Chainwork)
 	assert.Equal(t, string("4.6565423739069247246592908691514574469873245939403288293276821765520783128832e-10"), blockchainInfo.Result.Difficulty)
 	assert.Equal(t, int(863341), blockchainInfo.Result.Headers)
 	assert.Equal(t, int(0), blockchainInfo.Result.Mediantime)
@@ -164,9 +112,9 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	require.NoError(t, errJSON)
 	require.NotNil(t, getInfo.Result)
 
-	t.Logf("getInfo: %+v", getInfo)
+	td.LogJSON(t, "getInfo", getInfo)
 
-	assert.Equal(t, int(202), getInfo.Result.Blocks)
+	assert.Equal(t, int(td.Settings.ChainCfgParams.CoinbaseMaturity+2), getInfo.Result.Blocks)
 	assert.Equal(t, int(0), getInfo.Result.Connections)
 	assert.Equal(t, float64(4.6565423739069247e-10), getInfo.Result.Difficulty)
 	assert.Equal(t, int(70016), getInfo.Result.ProtocolVersion)
@@ -188,48 +136,45 @@ func TestShouldAllowFairTxUseRpc(t *testing.T) {
 	errJSON = json.Unmarshal([]byte(resp), &getDifficulty)
 	require.NoError(t, errJSON)
 
-	t.Logf("getDifficulty: %+v", getDifficulty)
+	// t.Logf("getDifficulty: %+v", getDifficulty)
 	assert.Equal(t, float64(4.6565423739069247e-10), getDifficulty.Result)
 
-	resp, err = td.CallRPC("getblockhash", []any{202})
-	require.NoError(t, err, "Failed to generate blocks")
+	resp, err = td.CallRPC("getblockhash", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
+	require.NoError(t, err, "Failed to get block hash")
 
 	var getBlockHash helper.GetBlockHashResponse
 	errJSON = json.Unmarshal([]byte(resp), &getBlockHash)
 	require.NoError(t, errJSON)
 
-	t.Logf("getBlockHash: %+v", getBlockHash)
-	assert.Equal(t, block202.Hash().String(), getBlockHash.Result)
+	// t.Logf("getBlockHash: %+v", getBlockHash)
+	assert.Equal(t, block.Hash().String(), getBlockHash.Result)
 
-	t.Logf("%s", resp)
+	td.LogJSON(t, "getBlockHash", getBlockHash)
 
-	resp, err = td.CallRPC("getblockbyheight", []any{102})
+	resp, err = td.CallRPC("getblockbyheight", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
 	require.NoError(t, err, "Failed to get block by height")
 
 	var getBlockByHeightResp helper.GetBlockByHeightResponse
 	errJSON = json.Unmarshal([]byte(resp), &getBlockByHeightResp)
 	require.NoError(t, errJSON)
 
-	t.Logf("getBlockByHeightResp: %+v", getBlockByHeightResp)
+	td.LogJSON(t, "getBlockByHeightResp", getBlockByHeightResp)
 
-	t.Logf("Resp: %s", resp)
+	penultimateBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, getBlockByHeightResp.Result.Height-1)
+	require.NoError(t, err)
 
-	block103, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 103)
-	require.NoError(t, err)
-	block101, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
-	require.NoError(t, err)
 	// Assert block properties
-	require.Equal(t, block102.Hash().String(), getBlockByHeightResp.Result.Hash)
-	require.Equal(t, 101, getBlockByHeightResp.Result.Confirmations)
-	// require.Equal(t, 229, getBlockByHeightResp.Result.Size)
-	require.Equal(t, 102, getBlockByHeightResp.Result.Height)
-	require.Equal(t, 536870912, getBlockByHeightResp.Result.Version)
-	require.Equal(t, "20000000", getBlockByHeightResp.Result.VersionHex)
-	require.Equal(t, block102.Header.HashMerkleRoot.String(), getBlockByHeightResp.Result.Merkleroot)
-	require.Equal(t, "207fffff", getBlockByHeightResp.Result.Bits)
-	require.InDelta(t, 4.6565423739069247e-10, getBlockByHeightResp.Result.Difficulty, 1e-20)
-	require.Equal(t, block101.Hash().String(), getBlockByHeightResp.Result.Previousblockhash)
-	require.Equal(t, block103.Hash().String(), getBlockByHeightResp.Result.Nextblockhash)
+	assert.Equal(t, block.Hash().String(), getBlockByHeightResp.Result.Hash)
+	assert.Equal(t, 1, getBlockByHeightResp.Result.Confirmations)
+	// assert.Equal(t, 229, getBlockByHeightResp.Result.Size)
+	assert.Equal(t, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+2), getBlockByHeightResp.Result.Height)
+	assert.Equal(t, 536870912, getBlockByHeightResp.Result.Version)
+	assert.Equal(t, "20000000", getBlockByHeightResp.Result.VersionHex)
+	assert.Equal(t, block.Header.HashMerkleRoot.String(), getBlockByHeightResp.Result.Merkleroot)
+	assert.Equal(t, "207fffff", getBlockByHeightResp.Result.Bits)
+	assert.InDelta(t, 4.6565423739069247e-10, getBlockByHeightResp.Result.Difficulty, 1e-20)
+	assert.Equal(t, penultimateBlock.Hash().String(), getBlockByHeightResp.Result.Previousblockhash)
+	assert.Equal(t, "", getBlockByHeightResp.Result.Nextblockhash)
 }
 
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
@@ -635,4 +580,41 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	}
 
 	assert.True(t, tx2Found, "TX2 not found in the blockstore")
+}
+
+func TestDoubleInput(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test.oversizedscripttest",
+	})
+
+	defer td.Stop(t)
+
+	// set run state
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Generate initial blocks to get coinbase funds
+	_, err = td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err)
+
+	// Create a transaction with an oversized script
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	coinbaseTx := block1.CoinbaseTx
+
+	tx := td.CreateTransactionWithOptions(t,
+		daemon.WithInput(coinbaseTx, 0),
+		daemon.WithInput(coinbaseTx, 0),
+		daemon.WithP2PKHOutputs(1, coinbaseTx.Outputs[0].Satoshis+100000, nil),
+		daemon.WithOpReturnData([]byte("test")),
+		daemon.WithP2PKHOutputs(1, 1000),
+	)
+
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)
+	require.Error(t, err)
+
+	t.Logf("tx: %s", tx.String())
+
 }

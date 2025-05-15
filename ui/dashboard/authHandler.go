@@ -33,8 +33,7 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
 		authsha = sha256.Sum256([]byte(auth))
 
-		// Debug log to help troubleshoot
-		logger.Infof("Auth initialized with user: %s", rpcUser)
+		logger.Debugf("Auth initialized with user: %s", rpcUser)
 	} else {
 		logger.Warnf("RPC authentication not configured properly. User: %s, Pass: %s",
 			rpcUser != "", rpcPass != "")

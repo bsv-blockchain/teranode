@@ -1,4 +1,4 @@
-//go:build test_all || test_model || test_bigblock || test_longlong
+//go:build test_model || test_bigblock || test_longlong
 
 package model
 
