@@ -36,24 +36,22 @@ services:
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
     entrypoint: [ "pwd" ]
 
-  jaeger:
-    container_name: jaeger
-    image: jaegertracing/all-in-one:1.59
-    network_mode: "host"
-    environment:
-      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
-
   postgres:
     container_name: postgres
     image: postgres:latest
     network_mode: "host"
+    profiles:
+      - postgres
+      - teranode1
+      - teranode2
+      - teranode3
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     volumes:
-      - ./postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../compose/postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ../compose/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ../data/postgres:/var/lib/postgresql/data
     restart: on-failure
 
@@ -62,6 +60,11 @@ services:
     image: redpandadata/redpanda:latest
     network_mode: "host"
     mem_limit: 256m
+    profiles:
+      - kafka
+      - teranode1
+      - teranode2
+      - teranode3
     command:
       - redpanda start
       - --smp 1
@@ -72,20 +75,22 @@ services:
       - --pandaproxy-addr 0.0.0.0:9093
       - --advertise-pandaproxy-addr localhost:19093
 
-  teranode-1:
+  teranode1:
     <<: *teranode-base
-    container_name: teranode-1
+    container_name: teranode1
+    profiles:
+      - teranode1
     depends_on:
       postgres:
         condition: service_started
       kafka-shared:
         condition: service_started
-      aerospike-1:
+      aerospike1:
         condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1"
-      JAEGER_SERVICE_NAME: teranode-1
+      JAEGER_SERVICE_NAME: teranode1
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
@@ -98,20 +103,22 @@ services:
       - ../data/teranode1/external:/app/data/teranode1/external
       - ./wait.sh:/app/wait.sh
 
-  teranode-2:
+  teranode2:
     <<: *teranode-base
-    container_name: teranode-2
+    container_name: teranode2
+    profiles:
+      - teranode2
     depends_on:
       postgres:
         condition: service_started
       kafka-shared:
         condition: service_started
-      aerospike-2:
+      aerospike2:
         condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING"]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode2"
-      JAEGER_SERVICE_NAME: teranode-2
+      JAEGER_SERVICE_NAME: teranode2
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
@@ -123,20 +130,22 @@ services:
       - ../data/teranode2/external:/app/data/teranode2/external
       - ./wait.sh:/app/wait.sh
 
-  teranode-3:
+  teranode3:
     <<: *teranode-base
-    container_name: teranode-3
+    container_name: teranode3
+    profiles:
+      - teranode3
     depends_on:
       postgres:
         condition: service_started
       kafka-shared:
         condition: service_started
-      aerospike-3:
+      aerospike3:
         condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode3"
-      JAEGER_SERVICE_NAME: teranode-3
+      JAEGER_SERVICE_NAME: teranode3
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
@@ -148,26 +157,77 @@ services:
       - ../data/teranode3/external:/app/data/teranode3/external
       - ./wait.sh:/app/wait.sh
   
-  aerospike-1:
-    container_name: aerospike-1
+  aerospike1:
+    container_name: aerospike1
     <<: *aerospike-base
+    profiles:
+      - aerospike1
+      - teranode1
     volumes:
-      - ./aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-1.conf:/etc/aerospike.conf
       - ../data/aerospike1/logs:/var/log/aerospike
       - ../data/aerospike1/data:/opt/aerospike/data
 
-  aerospike-2:
-    container_name: aerospike-2
+  aerospike2:
+    container_name: aerospike2
     <<: *aerospike-base
+    profiles:
+      - aerospike2
+      - teranode2
     volumes:
-      - ./aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-2.conf:/etc/aerospike.conf
       - ../data/aerospike2/logs:/var/log/aerospike
       - ../data/aerospike2/data:/opt/aerospike/data
 
-  aerospike-3:
-    container_name: aerospike-3
+  aerospike3:
+    container_name: aerospike3
     <<: *aerospike-base
+    profiles:
+      - aerospike3
+      - teranode3
     volumes:
-      - ./aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ../compose/aerospike/aerospike-3.conf:/etc/aerospike.conf
       - ../data/aerospike3/logs:/var/log/aerospike
       - ../data/aerospike3/data:/opt/aerospike/data
+  
+  svnode1:
+    container_name: svnode1-${TEST_ID:-default}
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    network_mode: "host"
+    profiles:
+      - svnode1
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/svnode-1.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/svnode1:/data
+    command: [ "/entrypoint.sh", "bitcoind"]
+
+  svnode2:
+    container_name: svnode2-${TEST_ID:-default}
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    network_mode: "host"
+    profiles:
+      - svnode2
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/svnode-2.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/svnode2:/data
+    command: [ "/entrypoint.sh", "bitcoind"]
+
+  svnode3:
+    container_name: svnode3-${TEST_ID:-default}
+    image: bitcoinsv/bitcoin-sv:1.1.0
+    platform: linux/amd64
+    network_mode: "host"
+    profiles:
+      - svnode3
+    healthcheck:
+      test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
+    volumes:
+      - ./config/svnode-3.conf:/data/bitcoin.conf
+      - ./data/test/${TEST_ID:-default}/svnode3:/data
+    command: [ "/entrypoint.sh", "bitcoind"]

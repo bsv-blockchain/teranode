@@ -253,7 +253,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	require.Equal(t, block102.Hash().String(), getBlockByHeightResp.Result.Hash)
 	require.Equal(t, 101, getBlockByHeightResp.Result.Confirmations)
 	// require.Equal(t, 229, getBlockByHeightResp.Result.Size)
-	require.Equal(t, 102, getBlockByHeightResp.Result.Height)
+	require.Equal(t, uint32(102), getBlockByHeightResp.Result.Height)
 	require.Equal(t, 536870912, getBlockByHeightResp.Result.Version)
 	require.Equal(t, "20000000", getBlockByHeightResp.Result.VersionHex)
 	require.Equal(t, block102.Header.HashMerkleRoot.String(), getBlockByHeightResp.Result.Merkleroot)

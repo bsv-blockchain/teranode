@@ -238,17 +238,19 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "../..",
 		ComposeFile: "docker-compose-host.yml",
+		Profiles:    []string{"teranode1", "teranode2"},
+		HealthServicePorts: []testcontainers.ServicePort{
+			{ServiceName: "teranode1", Port: 18000},
+			{ServiceName: "teranode2", Port: 28000},
+		},
 	})
 	require.NoError(t, err)
 
 	node1 := tc.GetNodeClients(t, "docker.host.teranode1")
 	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
 
-	_, err = helper.CallRPC(node1.RPCURL.String(), "generate", []any{110})
+	_, err = helper.CallRPC(node1.RPCURL.String(), "generate", []any{101})
 	require.NoError(t, err, "Failed to generate blocks")
-
-	// tc.StopNode(t, "teranode-1")
-	// tc.StartNode(t, "teranode-1")
 
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 101, 20*time.Second)
 	require.NoError(t, err)
@@ -260,6 +262,15 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	require.NoError(t, err)
 
 	coinbaseTxFromNode1 := block1.CoinbaseTx
+
+	t.Logf("coinbaseTxFromNode1: %s", coinbaseTxFromNode1.String())
+	t.Logf("parentTx: %s", coinbaseTxFromNode1.TxIDChainHash())
+
+	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 18090), coinbaseTxFromNode1.TxIDChainHash().String())
+	require.NoError(t, err)
+
+	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 28090), coinbaseTxFromNode1.TxIDChainHash().String())
+	require.NoError(t, err)
 
 	tx := bt.NewTx()
 
@@ -282,25 +293,23 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	// Check that the transaction is signed
 	assert.Greater(t, len(tx.Inputs[0].UnlockingScript.Bytes()), 0)
 
-	err = node1.PropagationClient.ProcessTransaction(t.Context(), tx)
-	require.NoError(t, err)
-
 	err = node2.PropagationClient.ProcessTransaction(t.Context(), tx)
-	require.NoError(t, err)
-
-	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 18090), tx.TxIDChainHash().String())
 	require.NoError(t, err)
 
 	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 28090), tx.TxIDChainHash().String())
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	err = node1.PropagationClient.ProcessTransaction(t.Context(), tx)
+	require.NoError(t, err)
+
+	_, err = getTx(t, fmt.Sprintf("http://localhost:%d", 18090), tx.TxIDChainHash().String())
+	require.NoError(t, err)
 
 	_, err = helper.CallRPC(node1.RPCURL.String(), "generate", []any{1})
 	require.NoError(t, err)
 
-	tc.StopNode(t, "teranode-1")
-	tc.StartNode(t, "teranode-1")
+	tc.StopNode(t, "teranode1")
+	tc.StartNode(t, "teranode1")
 
 	// create a child tx
 	childTx := bt.NewTx()

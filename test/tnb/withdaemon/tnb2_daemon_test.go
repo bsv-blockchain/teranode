@@ -22,6 +22,7 @@ func TestUtxoStore(t *testing.T) {
 	_, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "../..",
 		ComposeFile: "docker-compose-host.yml",
+		Profiles:    []string{"postgres"},
 	})
 	require.NoError(t, err)
 

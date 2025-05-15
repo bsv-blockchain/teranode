@@ -22,8 +22,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/propagation"
 	distributor "github.com/bitcoin-sv/teranode/services/rpc"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/testutil"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -56,22 +54,24 @@ type ServicePort struct {
 }
 
 func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer, error) {
-	err := os.RemoveAll(filepath.Join(config.Path, "data"))
+	err := os.RemoveAll(filepath.Join(config.Path, "../data"))
 	require.NoError(t, err)
 
 	// Wait for directory removal to complete
-	err = helper.WaitForDirRemoval(filepath.Join(config.Path, "data"), 2*time.Second)
+	err = helper.WaitForDirRemoval(filepath.Join(config.Path, "../data"), 2*time.Second)
 	require.NoError(t, err)
 
 	// Ensure the required Docker mount paths exist
 	requiredDirs := []string{
-		filepath.Join(config.Path, "data/test/default/legacy/svnode1-data"),
-		filepath.Join(config.Path, "data/test/default/legacy/svnode2-data"),
-		filepath.Join(config.Path, "data/test/default/legacy/svnode3-data"),
-		filepath.Join(config.Path, "data/aerospike1/logs"),
-		filepath.Join(config.Path, "data/aerospike2/logs"),
-		filepath.Join(config.Path, "data/aerospike3/logs"),
+		filepath.Join(config.Path, "../data/postgres"),
+		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode1-data"),
+		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode2-data"),
+		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode3-data"),
+		// 	filepath.Join(config.Path, "data/aerospike1/logs"),
+		// 	filepath.Join(config.Path, "data/aerospike2/logs"),
+		// 	filepath.Join(config.Path, "data/aerospike3/logs"),
 	}
+
 	for _, dir := range requiredDirs {
 		err = os.MkdirAll(dir, 0755)
 		require.NoError(t, err)
@@ -138,8 +138,6 @@ type TestClient struct {
 	BlockAssemblyClient   *blockassembly.Client
 	PropagationClient     *propagation.Client
 	BlockValidationClient *blockvalidation.Client
-	SubtreeStore          blob.Store
-	UtxoStore             utxo.Store
 	DistributorClient     *distributor.Distributor
 	Settings              *settings.Settings
 	RPCURL                *url.URL
@@ -179,27 +177,15 @@ func (tc *TestContainer) GetNodeClients(t *testing.T, settingsContext string) *T
 
 	clients.DistributorClient = distributorClient
 
-	ds := daemon.DaemonStores{}
-
-	subtreeStore, err := ds.GetSubtreeStore(tc.Logger, tSettings)
-	require.NoError(t, err)
-
-	clients.SubtreeStore = subtreeStore
-
-	utxoStore, err := ds.GetUtxoStore(tc.Ctx, tc.Logger, tSettings)
-	require.NoError(t, err)
-
-	clients.UtxoStore = utxoStore
-
 	clients.RPCURL = tSettings.RPC.RPCListenerURL
 
 	return clients
 }
 
 // callrpc on a test client
-func (tc *TestClient) CallRPC(t *testing.T, method string, params []interface{}) (string, error) {
+func (tc *TestClient) CallRPC(t *testing.T, method string, params []any) (string, error) {
 	// Create the request payload
-	requestBody, err := json.Marshal(map[string]interface{}{
+	requestBody, err := json.Marshal(map[string]any{
 		"method": method,
 		"params": params,
 	})

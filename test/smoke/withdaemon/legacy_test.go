@@ -39,7 +39,7 @@ func TestInitialSync(t *testing.T) {
 
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "../..",
-		ComposeFile: "docker-compose-host-withLegacy.yml",
+		ComposeFile: "docker-compose-host.yml",
 		Profiles:    []string{"svnode1"},
 		// HealthServicePorts: []testcontainers.ServicePort{
 		// 	{ServiceName: "teranode1", Port: 18000},
@@ -114,7 +114,7 @@ func TestCatchUpWithLegacy(t *testing.T) {
 
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "../..",
-		ComposeFile: "docker-compose-host-withLegacy.yml",
+		ComposeFile: "docker-compose-host.yml",
 		Profiles:    []string{"svnode1"},
 		ServicesToWaitFor: []testcontainers.ServicePort{
 			{ServiceName: "svnode1", Port: svNodeRPCPort},
@@ -163,7 +163,7 @@ func TestSendTxToLegacy(t *testing.T) {
 
 	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "../..",
-		ComposeFile: "docker-compose-host-withLegacy.yml",
+		ComposeFile: "docker-compose-host.yml",
 		Profiles:    []string{"svnode1"},
 		ServicesToWaitFor: []testcontainers.ServicePort{
 			{ServiceName: "svnode1", Port: svNodeRPCPort},
