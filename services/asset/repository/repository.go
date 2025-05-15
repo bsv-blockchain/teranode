@@ -395,7 +395,7 @@ func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainha
 	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
-// GetSubtreeDataReader provides a reader interface for accessing subtree data from block persister.
+// GetSubtreeDataReaderFromBlockPersister provides a reader interface for accessing subtree data from block persister.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -405,7 +405,7 @@ func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainha
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtreeData"))
 }
 
 // GetSubtree retrieves and deserializes a complete subtree structure.

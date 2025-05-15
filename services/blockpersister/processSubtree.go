@@ -33,7 +33,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	defer deferFn()
 
 	// 1. get the subtree from the subtree store
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtreeData"))
 	if err != nil {
 		return errors.NewStorageError("[BlockPersister] error getting subtree %s from store", subtreeHash.String(), err)
 	}
@@ -59,9 +59,9 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	txMetaSlice := make([]*meta.Data, len(txHashes))
 
 	// The first tx is the coinbase tx
-	txMetaSlice[0] = &meta.Data{Tx: coinbaseTx}
-
-	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
+	if txHashes[0].Equal(util.CoinbasePlaceholderHashValue) {
+		txMetaSlice[0] = &meta.Data{Tx: coinbaseTx}
+	}
 
 	batched := u.settings.Block.BatchMissingTransactions
 
@@ -84,7 +84,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
 	}
 
-	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], "subtree")
+	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], "subtreeData")
 	if err != nil {
 		return errors.NewStorageError("error creating subtree file", err)
 	}

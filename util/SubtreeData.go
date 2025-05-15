@@ -29,7 +29,7 @@ func NewSubtreeDataFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeData, 
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(bytes.NewReader(dataBytes)); err != nil {
-		return nil, errors.NewProcessingError("unable to create subtree meta from bytes", err)
+		return nil, errors.NewProcessingError("unable to create subtree data from bytes", err)
 	}
 
 	return s, nil
@@ -40,7 +40,7 @@ func NewSubtreeDataFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeD
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(dataReader); err != nil {
-		return nil, errors.NewProcessingError("unable to create subtree meta from reader", err)
+		return nil, errors.NewProcessingError("unable to create subtree data from reader", err)
 	}
 
 	return s, nil
@@ -51,6 +51,13 @@ func (s *SubtreeData) RootHash() *chainhash.Hash {
 }
 
 func (s *SubtreeData) AddTx(tx *bt.Tx, index int) error {
+	if index == 0 && tx.IsCoinbase() && s.Subtree.Nodes[index].Hash.Equal(CoinbasePlaceholderHashValue) {
+		// we got the coinbase tx as the first tx, we need to add it as the first tx and stop further processing
+		s.Txs[index] = tx
+
+		return nil
+	}
+
 	// check whether this is set in the main subtree
 	if !s.Subtree.Nodes[index].Hash.Equal(*tx.TxIDChainHash()) {
 		return errors.NewProcessingError("transaction hash does not match subtree node hash")
@@ -62,10 +69,16 @@ func (s *SubtreeData) AddTx(tx *bt.Tx, index int) error {
 }
 
 func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
-	var err error
+	var (
+		err     error
+		txIndex int
+	)
 
-	var txIndex int
-	if s.Subtree.Nodes[0].Hash.Equal(*CoinbasePlaceholderHash) {
+	if s.Subtree == nil || len(s.Subtree.Nodes) == 0 {
+		return errors.NewProcessingError("subtree nodes slice is empty")
+	}
+
+	if s.Subtree.Nodes[0].Hash.Equal(CoinbasePlaceholderHashValue) {
 		txIndex = 1
 	}
 
@@ -82,6 +95,17 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 			}
 
 			return errors.NewProcessingError("error reading transaction", err)
+		}
+
+		if txIndex == 1 && tx.IsCoinbase() {
+			// we got the coinbase tx as the first tx, we need to add it as the first tx and continue
+			s.Txs[0] = tx
+
+			continue
+		}
+
+		if txIndex >= len(s.Subtree.Nodes) {
+			return errors.NewProcessingError("transaction index out of bounds")
 		}
 
 		if !s.Subtree.Nodes[txIndex].Hash.Equal(*tx.TxIDChainHash()) {

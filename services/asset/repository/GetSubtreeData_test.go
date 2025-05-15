@@ -21,7 +21,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		ctx, subtree, metaDatas := setupSubtreeReaderTest(t)
 
 		// create the block-store .subtree file
-		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtree")
+		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtreeData")
 		require.NoError(t, err)
 
 		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, metaDatas, nil)

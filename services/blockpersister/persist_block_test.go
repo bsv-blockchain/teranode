@@ -223,7 +223,7 @@ func TestBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	subtreeStore := memory.New()
-	err = subtreeStore.Set(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = subtreeStore.Set(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtreeData"))
 	require.NoError(t, err)
 
 	blockStore := memory.New()

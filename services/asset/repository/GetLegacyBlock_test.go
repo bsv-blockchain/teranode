@@ -61,14 +61,14 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 		})
 	}
 
-	// create the block-store .subtree file
-	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtree")
+	// create the block-store .subtreeData file
+	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtreeData")
 	require.NoError(t, err)
 
 	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
 	require.NoError(t, err)
 
-	storer.Close(context.Background())
+	_ = storer.Close(context.Background())
 
 	// should be able to get the block from the block-store (should NOT be looking at subtree-store)
 	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{})

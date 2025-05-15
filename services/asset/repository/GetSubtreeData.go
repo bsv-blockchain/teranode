@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// GetSubtreeDataWithReader retrieves the subtree data associated with the given subtree hash.
+// GetSubtreeDataReader retrieves the subtree data associated with the given subtree hash.
 // It returns a PipeReader that can be used to read the subtree data as it is being streamed.
 // The data is either retrieved from the block store or the subtree store, depending on availability.
 //

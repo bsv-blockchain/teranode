@@ -246,9 +246,8 @@ func TestMerkleRoot(t *testing.T) {
 
 // TestTtlCache validates the TTL cache functionality
 func TestTtlCache(t *testing.T) {
-	cache := ttlcache.New[chainhash.Hash, bool](
 	// ttlcache.WithTTL[chainhash.Hash, bool](1 * time.Second),
-	)
+	cache := ttlcache.New[chainhash.Hash, bool]()
 
 	for _, txId := range txIds { //nolint:stylecheck
 		hash, _ := chainhash.NewHashFromStr(txId)
