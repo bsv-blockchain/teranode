@@ -167,12 +167,15 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 		return errors.NewServiceError("error creating p2p server", err)
 	}
 
-	// Start the p2p server
+	// delay closing readyCh until p2p server is started
+	time.AfterFunc(500*time.Millisecond, func() {
+		closeOnce.Do(func() { close(readyCh) })
+	})
+
+	// Start the p2p server - this blocks
 	if err = s.p2pServer.Start(ctx); err != nil {
 		return errors.NewServiceError("error starting p2p server", err)
 	}
-
-	closeOnce.Do(func() { close(readyCh) })
 
 	// wait for a shutdown signal
 	<-ctx.Done()

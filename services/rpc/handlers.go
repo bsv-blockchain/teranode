@@ -301,7 +301,9 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 
 	hash := bh.Hash()
 
-	rpcCallCache.Set("getbestblockhash", hash.String(), cache.DefaultExpiration)
+	if s.settings.RPC.CacheEnabled {
+		rpcCallCache.Set("getbestblockhash", hash.String(), cache.DefaultExpiration)
+	}
 
 	return hash.String(), nil
 }
@@ -784,7 +786,9 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		}
 	}
 
-	rpcCallCache.Set("getpeerinfo", infos, 10*time.Second)
+	if s.settings.RPC.CacheEnabled {
+		rpcCallCache.Set("getpeerinfo", infos, 10*time.Second)
+	}
 
 	// return peerInfo, nil
 	return infos, nil
@@ -841,7 +845,9 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		"softforks":            []interface{}{},
 	}
 
-	rpcCallCache.Set("getblockchaininfo", jsonMap, 10*time.Second)
+	if s.settings.RPC.CacheEnabled {
+		rpcCallCache.Set("getblockchaininfo", jsonMap, 10*time.Second)
+	}
 
 	return jsonMap, nil
 }
@@ -904,7 +910,9 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 
 	}
 
-	rpcCallCache.Set("getinfo", jsonMap, cache.DefaultExpiration)
+	if s.settings.RPC.CacheEnabled {
+		rpcCallCache.Set("getinfo", jsonMap, cache.DefaultExpiration)
+	}
 
 	return jsonMap, nil
 }

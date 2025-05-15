@@ -43,6 +43,10 @@ func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait ti
 	for !allReady {
 		select {
 		case <-ctxWait.Done():
+			if !errors.Is(ctxWait.Err(), context.DeadlineExceeded) {
+				return nil
+			}
+
 			return errors.NewServiceError("timeout (%v) waiting for ports. Ports still unavailable: [%s].",
 				maxWait, strings.Join(portsStillWaiting, ", "), ctxWait.Err())
 		case <-ticker.C:
@@ -60,7 +64,7 @@ func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait ti
 
 						readyPorts[port] = true
 
-						log.Printf("Port %d on host '%s' is ready.", port, host)
+						// log.Printf("Port %d on host '%s' is ready.", port, host)
 					} else {
 						// Not ready yet, add to the list for next check
 						nextPortsStillWaiting = append(nextPortsStillWaiting, address)
@@ -78,10 +82,10 @@ func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait ti
 			if numReady == len(ports) {
 				allReady = true
 
-				log.Printf("All required ports (%v) on host '%s' are ready.", ports, host)
-			} else if len(portsStillWaiting) > 0 {
+				// log.Printf("All required ports (%v) on host '%s' are ready.", ports, host)
+				// } else if len(portsStillWaiting) > 0 {
 				// Optional: Log periodically which ports are still being waited on
-				log.Printf("Still waiting for ports: %v", portsStillWaiting)
+				// log.Printf("Still waiting for ports: %v", portsStillWaiting)
 			}
 		}
 	}
@@ -115,6 +119,11 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 	for !allFree {
 		select {
 		case <-ctxWait.Done():
+			if !errors.Is(ctxWait.Err(), context.DeadlineExceeded) {
+				// no timeout occurred, so we can return nil
+				return nil
+			}
+
 			boundPortsList := []string{}
 
 			for port, isBound := range portsStillBound {
@@ -154,9 +163,9 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 			if numStillBound == 0 {
 				allFree = true
 
-				log.Printf("All specified ports %v on host '%s' are now free.", ports, host)
-			} else {
-				log.Printf("Still waiting for ports to become free on host '%s': %v", host, nextPortsStillBoundLog)
+				// log.Printf("All specified ports %v on host '%s' are now free.", ports, host)
+				// } else {
+				// log.Printf("Still waiting for ports to become free on host '%s': %v", host, nextPortsStillBoundLog)
 			}
 		}
 	}
@@ -168,7 +177,7 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 // belonging to the specified compose project name are still running or exist.
 // It waits until no containers are found or the timeout is reached.
 func WaitForDockerComposeProjectDown(ctx context.Context, projectName string, timeout time.Duration, checkInterval time.Duration) error {
-	log.Printf("Waiting up to %v for Docker Compose project '%s' containers to disappear...", timeout, projectName)
+	// log.Printf("Waiting up to %v for Docker Compose project '%s' containers to disappear...", timeout, projectName)
 
 	startTime := time.Now()
 

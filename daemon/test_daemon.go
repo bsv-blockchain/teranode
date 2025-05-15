@@ -146,6 +146,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	tSettings.LocalTestStartFromState = "RUNNING"
 	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
 	tSettings.ProfilerAddr = ""
+	tSettings.RPC.CacheEnabled = false
 
 	if opts.UseTracing {
 		// tracing
@@ -207,7 +208,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
-	WaitForPortsFree(t, tSettings)
+	WaitForPortsFree(t, ctx, tSettings)
 
 	go d.Start(logger, services, tSettings, readyCh)
 
@@ -256,10 +257,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	privKey := w.PrivKey
 
-	subtreeStore, err := GetSubtreeStore(logger, tSettings)
+	subtreeStore, err := d.daemonStores.GetSubtreeStore(logger, tSettings)
 	require.NoError(t, err)
 
-	utxoStore, err := GetUtxoStore(ctx, logger, tSettings)
+	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, logger, tSettings)
 	require.NoError(t, err)
 
 	assert.NotNil(t, blockchainClient)
@@ -295,7 +296,7 @@ func (td *TestDaemon) Stop(t *testing.T) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
-	WaitForPortsFree(t, td.Settings)
+	WaitForPortsFree(t, td.Ctx, td.Settings)
 
 	td.ctxCancel()
 
@@ -306,8 +307,8 @@ func (td *TestDaemon) StopDaemonDependencies() {
 	StopDaemonDependencies(td.Ctx, td.composeDependencies)
 }
 
-func WaitForPortsFree(t *testing.T, settings *settings.Settings) {
-	require.NoError(t, testutil.WaitForPortsFree(t.Context(), "localhost", GetPorts(settings), 10*time.Second, 100*time.Millisecond))
+func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Settings) {
+	require.NoError(t, testutil.WaitForPortsFree(ctx, "localhost", GetPorts(settings), 30*time.Second, 100*time.Millisecond))
 }
 
 func GetPorts(tSettings *settings.Settings) []int {

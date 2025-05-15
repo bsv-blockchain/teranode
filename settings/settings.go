@@ -429,6 +429,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			RPCMaxClients:  getInt("rpc_max_clients", 1, alternativeContext...),
 			RPCQuirks:      getBool("rpc_quirks", true, alternativeContext...),
 			RPCListenerURL: getURL("rpc_listener_url", "", alternativeContext...),
+			CacheEnabled:   getBool("rpc_cache_enabled", true, alternativeContext...),
 		},
 		Faucet: FaucetSettings{
 			HTTPListenAddress: getString("faucet_httpListenAddress", "", alternativeContext...),

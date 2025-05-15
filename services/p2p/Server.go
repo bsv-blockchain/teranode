@@ -457,6 +457,9 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 			s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
 			return
 		}
+
+		// Check if peer has a higher height and valid hash
+		s.SyncHeights(hs, localHeight)
 	} else if hs.Type == "verack" {
 		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d",
 			hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
@@ -478,40 +481,44 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		}
 
 		// Check if peer has a higher height and valid hash
-		if hs.BestHash != "" && hs.BestHeight > localHeight {
-			s.logger.Infof("[handleHandshakeTopic][p2p-handshake] peer %s has higher block (%s) at height %d > %d, sending to Kafka",
-				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+		s.SyncHeights(hs, localHeight)
+	}
+}
 
-			// Send peer's block info to Kafka if we have a producer client
-			if s.blocksKafkaProducerClient != nil {
-				hash, err := chainhash.NewHashFromStr(hs.BestHash)
+func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
+	if hs.BestHeight > localHeight {
+		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] type:version - peer %s has higher block (%s) at height %d > %d, sending to Kafka",
+			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+
+		// Send peer's block info to Kafka if we have a producer client
+		if s.blocksKafkaProducerClient != nil {
+			hash, err := chainhash.NewHashFromStr(hs.BestHash)
+			if err != nil {
+				s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error getting chainhash from string %s: %v", hs.BestHash, err)
+			} else {
+				msg := &kafkamessage.KafkaBlockTopicMessage{
+					Hash: hash.String(),
+					URL:  hs.DataHubURL,
+				}
+
+				value, err := proto.Marshal(msg)
 				if err != nil {
-					s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error getting chainhash from string %s: %v", hs.BestHash, err)
+					s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error marshaling KafkaBlockTopicMessage: %v", err)
 				} else {
-					msg := &kafkamessage.KafkaBlockTopicMessage{
-						Hash: hash.String(),
-						URL:  hs.DataHubURL,
-					}
-
-					value, err := proto.Marshal(msg)
-					if err != nil {
-						s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error marshaling KafkaBlockTopicMessage: %v", err)
-					} else {
-						s.blocksKafkaProducerClient.Publish(&kafka.Message{
-							Value: value,
-						})
-					}
+					s.blocksKafkaProducerClient.Publish(&kafka.Message{
+						Value: value,
+					})
 				}
 			}
-		} else if hs.BestHash != "" && hs.BestHeight > 0 {
-			s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] peer %s has block %s at height %d (our height: %d), not requesting",
-				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 		}
+	} else if hs.BestHash != "" && hs.BestHeight > 0 {
+		s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] peer %s has block %s at height %d (our height: %d), not requesting",
+			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+	}
 
-		// update peer height
-		if peerID2, err := peer.Decode(hs.PeerID); err == nil {
-			s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
-		}
+	// update peer height
+	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
+		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	}
 }
 

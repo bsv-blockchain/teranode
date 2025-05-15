@@ -86,10 +86,10 @@ func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 			UTXOHash: utxoHash,
 		}
 		spendStatus, err := td.UtxoStore.GetSpend(ctx, spend)
+		require.NoError(t, err)
 		t.Logf("UTXO #%d spend status: %+v\n", 0, spendStatus)
 		require.Equal(t, spendStatus.Status, 1)
 		require.Equal(t, spendStatus.SpendingTxID, tx.TxIDChainHash())
-		require.NoError(t, err)
 	} else {
 		t.Logf("No tx found into meta.Data")
 	}

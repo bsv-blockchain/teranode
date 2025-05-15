@@ -318,7 +318,7 @@ type P2PSettings struct {
 	SharedKey   string
 	StaticPeers []string
 
-	SubtreeTopic string
+	SubtreeTopic   string
 	HandshakeTopic string // new pubsub topic for version/verack handshake
 
 	DHTProtocolID   string
@@ -430,6 +430,7 @@ type RPCSettings struct {
 	RPCMaxClients  int
 	RPCQuirks      bool
 	RPCListenerURL *url.URL
+	CacheEnabled   bool
 }
 
 type FaucetSettings struct {

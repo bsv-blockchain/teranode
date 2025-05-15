@@ -27,9 +27,7 @@ func TestSendTxAndCheckState(t *testing.T) {
 		SettingsContext: "dev.system.test",
 	})
 
-	defer func() {
-		td.Stop(t)
-	}()
+	defer td.Stop(t)
 
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t)
 
@@ -51,6 +49,8 @@ func TestSendTxAndCheckState(t *testing.T) {
 		// t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(delay * time.Millisecond)
 	}
+
+	time.Sleep(250 * time.Millisecond) // Make absolutely sure block assembly has processed the tx
 
 	block := td.MineAndWait(t, 1)
 
@@ -344,6 +344,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	// now try add a block with the transaction
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
+	// TODO should this be an error?
 	require.NoError(t, err)
 }
 
@@ -426,7 +427,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	// now try add a block with the transaction
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
-	require.NoError(t, err)
+	require.Error(t, err)
 }
 
 func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
@@ -435,9 +436,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 		SettingsContext: "dev.system.test",
 	})
 
-	defer func() {
-		td.Stop(t)
-	}()
+	defer td.Stop(t)
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -500,6 +499,8 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
 		time.Sleep(delay * time.Millisecond)
 	}
+
+	time.Sleep(250 * time.Millisecond) // Make absolutely sure block assembly has processed the tx
 
 	// Generate one block to include TX1
 	_, err = td.CallRPC("generate", []any{1})

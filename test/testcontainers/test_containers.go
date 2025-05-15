@@ -179,12 +179,14 @@ func (tc *TestContainer) GetNodeClients(t *testing.T, settingsContext string) *T
 
 	clients.DistributorClient = distributorClient
 
-	subtreeStore, err := daemon.GetSubtreeStore(tc.Logger, tSettings)
+	ds := daemon.DaemonStores{}
+
+	subtreeStore, err := ds.GetSubtreeStore(tc.Logger, tSettings)
 	require.NoError(t, err)
 
 	clients.SubtreeStore = subtreeStore
 
-	utxoStore, err := daemon.GetUtxoStore(tc.Ctx, tc.Logger, tSettings)
+	utxoStore, err := ds.GetUtxoStore(tc.Ctx, tc.Logger, tSettings)
 	require.NoError(t, err)
 
 	clients.UtxoStore = utxoStore

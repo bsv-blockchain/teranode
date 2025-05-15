@@ -32,6 +32,8 @@ const (
 	RedpandaVersion = "v24.3.1"
 )
 
+var testLock sync.Mutex
+
 type TestContainerWrapper struct {
 	container testcontainers.Container
 	hostPort  int
@@ -62,7 +64,7 @@ func GetFreePort() (int, error) {
 		}
 
 		// Actively check if the port is free by attempting to dial it
-		if err := waitForPortRelease(port, 10*time.Millisecond, 1*time.Second); err != nil {
+		if err := waitForPortRelease(port, 10*time.Millisecond, 5*time.Second); err != nil {
 			continue
 		}
 
@@ -77,7 +79,7 @@ func GetFreePort() (int, error) {
 		}
 
 		// Check again after verification close
-		if err := waitForPortRelease(port, 10*time.Millisecond, 1*time.Second); err != nil {
+		if err := waitForPortRelease(port, 10*time.Millisecond, 5*time.Second); err != nil {
 			continue
 		}
 
@@ -142,6 +144,9 @@ func (t *TestContainerWrapper) GetBrokerAddresses() []string {
 }
 
 func TestRunSimpleKafkaContainer(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	// logger := ulogger.NewZeroLogger("test")
 	//	logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
@@ -247,6 +252,9 @@ func TestRunSimpleKafkaContainer(t *testing.T) {
 }
 
 func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -367,6 +375,9 @@ func TestKafkaAsyncProducerWithManualCommitParamsUsingTC(t *testing.T) {
 }
 
 func TestKafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOptionUsingTC(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -464,6 +475,9 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOptionUsingTC(t *te
 }
 
 func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -568,6 +582,9 @@ func TestKafkaAsyncProducerWithManualCommitWithRetryAndStopOptionUsingTC(t *test
 }
 
 func TestKafkaAsyncProducerWithManualCommitWithNoOptionsUsingTC(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	logger := ulogger.TestLogger{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -667,6 +684,8 @@ This test is to ensure that when a consumer is restarted, it will resume from th
 and not reprocess the same messages again.
 */
 func TestKafkaConsumerOffsetContinuation(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
 
 	logger := ulogger.NewZeroLogger("test")
 
@@ -735,6 +754,9 @@ This test is to ensure that when a consumer is restarted, it will not reprocess 
 This test mimics TestKafkaConsumerOffsetContinuation, but with replay=0
 */
 func TestKafkaConsumerNoReplay(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	logger := ulogger.NewZeroLogger("test")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -883,6 +905,9 @@ func produceMessages(logger ulogger.Logger, client ukafka.KafkaAsyncProducerI, n
 }
 
 func Test3Containers(t *testing.T) {
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	ctx := context.Background()
 
 	// Create containers with retry logic

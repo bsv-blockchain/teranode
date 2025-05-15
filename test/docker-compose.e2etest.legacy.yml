@@ -188,7 +188,6 @@ services:
   teranode1:
     <<: *teranode-base
     container_name: teranode1-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-1
       - postgres
@@ -216,7 +215,6 @@ services:
   teranode2:
     <<: *teranode-base
     container_name: teranode2-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-2
       - postgres
@@ -244,7 +242,6 @@ services:
   teranode3:
     <<: *teranode-base
     container_name: teranode3-test-${TEST_ID:-default}
-    image: teranode:latest
     depends_on:
       - aerospike-3
       - postgres

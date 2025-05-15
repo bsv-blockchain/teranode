@@ -63,7 +63,7 @@ func TestInitialSync(t *testing.T) {
 		EnableLegacy:    true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.legacy",
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Legacy.ConnectPeers = []string{svNodeHost}
 			settings.P2P.StaticPeers = []string{}
@@ -133,7 +133,7 @@ func TestCatchUpWithLegacy(t *testing.T) {
 		EnableLegacy:    true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.legacy",
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Legacy.ConnectPeers = []string{svNodeHost}
 			settings.P2P.StaticPeers = []string{}
@@ -179,7 +179,7 @@ func TestSendTxToLegacy(t *testing.T) {
 		EnableLegacy:    true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.legacy",
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Legacy.ConnectPeers = []string{svNodeHost}
 			settings.P2P.StaticPeers = []string{}

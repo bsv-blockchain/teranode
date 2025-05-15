@@ -24,9 +24,7 @@ func TestShouldHandleFreeze(t *testing.T) {
 		SettingsContext: "dev.system.test",
 	})
 
-	t.Cleanup(func() {
-		td.Stop(t)
-	})
+	defer td.Stop(t)
 
 	// set run state
 	err := td.BlockchainClient.Run(td.Ctx, "test")

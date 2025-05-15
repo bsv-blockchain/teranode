@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -57,7 +58,7 @@ type KafkaConsumerConfig struct {
 type KafkaConsumerGroup struct {
 	Config        KafkaConsumerConfig
 	ConsumerGroup sarama.ConsumerGroup
-	cancel        context.CancelFunc
+	cancel        atomic.Value
 }
 
 // NewKafkaConsumerGroupFromURL creates a new KafkaConsumerGroup from a URL.
@@ -117,9 +118,9 @@ func (k *KafkaConsumerGroup) Close() error {
 	k.Config.Logger.Infof("[Kafka] %s: initiating shutdown of consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 
 	// cancel the context first to signal all consumers to stop
-	if k.cancel != nil {
+	if k.cancel.Load() != nil {
 		k.Config.Logger.Debugf("[Kafka] %s: canceling context for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
-		k.cancel()
+		k.cancel.Load().(context.CancelFunc)()
 	}
 
 	// Then close the consumer group
@@ -330,7 +331,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 
 	go func() {
 		internalCtx, cancel := context.WithCancel(ctx)
-		k.cancel = cancel
+		k.cancel.Store(cancel)
 		defer cancel()
 
 		go func() {

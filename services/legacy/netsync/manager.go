@@ -264,7 +264,7 @@ type SyncManager struct {
 	orphanTxs    *expiringmap.ExpiringMap[chainhash.Hash, *orphanTxAndParents]
 	chainParams  *chaincfg.Params
 	msgChan      chan interface{}
-	wg           sync.WaitGroup
+	handlerDone  chan struct{}
 	quit         chan struct{}
 
 	// TERANODE services
@@ -1889,7 +1889,7 @@ out:
 		}
 	}
 
-	sm.wg.Done()
+	close(sm.handlerDone)
 	sm.logger.Infof("Block handler done")
 }
 
@@ -2016,7 +2016,6 @@ func (sm *SyncManager) Start() {
 	}
 
 	sm.logger.Infof("Starting sync manager")
-	sm.wg.Add(1)
 
 	go sm.blockHandler()
 }
@@ -2032,7 +2031,7 @@ func (sm *SyncManager) Stop() error {
 
 	sm.logger.Infof("Sync manager shutting down")
 	close(sm.quit)
-	sm.wg.Wait()
+	<-sm.handlerDone
 
 	return nil
 }
@@ -2087,7 +2086,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		quit:       make(chan struct{}),
 		// feeEstimator:            config.FeeEstimator,
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
-
+		handlerDone:             make(chan struct{}),
 		// teranode stores etc.
 		logger:            logger,
 		blockchainClient:  blockchainClient,

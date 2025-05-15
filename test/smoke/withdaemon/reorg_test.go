@@ -19,7 +19,7 @@ import (
 var (
 	testLock sync.Mutex
 	// DEBUG DEBUG DEBUG
-	blockWait = 120 * time.Second
+	blockWait = 10 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
@@ -42,9 +42,8 @@ func TestMoveUp(t *testing.T) {
 	require.NoError(t, err)
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		SkipRemoveDataDir: true,
+		EnableRPC: true,
+		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 	})
@@ -96,19 +95,15 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 
 	// mine 2 blocks on node1
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1.daemon",
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
-
-	// // set run state
-	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
-	// require.NoError(t, err)
 
 	_, err = node1.CallRPC("generate", []any{2})
 	require.NoError(t, err)
@@ -123,7 +118,8 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode2.daemon",
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -151,9 +147,6 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 	testLock.Lock()
 	defer testLock.Unlock()
 
-	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
-	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
@@ -173,19 +166,15 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 
 	// mine 2 blocks on node1
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1.daemon",
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableValidator: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
-
-	// // set run state
-	// err = node1.BlockchainClient.Run(node1.Ctx, "test")
-	// require.NoError(t, err)
 
 	_, err = node1.CallRPC("generate", []any{2})
 	require.NoError(t, err)
@@ -196,7 +185,8 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:         true,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode2.daemon",
+		// EnableFullLogging:            true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
@@ -405,7 +395,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 	testLock.Lock()
 	defer testLock.Unlock()
 
-	// Start node2 and generate 1001 blocks
+	// Start node2 and generate 999 blocks
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
@@ -414,7 +404,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 	})
 	t.Cleanup(func() { node2.Stop(t) })
 
-	_, err := node2.CallRPC("generate", []interface{}{1001})
+	_, err := node2.CallRPC("generate", []any{999})
 	require.NoError(t, err)
 
 	// Start node1 and generate 100 blocks (shorter chain)
@@ -426,7 +416,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 	})
 	t.Cleanup(func() { node1.Stop(t) })
 
-	_, err = node1.CallRPC("generate", []interface{}{100})
+	_, err = node1.CallRPC("generate", []any{100})
 	require.NoError(t, err)
 
 	// Now enable P2P on node1 to trigger reorg
@@ -442,7 +432,7 @@ func TestBlockAssemblyReset(t *testing.T) {
 	})
 	t.Cleanup(func() { node1.Stop(t) })
 
-	_, err = node1.CallRPC("generate", []interface{}{1})
+	_, err = node1.CallRPC("generate", []any{1})
 	require.NoError(t, err)
 
 	// At this stage, call BA reset
@@ -450,6 +440,6 @@ func TestBlockAssemblyReset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify node1 has synced to node2's chain
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1001, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 999, blockWait)
 	require.NoError(t, err)
 }

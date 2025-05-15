@@ -339,9 +339,18 @@ func TestJobManagerTriggerCleanup(t *testing.T) {
 	})
 
 	t.Run("cancel pending jobs", func(t *testing.T) {
+		processorCancelTest := func(job *Job, workerID int) {
+			if job.BlockHeight == 123 {
+				// Simulate work for the first job to allow cancellation
+				time.Sleep(200 * time.Millisecond)
+			}
+			// Mark job as completed
+			job.SetStatus(JobStatusCompleted)
+		}
+
 		manager, err := NewJobManager(JobManagerOptions{
 			Logger:       logger,
-			JobProcessor: processor,
+			JobProcessor: processorCancelTest, // Use the new processor for this subtest
 		})
 		require.NoError(t, err)
 

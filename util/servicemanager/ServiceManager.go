@@ -213,6 +213,10 @@ func (sm *ServiceManager) Wait() error {
 
 	sm.logger.Infof("🛑 All services stopped.")
 
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+
 	return err // This is the original error
 }
 
