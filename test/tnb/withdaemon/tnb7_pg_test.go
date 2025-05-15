@@ -9,8 +9,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utils "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -23,7 +23,7 @@ import (
 func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 	ctx := context.Background()
 
-	td := utils.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
+	td := daemon.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
 
 	// Generate initial blocks
 	_, err := td.CallRPC("generate", []interface{}{101})

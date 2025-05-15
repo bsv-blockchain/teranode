@@ -90,6 +90,7 @@ func TestHTTPEndpoints(t *testing.T) {
 	t.Run("Single transaction via HTTP endpoint", func(t *testing.T) {
 		// Create test settings with policy checks disabled
 		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store with expectations
 		utxoMock := &utxo.MockUtxostore{}
@@ -108,7 +109,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Create a new server
-		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil)
+		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil)
 
 		// Initialize the server without starting the gRPC/HTTP servers
 		err := server.Init(context.Background())
@@ -140,6 +141,7 @@ func TestHTTPEndpoints(t *testing.T) {
 	t.Run("Multiple transactions via HTTP endpoint", func(t *testing.T) {
 		// Create test settings with policy checks disabled
 		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store
 		utxoMock := &utxo.MockUtxostore{}
@@ -158,7 +160,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		utxoMock.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Create a new server
-		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil)
+		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil)
 
 		// Initialize the server
 		err := server.Init(context.Background())

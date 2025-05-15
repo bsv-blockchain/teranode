@@ -34,16 +34,16 @@ func Test_HandleBlockDirect(t *testing.T) {
 	assert.Equal(t, block.Hash().String(), "00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386")
 
 	var (
-		ctx               = context.Background()
-		logger            = ulogger.TestLogger{}
-		blockchainClient  = &blockchain.Mock{}
-		validator         = &validator.MockValidator{}
-		utxoStore         = &utxo.MockUtxostore{}
-		subtreeStore      = memory.New()
-		subtreeValidation = &subtreevalidation.MockSubtreeValidation{}
-		blockValidation   = &blockvalidation.MockBlockValidation{}
-		blockAssembly     = blockassembly.Mock{}
-		config            = &Config{
+		ctx                 = context.Background()
+		logger              = ulogger.TestLogger{}
+		blockchainClient    = &blockchain.Mock{}
+		validatorClient     = &validator.MockValidator{}
+		utxoStore           = &utxo.MockUtxostore{}
+		subtreeStore        = memory.New()
+		subtreeValidation   = &subtreevalidation.MockSubtreeValidation{}
+		blockValidation     = &blockvalidation.MockBlockValidation{}
+		blockAssemblyClient = blockassembly.NewMock()
+		config              = &Config{
 			ChainParams: &chaincfg.MainNetParams,
 		}
 	)
@@ -83,7 +83,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 
 	_ = blockchainClient.AddBlock(ctx, &blockToAdd, "test")
 
-	blockAssembly.State = &blockassembly_api.StateMessage{
+	blockAssemblyClient.On("GetBlockAssemblyState", mock.Anything).Return(&blockassembly_api.StateMessage{
 		BlockAssemblyState:    "",
 		SubtreeProcessorState: "",
 		ResetWaitCount:        0,
@@ -93,7 +93,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 		QueueCount:            0,
 		CurrentHeight:         0,
 		CurrentHash:           "",
-	}
+	}, nil)
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
@@ -122,13 +122,13 @@ func Test_HandleBlockDirect(t *testing.T) {
 		logger,
 		tSettings,
 		blockchainClient,
-		validator,
+		validatorClient,
 		utxoStore,
 		subtreeStore,
 		subtreeStore, // tempStore
 		subtreeValidation,
 		blockValidation,
-		blockAssembly,
+		blockAssemblyClient,
 		config,
 	)
 	require.NoError(t, err)

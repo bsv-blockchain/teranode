@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -19,9 +20,12 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
+	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -487,5 +491,61 @@ func TestStartHTTPServer(t *testing.T) {
 				assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "unexpected status code for %d: %d", i, resp.StatusCode)
 			}
 		}
+	})
+}
+
+// Test_handleMultipleTx tests the handleMultipleTx function.
+// This test makes sure chains of transactions are processed properly
+func Test_handleMultipleTx(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockAssembly.Disabled = true
+
+	t.Run("Test handleMultipleTx with valid transactions", func(t *testing.T) {
+		utxoStore := memory.New(logger)
+		_ = utxoStore.SetBlockHeight(101)
+
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil)
+		require.NoError(t, err)
+
+		// Create a PropagationServer
+		ps := &PropagationServer{
+			logger:    logger,
+			validator: validatorInstance,
+			settings:  tSettings,
+		}
+
+		handler := ps.handleMultipleTx(t.Context())
+
+		txBytes := make([]byte, 0, 1024)
+		txs := transactions.CreateTestTransactionChainWithCount(t, 20)
+		coinbaseTx := txs[0]
+
+		_, err = utxoStore.Create(t.Context(), coinbaseTx, 1)
+		require.NoError(t, err)
+
+		// Add all the transaction bytes to the byte slice for sending to the handler
+		for i := 1; i < len(txs); i++ {
+			txBytes = append(txBytes, txs[i].ExtendedBytes()...)
+		}
+
+		txsReader := bytes.NewReader(txBytes)
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodPost, "/txs", txsReader)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		c.SetPath("/txs")
+
+		assert.NoError(t, handler(c))
+		assert.Equal(t, 200, rec.Code)
+
+		responseBody, err := io.ReadAll(rec.Body)
+		require.NoError(t, err)
+
+		assert.Equal(t, "OK", string(responseBody))
 	})
 }

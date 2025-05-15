@@ -426,12 +426,10 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			totalBytesRead += bytesRead
 
 			if totalNrTransactions > maxTransactionsPerRequest {
-				// return error, max 1024 txs per request
 				return c.String(http.StatusBadRequest, "Invalid request body: too many transactions")
 			}
 
 			if totalBytesRead > maxDataPerRequest {
-				// return error, max 32MB per request
 				return c.String(http.StatusBadRequest, "Invalid request body: too much data")
 			}
 
@@ -662,7 +660,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
 		if _, err := ps.validator.Validate(ctx, btTx, 0); err != nil {
-			return errors.NewServiceError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
+			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
 
@@ -759,11 +757,12 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "PropagationServer:Set:Store")
 	defer deferFn()
 
-	// TODO (Gokhan): add retry
-	if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
-		// TODO make this resilient to errors
-		// write it to secondary store (Kafka) and retry?
-		return err
+	if ps.txStore != nil {
+		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+			// TODO make this resilient to errors
+			// write it to secondary store (Kafka) and retry?
+			return err
+		}
 	}
 
 	return nil

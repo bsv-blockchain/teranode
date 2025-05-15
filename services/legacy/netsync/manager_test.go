@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
@@ -68,9 +69,14 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		return errors.NewServiceError("failed to create blockchain client", err)
 	}
 
+	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
+	if err != nil {
+		return errors.NewServiceError("failed to create block assembly client", err)
+	}
+
 	utxoStore := utxostore.New(ulogger.TestLogger{})
 
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 	if err != nil {
 		return errors.NewServiceError("failed to create validator client", err)
 	}

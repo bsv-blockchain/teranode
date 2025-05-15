@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -85,6 +86,12 @@ func (d *DaemonStores) GetBlockchainClient(ctx context.Context, logger ulogger.L
 	return blockchain.NewClient(ctx, logger, tSettings, source)
 }
 
+// GetBlockAssemblyClient creates and returns a new block assembly client instance.
+func GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (blockassembly.ClientI, error) {
+	// don't use a global client, otherwise we don't know the source
+	return blockassembly.NewClient(ctx, logger, tSettings)
+}
+
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
 // initialized yet, it creates either a local validator or a remote client based on configuration.
 // For local validators, it sets up necessary dependencies including UTXO store and Kafka producers.
@@ -115,12 +122,18 @@ func (d *DaemonStores) GetValidatorClient(ctx context.Context, logger ulogger.Lo
 			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 		}
 
+		blockAssemblyClient, err := GetBlockAssemblyClient(ctx, logger, tSettings)
+		if err != nil {
+			return nil, errors.NewServiceError("could not create block assembly client for local validator", err)
+		}
+
 		validatorClient, err := validator.New(ctx,
 			logger,
 			tSettings,
 			utxoStore,
 			txMetaKafkaProducerClient,
 			rejectedTxKafkaProducerClient,
+			blockAssemblyClient,
 		)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator", err)

@@ -83,18 +83,15 @@ type Validator struct {
 // New creates a new Validator instance with the provided configuration.
 // It initializes the validator with the given logger, UTXO store, and Kafka producers.
 // Returns an error if initialization fails.
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
+	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	blockAssemblyClient blockassembly.ClientI) (Interface, error) {
 	initPrometheusMetrics()
 
 	var ba blockassembly.Store
 
-	var err error
-
 	if !tSettings.BlockAssembly.Disabled {
-		ba, err = blockassembly.NewClient(ctx, logger, tSettings)
-		if err != nil {
-			return nil, errors.NewServiceError("failed to create block assembly client", err)
-		}
+		ba = blockAssemblyClient
 	}
 
 	v := &Validator{
@@ -527,6 +524,10 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 		g.Go(func() error {
 			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, fields.BlockIDs, fields.BlockHeights)
 			if err != nil {
+				if errors.Is(err, errors.ErrTxNotFound) {
+					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
+				}
+
 				return errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 			}
 

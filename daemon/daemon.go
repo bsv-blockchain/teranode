@@ -852,6 +852,11 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				return err
 			}
 
+			blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger("bass"), tSettings)
+			if err != nil {
+				return err
+			}
+
 			if err = sm.AddService("Validator", validator.NewServer(
 				createLogger("validator"),
 				tSettings,
@@ -860,6 +865,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				consumerClient,
 				txMetaKafkaProducerClient,
 				rejectedTxKafkaProducerClient,
+				blockAssemblyClient,
 			)); err != nil {
 				return err
 			}

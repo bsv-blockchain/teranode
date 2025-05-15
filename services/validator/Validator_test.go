@@ -35,6 +35,7 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
@@ -68,7 +69,10 @@ func BenchmarkValidator(b *testing.B) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil)
+	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
+	require.NoError(b, err)
+
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil, blockAssemblyClient)
 	if err != nil {
 		panic(err)
 	}
@@ -97,7 +101,10 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
+	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
+	require.NoError(t, err)
+
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 	if err != nil {
 		panic(err)
 	}
@@ -128,7 +135,10 @@ func TestValidate_ValidTransaction(t *testing.T) {
 
 		tSettings := test.CreateBaseTestSettings()
 
-		v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil)
+		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
+		require.NoError(t, err)
+
+		v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are not getting blockIDs

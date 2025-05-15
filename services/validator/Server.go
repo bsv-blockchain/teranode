@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator/validator_api"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -54,6 +55,7 @@ type Server struct {
 	consumerClient                kafka.KafkaConsumerGroupI
 	txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+	blockAssemblyClient           blockassembly.ClientI
 	httpServer                    *echo.Echo
 }
 
@@ -68,7 +70,10 @@ type Server struct {
 //
 // Returns:
 //   - *Server: Initialized server instance
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store,
+	blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI,
+	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	blockAssemblyClient blockassembly.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
@@ -80,6 +85,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		consumerClient:                consumerClient,
 		txMetaKafkaProducerClient:     txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
+		blockAssemblyClient:           blockAssemblyClient,
 	}
 }
 
@@ -156,9 +162,13 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
-	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient)
+	if v.blockAssemblyClient == nil && !v.settings.BlockAssembly.Disabled {
+		return errors.NewServiceError("[Init] blockassembly client is nil while enabled in the validator", nil)
+	}
+
+	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.blockAssemblyClient)
 	if err != nil {
-		return errors.NewServiceError("could not create validator", err)
+		return errors.NewServiceError("[Init] could not create validator", err)
 	}
 
 	return nil
