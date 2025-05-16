@@ -29,17 +29,11 @@ var (
 	prometheusBlockValidationCatchupCh         prometheus.Gauge
 	prometheusBlockValidationCatchup           prometheus.Histogram
 	prometheusBlockValidationProcessBlockFound prometheus.Histogram
-	prometheusBlockValidationSetTxMetaQueueCh  prometheus.Gauge
 
 	// block validation
 	prometheusBlockValidationValidateBlock      prometheus.Histogram
 	prometheusBlockValidationReValidateBlock    prometheus.Histogram
 	prometheusBlockValidationReValidateBlockErr prometheus.Histogram
-
-	// tx meta cache stats
-	prometheusBlockValidationSetTXMetaCache    prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheDel prometheus.Counter
-	prometheusBlockValidationSetMinedMulti     prometheus.Counter
 
 	// expiring cache metrics
 	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
@@ -113,33 +107,6 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetTxMetaQueueCh = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "set_tx_meta_queue_ch",
-			Help:      "Number of tx meta queue buffered in the set tx meta queue channel",
-		},
-	)
-
-	// prometheusBlockValidationSetTxMetaQueueChWaitDuration = promauto.NewHistogram(
-	//	prometheus.HistogramOpts{
-	//		Namespace: "blockvalidation",
-	//		Name:      "set_tx_meta_queue_ch_wait_duration_millis",
-	//		Help:      "Duration of set tx meta queue channel wait",
-	//		Buckets:   util.MetricsBucketsMilliSeconds,
-	//	},
-	// )
-	//
-	// prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
-	//	prometheus.HistogramOpts{
-	//		Namespace: "blockvalidation",
-	//		Name:      "set_tx_meta_queue_duration_millis",
-	//		Help:      "Duration of set tx meta from queue",
-	//		Buckets:   util.MetricsBucketsMilliSeconds,
-	//	},
-	// )
-
 	prometheusBlockValidationValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -167,41 +134,6 @@ func _initPrometheusMetrics() {
 			Name:      "revalidate_block_err",
 			Help:      "Number of blocks revalidated with error",
 			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockValidationSetTXMetaCache = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "set_tx_meta_cache",
-			Help:      "Number of tx meta cache sets",
-		},
-	)
-
-	prometheusBlockValidationSetTXMetaCacheDel = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "del_tx_meta_cache",
-			Help:      "Number of tx meta cache deletes",
-		},
-	)
-
-	// prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Namespace: "blockvalidation",
-	//		Name:      "set_tx_mined_local",
-	//		Help:      "Number of tx mined local sets",
-	//	},
-	// )
-
-	prometheusBlockValidationSetMinedMulti = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "set_tx_mined_multi",
-			Help:      "Number of tx mined multi sets",
 		},
 	)
 

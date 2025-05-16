@@ -234,464 +234,6 @@ func (x *ProcessBlockRequest) GetHeight() uint32 {
 	return 0
 }
 
-// swagger:model GetSubtreeRequest
-type GetSubtreeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetSubtreeRequest) Reset() {
-	*x = GetSubtreeRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetSubtreeRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetSubtreeRequest) ProtoMessage() {}
-
-func (x *GetSubtreeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetSubtreeRequest.ProtoReflect.Descriptor instead.
-func (*GetSubtreeRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *GetSubtreeRequest) GetHash() []byte {
-	if x != nil {
-		return x.Hash
-	}
-	return nil
-}
-
-// swagger:model GetSubtreeResponse
-type GetSubtreeResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Subtree       []byte                 `protobuf:"bytes,1,opt,name=subtree,proto3" json:"subtree,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetSubtreeResponse) Reset() {
-	*x = GetSubtreeResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetSubtreeResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetSubtreeResponse) ProtoMessage() {}
-
-func (x *GetSubtreeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetSubtreeResponse.ProtoReflect.Descriptor instead.
-func (*GetSubtreeResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *GetSubtreeResponse) GetSubtree() []byte {
-	if x != nil {
-		return x.Subtree
-	}
-	return nil
-}
-
-// swagger:model ExistsSubtreeRequest
-type ExistsSubtreeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExistsSubtreeRequest) Reset() {
-	*x = ExistsSubtreeRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExistsSubtreeRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExistsSubtreeRequest) ProtoMessage() {}
-
-func (x *ExistsSubtreeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExistsSubtreeRequest.ProtoReflect.Descriptor instead.
-func (*ExistsSubtreeRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *ExistsSubtreeRequest) GetHash() []byte {
-	if x != nil {
-		return x.Hash
-	}
-	return nil
-}
-
-// swagger:model ExistsSubtreeResponse
-type ExistsSubtreeResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Exists        bool                   `protobuf:"varint,1,opt,name=exists,proto3" json:"exists,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExistsSubtreeResponse) Reset() {
-	*x = ExistsSubtreeResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExistsSubtreeResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExistsSubtreeResponse) ProtoMessage() {}
-
-func (x *ExistsSubtreeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExistsSubtreeResponse.ProtoReflect.Descriptor instead.
-func (*ExistsSubtreeResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *ExistsSubtreeResponse) GetExists() bool {
-	if x != nil {
-		return x.Exists
-	}
-	return false
-}
-
-// swagger:model SetTxMetaRequest
-type SetTxMetaRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          [][]byte               `protobuf:"bytes,1,rep,name=data,proto3" json:"data,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetTxMetaRequest) Reset() {
-	*x = SetTxMetaRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetTxMetaRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetTxMetaRequest) ProtoMessage() {}
-
-func (x *SetTxMetaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetTxMetaRequest.ProtoReflect.Descriptor instead.
-func (*SetTxMetaRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *SetTxMetaRequest) GetData() [][]byte {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-// swagger:model SetTxMetaResponse
-type SetTxMetaResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetTxMetaResponse) Reset() {
-	*x = SetTxMetaResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetTxMetaResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetTxMetaResponse) ProtoMessage() {}
-
-func (x *SetTxMetaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetTxMetaResponse.ProtoReflect.Descriptor instead.
-func (*SetTxMetaResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *SetTxMetaResponse) GetOk() bool {
-	if x != nil {
-		return x.Ok
-	}
-	return false
-}
-
-// swagger:model DelTxMetaRequest
-type DelTxMetaRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DelTxMetaRequest) Reset() {
-	*x = DelTxMetaRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DelTxMetaRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DelTxMetaRequest) ProtoMessage() {}
-
-func (x *DelTxMetaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DelTxMetaRequest.ProtoReflect.Descriptor instead.
-func (*DelTxMetaRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *DelTxMetaRequest) GetHash() []byte {
-	if x != nil {
-		return x.Hash
-	}
-	return nil
-}
-
-// swagger:model DelTxMetaResponse
-type DelTxMetaResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DelTxMetaResponse) Reset() {
-	*x = DelTxMetaResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[11]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DelTxMetaResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DelTxMetaResponse) ProtoMessage() {}
-
-func (x *DelTxMetaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[11]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DelTxMetaResponse.ProtoReflect.Descriptor instead.
-func (*DelTxMetaResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *DelTxMetaResponse) GetOk() bool {
-	if x != nil {
-		return x.Ok
-	}
-	return false
-}
-
-// swagger:model SetMinedMultiRequest
-type SetMinedMultiRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BlockId       uint32                 `protobuf:"varint,1,opt,name=block_id,json=blockId,proto3" json:"block_id,omitempty"`
-	Hashes        [][]byte               `protobuf:"bytes,2,rep,name=hashes,proto3" json:"hashes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetMinedMultiRequest) Reset() {
-	*x = SetMinedMultiRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetMinedMultiRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetMinedMultiRequest) ProtoMessage() {}
-
-func (x *SetMinedMultiRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetMinedMultiRequest.ProtoReflect.Descriptor instead.
-func (*SetMinedMultiRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *SetMinedMultiRequest) GetBlockId() uint32 {
-	if x != nil {
-		return x.BlockId
-	}
-	return 0
-}
-
-func (x *SetMinedMultiRequest) GetHashes() [][]byte {
-	if x != nil {
-		return x.Hashes
-	}
-	return nil
-}
-
-// swagger:model SetMinedMultiResponse
-type SetMinedMultiResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetMinedMultiResponse) Reset() {
-	*x = SetMinedMultiResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetMinedMultiResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetMinedMultiResponse) ProtoMessage() {}
-
-func (x *SetMinedMultiResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetMinedMultiResponse.ProtoReflect.Descriptor instead.
-func (*SetMinedMultiResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *SetMinedMultiResponse) GetOk() bool {
-	if x != nil {
-		return x.Ok
-	}
-	return false
-}
-
 // swagger:model ValidateBlockRequest
 type ValidateBlockRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -703,7 +245,7 @@ type ValidateBlockRequest struct {
 
 func (x *ValidateBlockRequest) Reset() {
 	*x = ValidateBlockRequest{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[14]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -715,7 +257,7 @@ func (x *ValidateBlockRequest) String() string {
 func (*ValidateBlockRequest) ProtoMessage() {}
 
 func (x *ValidateBlockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[14]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -728,7 +270,7 @@ func (x *ValidateBlockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateBlockRequest.ProtoReflect.Descriptor instead.
 func (*ValidateBlockRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{14}
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ValidateBlockRequest) GetBlock() []byte {
@@ -756,7 +298,7 @@ type ValidateBlockResponse struct {
 
 func (x *ValidateBlockResponse) Reset() {
 	*x = ValidateBlockResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[15]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +310,7 @@ func (x *ValidateBlockResponse) String() string {
 func (*ValidateBlockResponse) ProtoMessage() {}
 
 func (x *ValidateBlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[15]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +323,7 @@ func (x *ValidateBlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateBlockResponse.ProtoReflect.Descriptor instead.
 func (*ValidateBlockResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{15}
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ValidateBlockResponse) GetOk() bool {
@@ -814,45 +356,19 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"\x10wait_to_complete\x18\x03 \x01(\bR\x0ewaitToComplete\"C\n" +
 	"\x13ProcessBlockRequest\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\x12\x16\n" +
-	"\x06height\x18\x02 \x01(\rR\x06height\"'\n" +
-	"\x11GetSubtreeRequest\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\".\n" +
-	"\x12GetSubtreeResponse\x12\x18\n" +
-	"\asubtree\x18\x01 \x01(\fR\asubtree\"*\n" +
-	"\x14ExistsSubtreeRequest\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\"/\n" +
-	"\x15ExistsSubtreeResponse\x12\x16\n" +
-	"\x06exists\x18\x01 \x01(\bR\x06exists\"&\n" +
-	"\x10SetTxMetaRequest\x12\x12\n" +
-	"\x04data\x18\x01 \x03(\fR\x04data\"#\n" +
-	"\x11SetTxMetaResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"&\n" +
-	"\x10DelTxMetaRequest\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\"#\n" +
-	"\x11DelTxMetaResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"I\n" +
-	"\x14SetMinedMultiRequest\x12\x19\n" +
-	"\bblock_id\x18\x01 \x01(\rR\ablockId\x12\x16\n" +
-	"\x06hashes\x18\x02 \x03(\fR\x06hashes\"'\n" +
-	"\x15SetMinedMultiResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"D\n" +
+	"\x06height\x18\x02 \x01(\rR\x06height\"D\n" +
 	"\x14ValidateBlockRequest\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\"A\n" +
 	"\x15ValidateBlockResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\xf3\x06\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage2\x90\x03\n" +
 	"\x12BlockValidationAPI\x12V\n" +
 	"\n" +
 	"HealthGRPC\x12!.blockvalidation_api.EmptyMessage\x1a#.blockvalidation_api.HealthResponse\"\x00\x12Y\n" +
 	"\n" +
 	"BlockFound\x12&.blockvalidation_api.BlockFoundRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12]\n" +
-	"\fProcessBlock\x12(.blockvalidation_api.ProcessBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12X\n" +
-	"\x03Get\x12&.blockvalidation_api.GetSubtreeRequest\x1a'.blockvalidation_api.GetSubtreeResponse\"\x00\x12a\n" +
-	"\x06Exists\x12).blockvalidation_api.ExistsSubtreeRequest\x1a*.blockvalidation_api.ExistsSubtreeResponse\"\x00\x12\\\n" +
-	"\tSetTxMeta\x12%.blockvalidation_api.SetTxMetaRequest\x1a&.blockvalidation_api.SetTxMetaResponse\"\x00\x12\\\n" +
-	"\tDelTxMeta\x12%.blockvalidation_api.DelTxMetaRequest\x1a&.blockvalidation_api.DelTxMetaResponse\"\x00\x12h\n" +
-	"\rSetMinedMulti\x12).blockvalidation_api.SetMinedMultiRequest\x1a*.blockvalidation_api.SetMinedMultiResponse\"\x00\x12h\n" +
+	"\fProcessBlock\x12(.blockvalidation_api.ProcessBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12h\n" +
 	"\rValidateBlock\x12).blockvalidation_api.ValidateBlockRequest\x1a*.blockvalidation_api.ValidateBlockResponse\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
 
 var (
@@ -867,51 +383,31 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescData
 }
 
-var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),          // 0: blockvalidation_api.EmptyMessage
 	(*HealthResponse)(nil),        // 1: blockvalidation_api.HealthResponse
 	(*BlockFoundRequest)(nil),     // 2: blockvalidation_api.BlockFoundRequest
 	(*ProcessBlockRequest)(nil),   // 3: blockvalidation_api.ProcessBlockRequest
-	(*GetSubtreeRequest)(nil),     // 4: blockvalidation_api.GetSubtreeRequest
-	(*GetSubtreeResponse)(nil),    // 5: blockvalidation_api.GetSubtreeResponse
-	(*ExistsSubtreeRequest)(nil),  // 6: blockvalidation_api.ExistsSubtreeRequest
-	(*ExistsSubtreeResponse)(nil), // 7: blockvalidation_api.ExistsSubtreeResponse
-	(*SetTxMetaRequest)(nil),      // 8: blockvalidation_api.SetTxMetaRequest
-	(*SetTxMetaResponse)(nil),     // 9: blockvalidation_api.SetTxMetaResponse
-	(*DelTxMetaRequest)(nil),      // 10: blockvalidation_api.DelTxMetaRequest
-	(*DelTxMetaResponse)(nil),     // 11: blockvalidation_api.DelTxMetaResponse
-	(*SetMinedMultiRequest)(nil),  // 12: blockvalidation_api.SetMinedMultiRequest
-	(*SetMinedMultiResponse)(nil), // 13: blockvalidation_api.SetMinedMultiResponse
-	(*ValidateBlockRequest)(nil),  // 14: blockvalidation_api.ValidateBlockRequest
-	(*ValidateBlockResponse)(nil), // 15: blockvalidation_api.ValidateBlockResponse
-	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
+	(*ValidateBlockRequest)(nil),  // 4: blockvalidation_api.ValidateBlockRequest
+	(*ValidateBlockResponse)(nil), // 5: blockvalidation_api.ValidateBlockResponse
+	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
 }
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_depIdxs = []int32{
-	16, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	0,  // 1: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
-	2,  // 2: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
-	3,  // 3: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
-	4,  // 4: blockvalidation_api.BlockValidationAPI.Get:input_type -> blockvalidation_api.GetSubtreeRequest
-	6,  // 5: blockvalidation_api.BlockValidationAPI.Exists:input_type -> blockvalidation_api.ExistsSubtreeRequest
-	8,  // 6: blockvalidation_api.BlockValidationAPI.SetTxMeta:input_type -> blockvalidation_api.SetTxMetaRequest
-	10, // 7: blockvalidation_api.BlockValidationAPI.DelTxMeta:input_type -> blockvalidation_api.DelTxMetaRequest
-	12, // 8: blockvalidation_api.BlockValidationAPI.SetMinedMulti:input_type -> blockvalidation_api.SetMinedMultiRequest
-	14, // 9: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
-	1,  // 10: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
-	0,  // 11: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
-	0,  // 12: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
-	5,  // 13: blockvalidation_api.BlockValidationAPI.Get:output_type -> blockvalidation_api.GetSubtreeResponse
-	7,  // 14: blockvalidation_api.BlockValidationAPI.Exists:output_type -> blockvalidation_api.ExistsSubtreeResponse
-	9,  // 15: blockvalidation_api.BlockValidationAPI.SetTxMeta:output_type -> blockvalidation_api.SetTxMetaResponse
-	11, // 16: blockvalidation_api.BlockValidationAPI.DelTxMeta:output_type -> blockvalidation_api.DelTxMetaResponse
-	13, // 17: blockvalidation_api.BlockValidationAPI.SetMinedMulti:output_type -> blockvalidation_api.SetMinedMultiResponse
-	15, // 18: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
-	10, // [10:19] is the sub-list for method output_type
-	1,  // [1:10] is the sub-list for method input_type
-	1,  // [1:1] is the sub-list for extension type_name
-	1,  // [1:1] is the sub-list for extension extendee
-	0,  // [0:1] is the sub-list for field type_name
+	6, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	0, // 1: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
+	2, // 2: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
+	3, // 3: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
+	4, // 4: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
+	1, // 5: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
+	0, // 6: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
+	0, // 7: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
+	5, // 8: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_init() }
@@ -925,7 +421,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc), len(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

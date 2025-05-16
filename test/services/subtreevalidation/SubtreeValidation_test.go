@@ -137,7 +137,7 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	validatorClient := &validator.MockValidatorClient{TxMetaStore: utxoStore}
+	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
 
 	blockchainClient := &blockchain.LocalClient{}
 

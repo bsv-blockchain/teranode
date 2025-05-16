@@ -19,8 +19,6 @@ import (
 	"net/http"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -43,27 +41,6 @@ type Interface interface {
 	// ValidateBlock validates a block using the provided request, but does not update any state or database tables.
 	// This is useful for validating blocks without committing them to the database.
 	ValidateBlock(ctx context.Context, block *model.Block) error
-
-	// Get retrieves a subtree by its hash.
-	Get(ctx context.Context, subtreeHash []byte) ([]byte, error)
-
-	// Exists checks if a subtree exists by its hash.
-	Exists(ctx context.Context, subtreeHash []byte) (bool, error)
-
-	// Set stores a key-value pair with optional options.
-	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
-
-	// SetDAH sets a delete at height for a key.
-	SetDAH(ctx context.Context, key []byte, dah uint32) error
-
-	// SetTxMeta stores transaction metadata.
-	SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error
-
-	// DelTxMeta deletes transaction metadata for a given hash.
-	DelTxMeta(ctx context.Context, hash *chainhash.Hash) error
-
-	// SetMinedMulti marks multiple transactions as mined in a specific block.
-	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 }
 
 var _ Interface = &MockBlockValidation{}
@@ -83,33 +60,5 @@ func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Bl
 }
 
 func (mv *MockBlockValidation) ValidateBlock(ctx context.Context, block *model.Block) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (mv *MockBlockValidation) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
-	return false, nil
-}
-
-func (mv *MockBlockValidation) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) SetDAH(ctx context.Context, key []byte, dah uint32) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) DelTxMeta(ctx context.Context, hash *chainhash.Hash) error {
-	return nil
-}
-
-func (mv *MockBlockValidation) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	return nil
 }

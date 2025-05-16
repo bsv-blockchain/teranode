@@ -170,7 +170,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxStore:                               getURL("txstore", "", alternativeContext...),
 			BlockPersisterPersistAge:              uint32(getInt("blockpersister_persistAge", 100, alternativeContext...)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
 			BlockPersisterPersistSleep:            getDuration("blockPersister_persistSleep", time.Minute, alternativeContext...),
-			TxMetaStore:                           getURL("txmeta_store", "", alternativeContext...),
+			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                            getBool("blockassembly_disabled", false, alternativeContext...),

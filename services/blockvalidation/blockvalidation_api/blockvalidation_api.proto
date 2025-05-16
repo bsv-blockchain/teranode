@@ -11,11 +11,6 @@ service BlockValidationAPI {
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
-  rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
-  rpc Exists (ExistsSubtreeRequest) returns (ExistsSubtreeResponse) {}
-  rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
-  rpc DelTxMeta (DelTxMetaRequest) returns (DelTxMetaResponse) {}
-  rpc SetMinedMulti (SetMinedMultiRequest) returns (SetMinedMultiResponse) {}
   rpc ValidateBlock (ValidateBlockRequest) returns (ValidateBlockResponse) {}
 }
 
@@ -40,57 +35,6 @@ message BlockFoundRequest {
 message ProcessBlockRequest {
   bytes block = 1;
   uint32 height = 2;
-}
-
-// swagger:model GetSubtreeRequest
-message GetSubtreeRequest {
-  bytes hash = 1;
-}
-
-// swagger:model GetSubtreeResponse
-message GetSubtreeResponse {
-  bytes subtree = 1;
-}
-
-// swagger:model ExistsSubtreeRequest
-message ExistsSubtreeRequest {
-  bytes hash = 1;
-}
-
-// swagger:model ExistsSubtreeResponse
-message ExistsSubtreeResponse {
-  bool exists = 1;
-}
-
-// swagger:model SetTxMetaRequest
-message SetTxMetaRequest {
-  repeated bytes data = 1;
-}
-
-// swagger:model SetTxMetaResponse
-message SetTxMetaResponse {
-  bool ok = 1;
-}
-
-// swagger:model DelTxMetaRequest
-message DelTxMetaRequest {
-  bytes hash = 1;
-}
-
-// swagger:model DelTxMetaResponse
-message DelTxMetaResponse {
-  bool ok = 1;
-}
-
-// swagger:model SetMinedMultiRequest
-message SetMinedMultiRequest {
-  uint32 block_id = 1;
-  repeated bytes hashes = 2;
-}
-
-// swagger:model SetMinedMultiResponse
-message SetMinedMultiResponse {
-  bool ok = 1;
 }
 
 // swagger:model ValidateBlockRequest

@@ -929,9 +929,9 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 		}
 	}()
 
-	aeroURL := b.settings.Block.TxMetaStore
+	aeroURL := b.settings.Block.UtxoStore
 	if aeroURL == nil {
-		return errors.NewConfigurationError("aerospike get URL (settings.Block.TxMetaStore) is nil")
+		return errors.NewConfigurationError("aerospike get URL (settings.Block.UtxoStore) is nil")
 	}
 
 	portStr := aeroURL.Port()

@@ -34,7 +34,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -123,10 +122,6 @@ type Server struct {
 	// blockValidation contains the core validation logic and state
 	blockValidation *BlockValidation
 
-	// SetTxMetaQ provides a lock-free queue for handling transaction metadata
-	// operations asynchronously
-	SetTxMetaQ *util.LockFreeQ[[][]byte]
-
 	// kafkaConsumerClient handles subscription to and consumption of
 	// Kafka messages for distributed coordination
 	kafkaConsumerClient kafka.KafkaConsumerGroupI
@@ -176,7 +171,6 @@ func New(
 		blockFoundCh:         make(chan processBlockFound, tSettings.BlockValidation.BlockFoundChBufferSize),
 		catchupCh:            make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
-		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 		stats:                gocore.NewStat("blockvalidation"),
 		kafkaConsumerClient:  kafkaConsumerClient,
 	}
@@ -271,48 +265,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
 
 	go u.processSubtreeNotify.Start()
-
-	go func() {
-		var err error
-
-		for {
-			select {
-
-			case <-ctx.Done():
-				u.logger.Infof("[Init] closing block found channel")
-				return
-
-			default:
-				data := u.SetTxMetaQ.Dequeue()
-				if data == nil {
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-
-				go func(data *[][]byte) {
-					prometheusBlockValidationSetTxMetaQueueCh.Dec()
-
-					keys := make([][]byte, 0)
-					values := make([][]byte, 0)
-
-					for _, meta := range *data {
-						if len(meta) < 32 {
-							u.logger.Errorf("meta data is too short: %v", meta)
-							return
-						}
-
-						// first 32 bytes is hash
-						keys = append(keys, meta[:32])
-						values = append(values, meta[32:])
-					}
-
-					if err = u.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
-						u.logger.Errorf("failed to set tx meta data: %v", err)
-					}
-				}(data)
-			}
-		}
-	}()
 
 	// process blocks found from channel
 	go func() {
@@ -1238,172 +1190,4 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 	}
 
 	return batches
-}
-
-// Get retrieves a subtree from storage based on its hash identifier.
-// This method provides direct access to the underlying subtree storage system,
-// allowing retrieval of block organization structures for validation and
-// chain synchronization purposes.
-//
-// The method manages performance tracking and error handling for subtree
-// retrieval operations. It ensures proper extension management and converts
-// any storage-level errors into appropriate gRPC responses.
-//
-// Parameters:
-//   - ctx: Context for managing operation timeouts and cancellation
-//   - request: Contains the hash identifying the requested subtree
-//
-// Returns a GetSubtreeResponse containing the serialized subtree data or
-// an error if retrieval fails. Storage errors are properly wrapped to
-// maintain consistent gRPC error semantics.
-func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "Get", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	subtree, err := u.subtreeStore.Get(ctx, request.Hash, options.WithFileExtension("subtree"))
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewStorageError("failed to get subtree: %s", utils.ReverseAndHexEncodeSlice(request.Hash), err))
-	}
-
-	return &blockvalidation_api.GetSubtreeResponse{
-		Subtree: subtree,
-	}, nil
-}
-
-// Exists verifies whether a specific subtree exists in storage.
-// This method provides efficient existence checking for subtrees without
-// requiring full data retrieval. It is particularly useful during block
-// validation to verify the availability of required subtree structures.
-//
-// The implementation includes performance monitoring and maintains
-// consistency with the service's caching and storage layers.
-//
-// Parameters:
-//   - ctx: Context for the verification operation
-//   - request: Contains the hash of the subtree to verify
-//
-// Returns an ExistsSubtreeResponse indicating whether the subtree exists.
-// Any errors during verification are wrapped appropriately for gRPC
-// error handling.
-func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "Exists", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	hash := chainhash.Hash(request.Hash)
-
-	exists, err := u.blockValidation.GetSubtreeExists(ctx, &hash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewServiceError("failed to check if subtree exists: %s", hash.String(), err))
-	}
-
-	return &blockvalidation_api.ExistsSubtreeResponse{
-		Exists: exists,
-	}, nil
-}
-
-// SetTxMeta queues transaction metadata updates for processing.
-// This method handles batched updates to transaction metadata, managing them
-// through an asynchronous queue to prevent overwhelming the storage system.
-//
-// The method:
-// - Updates prometheus metrics for monitoring
-// - Enqueues the metadata for processing
-// - Returns quickly to allow high throughput
-//
-// The actual processing happens asynchronously through the SetTxMetaQ queue.
-func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
-	start, stat, _ := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	// number of items added
-	prometheusBlockValidationSetTXMetaCache.Add(float64(len(request.Data)))
-
-	// queue size
-	prometheusBlockValidationSetTxMetaQueueCh.Inc()
-
-	u.SetTxMetaQ.Enqueue(request.Data)
-
-	return &blockvalidation_api.SetTxMetaResponse{
-		Ok: true,
-	}, nil
-}
-
-// DelTxMeta removes transaction metadata from the system.
-// This method handles the deletion of transaction metadata, typically used
-// when transactions are no longer needed or during chain reorganization.
-//
-// The method:
-// - Validates the provided transaction hash
-// - Updates monitoring metrics
-// - Executes the deletion through the caching layer
-// - Handles any errors during deletion
-func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockValidationSetTXMetaCacheDel.Inc()
-
-	hash, err := chainhash.NewHash(request.Hash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create hash from bytes", err))
-	}
-
-	if err = u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
-		u.logger.Errorf("failed to delete tx meta data: %v", err)
-	}
-
-	return &blockvalidation_api.DelTxMetaResponse{
-		Ok: true,
-	}, nil
-}
-
-// SetMinedMulti marks multiple transactions as mined in a specific block.
-// This method efficiently handles batch updates for transaction mining status,
-// typically called when a block has been successfully validated and added to the chain.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - request: Contains block ID and list of transaction hashes
-//
-// The method ensures atomic updates and maintains consistency between the transaction
-// metadata cache and permanent storage. It includes metric tracking for monitoring
-// system performance.
-func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetMinedMulti", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	u.logger.Warnf("GRPC SetMinedMulti %d: %d", request.BlockId, len(request.Hashes))
-
-	hashes := make([]*chainhash.Hash, 0, len(request.Hashes))
-
-	for _, hash := range request.Hashes {
-		hash32 := chainhash.Hash(hash)
-		hashes = append(hashes, &hash32)
-	}
-
-	prometheusBlockValidationSetMinedMulti.Inc()
-
-	// TODO add the height and subtree index to the request
-	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, utxo.MinedBlockInfo{
-		BlockID:     request.BlockId,
-		BlockHeight: 0,
-		SubtreeIdx:  0,
-	})
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data", err))
-	}
-
-	return &blockvalidation_api.SetMinedMultiResponse{
-		Ok: true,
-	}, nil
 }

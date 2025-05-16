@@ -149,7 +149,7 @@ type BlockSettings struct {
 	UTXOPersisterDirect                   bool
 	BlockPersisterPersistAge              uint32
 	BlockPersisterPersistSleep            time.Duration
-	TxMetaStore                           *url.URL
+	UtxoStore                             *url.URL
 }
 
 type BlockChainSettings struct {

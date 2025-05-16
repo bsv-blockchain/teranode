@@ -33,7 +33,7 @@ type MockValidatorClient struct {
 	BlockHeight     uint32
 	MedianBlockTime uint32
 	Errors          []error
-	TxMetaStore     utxo.Store
+	UtxoStore       utxo.Store
 }
 
 func (m *MockValidatorClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -72,7 +72,7 @@ func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx
 		return nil, err
 	}
 
-	return m.TxMetaStore.Create(context.Background(), tx, 0)
+	return m.UtxoStore.Create(context.Background(), tx, 0)
 }
 
 func (m *MockValidatorClient) TriggerBatcher() {}

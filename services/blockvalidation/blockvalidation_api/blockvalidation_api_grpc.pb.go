@@ -22,11 +22,6 @@ const (
 	BlockValidationAPI_HealthGRPC_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/HealthGRPC"
 	BlockValidationAPI_BlockFound_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/BlockFound"
 	BlockValidationAPI_ProcessBlock_FullMethodName  = "/blockvalidation_api.BlockValidationAPI/ProcessBlock"
-	BlockValidationAPI_Get_FullMethodName           = "/blockvalidation_api.BlockValidationAPI/Get"
-	BlockValidationAPI_Exists_FullMethodName        = "/blockvalidation_api.BlockValidationAPI/Exists"
-	BlockValidationAPI_SetTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/SetTxMeta"
-	BlockValidationAPI_DelTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/DelTxMeta"
-	BlockValidationAPI_SetMinedMulti_FullMethodName = "/blockvalidation_api.BlockValidationAPI/SetMinedMulti"
 	BlockValidationAPI_ValidateBlock_FullMethodName = "/blockvalidation_api.BlockValidationAPI/ValidateBlock"
 )
 
@@ -38,11 +33,6 @@ type BlockValidationAPIClient interface {
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessBlock(ctx context.Context, in *ProcessBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
-	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
-	Exists(ctx context.Context, in *ExistsSubtreeRequest, opts ...grpc.CallOption) (*ExistsSubtreeResponse, error)
-	SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error)
-	DelTxMeta(ctx context.Context, in *DelTxMetaRequest, opts ...grpc.CallOption) (*DelTxMetaResponse, error)
-	SetMinedMulti(ctx context.Context, in *SetMinedMultiRequest, opts ...grpc.CallOption) (*SetMinedMultiResponse, error)
 	ValidateBlock(ctx context.Context, in *ValidateBlockRequest, opts ...grpc.CallOption) (*ValidateBlockResponse, error)
 }
 
@@ -84,56 +74,6 @@ func (c *blockValidationAPIClient) ProcessBlock(ctx context.Context, in *Process
 	return out, nil
 }
 
-func (c *blockValidationAPIClient) Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetSubtreeResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_Get_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockValidationAPIClient) Exists(ctx context.Context, in *ExistsSubtreeRequest, opts ...grpc.CallOption) (*ExistsSubtreeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExistsSubtreeResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_Exists_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockValidationAPIClient) SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetTxMetaResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_SetTxMeta_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockValidationAPIClient) DelTxMeta(ctx context.Context, in *DelTxMetaRequest, opts ...grpc.CallOption) (*DelTxMetaResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DelTxMetaResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_DelTxMeta_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockValidationAPIClient) SetMinedMulti(ctx context.Context, in *SetMinedMultiRequest, opts ...grpc.CallOption) (*SetMinedMultiResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetMinedMultiResponse)
-	err := c.cc.Invoke(ctx, BlockValidationAPI_SetMinedMulti_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockValidationAPIClient) ValidateBlock(ctx context.Context, in *ValidateBlockRequest, opts ...grpc.CallOption) (*ValidateBlockResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateBlockResponse)
@@ -152,11 +92,6 @@ type BlockValidationAPIServer interface {
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	BlockFound(context.Context, *BlockFoundRequest) (*EmptyMessage, error)
 	ProcessBlock(context.Context, *ProcessBlockRequest) (*EmptyMessage, error)
-	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
-	Exists(context.Context, *ExistsSubtreeRequest) (*ExistsSubtreeResponse, error)
-	SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error)
-	DelTxMeta(context.Context, *DelTxMetaRequest) (*DelTxMetaResponse, error)
-	SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error)
 	ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
@@ -176,21 +111,6 @@ func (UnimplementedBlockValidationAPIServer) BlockFound(context.Context, *BlockF
 }
 func (UnimplementedBlockValidationAPIServer) ProcessBlock(context.Context, *ProcessBlockRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessBlock not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) Exists(context.Context, *ExistsSubtreeRequest) (*ExistsSubtreeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Exists not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetTxMeta not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) DelTxMeta(context.Context, *DelTxMetaRequest) (*DelTxMetaResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DelTxMeta not implemented")
-}
-func (UnimplementedBlockValidationAPIServer) SetMinedMulti(context.Context, *SetMinedMultiRequest) (*SetMinedMultiResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetMinedMulti not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateBlock not implemented")
@@ -270,96 +190,6 @@ func _BlockValidationAPI_ProcessBlock_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockValidationAPI_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetSubtreeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).Get(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_Get_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).Get(ctx, req.(*GetSubtreeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockValidationAPI_Exists_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExistsSubtreeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).Exists(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_Exists_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).Exists(ctx, req.(*ExistsSubtreeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockValidationAPI_SetTxMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetTxMetaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).SetTxMeta(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_SetTxMeta_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).SetTxMeta(ctx, req.(*SetTxMetaRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockValidationAPI_DelTxMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DelTxMetaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).DelTxMeta(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_DelTxMeta_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).DelTxMeta(ctx, req.(*DelTxMetaRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockValidationAPI_SetMinedMulti_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetMinedMultiRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockValidationAPIServer).SetMinedMulti(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockValidationAPI_SetMinedMulti_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockValidationAPIServer).SetMinedMulti(ctx, req.(*SetMinedMultiRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockValidationAPI_ValidateBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ValidateBlockRequest)
 	if err := dec(in); err != nil {
@@ -396,26 +226,6 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProcessBlock",
 			Handler:    _BlockValidationAPI_ProcessBlock_Handler,
-		},
-		{
-			MethodName: "Get",
-			Handler:    _BlockValidationAPI_Get_Handler,
-		},
-		{
-			MethodName: "Exists",
-			Handler:    _BlockValidationAPI_Exists_Handler,
-		},
-		{
-			MethodName: "SetTxMeta",
-			Handler:    _BlockValidationAPI_SetTxMeta_Handler,
-		},
-		{
-			MethodName: "DelTxMeta",
-			Handler:    _BlockValidationAPI_DelTxMeta_Handler,
-		},
-		{
-			MethodName: "SetMinedMulti",
-			Handler:    _BlockValidationAPI_SetMinedMulti_Handler,
 		},
 		{
 			MethodName: "ValidateBlock",

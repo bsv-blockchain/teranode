@@ -28,9 +28,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
-	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -147,14 +145,14 @@ type BlockValidation struct {
 //   - blockchainClient: Interface to blockchain operations
 //   - subtreeStore: Storage for block subtrees
 //   - txStore: Storage for transactions
-//   - txMetaStore: Storage for transaction metadata
+//   - utxoStore: Storage for utxos and transaction metadata
 //   - validatorClient: Transaction validation interface
 //   - subtreeValidationClient: Subtree validation interface
 //   - bloomRetentionSize: Length of last X blocks to retain bloom filters
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore utxo.Store, subtreeValidationClient subtreevalidation.Interface) *BlockValidation {
+	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	bv := &BlockValidation{
 		logger:                        logger,
@@ -163,7 +161,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeStore:                  subtreeStore,
 		subtreeBlockHeightRetention:   tSettings.GlobalBlockHeightRetention,
 		txStore:                       txStore,
-		utxoStore:                     txMetaStore,
+		utxoStore:                     utxoStore,
 		recentBlocksBloomFilters:      make(map[chainhash.Hash]*model.BlockBloomFilter),
 		bloomFilterRetentionSize:      tSettings.BlockValidation.BloomFilterRetentionSize,
 		subtreeValidationClient:       subtreeValidationClient,
@@ -540,7 +538,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 
 	blockID := ids[0]
 
-	// add the transactions in this block to the txMeta block IDs in the txMeta store
+	// add the transactions in this block to the block IDs in the utxo store
 	if err = model.UpdateTxMinedStatus(
 		ctx,
 		u.logger,
@@ -592,102 +590,6 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 	}
 
 	return parentBlockMined, nil
-}
-
-// SetTxMetaCache stores transaction metadata in the cache.
-// This method provides fast access to transaction metadata for validation purposes.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - hash: Transaction hash
-//   - txMeta: Transaction metadata to store
-//
-// Returns an error if the operation fails.
-func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "SetTxMetaCache")
-		defer deferFn()
-
-		return cache.SetCache(hash, txMeta)
-	}
-
-	return nil
-}
-
-// SetTxMetaCacheFromBytes stores transaction metadata from raw bytes.
-// This method provides efficient bulk loading of transaction metadata.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - key: Transaction identifier bytes
-//   - txMetaBytes: Raw metadata bytes to store
-//
-// Returns an error if storage fails.
-func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		return cache.SetCacheFromBytes(key, txMetaBytes)
-	}
-
-	return nil
-}
-
-// SetTxMetaCacheMinedMulti marks multiple transactions as mined.
-// This method efficiently updates mining status for transaction batches.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - hashes: Transaction hashes to mark as mined
-//   - blockID: ID of the block containing these transactions
-//
-// Returns an error if the update fails.
-func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
-		defer deferFn()
-
-		return cache.SetMinedMulti(ctx, hashes, minedBlockInfo)
-	}
-
-	return nil
-}
-
-// SetTxMetaCacheMulti stores multiple transaction metadata entries.
-// This method enables efficient batch updates to the metadata cache.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - keys: Transaction identifier bytes
-//   - values: Corresponding metadata bytes
-//
-// Returns an error if the batch update fails.
-func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:SetTxMetaCacheMulti")
-		defer deferFn()
-
-		return cache.SetCacheMulti(keys, values)
-	}
-
-	return nil
-}
-
-// DelTxMetaCacheMulti removes transaction metadata from the cache.
-// This method cleans up metadata for invalidated or reorganized transactions.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - hash: Transaction hash to remove
-//
-// Returns an error if deletion fails.
-func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:DelTxMetaCacheMulti")
-		defer deferFn()
-
-		return cache.Delete(ctx, hash)
-	}
-
-	return nil
 }
 
 // ValidateBlock performs comprehensive validation of a Bitcoin block.
