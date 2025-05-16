@@ -127,8 +127,8 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 		copy(txIDBytes[idx*32:(idx+1)*32], txHash.Hash[:])
 	}
 
-	// do http request to baseUrl + txHash.String()
-	url := fmt.Sprintf("%s/txs", baseURL)
+	// do a POST http request to baseUrl + subtree hash + txs endpoint
+	url := fmt.Sprintf("%s/%s/txs", baseURL, subtreeHash.String())
 	u.logger.Debugf("[getMissingTransactionsBatch][%s] getting %d txs from peer %s", subtreeHash.String(), len(txHashes), url)
 
 	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)

@@ -184,7 +184,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/tx/:hash/hex", h.GetTransaction(HEX))
 	apiGroup.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
-	apiGroup.POST("/txs", h.GetTransactions()) // BINARY_STREAM
+	// backwards compatibility for legacy endpoints - remove in future
+	apiGroup.POST("/txs", h.GetTransactions())       // BINARY_STREAM only
+	apiGroup.POST("/:hash/txs", h.GetTransactions()) // BINARY_STREAM only
 
 	apiGroup.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 

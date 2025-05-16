@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
@@ -120,9 +121,10 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
-	httpmock.RegisterResponder(
+	httpmock.RegisterRegexpMatcherResponder(
 		"POST",
-		`=~^/txs`,
+		regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+		httpmock.Matcher{},
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
@@ -446,10 +448,10 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodes2Bytes),
 		)
 
-		// Setup batch transaction responder
-		httpmock.RegisterResponder(
+		httpmock.RegisterRegexpMatcherResponder(
 			"POST",
-			"/txs",
+			regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+			httpmock.Matcher{},
 			func(req *http.Request) (*http.Response, error) {
 				body, err := io.ReadAll(req.Body)
 				if err != nil {
@@ -652,9 +654,10 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			Hash: *hash2,
 		}}
 
-		httpmock.RegisterResponder(
+		httpmock.RegisterRegexpMatcherResponder(
 			"POST",
-			`=~^/txs`,
+			regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+			httpmock.Matcher{},
 			httpmock.NewBytesResponder(200, append(tx1.ExtendedBytes(), tx2.ExtendedBytes()...)),
 		)
 

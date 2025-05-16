@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"testing"
 	"time"
 
@@ -1190,9 +1191,10 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		},
 	)
 
-	httpmock.RegisterResponder(
+	httpmock.RegisterRegexpMatcherResponder(
 		"POST",
-		"/txs",
+		regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+		httpmock.Matcher{},
 		func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)
 			if err != nil {

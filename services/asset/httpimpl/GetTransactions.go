@@ -83,6 +83,34 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		defer deferFn()
 
+		// this if statement is temporary and will be removed when the subtree data is implemented
+		if len(c.Param("hash")) > 0 {
+			if len(c.Param("hash")) != 64 {
+				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid subtree hash length").Error())
+			}
+
+			subtreeHash, err := chainhash.NewHashFromStr(c.Param("hash"))
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid subtree hash string", err).Error())
+			}
+
+			// check whether the subtree exists
+			subtreeExists, err := h.repository.GetSubtreeExists(ctx, subtreeHash)
+			if err != nil {
+				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
+					return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree not found", err).Error())
+				} else {
+					return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting subtree", err).Error())
+				}
+			}
+
+			// TODO read the data from the subtreeData file and return the txs from there
+			// https://github.com/bitcoin-sv/teranode/issues/2806
+			if !subtreeExists {
+				return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree %s not found", subtreeHash.String()).Error())
+			}
+		}
+
 		nrTxAdded := 0
 
 		body := c.Request().Body

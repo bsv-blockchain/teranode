@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -58,6 +59,89 @@ func TestGetTransactions(t *testing.T) {
 
 		// make sure no more data is on the reader
 		assert.Equal(t, 0, reader.Len())
+	})
+
+	t.Run("Valid transaction hashes with subtree hash", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("subtreeHash"))
+
+		// set mock response
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX2RawBytes, nil).Once()
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+
+		transactionHashes := test.TX1Hash.CloneBytes()
+		transactionHashes = append(transactionHashes, test.TX1Hash.CloneBytes()...)
+
+		// set echo context
+		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
+		echoContext.SetPath("/:hash/txs")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(subtreeHash.String())
+
+		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
+
+		// Call GetTransactions handler
+		err := httpServer.GetTransactions()(echoContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Check response status code
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		reader := bytes.NewReader(responseRecorder.Body.Bytes())
+
+		// read transactions from body, using go-bt
+		// check that the transactions are the same as what we sent
+		tx1 := bt.Tx{}
+		_, err = tx1.ReadFrom(reader)
+		require.NoError(t, err)
+		assert.Equal(t, test.TX1Hash.String(), tx1.TxIDChainHash().String())
+
+		tx2 := bt.Tx{}
+		_, err = tx2.ReadFrom(reader)
+		require.NoError(t, err)
+		assert.Equal(t, test.TX2Hash.String(), tx2.TxIDChainHash().String())
+
+		// make sure no more data is on the reader
+		assert.Equal(t, 0, reader.Len())
+	})
+
+	t.Run("With invalid subtree hash", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+		subtreeHash := chainhash.HashH([]byte("subtreeHash"))
+
+		// set mock response
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(false, nil).Once()
+		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil)
+
+		// set echo context
+		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
+		echoContext.SetPath("/:hash/txs")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(subtreeHash.String())
+
+		// Call GetTransactions handler
+		err := httpServer.GetTransactions()(echoContext)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "NOT_FOUND")
+
+		echoContext.SetParamValues("test")
+
+		// Call GetTransactions handler
+		err = httpServer.GetTransactions()(echoContext)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid subtree hash length")
+
+		echoContext.SetParamValues("testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttest")
+
+		// Call GetTransactions handler
+		err = httpServer.GetTransactions()(echoContext)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid subtree hash string")
 	})
 
 	t.Run("Invalid transaction hash length", func(t *testing.T) {
