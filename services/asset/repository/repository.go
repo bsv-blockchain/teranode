@@ -47,7 +47,6 @@ type Interface interface {
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
-	GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error)
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
@@ -485,24 +484,6 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 	}
 
 	return subtree, numNodesInt, nil
-}
-
-// GetUtxoBytes retrieves the spending transaction ID for a specific UTXO.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - spend: UTXO spend information
-//
-// Returns:
-//   - []byte: Spending transaction ID bytes
-//   - error: Any error encountered during retrieval
-func (repo *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error) {
-	resp, err := repo.GetUtxo(ctx, spend)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp.SpendingTxID.CloneBytes(), nil
 }
 
 // GetUtxo retrieves detailed spend information for a specific UTXO.

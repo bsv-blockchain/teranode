@@ -40,6 +40,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -60,9 +61,9 @@ type Spend struct {
 	// UTXOHash is the unique identifier of this UTXO
 	UTXOHash *chainhash.Hash `json:"utxoHash"`
 
-	// SpendingTxID is the transaction ID that spends this UTXO
+	// SpendingData contains information about the transaction that spends this UTXO
 	// This will be nil if the UTXO is unspent
-	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+	SpendingData *spend.SpendingData `json:"spendingData,omitempty"`
 
 	// ConflictingTxID is the transaction ID that conflicts with this UTXO
 	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
@@ -72,6 +73,43 @@ type Spend struct {
 
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
+}
+
+func (s *Spend) Clone() *Spend {
+	if s == nil {
+		return nil
+	}
+
+	clone := &Spend{
+		Vout: s.Vout,
+		Err:  s.Err,
+	}
+
+	if s.TxID != nil {
+		clone.TxID = &chainhash.Hash{}
+		*clone.TxID = *s.TxID
+	}
+
+	if s.UTXOHash != nil {
+		clone.UTXOHash = &chainhash.Hash{}
+		*clone.UTXOHash = *s.UTXOHash
+	}
+
+	if s.SpendingData != nil {
+		clone.SpendingData = s.SpendingData.Clone()
+	}
+
+	if s.ConflictingTxID != nil {
+		clone.ConflictingTxID = &chainhash.Hash{}
+		*clone.ConflictingTxID = *s.ConflictingTxID
+	}
+
+	if s.BlockIDs != nil {
+		clone.BlockIDs = make([]uint32, len(s.BlockIDs))
+		copy(clone.BlockIDs, s.BlockIDs)
+	}
+
+	return clone
 }
 
 type IgnoreFlags struct {

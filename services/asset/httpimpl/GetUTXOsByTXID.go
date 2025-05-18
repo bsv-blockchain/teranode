@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
@@ -38,9 +39,9 @@ type UTXOItem struct {
 	// Status indicates the current state of the UTXO (e.g., "SPENT", "NOT_FOUND")
 	Status string `json:"status"`
 
-	// SpendingTxID is the hash of the transaction that spent this UTXO.
+	// SpendingData is the hash of the transaction that spent this UTXO.
 	// Only present if the UTXO has been spent.
-	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+	SpendingData *spendpkg.SpendingData `json:"spendingData,omitempty"`
 
 	// LockTime specifies when this UTXO becomes spendable.
 	// Only present if the UTXO has a time lock.
@@ -196,7 +197,7 @@ func (h *HTTP) GetUTXOsByTxID(mode ReadMode) func(c echo.Context) error {
 				//nolint:gosec
 				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
 					utxoItem.Status = utxo.Status(utxoRes.Status).String()
-					utxoItem.SpendingTxID = utxoRes.SpendingTxID
+					utxoItem.SpendingData = utxoRes.SpendingData
 					utxoItem.LockTime = utxoRes.LockTime
 				} else {
 					utxoItem.Status = utxo.Status_NOT_FOUND.String()

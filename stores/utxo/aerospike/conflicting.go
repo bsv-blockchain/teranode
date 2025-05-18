@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -88,7 +89,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			aerospike.NewValue(s.settings.UtxoStore.BlockHeightRetention),
 		))
 
-		for _, input := range tx.Inputs {
+		for i, input := range tx.Inputs {
 			utxoHash, err := util.UTXOHashFromInput(input)
 			if err != nil {
 				return nil, nil, err
@@ -98,7 +99,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				TxID:         input.PreviousTxIDChainHash(),
 				Vout:         input.PreviousTxOutIndex,
 				UTXOHash:     utxoHash,
-				SpendingTxID: tx.TxIDChainHash(),
+				SpendingData: spend.NewSpendingData(tx.TxIDChainHash(), i),
 			}
 
 			affectedParentSpends = append(affectedParentSpends, spend)
@@ -127,8 +128,8 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				return nil, nil, err
 			}
 
-			if spendResponse.SpendingTxID != nil {
-				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingTxID)
+			if spendResponse.SpendingData != nil && spendResponse.SpendingData.TxID != nil {
+				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingData.TxID)
 			}
 		}
 	}

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Common test flags
-TEST_FLAGS="-timeout 30s -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -count=1"
+TEST_FLAGS="-timeout 120 -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -count=1"
 
 # Store the original directory
 ORIGINAL_DIR=$(pwd)

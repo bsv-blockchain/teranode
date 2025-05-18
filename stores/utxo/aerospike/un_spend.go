@@ -118,12 +118,7 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
 			if spend != nil {
-				var txID string
-				if spend.SpendingTxID != nil {
-					txID = spend.SpendingTxID.String()
-				}
-
-				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, txID)
+				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
 
 				if err = s.unspendLua(spend); err != nil {
 					// just return the raw error, should already be wrapped

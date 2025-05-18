@@ -55,6 +55,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -299,7 +300,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,satoshis
 		,coinbase_spending_height
 		,utxo_hash
-		,spending_transaction_id
+		,spending_data
 		) VALUES (
 		 $1
 		,$2
@@ -453,10 +454,10 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	data := &meta.Data{}
 
 	var (
-		id        int
-		version   uint32
-		lockTime  uint32
-		hashBytes []byte
+		id                int
+		version           uint32
+		lockTime          uint32
+		spendingDataBytes []byte
 	)
 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Unspendable)
@@ -591,11 +592,11 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		data.ConflictingChildren = make([]chainhash.Hash, 0, 16)
 
 		for rows.Next() {
-			if err = rows.Scan(&hashBytes); err != nil {
+			if err = rows.Scan(&spendingDataBytes); err != nil {
 				return nil, err
 			}
 
-			data.ConflictingChildren = append(data.ConflictingChildren, chainhash.Hash(hashBytes))
+			data.ConflictingChildren = append(data.ConflictingChildren, chainhash.Hash(spendingDataBytes))
 		}
 	}
 
@@ -604,7 +605,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 
 		// get all the spending tx ids for this tx
 		q := `
-			SELECT o.idx, o.spending_transaction_id
+			SELECT o.idx, o.spending_data
 			FROM transactions as t, outputs as o
 			WHERE t.hash = $1 
 			  AND t.id = o.transaction_id
@@ -618,20 +619,20 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 
 		defer rows.Close()
 
-		data.SpendingTxIDs = make([]*chainhash.Hash, len(tx.Outputs)) // needs to be nullable
+		data.SpendingDatas = make([]*spendpkg.SpendingData, len(tx.Outputs)) // needs to be nullable
 
 		for rows.Next() {
-			if err = rows.Scan(&idx, &hashBytes); err != nil {
+			if err = rows.Scan(&idx, &spendingDataBytes); err != nil {
 				return nil, err
 			}
 
-			if hashBytes != nil {
-				data.SpendingTxIDs[idx], err = chainhash.NewHash(hashBytes)
+			if spendingDataBytes != nil {
+				data.SpendingDatas[idx], err = spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
 				if err != nil {
 					return nil, errors.NewProcessingError("failed to create hash from bytes", err)
 				}
 			} else {
-				data.SpendingTxIDs[idx] = nil
+				data.SpendingDatas[idx] = nil
 			}
 		}
 	}
@@ -706,7 +707,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		 o.transaction_id
 		,o.coinbase_spending_height
 		,o.utxo_hash
-		,o.spending_transaction_id
+		,o.spending_data
 		,o.frozen OR t.frozen AS frozen
 		,t.conflicting
 		,t.unspendable
@@ -723,7 +724,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 
 	q2 := `
 		UPDATE outputs
-		SET spending_transaction_id = $1
+		SET spending_data = $1
 		WHERE transaction_id = $2
 		AND idx = $3
 	`
@@ -747,14 +748,14 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				transactionID          int
 				coinbaseSpendingHeight uint32
 				utxoHash               []byte
-				spendingTransactionID  []byte
+				spendingDataBytes      []byte
 				frozen                 bool
 				conflicting            bool
 				unspendable            bool
 				spendableIn            *uint32
 			)
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &conflicting, &unspendable, &spendableIn)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingDataBytes, &frozen, &conflicting, &unspendable, &spendableIn)
 			if err != nil {
 				errorFound = true
 
@@ -800,12 +801,22 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 			}
 
 			// Check if the utxo is already spent
-			if len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
-				errorFound = true
-				spend.Err = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
-				spend.ConflictingTxID, _ = chainhash.NewHash(spendingTransactionID)
+			if len(spendingDataBytes) > 0 {
+				if spend.SpendingData != nil && !bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
+					spendingData, err := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
+					if err != nil {
+						errorFound = true
+						spend.Err = errors.NewProcessingError("failed to create spending data from bytes", err)
 
-				continue
+						continue
+					}
+
+					errorFound = true
+					spend.Err = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+					spend.ConflictingTxID = spendingData.TxID
+
+					continue
+				}
 			}
 
 			// Check the utxo hash is correct
@@ -824,7 +835,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				continue
 			}
 
-			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout)
+			result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
 			if err != nil {
 				errorFound = true
 				spend.Err = errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d", spend.TxID, spend.Vout, err)
@@ -881,7 +892,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 			SELECT count(o.idx), t.conflicting
 			FROM transactions t
 			LEFT JOIN outputs o ON t.id = o.transaction_id
-			   AND o.spending_transaction_id IS NULL
+			   AND o.spending_data IS NULL
 			WHERE t.id = $1
 			GROUP BY t.id
 		`
@@ -927,7 +938,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 
 	q1 := `
 		UPDATE outputs
-		SET spending_transaction_id = NULL
+		SET spending_data = NULL
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
@@ -1128,7 +1139,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		SELECT
 		 o.utxo_hash
 		,o.coinbase_spending_height
-		,o.spending_transaction_id
+		,o.spending_data
 		,o.frozen OR t.frozen AS frozen
 		,o.spendableIn
 		,t.conflicting
@@ -1142,14 +1153,14 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	var (
 		utxoHash               []byte
 		coinbaseSpendingHeight uint32
-		spendingTransactionID  []byte
+		spendingDataBytes      []byte
 		frozen                 bool
 		spendableIn            *uint32
 		conflicting            bool
 		unspendable            bool
 	)
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingTransactionID, &frozen, &spendableIn, &conflicting, &unspendable)
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &unspendable)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
@@ -1163,16 +1174,16 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		return nil, errors.NewStorageError("utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	var spendingTxID *chainhash.Hash
+	var spendingData *spendpkg.SpendingData
 
-	if len(spendingTransactionID) > 0 {
-		spendingTxID, err = chainhash.NewHash(spendingTransactionID)
+	if len(spendingDataBytes) > 0 {
+		spendingData, err = spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	utxoStatus := utxo.CalculateUtxoStatus(spendingTxID, coinbaseSpendingHeight, s.blockHeight.Load())
+	utxoStatus := utxo.CalculateUtxoStatus(spendingData, coinbaseSpendingHeight, s.blockHeight.Load())
 
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
@@ -1188,7 +1199,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 	return &utxo.SpendResponse{
 		Status:       int(utxoStatus),
-		SpendingTxID: spendingTxID,
+		SpendingData: spendingData,
 		LockTime:     coinbaseSpendingHeight,
 	}, nil
 }
@@ -1329,7 +1340,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, err
 		}
 
-		for _, input := range txMeta.Tx.Inputs {
+		for i, input := range txMeta.Tx.Inputs {
 			utxoHash, err = util.UTXOHashFromInput(input)
 			if err != nil {
 				return nil, nil, err
@@ -1339,7 +1350,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				TxID:         input.PreviousTxIDChainHash(),
 				Vout:         input.PreviousTxOutIndex,
 				UTXOHash:     utxoHash,
-				SpendingTxID: &conflictingTxHash,
+				SpendingData: spendpkg.NewSpendingData(&conflictingTxHash, i),
 			}
 
 			affectedParentSpends = append(affectedParentSpends, spend)
@@ -1368,8 +1379,8 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				return nil, nil, err
 			}
 
-			if spendResponse.Status == int(utxo.Status_SPENT) {
-				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingTxID)
+			if spendResponse.Status == int(utxo.Status_SPENT) && spendResponse.SpendingData != nil && spendResponse.SpendingData.TxID != nil {
+				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingData.TxID)
 			}
 		}
 	}
@@ -1476,10 +1487,9 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not add new foreign key constraint with CASCADE on inputs table - [%+v]", err)
 	}
 
-	// All fields are NOT NULL except for the spending_transaction_id which is NULL for unspent outputs.
+	// All fields are NOT NULL except for the spending_data which is NULL for unspent outputs.
 	// The utxo_hash is a hash of the transaction_id, idx, locking_script and satoshis and is used as a checksum of a utxo.
-	// The spending_transaction_id is the transaction_id of the transaction that spends this utxo but we do not use referential integrity here as
-	// the spending transaction may not have been removed from the database.
+	// The spending_data is the transaction_id of the transaction that spends this utxo
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
          transaction_id           BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
@@ -1488,7 +1498,7 @@ func createPostgresSchema(db *usql.DB) error {
         ,satoshis                 BIGINT NOT NULL
         ,coinbase_spending_height BIGINT NOT NULL
         ,utxo_hash 			      BYTEA NOT NULL
-        ,spending_transaction_id  BYTEA
+        ,spending_data            BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
         ,PRIMARY KEY (transaction_id, idx)
@@ -1643,10 +1653,9 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create inputs table - [%+v]", err)
 	}
 
-	// All fields are NOT NULL except for the spending_transaction_id which is NULL for unspent outputs.
+	// All fields are NOT NULL except for the spending_data which is NULL for unspent outputs.
 	// The utxo_hash is a hash of the transaction_id, idx, locking_script and satoshis and is used as a checksum of a utxo.
-	// The spending_transaction_id is the transaction_id of the transaction that spends this utxo but we do not use referential integrity here as
-	// the spending transaction may not have been removed from the database.
+	// The spending_data is the transaction_id of the transaction and vin that spends this utxo
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
          transaction_id           INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE
@@ -1655,7 +1664,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,satoshis                 BIGINT NOT NULL
         ,coinbase_spending_height BIGINT NOT NULL
         ,utxo_hash                BLOB NOT NULL
-        ,spending_transaction_id  BLOB
+        ,spending_data            BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
         ,PRIMARY KEY (transaction_id, idx)

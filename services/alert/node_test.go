@@ -256,6 +256,6 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 
 		// check that the utxo is unfrozen = 0
 		require.Equal(t, int(utxo.Status_UNSPENDABLE), utxoSpend.Status)
-		require.Nil(t, utxoSpend.SpendingTxID)
+		require.Nil(t, utxoSpend.SpendingData)
 	})
 }

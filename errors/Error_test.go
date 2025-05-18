@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -241,7 +242,9 @@ func Test_UtxoSpentError(t *testing.T) {
 	t.Run("UtxoSpentError", func(t *testing.T) {
 		txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
 
-		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, chainhash.Hash{})
+		spendingData := spendpkg.NewSpendingData(&txID, 1)
+
+		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, spendingData)
 		require.NotNil(t, utxoSpentError)
 		require.True(t, utxoSpentError.Is(ErrSpent), "expected error to be of type ERR_SPENT")
 		require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
@@ -260,15 +263,22 @@ func Test_UtxoSpentError(t *testing.T) {
 		assert.Equal(t, txID, hash)
 
 		// check spending tx hash
-		assert.Equal(t, chainhash.Hash{}, spentErr.data.(*UtxoSpentErrData).SpendingTxHash)
+		assert.Equal(t, txID, *spentErr.data.(*UtxoSpentErrData).SpendingData.TxID)
 
-		spendingTxHash := spentErr.GetData("spending_tx_hash")
-		assert.Equal(t, chainhash.Hash{}, spendingTxHash)
+		spendingDataIfc := spentErr.GetData("spending_data")
+		spendingData2, ok := spendingDataIfc.(*spendpkg.SpendingData)
+		require.True(t, ok)
+
+		assert.Equal(t, txID, *spendingData2.TxID)
+		assert.Equal(t, 1, spendingData2.Vin)
 	})
 
 	t.Run("UtxoSpentErrorData grpc", func(t *testing.T) {
 		txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
-		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, chainhash.Hash{})
+
+		spendingData := spendpkg.NewSpendingData(&txID, 1)
+
+		utxoSpentError := NewUtxoSpentError(txID, 1, chainhash.Hash{}, spendingData)
 
 		// wrap the error in a gRPC error
 		grpcErr := WrapGRPC(utxoSpentError)
@@ -297,12 +307,16 @@ func Test_UtxoSpentError(t *testing.T) {
 		assert.Equal(t, txID, hash)
 
 		// check spending tx hash
-		assert.Equal(t, chainhash.Hash{}, unwrappedErr.Data().(*UtxoSpentErrData).SpendingTxHash)
+		assert.Equal(t, txID, *unwrappedErr.Data().(*UtxoSpentErrData).SpendingData.TxID)
 
-		spendingTxHash := unwrappedErr.Data().GetData("spending_tx_hash")
-		assert.Equal(t, chainhash.Hash{}, spendingTxHash)
+		spendingDataIfc := unwrappedErr.Data().GetData("spending_data")
+		spendingData2, ok := spendingDataIfc.(*spendpkg.SpendingData)
+		require.True(t, ok)
 
-		contains := "60: UTXO_SPENT (60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx id 0000000000000000000000000000000000000000000000000000000000000000 \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000000000000000000000\""
+		assert.Equal(t, txID, *spendingData2.TxID)
+		assert.Equal(t, 1, spendingData2.Vin)
+
+		contains := "60: UTXO_SPENT (60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx 0000000000000000000000000000000000000000000000313233343536373839[1] \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000313233343536373839[1]\""
 
 		assert.Contains(t, unwrappedErr.Error(), contains)
 	})
@@ -649,7 +663,7 @@ func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*gr
 	utxoHash := chainhash.Hash{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
 	spendingTxID := chainhash.Hash{'1', '2', '3', '4', '5', '6', '7', '8', '9'}
 
-	baseErr := NewUtxoSpentError(txID, 10, utxoHash, spendingTxID)
+	baseErr := NewUtxoSpentError(txID, 10, utxoHash, spendpkg.NewSpendingData(&spendingTxID, 1))
 	level1Err := NewTxInvalidError("transaction invalid", baseErr)
 	level2Err := NewBlockInvalidError("block invalid", level1Err)
 	level3Err := NewServiceError("level service error", level2Err)

@@ -242,14 +242,6 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 
 Retrieves UTXO information.
 
-#### GetUtxoBytes
-
-```go
-func (repo *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error)
-```
-
-Retrieves the raw bytes of spending transaction ID for a specific UTXO.
-
 #### GetBestBlockHeader
 
 ```go

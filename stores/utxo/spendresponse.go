@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // SpendResponse contains the response from querying (GetSpend) a UTXO's spend status.
@@ -14,17 +14,17 @@ type SpendResponse struct {
 	// Status indicates the current state of the UTXO
 	Status int `json:"status"`
 
-	// SpendingTxID is the ID of the transaction that spent this UTXO, if any
-	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+	// SpendingData contains information about the transaction that spent this UTXO, if any
+	SpendingData *spend.SpendingData `json:"spendingData,omitempty"`
 
 	// LockTime is the block height or timestamp until which this UTXO is locked
 	LockTime uint32 `json:"lockTime,omitempty"`
 }
 
 // Bytes serializes the SpendResponse into a byte slice.
-// The format is: [8 bytes status][4 bytes locktime][32 bytes spendingTxID (optional)]
+// The format is: [8 bytes status][4 bytes locktime][4 bytes spendingTxVin][32 bytes spendingTxID (optional)]
 func (sr *SpendResponse) Bytes() []byte {
-	buf := make([]byte, 0, 8+32+4)
+	buf := make([]byte, 0, 8+4+4+32)
 
 	uint32Bytes := make([]byte, 4)
 	uint64Bytes := make([]byte, 8)
@@ -38,9 +38,9 @@ func (sr *SpendResponse) Bytes() []byte {
 	binary.LittleEndian.PutUint32(uint32Bytes, sr.LockTime)
 	buf = append(buf, uint32Bytes...)
 
-	// write spending txid to bytes
-	if sr.SpendingTxID != nil {
-		buf = append(buf, sr.SpendingTxID.CloneBytes()...)
+	// write spendingData to bytes
+	if sr.SpendingData != nil {
+		buf = append(buf, sr.SpendingData.Bytes()...)
 	}
 
 	return buf
@@ -59,12 +59,13 @@ func (sr *SpendResponse) FromBytes(b []byte) (err error) {
 	}
 
 	sr.Status = intFirstEightBytes
+
 	sr.LockTime = binary.LittleEndian.Uint32(b[8:12])
 
 	if len(b) > 12 {
-		sr.SpendingTxID, err = chainhash.NewHash(b[12:])
+		sr.SpendingData, err = spend.NewSpendingDataFromBytes(b[12:])
 		if err != nil {
-			return err
+			return errors.NewProcessingError("failed to convert spending data", err)
 		}
 	}
 

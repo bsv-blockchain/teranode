@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
@@ -74,7 +75,7 @@ var (
 	}
 	testUtxo = &utxo.SpendResponse{
 		Status:       1,
-		SpendingTxID: testTx1.TxIDChainHash(),
+		SpendingData: spendpkg.NewSpendingData(testTx1.TxIDChainHash(), 0),
 		LockTime:     100,
 	}
 )

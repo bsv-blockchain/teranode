@@ -60,10 +60,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
-		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
-		require.NoError(t, aErr)
-
-		cleanDB(t, client, key, tx)
+		cleanDB(t, client)
 
 		store.SetUtxoBatchSize(1)
 
@@ -74,7 +71,10 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
-		resp, err := client.Get(nil, key)
+		keyTx, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+		require.NoError(t, err)
+
+		resp, err := client.Get(nil, keyTx)
 		require.NoError(t, err)
 
 		// Check the totalExtraRecs and spentExtraRecs
@@ -181,18 +181,17 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
+	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		deferFn()
 	})
 
 	t.Run("Increment spentExtraRecs", func(t *testing.T) {
+		cleanDB(t, client)
+
 		txID := tx.TxIDChainHash()
-
-		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
-		require.NoError(t, aErr)
-
-		// Clean up the database
-		cleanDB(t, client, key, tx)
 
 		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
@@ -209,10 +208,10 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
 		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
-		assert.Nil(t, ret.SpendingTxID)
+		assert.Nil(t, ret.SpendingData)
 
 		// Verify the increment
-		resp, err := client.Get(nil, key)
+		resp, err := client.Get(nil, txKey)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Equal(t, 2, resp.Bins[fields.TotalExtraRecs.String()])
@@ -230,10 +229,10 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
 		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
-		assert.Nil(t, ret.SpendingTxID)
+		assert.Nil(t, ret.SpendingData)
 
 		// Verify the decrement
-		resp, err = client.Get(nil, key)
+		resp, err = client.Get(nil, txKey)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Equal(t, 2, resp.Bins[fields.TotalExtraRecs.String()])
@@ -247,7 +246,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, aErr)
 
 		// Clean up the database
-		cleanDB(t, client, key, tx)
+		cleanDB(t, client)
 
 		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
@@ -319,7 +318,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, aErr)
 
 		// Clean up the database
-		cleanDB(t, client, key, tx)
+		cleanDB(t, client)
 
 		_, err := store.Create(ctx, tx, 101)
 		require.NoError(t, err)
@@ -374,13 +373,8 @@ func TestStore_Unspend(t *testing.T) {
 	})
 
 	t.Run("Unspend a non-spent tx", func(t *testing.T) {
-		txID := tx.TxIDChainHash()
-
-		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
-		require.NoError(t, aErr)
-
 		// Clean up the database
-		cleanDB(t, client, key, tx)
+		cleanDB(t, client)
 
 		// Clean up any existing data
 		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))

@@ -50,6 +50,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -231,13 +232,14 @@ func TestUnspend(t *testing.T) {
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
-	spendingTxID1 := chainhash.HashH([]byte("test1"))
+	test1Hash := chainhash.HashH([]byte("test1"))
+	spendingData1 := spendpkg.NewSpendingData(&test1Hash, 1)
 
 	spend := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxohash,
-		SpendingTxID: &spendingTxID1,
+		SpendingData: spendingData1,
 	}
 
 	_, err = store.Spend(ctx, spendTx)
@@ -248,8 +250,9 @@ func TestUnspend(t *testing.T) {
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
-	spendingTxID2 := chainhash.HashH([]byte("test2"))
-	spend.SpendingTxID = &spendingTxID2
+	test2Hash := chainhash.HashH([]byte("test2"))
+	spendingData2 := spendpkg.NewSpendingData(&test2Hash, 2)
+	spend.SpendingData = spendingData2
 
 	_, err = store.Spend(ctx, spendTx)
 	require.NoError(t, err)
@@ -466,12 +469,14 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	require.NoError(t, err)
 
+	spendingData := spendpkg.NewSpendingData(spendTx01.TxIDChainHash(), 1)
+
 	// Create a spend record
 	spend0 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxohash0,
-		SpendingTxID: spendTx01.TxIDChainHash(),
+		SpendingData: spendingData,
 	}
 
 	// Spend the transaction
@@ -606,7 +611,7 @@ func TestSetTTL(t *testing.T) {
 	assert.Nil(t, tombstoneMillis)
 
 	// update all outputs to be spent
-	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = 1 WHERE transaction_id = $1", transactionID)
+	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = $1 WHERE transaction_id = $2", spendpkg.NewSpendingData(tx.TxIDChainHash(), 1).Bytes(), transactionID)
 	require.NoError(t, err)
 
 	err = store.setDAH(ctx, txn, transactionID)
@@ -618,7 +623,7 @@ func TestSetTTL(t *testing.T) {
 	assert.NotNil(t, tombstoneMillis)
 
 	// unset one of the outputs to be unspent
-	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_transaction_id = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
+	_, err = txn.ExecContext(ctx, "UPDATE outputs SET spending_data = NULL WHERE transaction_id = $1 AND idx = 0", transactionID)
 	require.NoError(t, err)
 
 	err = store.setDAH(ctx, txn, transactionID)

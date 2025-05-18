@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -21,10 +22,10 @@ import (
 //
 // Returns:
 //   - Status: The calculated UTXO status
-func CalculateUtxoStatus(spendingTxID *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
+func CalculateUtxoStatus(spendingData *spend.SpendingData, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
 	status := Status_OK
 
-	if spendingTxID != nil {
+	if spendingData != nil {
 		status = Status_SPENT
 	} else if coinbaseSpendingHeight > 0 && coinbaseSpendingHeight > blockHeight {
 		status = Status_LOCKED
@@ -35,10 +36,10 @@ func CalculateUtxoStatus(spendingTxID *chainhash.Hash, coinbaseSpendingHeight ui
 
 // CalculateUtxoStatus2 is a simplified version of CalculateUtxoStatus that only considers
 // the spending state of a UTXO, ignoring coinbase maturity.
-func CalculateUtxoStatus2(spendingTxID *chainhash.Hash) Status {
+func CalculateUtxoStatus2(spendingData *spend.SpendingData) Status {
 	status := Status_OK
 
-	if spendingTxID != nil {
+	if spendingData != nil {
 		status = Status_SPENT
 	}
 
@@ -163,7 +164,7 @@ func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
 
 	spends = make([]*Spend, 0, len(tx.Inputs))
 
-	for _, input := range tx.Inputs {
+	for i, input := range tx.Inputs {
 		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
 			return nil, errors.NewProcessingError("error getting input utxo hash", err)
@@ -174,7 +175,7 @@ func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,
 			UTXOHash:     hash,
-			SpendingTxID: txIDChainHash,
+			SpendingData: spend.NewSpendingData(txIDChainHash, i), // Use the current index as the Vin
 		})
 	}
 

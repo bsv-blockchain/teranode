@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,9 +22,9 @@ func TestErrSpent(t *testing.T) {
 	txID := chainhash.HashH([]byte("test"))
 	vOut := uint32(0)
 	utxoHash := chainhash.HashH([]byte("utxo"))
-	spendingTxID := chainhash.Hash{}
+	spendingData := spend.NewSpendingData(&chainhash.Hash{}, 1)
 
-	err := errors.NewUtxoSpentError(txID, vOut, utxoHash, spendingTxID)
+	err := errors.NewUtxoSpentError(txID, vOut, utxoHash, spendingData)
 	require.NotNil(t, err)
 
 	err = errors.NewProcessingError("processing error 1", err)
@@ -41,5 +42,6 @@ func TestErrSpent(t *testing.T) {
 
 	assert.Equal(t, txID.String(), usErr.Hash.String())
 	assert.Equal(t, vOut, usErr.Vout)
-	assert.Equal(t, spendingTxID.String(), usErr.SpendingTxHash.String())
+	assert.Equal(t, spendingData.TxID.String(), usErr.SpendingData.TxID.String())
+	assert.Equal(t, spendingData.Vin, usErr.SpendingData.Vin)
 }

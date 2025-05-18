@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -34,7 +35,7 @@ const (
 )
 
 var (
-	coinbaseKey      *aerospike.Key
+	coinbaseTXKey    *aerospike.Key
 	tx, _            = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 	spendingTxID1, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
 	spendingTxID2, _ = chainhash.NewHashFromStr("663bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
@@ -57,7 +58,7 @@ var (
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: spendTx.TxIDChainHash(),
+		SpendingData: spendpkg.NewSpendingData(spendingTxID1, 0),
 	}
 	spends = []*utxo.Spend{spend}
 
@@ -71,27 +72,27 @@ var (
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: spendingTxID2,
+		SpendingData: spendpkg.NewSpendingData(spendingTxID2, 0),
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         1,
 		UTXOHash:     utxoHash1,
-		SpendingTxID: spendingTxID2,
+		SpendingData: spendpkg.NewSpendingData(spendingTxID2, 1),
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         2,
 		UTXOHash:     utxoHash2,
-		SpendingTxID: spendingTxID2,
+		SpendingData: spendpkg.NewSpendingData(spendingTxID2, 2),
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         3,
 		UTXOHash:     utxoHash3,
-		SpendingTxID: spendingTxID2,
+		SpendingData: spendpkg.NewSpendingData(spendingTxID2, 0),
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         4,
 		UTXOHash:     utxoHash4,
-		SpendingTxID: spendingTxID2,
+		SpendingData: spendpkg.NewSpendingData(spendingTxID2, 0),
 	}}
 
 	spendTxRemaining = utxo2.GetSpendingTx(tx, 1, 2, 3, 4)
@@ -153,27 +154,27 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 	}
 }
 
-func cleanDB(t *testing.T, client *uaerospike.Client, key *aerospike.Key, txs ...*bt.Tx) {
+func cleanDB(t *testing.T, client *uaerospike.Client) {
 	tSettings := test.CreateBaseTestSettings()
 
 	policy := util.GetAerospikeWritePolicy(tSettings, 0)
 
-	if key != nil {
-		_, err := client.Delete(policy, key)
-		require.NoError(t, err)
-	}
+	// Scan and delete all records in the set
+	scanPolicy := aerospike.NewScanPolicy()
+	recordSet, err := client.ScanAll(scanPolicy, aerospikeNamespace, aerospikeSet)
+	require.NoError(t, err)
 
-	if coinbaseKey != nil {
-		_, err := client.Delete(policy, coinbaseKey)
-		require.NoError(t, err)
-	}
-
-	if len(txs) > 0 {
-		for _, tx := range txs {
-			key, _ = aerospike.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
-			_, err := client.Delete(policy, key)
-			require.NoError(t, err)
+	for result := range recordSet.Results() {
+		if result.Err != nil {
+			t.Logf("Error getting record: %v", result.Err)
+			continue
 		}
+
+		require.NotNil(t, result.Record)
+		require.NotNil(t, result.Record.Key)
+
+		_, err = client.Delete(policy, result.Record.Key)
+		require.NoError(t, err)
 	}
 }
 

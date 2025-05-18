@@ -224,16 +224,6 @@ func (m *Mock) GetSubtreeHead(_ context.Context, hash *chainhash.Hash) (*util.Su
 	return args.Get(0).(*util.Subtree), args.Int(1), args.Error(2)
 }
 
-func (m *Mock) GetUtxoBytes(_ context.Context, spend *utxo.Spend) ([]byte, error) {
-	args := m.Called(spend)
-
-	if args.Error(1) != nil {
-		return nil, args.Error(1)
-	}
-
-	return args.Get(0).([]byte), args.Error(1)
-}
-
 func (m *Mock) GetUtxo(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	args := m.Called(spend)
 

@@ -1,7 +1,7 @@
 -- Constants for UTXO handling
 local UTXO_HASH_SIZE = 32
-local SPENDING_TX_SIZE = 32
-local FULL_UTXO_SIZE = UTXO_HASH_SIZE + SPENDING_TX_SIZE
+local SPENDING_DATA_SIZE = 36
+local FULL_UTXO_SIZE = UTXO_HASH_SIZE + SPENDING_DATA_SIZE
 local FROZEN_BYTE = 255
 
 -- Message constants
@@ -55,19 +55,27 @@ local function bytes_equal(a, b)
 end
 
 -- Function to convert a byte array to a hexadecimal string
-local function bytes_to_hex(b)
+local function spendingDataBytesToHex(b)
     local hex = ""
-    for i = bytes.size(b), 1, -1 do
+
+    -- The first 32 bytes are the txID
+    -- And we want to reverse it
+    for i = 32, 1, -1 do
+        hex = hex .. string.format("%02x", b[i])
+    end
+
+    -- The next 4 bytes are the vin in little-endian
+    for i = 33, 36, 1 do
         hex = hex .. string.format("%02x", b[i])
     end
     return hex
 end
 
--- Creates a new UTXO with spending transaction ID
-local function createUTXOWithSpendingTxID(utxoHash, spendingTxID)
+-- Creates a new UTXO with spending data
+local function createUTXOWithSpendingData(utxoHash, spendingData)
     local newUtxo
     
-    if spendingTxID == nil then
+    if spendingData == nil then
         newUtxo = bytes(UTXO_HASH_SIZE)
     else
         newUtxo = bytes(FULL_UTXO_SIZE)
@@ -78,27 +86,27 @@ local function createUTXOWithSpendingTxID(utxoHash, spendingTxID)
         newUtxo[i] = utxoHash[i]
     end
     
-    if spendingTxID == nil then
+    if spendingData == nil then
         return newUtxo
     end
     
     -- Copy spendingTxID
-    for i = 1, SPENDING_TX_SIZE do
-        newUtxo[UTXO_HASH_SIZE + i] = spendingTxID[i]
+    for i = 1, SPENDING_DATA_SIZE do
+        newUtxo[UTXO_HASH_SIZE + i] = spendingData[i]
     end
     
     return newUtxo
 end
 
---- Retrieves and validates a UTXO and its spending transaction ID
+--- Retrieves and validates a UTXO and its spending data
 -- @param rec table The record containing UTXOs
 -- @param offset number The offset into the UTXO array (0-based, will be adjusted for Lua)
 -- @param expectedHash string The expected hash to validate against
 -- @return table|nil utxos The full UTXOs array if found
 -- @return string|nil utxo The specific UTXO if found
--- @return string|nil spendingTxID The spending transaction ID if present
+-- @return string|nil spendingData The spending data if present
 -- @return string|nil err if an error occurs
-local function getUTXOAndSpendingTxID(utxos, offset, expectedHash)
+local function getUTXOAndSpendingData(utxos, offset, expectedHash)
     assert(utxos ~= nil, "utxos must be non-nil")
     assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
     assert(expectedHash, "expectedHash is required")
@@ -115,22 +123,22 @@ local function getUTXOAndSpendingTxID(utxos, offset, expectedHash)
         return nil, nil, ERR_UTXO_HASH_MISMATCH
     end
 
-    local spendingTxID = nil
+    local spendingData = nil
     if bytes.size(utxo) == FULL_UTXO_SIZE then
-        spendingTxID = bytes.get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_TX_SIZE)
+        spendingData = bytes.get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
     end
 
-    return utxo, spendingTxID, nil
+    return utxo, spendingData, nil
 end
 
--- Function to check if a spending transaction ID indicates a frozen UTXO
-local function isFrozen(spendingTxID)
-    if spendingTxID == nil then
+-- Function to check if a spending data indicates a frozen UTXO
+local function isFrozen(spendingData)
+    if spendingData == nil then
         return false
     end
 
-    for i = 1, SPENDING_TX_SIZE do
-        if spendingTxID[i] ~= FROZEN_BYTE then
+    for i = 1, SPENDING_DATA_SIZE do
+        if spendingData[i] ~= FROZEN_BYTE then
             return false
         end
     end
@@ -141,7 +149,7 @@ end
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
 -- offset number - the offset in the utxos list (vout % utxoBatchSize)
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
--- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
+-- spendingData []byte - 36 byte little-endian hash of the spending data
 -- currentBlockHeight number - the current block height
 -- blockHeightRetention number - the retention period for the UTXO record
 --                           _
@@ -151,12 +159,12 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
     -- Create a single spend item for spendMulti
     local spend = map()
     spend['offset'] = offset
     spend['utxoHash'] = utxoHash
-    spend['spendingTxID'] = spendingTxID
+    spend['spendingData'] = spendingData
     
     local spends = list()
     list.append(spends, spend)
@@ -205,10 +213,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
     for spend in list.iterator(spends) do
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
-        local spendingTxID = spend['spendingTxID']
+        local spendingData = spend['spendingData']
         
         -- Get and validate specific UTXO
-        local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+        local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if err then return err end
 
         if rec['utxoSpendableIn'] then
@@ -218,7 +226,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         end
 
         -- Get and validate specific UTXO
-        local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+        local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if err then return err end
 
         if rec['utxoSpendableIn'] then
@@ -228,18 +236,18 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         end
 
         -- Handle already spent UTXO
-        if existingSpendingTxID then            
-            if bytes_equal(existingSpendingTxID, spendingTxID) then
+        if existingSpendingData then            
+            if bytes_equal(existingSpendingData, spendingData) then
                 return MSG_OK
-            elseif isFrozen(existingSpendingTxID) then
+            elseif isFrozen(existingSpendingData) then
                 return MSG_FROZEN
             else
-                return MSG_SPENT .. bytes_to_hex(existingSpendingTxID)
+                return MSG_SPENT .. spendingDataBytesToHex(existingSpendingData)
             end
         end
 
-        -- Create new UTXO with spending transaction
-        local newUtxo = createUTXOWithSpendingTxID(utxoHash, spendingTxID)
+        -- Create new UTXO with spending data
+        local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData)
         
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
@@ -274,7 +282,7 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
         return ERR_UTXOS_NOT_FOUND
     end
 
-    local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+    local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if err then return err end
 
 
@@ -282,11 +290,11 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
 
     -- Only unspend if the UTXO is spent and not frozen
     if bytes.size(utxo) == FULL_UTXO_SIZE then
-        if isFrozen(existingSpendingTxID) then
+        if isFrozen(existingSpendingData) then
             return ERR_UTXO_IS_FROZEN
         end
         
-        local newUtxo = createUTXOWithSpendingTxID(utxoHash, nil)
+        local newUtxo = createUTXOWithSpendingData(utxoHash, nil)
         
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
@@ -361,15 +369,15 @@ function freeze(rec, offset, utxoHash)
     end
 
     -- Get and validate specific UTXO
-    local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+    local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
     if err then return err end
 
     -- If the utxo has been spent, check if it's already frozen
-    if existingSpendingTxID then
-        if isFrozen(existingSpendingTxID) then
+    if existingSpendingData then
+        if isFrozen(existingSpendingData) then
             return MSG_ALREADY_FROZEN
         else
-            return MSG_SPENT .. bytes_to_hex(existingSpendingTxID)
+            return MSG_SPENT .. spendingDataBytesToHex(existingSpendingData)
         end
     end
 
@@ -378,12 +386,12 @@ function freeze(rec, offset, utxoHash)
     end
 
     -- Create frozen UTXO
-    local frozenTxID = bytes(SPENDING_TX_SIZE)
-    for i = 1, SPENDING_TX_SIZE do
-        frozenTxID[i] = FROZEN_BYTE
+    local frozenData = bytes(SPENDING_DATA_SIZE)
+    for i = 1, SPENDING_DATA_SIZE do
+        frozenData[i] = FROZEN_BYTE
     end
 
-    local newUtxo = createUTXOWithSpendingTxID(utxoHash, frozenTxID)
+    local newUtxo = createUTXOWithSpendingData(utxoHash, frozenData)
     
     -- Update record
     utxos[offset + 1] = newUtxo
@@ -411,22 +419,22 @@ function unfreeze(rec, offset, utxoHash)
     end
 
     -- Get and validate specific UTXO
-    local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+    local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
     if err then return err end
 
     local signal = ""
 
-    if bytes.size(utxo) ~= 64 then
+    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
         return ERR_UTXO_INVALID_SIZE
     end
 
     -- Proper validation - check if the UTXO exists and is actually frozen
-    if not existingSpendingTxID or not isFrozen(existingSpendingTxID) then
+    if not existingSpendingData or not isFrozen(existingSpendingData) then
         return ERR_UTXO_NOT_FROZEN
     end
 
     -- Update the output utxo to the new utxo
-    local newUtxo = createUTXOWithSpendingTxID(utxoHash, nil)
+    local newUtxo = createUTXOWithSpendingData(utxoHash, nil)
 
     -- Update the record
     utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
@@ -457,22 +465,22 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
     end
 
     -- Get and validate specific UTXO
-    local utxo, existingSpendingTxID, err = getUTXOAndSpendingTxID(utxos, offset, utxoHash)
+    local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
     if err then return err end
 
     local signal = ""
 
-    if bytes.size(utxo) ~= 64 then
+    if bytes.size(utxo) ~= FULL_UTXO_SIZE then
         return ERR_UTXO_INVALID_SIZE
     end
 
     -- Check if UTXO is frozen (required for reassignment)
-    if not existingSpendingTxID or not isFrozen(existingSpendingTxID) then
+    if not existingSpendingData or not isFrozen(existingSpendingData) then
         return ERR_UTXO_NOT_FROZEN
     end
 
     -- Create new UTXO with new hash
-    local newUtxo = createUTXOWithSpendingTxID(newUtxoHash, nil)
+    local newUtxo = createUTXOWithSpendingData(newUtxoHash, nil)
 
     -- Update record
     utxos[offset + 1] = newUtxo

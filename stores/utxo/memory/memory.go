@@ -40,6 +40,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -48,19 +49,19 @@ import (
 
 // memoryData holds transaction data and UTXO state in memory.
 type memoryData struct {
-	tx                  *bt.Tx                             // The full transaction
-	blockHeight         uint32                             // Block height where tx appears
-	lockTime            uint32                             // Transaction lock time
-	blockIDs            []uint32                           // Block heights where tx appears
-	blockHeights        []uint32                           // Block heights where tx appears
-	subtreeIdxs         []int                              // Subtree indexes where tx appears
-	utxoMap             map[chainhash.Hash]*chainhash.Hash // Maps UTXO hash to spending tx hash
-	utxoSpendableIn     map[uint32]uint32                  // Maps output index to spendable height
-	frozenMap           map[chainhash.Hash]bool            // Tracks frozen UTXOs
-	frozen              bool                               // Tracks whether the transaction is frozen
-	conflicting         bool                               // Tracks whether the transaction is conflicting
-	conflictingChildren []chainhash.Hash                   // Tracks conflicting children
-	unspendable         bool                               // Tracks whether the transaction is unspendable
+	tx                  *bt.Tx                                    // The full transaction
+	blockHeight         uint32                                    // Block height where tx appears
+	lockTime            uint32                                    // Transaction lock time
+	blockIDs            []uint32                                  // Block heights where tx appears
+	blockHeights        []uint32                                  // Block heights where tx appears
+	subtreeIdxs         []int                                     // Subtree indexes where tx appears
+	utxoMap             map[chainhash.Hash]*spendpkg.SpendingData // Maps UTXO hash to spending tx hash
+	utxoSpendableIn     map[uint32]uint32                         // Maps output index to spendable height
+	frozenMap           map[chainhash.Hash]bool                   // Tracks frozen UTXOs
+	frozen              bool                                      // Tracks whether the transaction is frozen
+	conflicting         bool                                      // Tracks whether the transaction is conflicting
+	conflictingChildren []chainhash.Hash                          // Tracks conflicting children
+	unspendable         bool                                      // Tracks whether the transaction is unspendable
 }
 
 // Memory implements the UTXO store interface using in-memory data structures.
@@ -120,7 +121,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 		blockIDs:        make([]uint32, 0),
 		blockHeights:    make([]uint32, 0),
 		subtreeIdxs:     make([]int, 0),
-		utxoMap:         make(map[chainhash.Hash]*chainhash.Hash),
+		utxoMap:         make(map[chainhash.Hash]*spendpkg.SpendingData),
 		utxoSpendableIn: map[uint32]uint32{},
 		frozenMap:       make(map[chainhash.Hash]bool),
 		frozen:          false,
@@ -201,10 +202,10 @@ func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields
 		txMeta.ConflictingChildren = data.conflictingChildren
 		txMeta.Frozen = data.frozen
 		txMeta.Unspendable = data.unspendable
-		txMeta.SpendingTxIDs = make([]*chainhash.Hash, len(utxoHashes))
+		txMeta.SpendingDatas = make([]*spendpkg.SpendingData, len(utxoHashes))
 
 		for idx, utxoHash := range utxoHashes {
-			txMeta.SpendingTxIDs[idx] = data.utxoMap[*utxoHash]
+			txMeta.SpendingDatas[idx] = data.utxoMap[*utxoHash]
 		}
 
 		return txMeta, nil
@@ -252,7 +253,7 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 
 	return &utxo.SpendResponse{
 		Status:       int(utxoStatus),
-		SpendingTxID: txSpend,
+		SpendingData: txSpend,
 		LockTime:     metaData.LockTime,
 	}, nil
 }
@@ -318,7 +319,7 @@ func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignor
 			continue
 		}
 
-		spendTxID, ok := tx.utxoMap[*spend.UTXOHash]
+		spendData, ok := tx.utxoMap[*spend.UTXOHash]
 		if !ok {
 			errorFound = true
 			spend.Err = errors.NewTxNotFoundError("%v not found", spend.TxID)
@@ -326,12 +327,12 @@ func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignor
 			continue
 		}
 
-		if spendTxID != nil {
-			if *spendTxID != *spend.SpendingTxID {
+		if spendData != nil {
+			if spend.SpendingData != nil && spend.SpendingData.TxID != nil && *spendData.TxID != *spend.SpendingData.TxID {
 				errorFound = true
-				spend.Err = errors.NewUtxoSpentError(*spendTxID, spend.Vout, *spend.UTXOHash, *spend.SpendingTxID)
+				spend.Err = errors.NewUtxoSpentError(*spendData.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
 
-				spend.ConflictingTxID = spendTxID
+				spend.ConflictingTxID = spendData.TxID
 			}
 
 			// same spend tx ID, just ignore and continue
@@ -354,7 +355,9 @@ func (m *Memory) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignor
 			break
 		}
 
-		tx.utxoMap[*spend.UTXOHash] = spend.SpendingTxID
+		if spend.SpendingData != nil {
+			tx.utxoMap[*spend.UTXOHash] = spend.SpendingData
+		}
 
 		spendsDone = append(spendsDone, spend)
 	}
@@ -561,9 +564,9 @@ func (m *Memory) GetCounterConflicting(ctx context.Context, txHash chainhash.Has
 
 	counterConflictingMap := make(map[chainhash.Hash]struct{})
 
-	for _, spendingTxID := range tx.utxoMap {
-		if spendingTxID != nil {
-			counterConflictingMap[*spendingTxID] = struct{}{}
+	for _, spendData := range tx.utxoMap {
+		if spendData != nil {
+			counterConflictingMap[*spendData.TxID] = struct{}{}
 		}
 	}
 
@@ -601,9 +604,9 @@ func (m *Memory) GetConflictingChildren(_ context.Context, txHash chainhash.Hash
 
 	conflicting = append(conflicting, tx.conflictingChildren...)
 
-	for _, spendingTxID := range tx.utxoMap {
-		if spendingTxID != nil && !slices.Contains(conflicting, *spendingTxID) {
-			conflicting = append(conflicting, *spendingTxID)
+	for _, spendData := range tx.utxoMap {
+		if spendData != nil && !slices.Contains(conflicting, *spendData.TxID) {
+			conflicting = append(conflicting, *spendData.TxID)
 		}
 	}
 
@@ -691,7 +694,7 @@ func (m *Memory) GetMedianBlockTime() uint32 {
 
 // GetUtxoMap returns the utxo map for a given transaction hash.
 // This method is intended only for testing purposes and is not part of the Store interface.
-func (m *Memory) GetUtxoMap(txHash chainhash.Hash) map[chainhash.Hash]*chainhash.Hash {
+func (m *Memory) GetUtxoMap(txHash chainhash.Hash) map[chainhash.Hash]*spendpkg.SpendingData {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

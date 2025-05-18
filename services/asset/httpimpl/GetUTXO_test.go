@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ func TestGetUTXO(t *testing.T) {
 		// set mock response
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
-			SpendingTxID: &chainhash.Hash{},
+			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
 			LockTime:     1234567,
 		}, nil)
 
@@ -49,7 +50,12 @@ func TestGetUTXO(t *testing.T) {
 		// Check response fields
 		require.NotNil(t, response)
 		assert.Equal(t, float64(1), response["status"])
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", response["spendingTxId"])
+		spendingDataMap, ok := response["spendingData"].(map[string]interface{})
+		require.True(t, ok)
+
+		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", spendingDataMap["txId"])
+		assert.Equal(t, float64(0), spendingDataMap["vin"])
+
 		assert.Equal(t, float64(1234567), response["lockTime"])
 	})
 
@@ -59,7 +65,7 @@ func TestGetUTXO(t *testing.T) {
 		// set mock response
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
-			SpendingTxID: &chainhash.Hash{},
+			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
 			LockTime:     1234567,
 		}, nil)
 
@@ -82,7 +88,7 @@ func TestGetUTXO(t *testing.T) {
 
 		// Check response fields
 		assert.Equal(t, 1, response.Status)
-		assert.Equal(t, chainhash.Hash{}, *response.SpendingTxID)
+		assert.Equal(t, chainhash.Hash{}, *response.SpendingData.TxID)
 		assert.Equal(t, uint32(1234567), response.LockTime)
 	})
 
@@ -92,7 +98,7 @@ func TestGetUTXO(t *testing.T) {
 		// set mock response
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
-			SpendingTxID: &chainhash.Hash{},
+			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
 			LockTime:     1234567,
 		}, nil)
 
@@ -119,7 +125,7 @@ func TestGetUTXO(t *testing.T) {
 
 		// Check response fields
 		assert.Equal(t, 1, response.Status)
-		assert.Equal(t, chainhash.Hash{}, *response.SpendingTxID)
+		assert.Equal(t, chainhash.Hash{}, *response.SpendingData.TxID)
 		assert.Equal(t, uint32(1234567), response.LockTime)
 	})
 
@@ -240,7 +246,7 @@ func TestGetUTXO(t *testing.T) {
 		// set mock response
 		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(&utxo.SpendResponse{
 			Status:       1,
-			SpendingTxID: &chainhash.Hash{},
+			SpendingData: spendpkg.NewSpendingData(&chainhash.Hash{}, 0),
 			LockTime:     1234567,
 		}, nil)
 

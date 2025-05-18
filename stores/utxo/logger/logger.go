@@ -163,7 +163,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {
-		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
+		spendDetails[i] = fmt.Sprintf("{SpendingData: %v, TxID: %s, Vout: %d}", spend.SpendingData, spend.TxID, spend.Vout)
 	}
 
 	s.logger.Debugf("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
@@ -177,7 +177,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsUn
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {
-		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
+		spendDetails[i] = fmt.Sprintf("{SpendingData: %v, TxID: %s, Vout: %d}", spend.SpendingData, spend.TxID, spend.Vout)
 	}
 
 	s.logger.Debugf("[UTXOStore][logger][Unspend] spends: [%s], err: %v : %s",

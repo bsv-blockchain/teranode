@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -39,7 +40,7 @@ func TestAlertSystem(t *testing.T) {
 			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: tx.TxIDChainHash(),
+			SpendingData: spendpkg.NewSpendingData(tx.TxIDChainHash(), 0),
 		}
 
 		// Create a key for the UTXO
@@ -71,9 +72,9 @@ func TestAlertSystem(t *testing.T) {
 
 		frozenUTXO, ok := utxos[0].([]byte)
 		require.True(t, ok)
-		require.Len(t, frozenUTXO, 64)
+		require.Len(t, frozenUTXO, 68)
 		assert.Equal(t, utxoHash0[:], frozenUTXO[:32])
-		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:64])
+		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:68])
 
 		// try to spend the UTXO
 		spends, err := store.Spend(ctx, spendTx)
@@ -92,7 +93,7 @@ func TestAlertSystem(t *testing.T) {
 			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: tx.TxIDChainHash(),
+			SpendingData: spendpkg.NewSpendingData(tx.TxIDChainHash(), 0),
 		}
 
 		// Create a key for the UTXO
@@ -100,9 +101,9 @@ func TestAlertSystem(t *testing.T) {
 		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 		require.NoError(t, err)
 
-		utxoBytes := make([]byte, 64)
+		utxoBytes := make([]byte, 68)
 		copy(utxoBytes[:32], utxoHash0[:])
-		copy(utxoBytes[32:64], teranode_aerospike.GetFrozenUTXOBytes())
+		copy(utxoBytes[32:68], teranode_aerospike.GetFrozenUTXOBytes())
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
@@ -156,7 +157,7 @@ func TestAlertSystem(t *testing.T) {
 			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingTxID: utxoRecTx.TxIDChainHash(),
+			SpendingData: spendpkg.NewSpendingData(utxoRecTx.TxIDChainHash(), 0),
 		}
 
 		newUtxoRecTx := utxo2.GetSpendingTx(tx, 0)
@@ -182,7 +183,7 @@ func TestAlertSystem(t *testing.T) {
 			TxID:         tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     newUtxoHash,
-			SpendingTxID: newUtxoRecTx.TxIDChainHash(),
+			SpendingData: spendpkg.NewSpendingData(newUtxoRecTx.TxIDChainHash(), 0),
 		}
 
 		// Create a key for the UTXO

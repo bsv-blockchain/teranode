@@ -15,6 +15,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	utxostore_factory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -228,7 +229,7 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 					logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
 				} else {
 					//nolint:gosec
-					logger.Debugf("[%s] coinbase vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", loggerContext, vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+					logger.Debugf("[%s] coinbase vout %d utxo %s exists in utxo store with status %s, spending data %v, locktime %d", loggerContext, vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingData, utxo.LockTime)
 				}
 			}
 
@@ -332,7 +333,7 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 
 									utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 										TxID:         input.PreviousTxIDChainHash(),
-										SpendingTxID: btTx.TxIDChainHash(),
+										SpendingData: spendpkg.NewSpendingData(btTx.TxIDChainHash(), 0),
 										Vout:         input.PreviousTxOutIndex,
 										UTXOHash:     utxoHash,
 									})
@@ -343,11 +344,11 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 									//nolint:gocritic // rewrite to switch
 									if utxo == nil {
 										logger.Errorf("[%s] parent utxo %s does not exist in utxo store", loggerContext, utxoHash)
-									} else if !utxo.SpendingTxID.IsEqual(btTx.TxIDChainHash()) {
-										logger.Errorf("[%s] parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", loggerContext, utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingTxID)
+									} else if !utxo.SpendingData.TxID.IsEqual(btTx.TxIDChainHash()) {
+										logger.Errorf("[%s] parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", loggerContext, utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingData.TxID)
 									} else {
 										//nolint:gosec
-										logger.Debugf("[%s] transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", loggerContext, btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+										logger.Debugf("[%s] transaction %s parent utxo %s exists in utxo store with status %s, spending data %v, locktime %d", loggerContext, btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingData, utxo.LockTime)
 									}
 								}
 							}
@@ -381,7 +382,7 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 								logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
 							} else {
 								//nolint:gosec
-								logger.Debugf("[%s] transaction %s vout %d utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", loggerContext, btTx.TxIDChainHash(), vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
+								logger.Debugf("[%s] transaction %s vout %d utxo %s exists in utxo store with status %s, spending data %v, locktime %d", loggerContext, btTx.TxIDChainHash(), vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingData, utxo.LockTime)
 							}
 						}
 

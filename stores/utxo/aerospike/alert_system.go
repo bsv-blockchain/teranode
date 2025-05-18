@@ -125,10 +125,14 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
 					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
-					if err != nil {
+
+					switch {
+					case err != nil:
 						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err))
-					} else if responseMsgParts.ReturnValue == LuaError {
+					case responseMsgParts.ReturnValue == LuaError:
 						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, responseMsgParts.Signal))
+					case responseMsgParts.ReturnValue == LuaSpent:
+						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, responseMsgParts.SpendingData))
 					}
 				}
 			}

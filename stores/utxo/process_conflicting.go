@@ -214,10 +214,10 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 	}
 
 	// set the conflicting children from the utxos bin spends
-	if txMeta.SpendingTxIDs != nil {
-		for _, spendingTxID := range txMeta.SpendingTxIDs {
-			if spendingTxID != nil {
-				conflictingChildrenMap[*spendingTxID] = struct{}{}
+	if txMeta.SpendingDatas != nil {
+		for _, spendingData := range txMeta.SpendingDatas {
+			if spendingData != nil {
+				conflictingChildrenMap[*spendingData.TxID] = struct{}{}
 			}
 		}
 	}
@@ -279,7 +279,17 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 			return nil, err
 		}
 
-		parentTxs[*parentTxHash] = parentTxMeta.SpendingTxIDs
+		spendingTxIDs := make([]*chainhash.Hash, len(parentTxMeta.SpendingDatas))
+
+		for idx, spendingData := range parentTxMeta.SpendingDatas {
+			if spendingData == nil {
+				continue
+			}
+
+			spendingTxIDs[idx] = spendingData.TxID
+		}
+
+		parentTxs[*parentTxHash] = spendingTxIDs
 	}
 
 	for _, input := range txMeta.Tx.Inputs {

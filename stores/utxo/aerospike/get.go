@@ -60,6 +60,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -69,6 +70,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -106,6 +108,7 @@ type batchOutpoint struct {
 // The response includes:
 //   - Current UTXO status (OK, SPENT, FROZEN, etc)
 //   - Spending transaction ID if spent
+//   - Spending transaction Vin (input index) if spent
 //   - Lock time if applicable
 //
 // This operation verifies:
@@ -150,7 +153,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	var (
-		spendingTxID *chainhash.Hash
+		spendingData *spendpkg.SpendingData
 		spendableIn  int
 		frozen       bool
 		conflicting  bool
@@ -171,11 +174,15 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 					return nil, errors.NewProcessingError("utxo hash mismatch", nil)
 				}
 
-				if len(b) == 64 {
-					spendingTxID, err = chainhash.NewHash(b[32:])
+				if len(b) == 68 {
+					txID, err := chainhash.NewHash(b[32:64])
 					if err != nil {
 						return nil, errors.NewProcessingError("chain hash error", err)
 					}
+
+					vin := binary.LittleEndian.Uint32(b[64:])
+
+					spendingData = spendpkg.NewSpendingData(txID, int(vin))
 				}
 			}
 		}
@@ -205,7 +212,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 		}
 	}
 
-	utxoStatus := utxo.CalculateUtxoStatus2(spendingTxID)
+	utxoStatus := utxo.CalculateUtxoStatus2(spendingData)
 
 	// check utxo is spendable
 	if spendableIn != 0 && spendableIn > int(s.blockHeight.Load()) {
@@ -213,9 +220,9 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	// check if frozen
-	if frozen || (spendingTxID != nil && spendingTxID.IsEqual((*chainhash.Hash)(frozenUTXOBytes))) {
+	if frozen || (spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes)) {
 		utxoStatus = utxo.Status_FROZEN
-		spendingTxID = nil
+		spendingData = nil
 	}
 
 	if conflicting {
@@ -224,7 +231,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 
 	return &utxo.SpendResponse{
 		Status:       int(utxoStatus),
-		SpendingTxID: spendingTxID,
+		SpendingData: spendingData,
 	}, nil
 }
 
@@ -579,7 +586,7 @@ NEXT_BATCH_RECORD:
 					continue NEXT_BATCH_RECORD // because there was an error processing the utxos.
 				}
 
-				items[idx].Data.SpendingTxIDs = res
+				items[idx].Data.SpendingDatas = res
 
 			case fields.Unspendable:
 				unspendableBool, ok := bins[key.String()].(bool)
@@ -718,7 +725,7 @@ func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
 	return res, nil
 }
 
-func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aerospike.BinMap) ([]*chainhash.Hash, error) {
+func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aerospike.BinMap) ([]*spendpkg.SpendingData, error) {
 	totalUtxos, ok := bins[fields.TotalUtxos.String()].(int)
 	if !ok {
 		return nil, errors.NewStorageError("failed to get totalUtxos")
@@ -729,26 +736,31 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 		return nil, errors.NewTxInvalidError("missing utxos")
 	}
 
-	spendingTxIDs := make([]*chainhash.Hash, totalUtxos)
+	spendingDatas := make([]*spendpkg.SpendingData, totalUtxos)
 
 	for i, ui := range utxos {
 		u, ok := ui.([]uint8)
-		if ok && len(u) == 64 {
-			spendingTxIDs[i], _ = chainhash.NewHash(u[32:])
+		if ok && len(u) == 68 {
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
+			if err != nil {
+				return nil, errors.NewStorageError("failed to get spending data", err)
+			}
+
+			spendingDatas[i] = spendingData
 		} else {
-			spendingTxIDs[i] = nil
+			spendingDatas[i] = nil
 		}
 	}
 
 	// Add any extra UTXOs from child records...
 	totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
 	if ok {
-		if err := s.getAllExtraUTXOs(ctx, txid, totalExtraRecs, spendingTxIDs); err != nil {
+		if err := s.getAllExtraUTXOs(ctx, txid, totalExtraRecs, spendingDatas); err != nil {
 			return nil, err
 		}
 	}
 
-	return spendingTxIDs, nil
+	return spendingDatas, nil
 }
 
 func processConflictingChildren(bins aerospike.BinMap) (conflictingChildren []chainhash.Hash, err error) {
@@ -770,7 +782,7 @@ func processConflictingChildren(bins aerospike.BinMap) (conflictingChildren []ch
 }
 
 // getAllExtraUTXOs retrieves all UTXOs from child records recursively
-func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, totalExtraRecs int, spendingTxIDs []*chainhash.Hash) error {
+func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, totalExtraRecs int, spendingDatas []*spendpkg.SpendingData) error {
 	if totalExtraRecs <= 0 {
 		return nil
 	}
@@ -804,13 +816,13 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 		// Extract UTXOs from the extra record
 		if extraUtxos, ok := extraRecord.Bins[fields.Utxos.String()].([]interface{}); ok {
 			for i, ui := range extraUtxos {
-				if u, ok := ui.([]uint8); ok && len(u) == 64 {
-					hash, err := chainhash.NewHash(u[32:])
+				if u, ok := ui.([]uint8); ok && len(u) == 68 {
+					spendingData, err := spendpkg.NewSpendingDataFromBytes(u[32:])
 					if err != nil {
-						return errors.NewStorageError("failed to parse hash from extra record", err)
+						return errors.NewStorageError("failed to parse spending data from extra record", err)
 					}
 
-					spendingTxIDs[baseOffset+i] = hash
+					spendingDatas[baseOffset+i] = spendingData
 				}
 			}
 		}

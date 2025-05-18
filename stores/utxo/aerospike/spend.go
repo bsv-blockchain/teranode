@@ -217,7 +217,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
 
 				if errors.As(batchErr, &errSpent) {
-					spends[idx].ConflictingTxID = &errSpent.SpendingTxHash
+					spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
 				}
 
 				// s.logger.Errorf("error in aerospike spend (batched mode) %s: %v\n", spends[idx].TxID.String(), spends[idx].Err)
@@ -346,9 +346,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aeroKeyMap[keySourceStr] = key
 		}
 
-		// we need to check if the spending tx id is nil, if it is we cannot proceed
-		if bItem.spend.SpendingTxID == nil {
-			bItem.errCh <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending tx id is nil", bItem.spend.TxID.String())
+		// we need to check if the spending data is nil, if it is we cannot proceed
+		if bItem.spend.SpendingData == nil {
+			bItem.errCh <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending data is nil", bItem.spend.TxID.String())
 			continue
 		}
 
@@ -357,7 +357,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
 			"vOut":         bItem.spend.Vout,
 			"utxoHash":     bItem.spend.UTXOHash[:],
-			"spendingTxID": bItem.spend.SpendingTxID[:],
+			"spendingData": bItem.spend.SpendingData.Bytes(),
 		})
 
 		// we need to group the spends by key and ignoreUnspendable flag
@@ -495,12 +495,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 
-							if res.SpendingTxID == nil {
-								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] missing spending tx id in response", txID.String())
+							if res.SpendingData == nil {
+								batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] missing spending data in response", txID.String())
 								continue
 							}
 
-							batch[idx].errCh <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, *res.SpendingTxID)
+							batch[idx].errCh <- errors.NewUtxoSpentError(*batch[idx].spend.TxID, batch[idx].spend.Vout, *batch[idx].spend.UTXOHash, res.SpendingData)
 						}
 					case LuaError:
 						if res.Signal == LuaTxNotFound {

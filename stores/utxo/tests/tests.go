@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
@@ -53,7 +54,7 @@ var (
 		TxID:         Tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: TXHash,
+		SpendingData: spend.NewSpendingData(TXHash, 0),
 	}
 	TXHash  = Tx.TxIDChainHash()
 	Hash, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
@@ -61,7 +62,7 @@ var (
 		TxID:         TXHash,
 		Vout:         0,
 		UTXOHash:     utxoHash0,
-		SpendingTxID: Hash,
+		SpendingData: spend.NewSpendingData(Hash, 0),
 	}}
 )
 
@@ -165,7 +166,11 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	resp, err = db.GetSpend(ctx, testSpend0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
-	require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingTxID.String())
+	require.NotNil(t, resp.SpendingData)
+	require.NotNil(t, resp.SpendingData.TxID)
+	require.NotNil(t, resp.SpendingData)
+	require.NotNil(t, resp.SpendingData.TxID)
+	require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 }
 
 func ReAssign(t *testing.T, db utxostore.Store) {
@@ -203,7 +208,7 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 		TxID:         Tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash2,
-		SpendingTxID: spendTx2.TxIDChainHash(),
+		SpendingData: spend.NewSpendingData(spendTx2.TxIDChainHash(), 0),
 	}
 
 	// try to reassign, should fail, utxo has not yet been frozen
@@ -224,7 +229,7 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	resp, err := db.GetSpend(ctx, testSpend1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_UNSPENDABLE), resp.Status)
-	require.Nil(t, resp.SpendingTxID)
+	require.Nil(t, resp.SpendingData)
 
 	// try to spend the old utxo, should fail
 	_, err = db.Spend(ctx, spendTx)
@@ -336,11 +341,13 @@ func Sanity(t *testing.T, db utxostore.Store) {
 			TxID:         stx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash,
-			SpendingTxID: Hash,
+			SpendingData: spend.NewSpendingData(Hash, 0),
 		})
 		require.NoError(t, err)
 		require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
-		require.Equal(t, spendingTx.TxIDChainHash().String(), resp.SpendingTxID.String())
+		require.NotNil(t, resp.SpendingData)
+		require.NotNil(t, resp.SpendingData.TxID)
+		require.Equal(t, spendingTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 	}
 }
 

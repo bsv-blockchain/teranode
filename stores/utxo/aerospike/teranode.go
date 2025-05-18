@@ -64,19 +64,19 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v34" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v35" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
-var frozenUTXOBytes = util.CoinbasePlaceholder[:]
+var frozenUTXOBytes = util.FrozenBytes[:]
 
 // LuaReturnValue represents the status code returned from Lua scripts.
 type LuaReturnValue string
@@ -103,8 +103,8 @@ type LuaReturnMessage struct {
 	// Signal provides additional operation context
 	Signal LuaReturnValue
 
-	// SpendingTxID contains the spending transaction hash if relevant
-	SpendingTxID *chainhash.Hash
+	// SpendingData contains the spending data if relevant
+	SpendingData *spend.SpendingData
 
 	ChildCount int
 
@@ -139,9 +139,9 @@ func (l *LuaReturnMessage) String() string {
 		sb.WriteString(string(l.Signal))
 	}
 
-	if l.SpendingTxID != nil {
+	if l.SpendingData != nil {
 		sb.WriteString(":")
-		sb.WriteString(l.SpendingTxID.String())
+		sb.WriteString(l.SpendingData.String())
 	}
 
 	if l.ChildCount > 0 {
@@ -278,7 +278,7 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 //	"OK:[1,2,3]:ALLSPENT"
 //	"OK:[]:DAHSET:n"
 //	"OK:[3,4]:DAHUNSET:n"
-//	"SPENT:1234...5678" (where 1234...5678 is a 64-char tx hash)
+//	"SPENT:1234...5678" (where 1234...5678 is a 72-char (36 bytes) spending data)
 //	"ERROR:TX not found"
 //
 // Parameters:
@@ -320,13 +320,11 @@ func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error
 	}
 
 	if len(r) > 1 {
-		if len(r[1]) == 64 {
-			hash, err := chainhash.NewHashFromStr(r[1])
+		if len(r[1]) == 72 {
+			rets.SpendingData, err = spend.NewSpendingDataFromString(r[1])
 			if err != nil {
-				return rets, errors.NewProcessingError("error parsing spendingTxID %s", r[1], err)
+				return rets, err
 			}
-
-			rets.SpendingTxID = hash
 		} else {
 			rets.Signal = LuaReturnValue(r[1])
 		}

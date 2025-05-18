@@ -46,7 +46,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/libsv/go-bt/v2/chainhash"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 )
 
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
@@ -57,7 +57,7 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 	// check whether the UTXOs are already spent or frozen
 	for _, spend := range spends {
 		q := `
-            SELECT t.id, o.frozen, o.spending_transaction_id
+            SELECT t.id, o.frozen, o.spending_data
             FROM outputs AS o, transactions AS t
             WHERE t.hash = $1
               AND o.transaction_id = t.id AND o.idx = $2
@@ -65,20 +65,25 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 
 		var (
 			id           int
-			spendingTxID []byte
+			spendingData []byte
 			frozen       bool
 		)
 
-		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen, &spendingTxID); err != nil {
+		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen, &spendingData); err != nil {
 			return err
 		}
 
-		if spendingTxID != nil {
-			return errors.NewUtxoSpentError(*spend.SpendingTxID, spend.Vout, *spend.UTXOHash, chainhash.Hash(spendingTxID))
+		if spendingData != nil {
+			spendingData, err := spendpkg.NewSpendingDataFromBytes(spendingData)
+			if err != nil {
+				return errors.NewProcessingError("failed to create spending data from bytes", err)
+			}
+
+			return errors.NewUtxoSpentError(*spendingData.TxID, spend.Vout, *spend.UTXOHash, spendingData)
 		}
 
 		if frozen {
-			return errors.NewUtxoFrozenError("transaction %s:%d already frozen", spend.SpendingTxID, spend.Vout)
+			return errors.NewUtxoFrozenError("transaction %s:%d already frozen", spend.TxID, spend.Vout)
 		}
 
 		txHashIDMap[spend.TxID.String()] = id
@@ -88,7 +93,7 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 	for _, spend := range spends {
 		id := txHashIDMap[spend.TxID.String()]
 
-		q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_transaction_id IS NULL`
+		q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
 		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
 			return err
 		}
@@ -121,7 +126,7 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tS
 		}
 
 		if !frozen {
-			return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", spend.SpendingTxID, spend.Vout)
+			return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", spend.TxID, spend.Vout)
 		}
 
 		txHashIDMap[spend.TxID.String()] = id
@@ -130,7 +135,7 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tS
 	for _, spend := range spends {
 		id := txHashIDMap[spend.TxID.String()]
 
-		q := `UPDATE outputs SET frozen = false WHERE transaction_id = $1 AND idx = $2 AND spending_transaction_id IS NULL AND frozen = true`
+		q := `UPDATE outputs SET frozen = false WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL AND frozen = true`
 		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
 			return err
 		}
@@ -161,7 +166,7 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 	}
 
 	if !frozen {
-		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", utxo.SpendingTxID, utxo.Vout)
+		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", utxo.TxID, utxo.Vout)
 	}
 
 	spendableIn := s.GetBlockHeight() + utxostore.ReAssignedUtxoSpendableAfterBlocks
@@ -172,7 +177,7 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
         SET utxo_hash = $1, frozen = false, spendableIn = $2
         WHERE transaction_id = $3
           AND idx = $4
-          AND spending_transaction_id IS NULL
+          AND spending_data IS NULL
           AND frozen = true
     `
 	if _, err := s.db.ExecContext(ctx, q, newUtxo.UTXOHash[:], spendableIn, id, utxo.Vout); err != nil {

@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -59,8 +60,8 @@ type Data struct {
 	// Unspendable is a flag indicating if the transaction is not spendable
 	Unspendable bool `json:"unspendable"`
 
-	// SpendingTxIDs is the transaction ID of the transaction that spent the given tx output idx
-	SpendingTxIDs []*chainhash.Hash `json:"utxos"`
+	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
+	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
 }
 
 // PreviousOutput represents an input's previous output information.

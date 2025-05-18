@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,9 @@ func TestGetFeesAndUtxoHashes(t *testing.T) {
 func TestCalculateUtxoStatus(t *testing.T) {
 	// Test case when spendingTxId is not nil
 	spendingTxId, _ := chainhash.NewHashFromStr("b067b2d2a51cb3f63678cc2bf12efaa5d57235d296bcba09ead42f4147b63bf7")
-	status := CalculateUtxoStatus(spendingTxId, 0, 0)
+	spendingData := spendpkg.NewSpendingData(spendingTxId, 0)
+
+	status := CalculateUtxoStatus(spendingData, 0, 0)
 	assert.Equal(t, Status_SPENT, status)
 
 	// Test case when lockTime is greater than 0 and less than 500000000 and greater than blockHeight

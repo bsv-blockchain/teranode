@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type UtxoSpentErrData struct {
-	Hash           chainhash.Hash `json:"hash"`
-	Vout           uint32         `json:"vout"`
-	UtxoHash       chainhash.Hash `json:"utxo_hash"`
-	SpendingTxHash chainhash.Hash `json:"spending_tx_hash"`
+	Hash         chainhash.Hash         `json:"hash"`
+	Vout         uint32                 `json:"vout"`
+	UtxoHash     chainhash.Hash         `json:"utxo_hash"`
+	SpendingData *spendpkg.SpendingData `json:"spending_data"`
 }
 
 func (e *UtxoSpentErrData) SetData(key string, value interface{}) {
@@ -22,8 +23,8 @@ func (e *UtxoSpentErrData) SetData(key string, value interface{}) {
 		e.Vout = value.(uint32)
 	case "utxo_hash":
 		e.UtxoHash = value.(chainhash.Hash)
-	case "spending_tx_hash":
-		e.SpendingTxHash = value.(chainhash.Hash)
+	case "spending_data":
+		e.SpendingData = value.(*spendpkg.SpendingData)
 	}
 }
 
@@ -35,15 +36,15 @@ func (e *UtxoSpentErrData) GetData(key string) interface{} {
 		return e.Vout
 	case "utxo_hash":
 		return e.UtxoHash
-	case "spending_tx_hash":
-		return e.SpendingTxHash
+	case "spending_data":
+		return e.SpendingData
 	}
 
 	return nil
 }
 
 func (e *UtxoSpentErrData) Error() string {
-	return fmt.Sprintf("utxo %s already spent by %s", e.Hash, e.SpendingTxHash)
+	return fmt.Sprintf("utxo %s already spent by %v", e.Hash, e.SpendingData)
 }
 
 func (e *UtxoSpentErrData) EncodeErrorData() []byte {
@@ -57,15 +58,15 @@ func (e *UtxoSpentErrData) EncodeErrorData() []byte {
 	return data
 }
 
-func NewUtxoSpentError(txID chainhash.Hash, vOut uint32, utxoHash chainhash.Hash, spendingTxID chainhash.Hash) *Error {
+func NewUtxoSpentError(txID chainhash.Hash, vOut uint32, utxoHash chainhash.Hash, spendingData *spendpkg.SpendingData) *Error {
 	utxoSpentErrStruct := &UtxoSpentErrData{
-		Hash:           txID,
-		Vout:           vOut,
-		UtxoHash:       utxoHash,
-		SpendingTxHash: spendingTxID,
+		Hash:         txID,
+		Vout:         vOut,
+		UtxoHash:     utxoHash,
+		SpendingData: spendingData,
 	}
 
-	utxoSpentError := New(ERR_UTXO_SPENT, "%s (%d): %s:%d utxo already spent by tx id %s", ERR_UTXO_SPENT.Enum(), ERR_UTXO_SPENT, txID.String(), vOut, spendingTxID.String())
+	utxoSpentError := New(ERR_UTXO_SPENT, "%s (%d): %s:%d utxo already spent by tx %v", ERR_UTXO_SPENT.Enum(), ERR_UTXO_SPENT, txID.String(), vOut, spendingData)
 	utxoSpentError.data = utxoSpentErrStruct
 
 	return utxoSpentError

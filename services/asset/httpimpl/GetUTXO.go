@@ -103,7 +103,7 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			TxID:         nil,
 			Vout:         0,
 			UTXOHash:     hash,
-			SpendingTxID: nil,
+			SpendingData: nil,
 		})
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
