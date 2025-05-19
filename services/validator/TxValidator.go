@@ -258,7 +258,30 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
 
+	// Use a map to track seen inputs with fixed-size 36-byte array key (32 bytes txid + 4 bytes output index)
+	seenInputs := make(map[[36]byte]struct{})
+
 	for index, input := range tx.Inputs {
+		// Check each input for duplicates
+		var key [36]byte
+
+		copy(key[:32], input.PreviousTxID())
+
+		// Convert uint32 output index to 4 bytes
+		outIdx := input.PreviousTxOutIndex
+		key[32] = byte(outIdx >> 24)
+		key[33] = byte(outIdx >> 16)
+		key[34] = byte(outIdx >> 8)
+		key[35] = byte(outIdx)
+
+		// Check if we've seen this input before
+		if _, exists := seenInputs[key]; exists {
+			return errors.NewTxInvalidError("duplicate input found at index %d", index)
+		}
+
+		// Mark this input as seen
+		seenInputs[key] = struct{}{}
+
 		if input.PreviousTxIDStr() == coinbaseTxID {
 			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
 		}
