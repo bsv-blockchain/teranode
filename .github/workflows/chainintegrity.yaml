@@ -1,0 +1,104 @@
+name: Chain Integrity Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  GO_VERSION: '1.24.1'
+
+jobs:
+  chainintegrity:
+    name: Chain Integrity Test
+    runs-on: teranode-runner
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
+          aws-region: eu-north-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - name: Remove old data
+        run: rm -rf data
+
+      - name: Start Teranode nodes (docker compose up)
+        run: docker compose -f compose/docker-compose-host.yml up -d
+
+      - name: Wait for mining to complete (all nodes at height 110+ and in sync)
+        run: |
+          set -e
+          REQUIRED_HEIGHT=120
+          MAX_ATTEMPTS=180  # 15 minutes with 5s sleep
+          SLEEP=5
+          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
+            h1=$(curl -s http://localhost:18090/api/v1/bestblockheader/json | jq -r .height)
+            h2=$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height)
+            h3=$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height)
+            echo "Attempt $i: heights: $h1 $h2 $h3"
+            if [[ "$h1" =~ ^[0-9]+$ && "$h2" =~ ^[0-9]+$ && "$h3" =~ ^[0-9]+$ ]]; then
+              if [[ $h1 -ge $REQUIRED_HEIGHT && $h2 -ge $REQUIRED_HEIGHT && $h3 -ge $REQUIRED_HEIGHT ]]; then
+                if [[ $h1 -eq $h2 && $h2 -eq $h3 ]]; then
+                  echo "All nodes have reached height $REQUIRED_HEIGHT+ and are in sync."
+                  exit 0
+                fi
+              fi
+            fi
+            sleep $SLEEP
+          done
+          echo "Timeout waiting for all nodes to reach height $REQUIRED_HEIGHT and sync."
+          exit 1
+
+      - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
+        run: docker compose -f compose/docker-compose-host.yml down teranode-1 teranode-2 teranode-3
+
+      - name: Build chainintegrity binary
+        run: make build-chainintegrity
+
+      - name: Run chainintegrity test
+        run: ./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
+
+      - name: Check for hash mismatch and fail if found
+        run: |
+          if grep -q "Filtered log file hashes differ! Nodes are NOT consistent." chainintegrity_output.log; then
+            echo "Chain integrity test failed: log file hashes differ."
+            exit 1
+          fi
+
+      - name: Upload chainintegrity logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: chainintegrity-logs
+          path: |
+            chainintegrity*.log
+            chainintegrity*.filtered.log
+
+      - name: Cleanup (docker compose down)
+        if: always()
+        run: docker compose -f compose/docker-compose-host.yml down 

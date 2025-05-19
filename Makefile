@@ -92,7 +92,7 @@ build-teranode-ci: set_debug_flags set_txmetacache_flag
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
-	go build -tags aerospike --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
+	go build -o chainintegrity.run ./compose/cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags

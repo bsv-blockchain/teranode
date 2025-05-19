@@ -160,7 +160,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - data-teranode1:/app/data
 
@@ -190,7 +190,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - data-teranode2:/app/data
 
@@ -223,7 +223,7 @@ services:
       - "9905"
       - "9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - data-teranode3:/app/data
 

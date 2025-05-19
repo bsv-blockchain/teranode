@@ -95,7 +95,7 @@ services:
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode1/txstore:/app/data/teranode1/txstore
       - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
       - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
@@ -122,7 +122,7 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode2/txstore:/app/data/teranode2/txstore
       - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
       - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
@@ -149,7 +149,7 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode3/txstore:/app/data/teranode3/txstore
       - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
       - ../data/teranode3/blockstore:/app/data/teranode3/blockstore

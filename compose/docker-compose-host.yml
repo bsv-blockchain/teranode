@@ -105,7 +105,7 @@ services:
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode1/txstore:/app/data/teranode1/txstore
       - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
       - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
@@ -130,7 +130,7 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode2/txstore:/app/data/teranode2/txstore
       - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
       - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
@@ -155,7 +155,7 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/teranode3/txstore:/app/data/teranode3/txstore
       - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
       - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
@@ -173,7 +173,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode1"
     command: [ "miner", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "19292" ]
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/miner1:/app/data
     restart: unless-stopped
 
@@ -188,7 +188,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode2"
     command: [ "miner", "-coinbase-addr", "1Hh6nxmJrk4jyiJRxodAK32A9EXM8dx6F3", "-coinbase-sig", "/teranode2/", "-rpcport", "29292" ]
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/miner2:/app/data
     restart: unless-stopped
 
@@ -203,7 +203,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode3"
     command: [ "miner", "-coinbase-addr", "16Uy8VwEKAkEmH7RVtCjqyv6L6RfyvkJM2", "-coinbase-sig", "/teranode3/", "-rpcport", "39292" ]
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/miner3:/app/data
     restart: unless-stopped
 
@@ -219,7 +219,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
       profilerAddr: "localhost:17092"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/coinbase1:/app/data
 
   tx-blaster-1:
@@ -237,7 +237,7 @@ services:
     entrypoint: ["./blaster.run"]
     command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf
+      - ../settings.conf:/app/settings.conf
       - ../data/txblaster1:/app/data
       # - ../data/txblaster.log:/app/data/txblaster.log
 

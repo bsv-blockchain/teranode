@@ -205,7 +205,7 @@ services:
       - "11905:9905"
       - "11292:9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
@@ -232,7 +232,7 @@ services:
       - "13905:9905"
       - "13292:9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
@@ -262,7 +262,7 @@ services:
       - "15905:9905"
       - "15292:9292"
     volumes:
-      - ../settings_local.conf:/app/settings_local.conf:ro
+      - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
       - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
