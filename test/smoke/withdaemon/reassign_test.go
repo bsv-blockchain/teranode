@@ -8,8 +8,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/require"
@@ -31,14 +31,19 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC("generate", []interface{}{2})
 	require.NoError(t, err)
 
 	// Generate private keys and addresses for Alice, Bob, and Charles
 	alicePrivateKey := td.GetPrivateKey(t)
 
-	_, bob, _ := helper.GeneratePrivateKeyAndAddress()
-	charlesPrivatekey, charles, _ := helper.GeneratePrivateKeyAndAddress()
+	bobPrivateKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+	bob := bobPrivateKey.PubKey()
+
+	charlesPrivatekey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+	charles := charlesPrivatekey.PubKey()
 
 	// Get coinbase transaction from block 1
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -48,23 +53,10 @@ func TestShouldAllowReassign(t *testing.T) {
 	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 1)
 	require.NoError(t, err)
 
-	// Create Alice to Bob transaction
-	aliceToBobTx := bt.NewTx()
-	utxos := &bt.UTXO{
-		TxIDHash:      parentTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: parentTx.Outputs[0].LockingScript,
-		Satoshis:      parentTx.Outputs[0].Satoshis,
-	}
-
-	err = aliceToBobTx.FromUTXOs(utxos)
-	require.NoError(t, err)
-
-	err = aliceToBobTx.AddP2PKHOutputFromAddress(bob.AddressString, 10000)
-	require.NoError(t, err)
-
-	err = aliceToBobTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: alicePrivateKey})
-	require.NoError(t, err)
+	aliceToBobTx := td.CreateTransactionWithOptions(t,
+		daemon.WithInput(parentTx, 0, alicePrivateKey),
+		daemon.WithP2PKHOutputs(1, 10000, bob),
+	)
 
 	// Send Alice to Bob transaction
 	_, err = td.DistributorClient.SendTransaction(td.Ctx, aliceToBobTx)
@@ -75,34 +67,10 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(5 * time.Second)
 
-	// Create throwaway transaction (Alice to Charles)
-	throwawayTx := bt.NewTx()
-	err = throwawayTx.FromUTXOs(utxos)
-	require.NoError(t, err)
-
-	err = throwawayTx.AddP2PKHOutputFromAddress(charles.AddressString, 1000)
-	require.NoError(t, err)
-
-	err = throwawayTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: alicePrivateKey})
-	require.NoError(t, err)
-
-	// Create reassign transaction (Charles spending throwaway tx output)
-	reassignTx := bt.NewTx()
-	reassignUtxo := &bt.UTXO{
-		TxIDHash:      throwawayTx.TxIDChainHash(),
-		Vout:          uint32(0),
-		LockingScript: throwawayTx.Outputs[0].LockingScript,
-		Satoshis:      throwawayTx.Outputs[0].Satoshis,
-	}
-
-	err = reassignTx.FromUTXOs(reassignUtxo)
-	require.NoError(t, err)
-
-	err = reassignTx.AddP2PKHOutputFromAddress(bob.AddressString, 1000)
-	require.NoError(t, err)
-
-	err = reassignTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})
-	require.NoError(t, err)
+	throwawayTx := td.CreateTransactionWithOptions(t,
+		daemon.WithInput(parentTx, 0, alicePrivateKey),
+		daemon.WithP2PKHOutputs(1, 10000, charles),
+	)
 
 	// Freeze UTXO of Alice-Bob transaction
 	aliceBobUtxoHash, err := util.UTXOHashFromOutput(aliceToBobTx.TxIDChainHash(), aliceToBobTx.Outputs[0], 0)
@@ -147,7 +115,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	err = charlesSpendingTx.FromUTXOs(charlesUtxo)
 	require.NoError(t, err)
 
-	err = charlesSpendingTx.AddP2PKHOutputFromAddress(bob.AddressString, 100)
+	err = charlesSpendingTx.AddP2PKHOutputFromPubKeyBytes(bob.SerialiseCompressed(), 100)
 	require.NoError(t, err)
 
 	err = charlesSpendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})

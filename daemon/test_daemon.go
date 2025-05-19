@@ -147,6 +147,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
 	tSettings.ProfilerAddr = ""
 	tSettings.RPC.CacheEnabled = false
+	tSettings.P2P.DHTUsePrivate = true
 
 	if opts.UseTracing {
 		// tracing

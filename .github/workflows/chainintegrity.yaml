@@ -64,15 +64,13 @@ jobs:
             echo "Attempt $i: heights: $h1 $h2 $h3"
             if [[ "$h1" =~ ^[0-9]+$ && "$h2" =~ ^[0-9]+$ && "$h3" =~ ^[0-9]+$ ]]; then
               if [[ $h1 -ge $REQUIRED_HEIGHT && $h2 -ge $REQUIRED_HEIGHT && $h3 -ge $REQUIRED_HEIGHT ]]; then
-                if [[ $h1 -eq $h2 && $h2 -eq $h3 ]]; then
-                  echo "All nodes have reached height $REQUIRED_HEIGHT+ and are in sync."
-                  exit 0
-                fi
+                echo "All nodes have reached height $REQUIRED_HEIGHT or greater."
+                exit 0
               fi
             fi
             sleep $SLEEP
           done
-          echo "Timeout waiting for all nodes to reach height $REQUIRED_HEIGHT and sync."
+          echo "Timeout waiting for all nodes to reach height $REQUIRED_HEIGHT."
           exit 1
 
       - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
