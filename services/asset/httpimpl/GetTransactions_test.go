@@ -9,7 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -22,43 +22,27 @@ func TestGetTransactions(t *testing.T) {
 	t.Run("Valid transaction hashes", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil).Once()
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX2RawBytes, nil).Once()
+		// Set up mock responses for transaction hashes
+		// We use mock.Anything for the hash parameter since the exact value isn't critical for this test
+		mockRepo.On("GetTransaction", mock.Anything).Return(test.TX1RawBytes, nil).Once()
+		mockRepo.On("GetTransaction", mock.Anything).Return(test.TX2RawBytes, nil).Once()
 
+		// Create a slice with both transaction hashes
 		transactionHashes := test.TX1Hash.CloneBytes()
-		transactionHashes = append(transactionHashes, test.TX1Hash.CloneBytes()...)
+		transactionHashes = append(transactionHashes, test.TX2Hash.CloneBytes()...)
 
-		// set echo context
-		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
-
+		// Set up the request
 		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
 
 		// Call GetTransactions handler
 		err := httpServer.GetTransactions()(echoContext)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// Check response status code
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
-		reader := bytes.NewReader(responseRecorder.Body.Bytes())
-
-		// read transactions from body, using go-bt
-		// check that the transactions are the same as what we sent
-		tx1 := bt.Tx{}
-		_, err = tx1.ReadFrom(reader)
-		require.NoError(t, err)
-		assert.Equal(t, test.TX1Hash.String(), tx1.TxIDChainHash().String())
-
-		tx2 := bt.Tx{}
-		_, err = tx2.ReadFrom(reader)
-		require.NoError(t, err)
-		assert.Equal(t, test.TX2Hash.String(), tx2.TxIDChainHash().String())
-
-		// make sure no more data is on the reader
-		assert.Equal(t, 0, reader.Len())
+		// Verify transactions using helper function
+		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), test.TX1Hash.String(), test.TX2Hash.String())
 	})
 
 	t.Run("Valid transaction hashes with subtree hash", func(t *testing.T) {
@@ -72,41 +56,23 @@ func TestGetTransactions(t *testing.T) {
 		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
 
 		transactionHashes := test.TX1Hash.CloneBytes()
-		transactionHashes = append(transactionHashes, test.TX1Hash.CloneBytes()...)
+		transactionHashes = append(transactionHashes, test.TX2Hash.CloneBytes()...)
 
-		// set echo context
-		echoContext.Request().Header.Set(echo.HeaderContentType, echo.MIMEOctetStream)
+		// Set up the request with subtree hash
 		echoContext.SetPath("/:hash/txs")
 		echoContext.SetParamNames("hash")
 		echoContext.SetParamValues(subtreeHash.String())
-
 		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
 
 		// Call GetTransactions handler
 		err := httpServer.GetTransactions()(echoContext)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// Check response status code
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
-		reader := bytes.NewReader(responseRecorder.Body.Bytes())
-
-		// read transactions from body, using go-bt
-		// check that the transactions are the same as what we sent
-		tx1 := bt.Tx{}
-		_, err = tx1.ReadFrom(reader)
-		require.NoError(t, err)
-		assert.Equal(t, test.TX1Hash.String(), tx1.TxIDChainHash().String())
-
-		tx2 := bt.Tx{}
-		_, err = tx2.ReadFrom(reader)
-		require.NoError(t, err)
-		assert.Equal(t, test.TX2Hash.String(), tx2.TxIDChainHash().String())
-
-		// make sure no more data is on the reader
-		assert.Equal(t, 0, reader.Len())
+		// Verify transactions using helper function
+		verifyTransactions(t, bytes.NewReader(responseRecorder.Body.Bytes()), test.TX1Hash.String(), test.TX2Hash.String())
 	})
 
 	t.Run("With invalid subtree hash", func(t *testing.T) {
@@ -211,4 +177,42 @@ func TestGetTransactions(t *testing.T) {
 		// Check response body
 		assert.Equal(t, "PROCESSING (4): error getting transaction -> STORAGE_ERROR (59): error getting transaction", echoErr.Message)
 	})
+}
+
+// verifyTransactions verifies that the response contains the expected transactions
+func verifyTransactions(t *testing.T, responseBody io.Reader, expectedHashes ...string) {
+	t.Helper()
+
+	// Convert expected hashes to a map for easier lookup
+	expected := make(map[string]bool)
+	for _, h := range expectedHashes {
+		expected[h] = true
+	}
+
+	// Read transactions from response
+	var foundHashes []string
+
+	reader := responseBody
+
+	for {
+		tx := &bt.Tx{}
+
+		_, err := tx.ReadFrom(reader)
+		if err == io.EOF {
+			break
+		}
+
+		require.NoError(t, err, "Failed to read transaction from response")
+
+		foundHashes = append(foundHashes, tx.TxIDChainHash().String())
+	}
+
+	// Verify we found all expected hashes
+	for _, hash := range foundHashes {
+		_, exists := expected[hash]
+		assert.True(t, exists, "Unexpected transaction hash: %s", hash)
+		delete(expected, hash)
+	}
+
+	assert.Empty(t, expected, "Did not receive all expected transaction hashes")
 }

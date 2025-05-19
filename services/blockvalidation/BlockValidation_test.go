@@ -1448,15 +1448,27 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		defer deferFunc()
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once().Run(func(args mock.Arguments) {
-			// subtree was validated properly, let's add it to our subtree store so it doesn't get checked again
-			subtreeBytes, err := subtree1.Serialize()
-			require.NoError(t, err)
+		// First call - for subtree1 - success
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree1.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Once().
+			Run(func(args mock.Arguments) {
+				// subtree was validated properly, let's add it to our subtree store so it doesn't get checked again
+				subtreeBytes, err := subtree1.Serialize()
+				require.NoError(t, err)
 
-			require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
-		})
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.ErrSubtreeError).Once()
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+				require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+			})
+
+		// Second call - for subtree2 - fail with ErrSubtreeError
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree2.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(errors.ErrSubtreeError).
+			Once()
+
+		// Third call - for subtree2 - success (retry in series)
+		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree2.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Once()
 
 		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
