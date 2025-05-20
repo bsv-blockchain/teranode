@@ -32,16 +32,16 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 4. **dev**: Runs both the `dev-dashboard` and `dev-teranode` concurrently.
 5. **dev-teranode**: Executes the Go project.
 6. **dev-dashboard**: Installs and runs the Node.js dashboard project located in `./ui/dashboard`.
-7. **build**: Builds both the dashboard and Teranode.
-8. **test**: Executes Go tests excluding the playground and PoC directories.
-9. **longtests**: Executes long-running Go tests.
-10. **testall**: Runs linting and long tests.
+7. **build**: Builds the Teranode application and dashboard.
+8. **test**: Executes Go tests with race detection.
+9. **sequentialtests**: Runs tests sequentially for more stability.
+10. **smoketests**: Runs smoke tests for RPC functionality.
 11. **gen**: Generates required Go code from `.proto` files for various services.
 12. **clean_gen**: Removes generated Go files.
 13. **clean**: Cleans up generated binaries and build artifacts.
-14. **install-lint**: Installs linting tools.
+14. **install-lint**: Installs linting tools (golangci-lint and staticcheck).
 15. **lint**: Executes lint checks.
-16. **install**: Installs lint tools, proto generators, and sets up pre-commit hooks.
+16. **install**: Installs all development dependencies including: golangci-lint, staticcheck, protobuf, protoc-gen-go, protoc-gen-go-grpc, libtool, autoconf, automake, and pre-commit hooks.
 
 ## All Commands:
 
@@ -70,26 +70,30 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 
 ### Building:
 
-- `build`: A composite task that runs `build-dashboard` and `build-teranode`.
-- `build-teranode`: Builds the main Teranode project with certain tags and linker flags.
-- `build-dashboard`: Installs npm dependencies and builds a dashboard UI.
+- `build`: A composite task that runs `update_config`, `build-teranode-with-dashboard`, `build-teranode-cli`, and `clean_backup`.
+- `update_config`: Updates the configuration based on provided parameters.
+- `clean_backup`: Removes backup configuration files.
+- `build-teranode-with-dashboard`: Builds Teranode with the dashboard UI integrated.
+- `build-teranode`: Builds the main Teranode project with race detection and specific tags.
+- `build-teranode-no-debug`: Builds Teranode without debug symbols for production use.
+- `build-teranode-ci`: Builds Teranode for continuous integration environments.
+- `build-teranode-cli`: Builds the Teranode CLI tool.
+- `build-dashboard`: Installs npm dependencies and builds the dashboard UI.
 
-Other specific build tasks for different components:
+Other specific build tasks for components:
 
 - `build-chainintegrity`: Builds the chain integrity component.
 - `build-tx-blaster`: Builds the transaction blaster component.
-- `build-propagation-blaster`: Builds the propagation blaster component.
-- `build-utxostore-blaster`: Builds the UTXO store blaster component.
-- `build-s3-blaster`: Builds the S3 blaster component.
-- `build-blockassembly-blaster`: Builds the block assembly blaster component.
-- `build-blockchainstatus`: Builds the blockchainstatus component.
-- `build-aerospiketest`: Builds the Aerospike test component.
+- `build-blockchainstatus`: Builds the blockchain status monitoring component.
 
 ### Testing:
 
-- `test`: Runs unit tests, excluding certain packages.
-- `longtests`: Executes long-running tests with coverage.
-- `testall`: Lints the codebase and runs long tests.
+- `test`: Runs unit tests with race detection and configurable output format.
+- `buildtest`: Builds tests without running them for separate execution.
+- `sequentialtests`: Executes tests sequentially for more stable results.
+- `nightly-tests`: Runs comprehensive tests typically scheduled for nightly builds.
+- `smoketests`: Runs smoke tests focused on RPC functionality.
+- `install-tools`: Installs testing tools like the CTRF JSON reporter.
 
 ### Code Generation:
 
@@ -102,14 +106,26 @@ Other specific build tasks for different components:
 
 ### Linting and Static Analysis:
 
-- `install-lint`: Installs necessary tools for linting and static analysis.
-- `lint`: Runs linters and static analysis on the codebase.
+- `install-lint`: Installs tools for linting and static analysis (golangci-lint and staticcheck).
+- `lint`: Runs linters to check changed files compared to main branch.
+- `lint-new`: Checks only unstaged/untracked changes, useful for quick validation.
+- `lint-full`: Runs linters on the entire codebase.
+- `lint-full-changed-dirs`: Runs linters on changed directories only.
 
 ### Installation:
 
-- `install`: Installs linting tools, Protocol Buffers plugins, and pre-commit hooks.
+- `install`: Comprehensive installation command that installs:
+  - Linting tools (golangci-lint and staticcheck)
+  - Protocol Buffers compiler and tools (protobuf, protoc-gen-go, protoc-gen-go-grpc)
+  - Build tools (libtool, autoconf, automake)
+  - Git hooks via pre-commit
+
+  This is the preferred command for setting up a new development environment, as it installs all necessary dependencies.
 
 ## Notes:
 - The `PHONY` declarations before each command indicate that they do not produce or depend on any files, ensuring that the associated command is executed every time it's called.
 - The Makefile includes a combination of Go build commands, Node.js commands, and various tooling setups.
 - There's extensive use of conditional debug flags and platform-specific build tags.
+- Several configuration variables are available like `DEBUG` for debug builds, `TXMETA_TAG` for transaction metadata cache configuration, and `LOCAL_TEST_START_FROM_STATE` for testing.
+- The `generate_fsm_diagram` target creates visual state machine diagrams for the blockchain service.
+- Some targets are commented out in the Makefile (like propagation-blaster, utxostore-blaster) but may be re-enabled as needed.
