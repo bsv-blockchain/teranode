@@ -1,4 +1,4 @@
-package aerospike_reader
+package aerospikereader
 
 import (
 	"context"

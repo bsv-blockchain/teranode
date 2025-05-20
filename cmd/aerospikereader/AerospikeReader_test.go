@@ -1,13 +1,13 @@
-package aerospike_reader
+package aerospikereader
 
 import (
 	"context"
 	"net/url"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
@@ -25,9 +25,9 @@ func TestAerospikeReader(t *testing.T) {
 	privKey, err := bec.NewPrivateKey(bec.S256())
 	require.NoError(t, err)
 
-	tx := daemon.CreateTransaction(t,
-		daemon.WithSkipCheck(),
-		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	tx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/test miner/"),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
 	aeroURL, err := url.Parse("aerospike://localhost:3000/test?set=utxo&externalStore=file://./data/external")

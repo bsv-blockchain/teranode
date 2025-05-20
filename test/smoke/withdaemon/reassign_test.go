@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
@@ -54,8 +55,8 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 
 	aliceToBobTx := td.CreateTransactionWithOptions(t,
-		daemon.WithInput(parentTx, 0, alicePrivateKey),
-		daemon.WithP2PKHOutputs(1, 10000, bob),
+		transactions.WithInput(parentTx, 0, alicePrivateKey),
+		transactions.WithP2PKHOutputs(1, 10000, bob),
 	)
 
 	// Send Alice to Bob transaction
@@ -68,8 +69,8 @@ func TestShouldAllowReassign(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	throwawayTx := td.CreateTransactionWithOptions(t,
-		daemon.WithInput(parentTx, 0, alicePrivateKey),
-		daemon.WithP2PKHOutputs(1, 10000, charles),
+		transactions.WithInput(parentTx, 0, alicePrivateKey),
+		transactions.WithP2PKHOutputs(1, 10000, charles),
 	)
 
 	// Freeze UTXO of Alice-Bob transaction
@@ -131,4 +132,4 @@ func TestShouldAllowReassign(t *testing.T) {
 	// Now try spending the reassigned UTXO - should succeed
 	_, err = td.DistributorClient.SendTransaction(td.Ctx, charlesSpendingTx)
 	require.NoError(t, err)
-} 
+}

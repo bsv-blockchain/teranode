@@ -3,8 +3,8 @@ package validator
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
@@ -15,20 +15,20 @@ func TestCheckInputsWithDuplicateInputs(t *testing.T) {
 	privKey, err := bec.NewPrivateKey(bec.S256())
 	require.NoError(t, err)
 
-	parentTx := daemon.CreateTransaction(t,
-		daemon.WithSkipCheck(),
-		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
-	tx1 := daemon.CreateTransaction(t,
-		daemon.WithInput(parentTx, 0, privKey),
-		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	tx1 := transactions.Create(t,
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
-	tx2 := daemon.CreateTransaction(t,
-		daemon.WithInput(parentTx, 0, privKey),
-		daemon.WithInput(parentTx, 0, privKey),
-		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	tx2 := transactions.Create(t,
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
 	tSettings := test.CreateBaseTestSettings()

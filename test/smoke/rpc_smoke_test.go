@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -32,8 +33,8 @@ func TestSendTxAndCheckState(t *testing.T) {
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t)
 
 	newTx := td.CreateTransactionWithOptions(t,
-		daemon.WithInput(coinbaseTx, 0),
-		daemon.WithP2PKHOutputs(1, 10000),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 10000),
 	)
 
 	// t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
@@ -606,11 +607,11 @@ func TestDoubleInput(t *testing.T) {
 	coinbaseTx := block1.CoinbaseTx
 
 	tx := td.CreateTransactionWithOptions(t,
-		daemon.WithInput(coinbaseTx, 0),
-		daemon.WithInput(coinbaseTx, 0),
-		daemon.WithP2PKHOutputs(1, coinbaseTx.Outputs[0].Satoshis+100000, nil),
-		daemon.WithOpReturnData([]byte("test")),
-		daemon.WithP2PKHOutputs(1, 1000),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, coinbaseTx.Outputs[0].Satoshis+100000, nil),
+		transactions.WithOpReturnData([]byte("test")),
+		transactions.WithP2PKHOutputs(1, 1000),
 	)
 
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)

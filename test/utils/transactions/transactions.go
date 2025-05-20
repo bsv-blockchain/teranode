@@ -1,14 +1,10 @@
 package transactions
 
 import (
-	"encoding/binary"
 	"testing"
 
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/stretchr/testify/require"
 )
 
 // CreateTestTransactionChainWithCount generates a sequence of valid Bitcoin
@@ -26,34 +22,14 @@ func CreateTestTransactionChainWithCount(t *testing.T, count uint32) []*bt.Tx {
 		t.Fatalf("count must be greater than 1")
 	}
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	require.NoError(t, err)
-
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	require.NoError(t, err)
-
-	// Create coinbase transaction
-	coinbaseTx := bt.NewTx()
-	err = coinbaseTx.From(
-		"0000000000000000000000000000000000000000000000000000000000000000",
-		0xffffffff,
-		"",
-		0,
-	)
-	require.NoError(t, err)
+	privateKey, publicKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
 	blockHeight := uint32(100)
-	blockHeightBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(blockHeightBytes, blockHeight)
 
-	arbitraryData := make([]byte, 0)
-	arbitraryData = append(arbitraryData, 0x03)
-	arbitraryData = append(arbitraryData, blockHeightBytes[:3]...)
-	arbitraryData = append(arbitraryData, []byte("/Test miner/")...)
-	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
-
-	err = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100_000_000)
-	require.NoError(t, err)
+	coinbaseTx := Create(t,
+		WithCoinbaseData(blockHeight, "/Test miner/"),
+		WithP2PKHOutputs(1, 50e8, publicKey),
+	)
 
 	// Create the chain of transactions
 	result := []*bt.Tx{coinbaseTx}
@@ -65,33 +41,20 @@ func CreateTestTransactionChainWithCount(t *testing.T, count uint32) []*bt.Tx {
 	for i := uint32(0); i < count-2; i++ {
 		vOut := uint32(1)
 		if i == 0 {
-			vOut = 0
+			vOut = 0 // Spend the coinbase output 0 in first iteration
 		}
 
-		tx := CreateSpendingTx(t, parentTx, vOut, 1000, address, privateKey)
+		tx := Create(t,
+			WithPrivateKey(privateKey),
+			WithInput(parentTx, vOut),
+			WithP2PKHOutputs(1, 1000),
+			WithChangeOutput(),
+		)
+
 		result = append(result, tx)
 
 		parentTx = tx
 	}
 
 	return result
-}
-
-func CreateSpendingTx(t *testing.T, prevTx *bt.Tx, vOut uint32, amount uint64, address *bscript.Address, privateKey *bec.PrivateKey) *bt.Tx {
-	tx := bt.NewTx()
-
-	require.NoError(t, tx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      prevTx.TxIDChainHash(),
-		Vout:          vOut,
-		LockingScript: prevTx.Outputs[vOut].LockingScript,
-		Satoshis:      prevTx.Outputs[vOut].Satoshis,
-	}))
-
-	fee := bt.NewFeeQuote()
-
-	require.NoError(t, tx.AddP2PKHOutputFromAddress(address.AddressString, amount))
-	require.NoError(t, tx.ChangeToAddress(address.AddressString, fee))
-	require.NoError(t, tx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privateKey}))
-
-	return tx
 }

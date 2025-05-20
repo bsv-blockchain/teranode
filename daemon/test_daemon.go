@@ -34,6 +34,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/testutil"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -627,8 +628,13 @@ func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTx
 
 // CreateTransaction creates a new transaction with configurable options
 // At least one parent transaction must be provided using WithParentTx or WithParentTxs
-func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...TxOption) *bt.Tx {
-	return CreateTransaction(t, WithPrivateKey(td.privKey))
+func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...transactions.TxOption) *bt.Tx {
+	var opts []transactions.TxOption
+
+	opts = append(opts, transactions.WithPrivateKey(td.privKey)) // Put this as the first option so it is used as the fallback
+	opts = append(opts, options...)                              // Add the other options, which may override the fallback if WithPrivateKey was specified
+
+	return transactions.Create(t, opts...)
 }
 
 func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T) *bt.Tx {

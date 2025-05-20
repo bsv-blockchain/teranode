@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/bitcoin-sv/teranode/cmd/aerospike_reader"
+	"github.com/bitcoin-sv/teranode/cmd/aerospikereader"
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset"
 	"github.com/bitcoin-sv/teranode/cmd/checkblocktemplate"
 	"github.com/bitcoin-sv/teranode/cmd/filereader"
@@ -151,7 +151,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Invalid txid: %s", args[0])
 			}
 
-			aerospike_reader.AerospikeReader(logger, tSettings, args[0])
+			aerospikereader.AerospikeReader(logger, tSettings, args[0])
 
 			return nil
 		}

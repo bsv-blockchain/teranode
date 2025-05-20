@@ -1,9 +1,9 @@
-package daemon
+package transactions
 
 import (
+	"encoding/hex"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/go-utils"
@@ -11,18 +11,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCreateCoinbase(t *testing.T) {
+	_, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+
+	tx := Create(t,
+		WithCoinbaseData(100, "/Test miner/"),
+		WithP2PKHOutputs(1, 50*100_000_000, pubKey),
+	)
+
+	assert.Equal(t, 1, len(tx.Inputs))
+	assert.Equal(t, 1, len(tx.Outputs))
+	assert.Equal(t, uint64(50*100_000_000), tx.Outputs[0].Satoshis)
+
+	assert.Equal(t, "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff10036400002f54657374206d696e65722fffffffff0100f2052a010000001976a91433bce29781f73091a159baa346334ab17bb35cd288ac00000000", hex.EncodeToString(tx.Bytes()))
+}
+
 func TestCreateTransaction(t *testing.T) {
 	privKey, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
-	td := TestDaemon{privKey: privKey}
-
-	baseTx1 := td.CreateTransactionWithOptions(t, transactions.WithCoinbaseData(100, "/Test miner/"), transactions.WithP2PKHOutputs(1, 1e8))
-	baseTx2 := td.CreateTransactionWithOptions(t, transactions.WithCoinbaseData(101, "/Test miner/"), transactions.WithP2PKHOutputs(1, 2e8))
+	baseTx1 := Create(t, WithCoinbaseData(100, "/Test miner/"), WithP2PKHOutputs(1, 1e8, pubKey))
+	baseTx2 := Create(t, WithCoinbaseData(101, "/Test miner/"), WithP2PKHOutputs(1, 2e8, pubKey))
 
 	t.Run("WithSingleInputSingleOutput", func(t *testing.T) {
-		tx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithP2PKHOutputs(1, 1000),
+		tx := Create(t,
+			WithPrivateKey(privKey),
+			WithInput(baseTx1, 0),
+			WithP2PKHOutputs(1, 1000),
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
@@ -32,12 +46,13 @@ func TestCreateTransaction(t *testing.T) {
 	})
 
 	t.Run("WithSingleInputMultipleOutputs", func(t *testing.T) {
-		tx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithP2PKHOutputs(1, 1000),
-			transactions.WithOpReturnData([]byte("test")),
-			transactions.WithP2PKHOutputs(1, 1000),
-			transactions.WithP2PKHOutputs(2, 500),
+		tx := Create(t,
+			WithPrivateKey(privKey),
+			WithInput(baseTx1, 0),
+			WithP2PKHOutputs(1, 1000),
+			WithOpReturnData([]byte("test")),
+			WithP2PKHOutputs(1, 1000),
+			WithP2PKHOutputs(2, 500),
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
@@ -51,11 +66,12 @@ func TestCreateTransaction(t *testing.T) {
 	})
 
 	t.Run("WithMultipleInputsMultipleOutputs", func(t *testing.T) {
-		tx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithInput(baseTx2, 0),
-			transactions.WithP2PKHOutputs(1, 1000),
-			transactions.WithOpReturnData([]byte("test")),
+		tx := Create(t,
+			WithPrivateKey(privKey),
+			WithInput(baseTx1, 0),
+			WithInput(baseTx2, 0),
+			WithP2PKHOutputs(1, 1000),
+			WithOpReturnData([]byte("test")),
 		)
 
 		assert.Equal(t, 2, len(tx.Inputs))
@@ -69,10 +85,11 @@ func TestCreateTransaction(t *testing.T) {
 	t.Run("OversizedScript", func(t *testing.T) {
 		maxScriptSize := 10000
 
-		tx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithP2PKHOutputs(1, 10000, pubKey),
-			transactions.WithOpReturnSize(maxScriptSize),
+		tx := Create(t,
+			WithPrivateKey(privKey),
+			WithInput(baseTx1, 0),
+			WithP2PKHOutputs(1, 10000),
+			WithOpReturnSize(maxScriptSize),
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
@@ -89,17 +106,19 @@ func TestCreateTransaction(t *testing.T) {
 
 		customPubKey := customPrivKey.PubKey()
 
-		parentTx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithP2PKHOutputs(2, 100_000, customPubKey))
+		parentTx := Create(t,
+			WithPrivateKey(customPrivKey),
+			WithInput(baseTx1, 0),
+			WithP2PKHOutputs(2, 10_000, customPubKey))
 
 		assert.Equal(t, 2, len(parentTx.Outputs))
-		assert.Equal(t, uint64(100_000), parentTx.Outputs[0].Satoshis)
-		assert.Equal(t, uint64(100_000), parentTx.Outputs[1].Satoshis)
+		assert.Equal(t, uint64(10_000), parentTx.Outputs[0].Satoshis)
+		assert.Equal(t, uint64(10_000), parentTx.Outputs[1].Satoshis)
 
-		childTx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(parentTx, 0, customPrivKey),
-			transactions.WithP2PKHOutputs(2, 2000, customPubKey))
+		childTx := Create(t,
+			WithPrivateKey(customPrivKey),
+			WithInput(parentTx, 0),
+			WithP2PKHOutputs(2, 2000, customPubKey))
 
 		assert.Equal(t, 2, len(childTx.Outputs))
 		assert.Equal(t, uint64(2000), childTx.Outputs[0].Satoshis)
@@ -109,10 +128,11 @@ func TestCreateTransaction(t *testing.T) {
 	t.Run("WithCustomScript", func(t *testing.T) {
 		customScript, _ := bscript.NewFromASM("OP_RETURN 48656C6C6F20576F726C64")
 
-		tx := td.CreateTransactionWithOptions(t,
-			transactions.WithInput(baseTx1, 0),
-			transactions.WithOutput(0, customScript),
-			transactions.WithOpReturnData([]byte("test")),
+		tx := Create(t,
+			WithPrivateKey(privKey),
+			WithInput(baseTx1, 0),
+			WithOutput(0, customScript),
+			WithOpReturnData([]byte("test")),
 		)
 
 		assert.Equal(t, 2, len(tx.Outputs))
