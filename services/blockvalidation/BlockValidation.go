@@ -16,6 +16,9 @@ package blockvalidation
 
 import (
 	"context"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -693,7 +696,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 
-	oldBlockIDsMap := &sync.Map{}
+	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	if useOptimisticMining {
 		// make sure the proof of work is enough
@@ -765,35 +768,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				return
 			}
 
-			// range over the oldBlockIDsMap to get txID - oldBlockID pairs
-			oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-				txHash, ok := txID.(chainhash.Hash)
-				if !ok {
-					u.logger.Errorf("[Block Validation][Range] failed to assert txID to chainhash.Hash for txID: %v", txID)
-				}
+			// check the old block IDs and invalidate the block if needed
+			if err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); err != nil {
+				u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
 
-				parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
-				if !ok {
-					u.logger.Errorf("[Block Validation][Range] failed to assert blockIDs to []uint32 for txID: %v", txID)
+				if invalidateBlockErr := u.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); invalidateBlockErr != nil {
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 				}
-
-				// Flag to check if the old blocks are part of the current chain
-				var blocksPartOfCurrentChain bool
-				// TODO: what to do with the error here other than logging?
-				blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, parentTransactionsBlockIDs)
-				if err != nil {
-					u.logger.Errorf("[ValidateBlock][%s] failed to check if old blocks are part of the current chain: %v", block.String(), err)
-				}
-
-				if !blocksPartOfCurrentChain {
-					// TODO TEMP disable invalidation in the scaling test
-					//      Since the invalidation is disabled, here we are not invalidating the block
-					// 		Consider enabling the invalidation in the future
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid. Transaction's (%v) parent blocks (%v) are not from current chain", txHash, block.String())
-				}
-
-				return true
-			})
+			}
 		}()
 	} else {
 		// get all 100 previous block headers on the main chain
@@ -829,10 +811,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
 
-		iterationError := u.checkOldBlockIDs(ctx, oldBlockIDsMap, block.String())
-
-		// if iterationError is not nil, return the iterationError
-		if iterationError != nil {
+		if iterationError := u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); iterationError != nil {
 			return iterationError
 		}
 
@@ -1091,7 +1070,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	oldBlockIDsMap := &sync.Map{}
+	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
@@ -1105,7 +1084,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return err
 	}
 
-	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block.String())
+	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
 }
 
 // createAppendBloomFilter generates and manages bloom filters for blocks.
@@ -1381,35 +1360,84 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 // Parameters:
 //   - ctx: Context for the operation
 //   - oldBlockIDsMap: Map of transaction IDs to their parent block IDs
-//   - blockStr: String representation of the block for logging
+//   - block: Block to check IDs for
 //
 // Returns an error if block verification fails.
-func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *sync.Map, blockStr string) (iterationError error) {
+func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
+	block *model.Block) (iterationError error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:checkOldBlockIDs",
+		tracing.WithDebugLogMessage(u.logger, "[checkOldBlockIDs][%s] checking %d old block IDs", oldBlockIDsMap.Length(), block.Hash().String()),
+	)
+
+	defer deferFn()
+
+	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 10_000)
+	if err != nil {
+		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
+	}
+
+	currentChainBlockIDsMap := make(map[uint32]struct{}, len(currentChainBlockIDs))
+	for _, blockID := range currentChainBlockIDs {
+		currentChainBlockIDsMap[blockID] = struct{}{}
+	}
+
+	currentChainLookupCache := make(map[string]bool, len(currentChainBlockIDs))
+
+	var builder strings.Builder
+
 	// range over the oldBlockIDsMap to get txID - oldBlockID pairs
-	oldBlockIDsMap.Range(func(txID, blockIDs interface{}) bool {
-		txHash, ok := txID.(chainhash.Hash)
-		if !ok {
-			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs] failed to assert txID to chainhash.Hash for txID: %v", txID)
+	oldBlockIDsMap.Iterate(func(txID chainhash.Hash, blockIDs []uint32) bool {
+		if len(blockIDs) == 0 {
+			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] blockIDs is empty for txID: %v", block.String(), txID)
 			return false
 		}
 
-		parentTransactionsBlockIDs, ok := blockIDs.([]uint32)
-		if !ok {
-			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs] failed to assert blockIDs to []uint32 for txID: %v", txID)
-			return false
+		// check whether the blockIDs are in the current chain we just fetched
+		for _, blockID := range blockIDs {
+			if _, ok := currentChainBlockIDsMap[blockID]; ok {
+				// all good, continue
+				return true
+			}
+		}
+
+		slices.Sort(blockIDs)
+
+		builder.Reset()
+
+		for i, id := range blockIDs {
+			if i > 0 {
+				builder.WriteString(",") // Add a separator
+			}
+
+			builder.WriteString(strconv.Itoa(int(id)))
+		}
+
+		blockIDsString := builder.String()
+
+		// check whether we already checked exactly the same blockIDs and can use a cache
+		if blocksPartOfCurrentChain, ok := currentChainLookupCache[blockIDsString]; ok {
+			if !blocksPartOfCurrentChain {
+				iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain using cache", block.String(), txID, blockIDs)
+				return false
+			}
+
+			return true
 		}
 
 		// Flag to check if the old blocks are part of the current chain
-		blocksPartOfCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, parentTransactionsBlockIDs)
+		blocksPartOfCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, blockIDs)
 		// if err is not nil, log the error and continue iterating for the next transaction
 		if err != nil {
-			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] failed to check if old blocks are part of the current chain", blockStr, err)
+			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] failed to check if old blocks are part of the current chain", block.String(), err)
 			return false
 		}
 
+		// set the cache for the blockIDs
+		currentChainLookupCache[blockIDsString] = blocksPartOfCurrentChain
+
 		// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
 		if !blocksPartOfCurrentChain {
-			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not invalid. Transaction's (%v) parent blocks (%v) are not from current chain", blockStr, txHash, blockIDs)
+			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain", block.String(), txID, blockIDs)
 			return false
 		}
 

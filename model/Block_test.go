@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -282,12 +281,12 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	}
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	oldBlockIDs := &sync.Map{}
+	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 

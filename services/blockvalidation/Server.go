@@ -680,7 +680,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		blockHeaderIDs[i] = blockHeaderMeta.ID
 	}
 
-	oldBlockIDsMap := &sync.Map{}
+	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	// only get the bloom filters for the current chain
 	bloomFilters, err := u.blockValidation.collectNecessaryBloomFilters(ctx, blockHeaders)
@@ -692,7 +692,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
-	if err = u.blockValidation.checkOldBlockIDs(ctx, oldBlockIDsMap, block.String()); err != nil {
+	if err = u.blockValidation.checkOldBlockIDs(ctx, oldBlockIDsMap, block); err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 

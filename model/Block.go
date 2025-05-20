@@ -333,7 +333,7 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *sync.Map,
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
 		tracing.WithHistogram(prometheusBlockValid),
@@ -573,7 +573,8 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
-	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDsMap *sync.Map) error {
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats,
+	oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32]) error {
 	if b.txMap == nil {
 		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
 	}
@@ -759,7 +760,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						if err == nil && len(oldParentBlockIDs) > 0 {
 							// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
 							// Each tx id and its block ids will be checked by the validator separately.
-							oldBlockIDsMap.Store(parentTxStruct.txHash, oldParentBlockIDs)
+							oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
 						}
 
 						return err
