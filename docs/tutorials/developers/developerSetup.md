@@ -13,15 +13,16 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
     - [3.4 Verify Installation](#34-verify-installation)
     - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools)
-4. [Project Dependencies](#4-project-dependencies)
-
-5. [Clone the Project and Install Additional Dependencies](#5-clone-the-project-and-install-additional-dependencies)
-6. [Configure Your Node Dev Settings (Updated Example)](#6-configure-your-node-dev-settings-updated-example)
-    - [6.1 Open and Inspect `settings_local.conf`](#61-open-and-inspect-settings_localconf)
-    - [6.2 Duplicate and Customize the Template Lines](#62-duplicate-and-customize-the-template-lines)
-    - [6.3 Set Your Environment Variable](#63-set-your-environment-variable)
-    - [6.4 Verify](#64-verify)
-    - [6.5 Commit Your Changes (Optional)](#65-commit-your-changes-optional)
+4. [Clone the Project and Install Dependencies](#4-clone-the-project-and-install-dependencies)
+5. [Configure Your Node Dev Settings (Updated Example)](#5-configure-your-node-dev-settings-updated-example)
+    - [5.1 Open and Inspect `settings_local.conf`](#51-open-and-inspect-settings_localconf)
+    - [5.2 Duplicate and Customize the Template Lines](#52-duplicate-and-customize-the-template-lines)
+    - [5.3 Set Your Environment Variable](#53-set-your-environment-variable)
+    - [5.4 Verify](#54-verify)
+    - [5.5 Commit Your Changes (Optional)](#55-commit-your-changes-optional)
+6. [Prerequisites for Running the Node](#6-prerequisites-for-running-the-node)
+    - [6.1 Install Docker for Mac](#61-install-docker-for-mac)
+    - [6.2 Start Kafka and PostgreSQL](#62-start-kafka-and-postgresql)
 7. [Run the Node](#7-run-the-node)
 8. [Troubleshooting](#8-troubleshooting)
     - [8.1. Dependency errors and conflicts](#81-dependency-errors-and-conflicts)
@@ -125,38 +126,7 @@ pipx install PyYAML
 However, most Teranode workflows will need PyYAML as a library for scripts, so a virtual environment is usually best.
 
 
-
-
-## 4. Project Dependencies
-
----
-
-Install the various dependencies required for the project.
-
-```bash
-brew install golangci-lint
-brew install staticcheck
-
-brew install protobuf
-brew install protoc-gen-go
-brew install protoc-gen-go-grpc
-brew install libtool
-brew install autoconf
-brew install automake
-```
-
-**Test Protocol Buffers Installation**:
-Execute:
-```bash
-protoc --version
-```
-
-
-
-
-
-
-## 5. Clone the Project and Install Additional Dependencies
+## 4. Clone the Project and Install Dependencies
 
 ---
 
@@ -166,11 +136,12 @@ Clone the project:
 git clone git@github.com:bitcoin-sv/teranode.git
 ```
 
-**Install dependencies**:
+**Install all dependencies**:
 Execute:
 ```bash
 cd teranode
 
+# This will install all required dependencies (protobuf, golangci-lint, etc.)
 make install
 ```
 
@@ -186,9 +157,9 @@ make install
 
 ---
 
-## 6. Configure Your Node Dev Settings (Updated Example)
+## 5. Configure Your Node Dev Settings (Updated Example)
 
-### 6.1 Open and Inspect `settings_local.conf`
+### 5.1 Open and Inspect `settings_local.conf`
 
 1. In your project directory, locate the file `settings_local.conf`.
 2. Open it in your preferred editor (VSCode, IntelliJ, etc.).
@@ -201,7 +172,7 @@ make install
    ...
    ```
 
-### 6.2 Duplicate and Customize the Template Lines
+### 5.2 Duplicate and Customize the Template Lines
 
 #### **Example:**
 
@@ -223,7 +194,7 @@ For example, if your name is **John**, you copy each line and change `NEW_USER_T
 
 > If there’s already a `clientName.dev.John`, pick something more specific, like `JohnDoe`.
 
-### 6.3 Set Your Environment Variable
+### 5.3 Set Your Environment Variable
 
 In order for your node to read **your** custom lines, you set `SETTINGS_CONTEXT` to match the prefix you used (i.e., `dev.John`).
 
@@ -240,7 +211,7 @@ source ~/.zprofile
 ```
 (or the equivalent for your shell).
 
-### 6.4 Verify
+### 5.4 Verify
 
 1. **Echo** the environment variable to ensure it’s set correctly:
    ```bash
@@ -250,7 +221,7 @@ source ~/.zprofile
 
 2. **Run** or **restart** your node. Check logs or console output to confirm it’s picking up the lines with `dev.John`.
 
-### 6.5 Commit Your Changes (Optional)
+### 5.5 Commit Your Changes (Optional)
 
 If this config is in a shared repository and your team expects each dev to commit their user-specific lines, go ahead and commit them:
 
@@ -262,13 +233,45 @@ git push
 
 ----
 
-## 7. Run the Node
+## 6. Prerequisites for Running the Node
 
-As a precondition, we need to have Kafka (https://kafka.apache.org/) running in our local dev env:
+### 6.1 Install Docker for Mac
+
+Kafka runs in Docker containers, so you'll need to install Docker for Mac:
+
+1. Download Docker Desktop for Mac from [Docker Hub](https://www.docker.com/products/docker-desktop/)
+2. Double-click the downloaded `.dmg` file and drag the Docker app to your Applications folder
+3. Launch Docker Desktop from your Applications folder
+4. When prompted, authorize Docker with your system password
+5. Wait for Docker to start (the whale icon in the status bar will stop animating when Docker is ready)
+
+**Verify Docker installation**:
+```bash
+docker --version
+```
+
+### 6.2 Start Kafka and PostgreSQL
+
+Once Docker is installed and running, start Kafka and PostgreSQL with:
 
 ```bash
-./deploy/dev/kafka.sh
+# Start Kafka in Docker
+./scripts/kafka.sh
+
+# Start PostgreSQL in Docker
+./scripts/postgres.sh
 ```
+
+These scripts will set up Docker containers with the required services configured correctly for Teranode.
+
+> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
+> ```bash
+> # Start Aerospike in Docker
+> ./scripts/aerospike.sh
+> ```
+
+
+## 7. Run the Node
 
 
 You can run the entire node with the following command:

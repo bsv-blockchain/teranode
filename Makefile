@@ -151,7 +151,7 @@ buildtest:
 .PHONY: sequentialtests
 sequentialtests:
 	logLevel=INFO test/scripts/run_tests_sequentially.sh
-	
+
 .PHONY: nightly-tests
 
 nightly-tests:
@@ -354,11 +354,25 @@ lint-full-changed-dirs:
 	  golangci-lint run $$changed_dirs; \
 	fi
 
+# The install target installs all dependencies needed for development.
+# Dependencies are categorized as:
+# - Core: Required for all development tasks (protobuf tools)
+# - Build: Required for specific build operations (libtool, autoconf, automake)
+# - Quality: Tools for code quality (linting)
+# - Workflow: Required for team collaboration (git hooks)
 .PHONY: install
 install:
+	# Quality tools (optional but recommended)
 	$(MAKE) install-lint
+	# Core dependencies (required for gRPC service development)
+	brew install protobuf
 	brew install protoc-gen-go
 	brew install protoc-gen-go-grpc
+	# Build dependencies (required for certain native code components)
+	brew install libtool
+	brew install autoconf
+	brew install automake
+	# Workflow tools (required for team collaboration)
 	brew install pre-commit
 	pre-commit install
 
