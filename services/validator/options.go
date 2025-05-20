@@ -30,10 +30,6 @@ type Options struct {
 
 	// IgnoreUnspendable determines whether to ignore transactions marked as unspendable when spending
 	IgnoreUnspendable bool
-
-	// disableConsensus determine the consensus parameter to execute script interpreter
-	// By default it is false, meaning the consensus is true
-	disableConsensus bool
 }
 
 // Option defines a function type for setting options
@@ -140,18 +136,6 @@ func WithIgnoreConflicting(ignore bool) Option {
 func WithIgnoreUnspendable(ignoreUnspendable bool) Option {
 	return func(o *Options) {
 		o.IgnoreUnspendable = ignoreUnspendable
-	}
-}
-
-// WithDisableConsensus creates an option to control consensus
-// Parameters:
-//   - disable: When true, consensus will be disabled
-//
-// Returns:
-//   - Option: Function that sets the disableConsensus option
-func WithDisableConsensus(disable bool) Option {
-	return func(o *Options) {
-		o.disableConsensus = disable
 	}
 }
 

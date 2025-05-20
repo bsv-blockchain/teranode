@@ -213,9 +213,11 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 		return errors.NewTxInvalidError("tx interpreter is nil, available interpreters: %v", TxScriptInterpreterFactory)
 	}
 
+	// SkipPolicy is equivalent to execute the script with consensus = true
+	// https://github.com/bitcoin-sv/teranode/issues/2367
 	consensus := true
-	if validationOptions != nil && validationOptions.disableConsensus {
-		consensus = false
+	if validationOptions != nil {
+		consensus = validationOptions.SkipPolicyChecks
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts

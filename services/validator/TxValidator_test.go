@@ -216,10 +216,10 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{disableConsensus: true})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{})
 	assert.NoError(t, err)
 
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{disableConsensus: true})
+	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
@@ -239,10 +239,10 @@ func TestMaxScriptSizePolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{disableConsensus: true})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{})
 	assert.NoError(t, err)
 
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{disableConsensus: true})
+	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
@@ -264,10 +264,10 @@ func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{disableConsensus: true})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, &Options{})
 	assert.NoError(t, err)
 
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{disableConsensus: true})
+	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
@@ -282,7 +282,7 @@ func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-	err := txValidator.ValidateTransaction(aTx, 101, &Options{disableConsensus: false})
+	err := txValidator.ValidateTransaction(aTx, 101, &Options{})
 	assert.NoError(t, err)
 }
 

@@ -80,7 +80,7 @@ func BenchmarkValidator(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight); err != nil {
+		if _, err = v.Validate(context.Background(), tx, chaincfg.GenesisActivationHeight, WithSkipPolicyChecks(true)); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		} else {
 			fmt.Println("asd")
@@ -112,7 +112,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	height, err := util.ExtractCoinbaseHeight(coinbase)
 	require.NoError(t, err)
 
-	_, err = v.Validate(context.Background(), coinbase, height)
+	_, err = v.Validate(context.Background(), coinbase, height, WithSkipPolicyChecks(true))
 	require.Error(t, err)
 }
 
@@ -198,7 +198,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	txMeta, err := v.Validate(t.Context(), tx, 257727)
+	txMeta, err := v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
 	require.NoError(t, err)
 
 	// check the kafka channels
@@ -253,7 +253,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	_, err = v.Validate(context.Background(), tx, 100)
+	_, err = v.Validate(context.Background(), tx, 100, WithSkipPolicyChecks(true))
 	require.Error(t, err)
 
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
@@ -308,7 +308,7 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	txMetaData, err := v.Validate(t.Context(), tx, 257727)
+	txMetaData, err := v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
 	require.Error(t, err)
 	require.Nil(t, txMetaData)
 
@@ -368,7 +368,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{})
+	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -399,7 +399,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{})
+	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -430,7 +430,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -524,7 +524,7 @@ func TestValidateTransactions(t *testing.T) {
 		err = v.validateTransaction(span.Ctx, tx, testData.BlockHeight, &Options{})
 		require.NoError(t, err)
 
-		err = v.validateTransactionScripts(span.Ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{})
+		err = v.validateTransactionScripts(span.Ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", testData.TxID))
 	}
 }
@@ -555,7 +555,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -585,7 +585,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{})
+	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -673,7 +673,7 @@ func Benchmark_validateInternal(b *testing.B) {
 		err = v.validateTransaction(context.Background(), tx, 740975, &Options{})
 		require.NoError(b, err)
 
-		err = v.validateTransactionScripts(context.Background(), tx, 740975, []uint32{740975}, &Options{})
+		err = v.validateTransactionScripts(context.Background(), tx, 740975, []uint32{740975}, &Options{SkipPolicyChecks: true})
 		require.NoError(b, err)
 	}
 }
@@ -831,6 +831,6 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 	span := tracing.Start(ctx, "Test")
 	defer span.Finish()
 
-	err := v.validateTransactionScripts(span.Ctx, tx, height, []uint32{}, &Options{})
+	err := v.validateTransactionScripts(span.Ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
 	require.Error(t, err)
 }
