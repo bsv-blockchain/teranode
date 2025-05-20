@@ -528,6 +528,10 @@ end
 -- |___/\___|\__|____/ \___|_|\___|\__\___/_/   \_\__|_| |_|\___|_|\__, |_| |_|\__|
 --                                                                 |___/           
 function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    if blockHeightRetention == 0 then
+        return ""
+    end
+    
     -- Check if all the UTXOs are spent and set the deleteAtHeight, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
     local totalExtraRecs = rec['totalExtraRecs']
