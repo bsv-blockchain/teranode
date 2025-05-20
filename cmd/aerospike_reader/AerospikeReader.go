@@ -1,12 +1,16 @@
 package aerospike_reader
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"sort"
 
 	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blockchain"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -50,7 +54,21 @@ func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidSt
 		os.Exit(1)
 	}
 
-	record, err := printRecord(client, key)
+	// Get blockchain store URL from settings
+	blockchainStoreURL := tSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
+		fmt.Printf("error reading blockchain store setting\n")
+		os.Exit(1)
+	}
+
+	// Create blockchain blockchainStore
+	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings)
+	if err != nil {
+		fmt.Printf("Failed to create blockchain store: %s\n", err)
+		os.Exit(1)
+	}
+
+	record, err := printRecord(client, key, blockchainStore)
 	if err != nil {
 		fmt.Printf("Failed to print record: %s\n", err)
 		os.Exit(1)
@@ -78,7 +96,7 @@ func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidSt
 				fmt.Printf("Record %d\n", i)
 				fmt.Printf("-------\n")
 
-				if _, err := printRecord(client, key); err != nil {
+				if _, err := printRecord(client, key, blockchainStore); err != nil {
 					fmt.Printf("Failed to print record %d: %s\n", i, err)
 					os.Exit(1)
 				}
@@ -87,23 +105,36 @@ func AerospikeReader(logger ulogger.Logger, tSettings *settings.Settings, txidSt
 	}
 }
 
-func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error) {
+func printRecord(client *uaerospike.Client, key *aero.Key, blockchainStore blockchain.Store) (*aero.Record, error) {
 	response, err := client.Get(nil, key)
 	if err != nil {
 		return nil, errors.NewError("Failed to get record", err)
 	}
 
-	fmt.Printf("Digest      : %x\n", response.Key.Digest())
-	fmt.Printf("Namespace   : %s\n", response.Key.Namespace())
-	fmt.Printf("SetName     : %s\n", response.Key.SetName())
-	fmt.Printf("Node        : %s\n", response.Node.GetName())
-	fmt.Printf("Bins        :")
+	fmt.Printf("Digest        : %x\n", response.Key.Digest())
+	fmt.Printf("Namespace     : %s\n", response.Key.Namespace())
+	fmt.Printf("SetName       : %s\n", response.Key.SetName())
+	fmt.Printf("Node          : %s\n", response.Node.GetName())
+
+	fmt.Println()
+
+	fmt.Printf("Bins          :")
 
 	var indent = false
 
+	bins := make([]string, 0, len(response.Bins))
+
 	for binName := range response.Bins {
+		bins = append(bins, binName)
+	}
+
+	sort.SliceStable(bins, func(i, j int) bool {
+		return bins[i] < bins[j]
+	})
+
+	for _, binName := range bins {
 		if indent {
-			fmt.Printf("            : %s\n", binName)
+			fmt.Printf("              : %s\n", binName)
 		} else {
 			fmt.Printf(" %s\n", binName)
 		}
@@ -111,37 +142,34 @@ func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error)
 		indent = true
 	}
 
-	fmt.Printf("Generation  : %d\n", response.Generation)
-	fmt.Printf("Expiration  : %d\n", response.Expiration)
+	fmt.Println()
+
+	fmt.Printf("Generation    : %d\n", response.Generation)
+	fmt.Printf("Expiration    : %d\n", response.Expiration)
 
 	fmt.Println()
 
-	for k, v := range response.Bins {
+	for _, k := range bins {
+		v := response.Bins[k]
+
 		switch k {
 		case "Generation":
 			fallthrough
 		case "Expiration":
-			fallthrough
-		case "inputs":
-			fallthrough
-		case "outputs":
-			fallthrough
-		case "utxos":
+
+		case fields.BlockIDs.String():
+			printBlockIDs(response.Bins[fields.BlockIDs.String()], blockchainStore)
 
 		default:
 			if arr, ok := v.([]interface{}); ok {
 				printArray(k, arr)
 			} else if b, ok := v.([]byte); ok {
-				fmt.Printf("%-12s: %x\n", k, b)
+				fmt.Printf("%-14s: %x\n", k, b)
 			} else {
-				fmt.Printf("%-12s: %v\n", k, v)
+				fmt.Printf("%-14s: %v\n", k, v)
 			}
 		}
 	}
-
-	printArray("inputs", response.Bins["inputs"])
-	printArray("outputs", response.Bins["outputs"])
-	printArray("utxos", response.Bins["utxos"])
 
 	fmt.Println()
 
@@ -149,7 +177,7 @@ func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error)
 }
 
 func printArray(name string, ifc interface{}) {
-	fmt.Printf("%-12s:", name)
+	fmt.Printf("%-14s:", name)
 
 	if ifc == nil {
 		fmt.Printf(" <nil>\n")
@@ -172,13 +200,75 @@ func printArray(name string, ifc interface{}) {
 			if i == 0 {
 				fmt.Printf(" %-5d : %x\n", i, b)
 			} else {
-				fmt.Printf("            : %-5d : %x\n", i, b)
+				fmt.Printf("              : %-5d : %x\n", i, b)
 			}
 		} else {
 			if i == 0 {
 				fmt.Printf(" %-5d : %v\n", i, item)
 			} else {
-				fmt.Printf("            : %-5d : %v\n", i, item)
+				fmt.Printf("              : %-5d : %v\n", i, item)
+			}
+		}
+	}
+}
+
+func printBlockIDs(ifc interface{}, blockchainStore blockchain.Store) {
+	fmt.Printf("%-14s:", fields.BlockIDs.String())
+
+	if ifc == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	arr, ok := ifc.([]interface{})
+	if !ok {
+		fmt.Printf(" <not array>\n")
+		return
+	}
+
+	if len(arr) == 0 {
+		fmt.Printf(" <empty>\n")
+		return
+	}
+
+	for i, item := range arr {
+		if b, ok := item.([]byte); ok {
+			if i == 0 {
+				fmt.Printf(" %-5d : %x\n", i, b)
+			} else {
+				fmt.Printf("                  : %-5d : %x\n", i, b)
+			}
+		} else {
+			blockID, ok := item.(int)
+			if !ok {
+				if i == 0 {
+					fmt.Printf(" %-5d : %v\n", i, item)
+				} else {
+					fmt.Printf("                : %-5d : %v\n", i, item)
+				}
+
+				continue
+			}
+
+			// Get block by ID
+			ctx := context.Background()
+
+			block, err := blockchainStore.GetBlockByID(ctx, uint64(blockID)) //nolint:gosec
+			if err != nil {
+				if i == 0 {
+					fmt.Printf(" %-5d : %v (error getting block)\n", i, blockID)
+				} else {
+					fmt.Printf("              : %-5d : %v (error getting block)\n", i, blockID)
+				}
+
+				continue
+			}
+
+			// Print block ID and hash
+			if i == 0 {
+				fmt.Printf(" %-5d : %v (%v [%d])\n", i, blockID, block.Hash(), block.Height)
+			} else {
+				fmt.Printf("              : %-5d : %v (%v [%d])\n", i, blockID, block.Hash(), block.Height)
 			}
 		}
 	}

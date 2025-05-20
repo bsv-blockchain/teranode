@@ -15,19 +15,17 @@ func TestCheckInputsWithDuplicateInputs(t *testing.T) {
 	privKey, err := bec.NewPrivateKey(bec.S256())
 	require.NoError(t, err)
 
-	td := daemon.TestDaemon{}
-
-	parentTx := td.CreateTransactionWithOptions(t,
+	parentTx := daemon.CreateTransaction(t,
 		daemon.WithSkipCheck(),
 		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
-	tx1 := td.CreateTransactionWithOptions(t,
+	tx1 := daemon.CreateTransaction(t,
 		daemon.WithInput(parentTx, 0, privKey),
 		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
-	tx2 := td.CreateTransactionWithOptions(t,
+	tx2 := daemon.CreateTransaction(t,
 		daemon.WithInput(parentTx, 0, privKey),
 		daemon.WithInput(parentTx, 0, privKey),
 		daemon.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
