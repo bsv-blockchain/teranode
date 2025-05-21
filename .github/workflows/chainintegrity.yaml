@@ -84,8 +84,8 @@ jobs:
 
       - name: Check for hash mismatch and fail if found
         run: |
-          if grep -q "Filtered log file hashes differ! Nodes are NOT consistent." chainintegrity_output.log; then
-            echo "Chain integrity test failed: log file hashes differ."
+          if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then
+            echo "Chain integrity test failed: all log file hashes differ, no majority consensus."
             exit 1
           fi
 

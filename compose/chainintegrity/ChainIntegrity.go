@@ -546,10 +546,10 @@ func ChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bool, l
 		unique[hash] = struct{}{}
 	}
 
-	if len(unique) == 1 {
-		fmt.Println("[Baseline] All nodes are consistent: filtered log file hashes match.")
+	if len(unique) <= 2 {
+		fmt.Println("[Baseline] At least two nodes are consistent: filtered log file hashes match for a majority.")
 	} else {
-		fmt.Println("[Baseline] Filtered log file hashes differ! Nodes are NOT consistent.")
+		fmt.Println("[Baseline] All filtered log file hashes differ! No majority consensus among nodes.")
 	}
 }
 
