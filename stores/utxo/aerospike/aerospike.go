@@ -131,7 +131,6 @@ type Store struct {
 	externalStore      blob.Store
 	utxoBatchSize      int
 	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexName          string
 	indexMutex         sync.Mutex // Mutex for index creation operations
 	indexOnce          sync.Once  // Ensures index creation/wait is only done once per process
 }
@@ -205,10 +204,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// Ensure index creation/wait is only done once per process
-	if s.indexName != "" {
+	if cleanup.IndexName != "" {
 		s.indexOnce.Do(func() {
 			if s.client != nil && s.client.Client != nil {
-				exists, err := s.indexExists(s.indexName)
+				exists, err := s.indexExists(cleanup.IndexName)
 				if err != nil {
 					s.logger.Errorf("Failed to check index existence: %v", err)
 					return

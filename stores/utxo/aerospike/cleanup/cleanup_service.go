@@ -148,15 +148,17 @@ func (s *Service) Start(ctx context.Context) {
 		ctx = context.Background()
 	}
 
-	// All processes wait for the index to be built
-	if err := s.indexWaiter.WaitForIndexReady(ctx, IndexName); err != nil {
-		s.logger.Errorf("Timeout or error waiting for index to be built: %v", err)
-	}
+	go func() {
+		// All processes wait for the index to be built
+		if err := s.indexWaiter.WaitForIndexReady(ctx, IndexName); err != nil {
+			s.logger.Errorf("Timeout or error waiting for index to be built: %v", err)
+		}
 
-	// Only start job manager after index is built
-	s.jobManager.Start(ctx)
+		// Only start job manager after index is built
+		s.jobManager.Start(ctx)
 
-	s.logger.Infof("[AerospikeCleanupService] started cleanup service")
+		s.logger.Infof("[AerospikeCleanupService] started cleanup service")
+	}()
 }
 
 // Stop stops the cleanup service and waits for all workers to exit.
