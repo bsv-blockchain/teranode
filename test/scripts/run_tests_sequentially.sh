@@ -9,7 +9,7 @@ TEST_FLAGS="-timeout 120 -tags aerospike,native,functional,test_sequentially,tes
 ORIGINAL_DIR=$(pwd)
 
 # Find all test files that have "test_sequentially" in their first line
-test_files=$(find . -name "*_test.go" -type f -exec sh -c 'head -n 1 "{}" | grep -q "test_sequentially"' \; -print)
+test_files=$(find ./test/sequentialtest -name "*_test.go" -type f -print)
 
 if [ -z "$test_files" ]; then
     echo "No test files found with 'test_sequentially' in their first line"
@@ -27,7 +27,7 @@ for test_file in $test_files; do
     test_dir=$(dirname "$test_file")
     cd "$test_dir"
     echo "Compiling tests in ${test_dir}..."
-    if ! go test -c -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -race; then
+    if ! go test -c -tags aerospike,native,memory,postgres,sqlite -race; then
         echo "Failed to compile tests in ${test_dir}"
         cd "$ORIGINAL_DIR"
         exit 1

@@ -2,9 +2,10 @@
 
 This Makefile facilitates a variety of development and build tasks for the Teranode project.
 
-- [Environment Configuration](#environment-configuration)
-- [Key Commands:](#key-commands)
-- [All Commands:](#all-commands)
+- [🛠️ Makefile Documentation](#️-makefile-documentation)
+  - [Environment Configuration](#environment-configuration)
+  - [Key Commands:](#key-commands)
+  - [All Commands:](#all-commands)
     - [General Configuration:](#general-configuration)
     - [Setting Debug Flags:](#setting-debug-flags)
     - [Build All Components:](#build-all-components)
@@ -16,7 +17,7 @@ This Makefile facilitates a variety of development and build tasks for the Teran
     - [Cleanup:](#cleanup)
     - [Linting and Static Analysis:](#linting-and-static-analysis)
     - [Installation:](#installation)
-- [Notes:](#notes)
+  - [Notes:](#notes)
 
 
 
@@ -90,7 +91,8 @@ Other specific build tasks for components:
 
 - `test`: Runs unit tests with race detection and configurable output format.
 - `buildtest`: Builds tests without running them for separate execution.
-- `sequentialtests`: Executes tests sequentially for more stable results.
+- `sequentialtest`: Executes tests sequentially for more stable results.
+- `longtest`: Executes long tests.
 - `nightly-tests`: Runs comprehensive tests typically scheduled for nightly builds.
 - `smoketests`: Runs smoke tests focused on RPC functionality.
 - `install-tools`: Installs testing tools like the CTRF JSON reporter.

@@ -1,5 +1,3 @@
-//go:build test_tnc || debug
-
 package tnc
 
 // TNC-2.1 Test Suite

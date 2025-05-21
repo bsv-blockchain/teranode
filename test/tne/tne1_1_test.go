@@ -1,5 +1,3 @@
-//go:build test_tne || test_functional
-
 package tne
 
 // How to run all tests:

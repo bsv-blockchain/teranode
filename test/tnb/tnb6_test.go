@@ -1,5 +1,3 @@
-//go:build test_tnb || debug
-
 /*
 Package tnb implements Teranode Behavioral tests.
 
@@ -181,11 +179,14 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 					Vout:     uint32(i),
 					UTXOHash: utxoHash,
 				}
+
 				spendStatus, err := node1.UtxoStore.GetSpend(ctx, spend)
 				require.NoError(t, err)
+
 				t.Logf("UTXO #%d spend status: %+v\n", i, spendStatus)
+
 				require.Equal(t, spendStatus.Status, 0)
-				require.Nil(t, spendStatus.SpendingTxID)
+				require.Nil(t, spendStatus.SpendingData)
 			}
 		} else {
 			t.Logf("No tx found into meta.Data")

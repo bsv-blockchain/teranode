@@ -1,5 +1,3 @@
-//go:build test_tnb || debug
-
 // How to run:
 // go test -v -timeout 30s -tags "test_tnb" -run ^TestUnspentTransactionOutputsWithPostgres$
 
@@ -9,8 +7,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	u "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -23,7 +21,7 @@ import (
 func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 	ctx := context.Background()
 
-	td := daemon.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
+	td := u.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
 
 	// Generate initial blocks
 	_, err := td.CallRPC("generate", []interface{}{101})
@@ -89,7 +87,7 @@ func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("UTXO #%d spend status: %+v\n", 0, spendStatus)
 		require.Equal(t, spendStatus.Status, 1)
-		require.Equal(t, spendStatus.SpendingTxID, tx.TxIDChainHash())
+		require.Equal(t, spendStatus.SpendingData.TxID, tx.TxIDChainHash())
 	} else {
 		t.Logf("No tx found into meta.Data")
 	}

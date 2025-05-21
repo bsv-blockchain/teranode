@@ -1,5 +1,3 @@
-//go:build test_fsm || test_functional
-
 // How to run this test:
 // $ cd test/fsm/
 // $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags test_fsm

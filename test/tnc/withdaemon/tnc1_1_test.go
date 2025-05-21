@@ -1,5 +1,3 @@
-//go:build test_tnc || debug
-
 // How to run:
 // go test -v -timeout 30s -tags "test_tnc" -run ^TestVerifyMerkleRootCalculation$
 

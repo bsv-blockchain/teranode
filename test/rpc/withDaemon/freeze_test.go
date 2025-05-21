@@ -1,5 +1,3 @@
-//go:build test_smoke_rpc || test_rpc || debug
-
 package smoke
 
 import (

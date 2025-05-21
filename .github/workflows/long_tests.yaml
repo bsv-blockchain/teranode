@@ -15,8 +15,8 @@ env:
   GO_VERSION: '1.24.1'
 
 jobs:
-  test-services:
-    name: Services Tests (${{ github.event.inputs.run_id || 'scheduled' }})
+  longtest:
+    name: Long Tests (${{ github.event.inputs.run_id || 'scheduled' }})
     runs-on: teranode-runner
     steps:
       - name: Checkout code
@@ -30,91 +30,5 @@ jobs:
 
       - name: Run Services Tests
         run: |
-          cd test/services && \
-          go test -v -count 1 -tags test_services ./...
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-        continue-on-error: false
-
-  test-model:
-    name: Model Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Run Model Tests
-        run: |
-          cd test/model && \
-          go test -v -count 1 -tags test_model ./...
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-        continue-on-error: false
-
-  test-stores:
-    name: Stores Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Run Stores Tests
-        run: |
-          cd test/stores && \
-          go test -v -count 1 -tags test_stores,testtxmetacache ./...
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-        continue-on-error: false
-
-  test-util:
-    name: Util Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Run Util Tests
-        run: |
-          cd test/util && \
-          go test -v -count 1 -tags test_util ./...
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-        continue-on-error: false
-
-  test-double-spend:
-    name: Double Spend Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Run Double Spend Tests
-        run: |
-          make sequentialtests
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+          make testall
         continue-on-error: false

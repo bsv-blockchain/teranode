@@ -1,5 +1,3 @@
-//go:build test_tna || debug
-
 // How to run this test manually:
 // $ go test -v -run "^TestTNA4TestSuite$/TestBlockBroadcast$" -tags test_tna ./test/tna/tna4_test.go
 //
@@ -109,7 +107,7 @@ func (suite *TNA4TestSuite) TestBlockBroadcast() {
 	block1, err := node0.BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 	parenTx := block1.CoinbaseTx
-	
+
 	// Create and send transactions to be included in the block
 	hashes, _, err := node0.CreateAndSendTxs(t, ctx, parenTx, 10)
 	require.NoError(t, err, "Failed to create and send transactions")
@@ -130,7 +128,7 @@ waitLoop:
 	for {
 		select {
 		case <-timeout:
-			t.Fatalf("Timeout waiting for block notifications. Expected %d nodes, got notifications from %d nodes", 
+			t.Fatalf("Timeout waiting for block notifications. Expected %d nodes, got notifications from %d nodes",
 				expectedNodes, len(receivedBlocks))
 		case <-ticker.C:
 			mu.Lock()

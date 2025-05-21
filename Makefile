@@ -134,26 +134,30 @@ build-dashboard:
 install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 
+# make test will run all tests in the project except for the ones in the test directory
 .PHONY: test
 test:
-ifeq ($(USE_JSON_REPORTER),true)
-	$(MAKE) install-tools
-	# pipefail is needed so proper exit code is passed on in CI
-	bash -o pipefail -c 'SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" -race -count=1 ./... | go-ctrf-json-reporter -output ctrf-report.json'
-else
-	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache,test_all" -count=1 -coverprofile=coverage.out ./...
-endif
+	SETTINGS_CONTEXT=test go list ./... | grep -v github.com/bitcoin-sv/teranode/test | xargs go test -race -tags "testtxmetacache" -count=1 -coverprofile=coverage.out 2>&1 | grep -v "ld: warning:"
 
-.PHONY: buildtest
-buildtest:
-	mkdir -p test/build && go test -tags test_all -c -o test/build ./test/...
+# run tests in the test/longtest directory
+.PHONY: longtest
+longtest:
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout 180 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
-.PHONY: sequentialtests
-sequentialtests:
+# run tests in the test/sequentialtest directory in order, one by one
+.PHONY: sequentialtest
+sequentialtest:
 	logLevel=INFO test/scripts/run_tests_sequentially.sh
 
-.PHONY: nightly-tests
+.PHONY: testall
+testall: test longtest sequentialtest
 
+# run tests in the test/e2e/daemon directory
+.PHONY: smoketest
+smoketest:
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout 180 -coverprofile=coverage.out ./test/e2e/daemon/... 2>&1 | grep -v "ld: warning:"
+
+.PHONY: nightly-tests
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
 	$(MAKE) install-tools
@@ -166,7 +170,6 @@ reset-data:
 	chmod -R u+w data
 
 .PHONY: smoketests
-
 smoketests:
 	cd test/smoke && \
 		go test -v -count 1 -tags test_smoke_rpc ./...

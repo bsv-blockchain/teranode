@@ -1,5 +1,3 @@
-//go:build test_tnj
-
 // How to run this test manually:
 // $ go test -v -run "^$TNJLockTimeTestSuite/TestLocktimeScenarios$" -tags test_tnj ./test/tnj/locktime_test.go
 

@@ -11,7 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
-	postgres "github.com/bitcoin-sv/teranode/test/util/postgres"
+	postgres "github.com/bitcoin-sv/teranode/test/longtest/util/postgres"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/docker/go-connections/nat"

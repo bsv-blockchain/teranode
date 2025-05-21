@@ -52,7 +52,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
-	utxo2 "github.com/bitcoin-sv/teranode/test/stores/utxo"
+	utxo2 "github.com/bitcoin-sv/teranode/test/longtest/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"

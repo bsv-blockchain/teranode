@@ -1,5 +1,3 @@
-//go:build test_tnb || debug
-
 // How to run tests:
 //
 // Run all tests in the suite:

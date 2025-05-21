@@ -1,5 +1,3 @@
-//go:build test_docker_daemon || debug
-
 package tnb
 
 import (

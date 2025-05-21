@@ -1,5 +1,3 @@
-//go:build test_tnc || debug
-
 // How to run this test manually:
 // $ go test -v -run "^TestTNC1TestSuite$/TestCandidateContainsAllTxs$" -tags test_tnc ./test/tnc/tnc1_3_test.go
 // $ go test -v -run "^TestTNC1TestSuite$/TestCheckHashPrevBlockCandidate$" -tags test_tnc ./test/tnc/tnc1_3_test.go
@@ -107,14 +105,12 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 
 	coinbaseTx := block1.CoinbaseTx
 
-	
-
 	node1.CreateAndSendTxs(t, ctx, coinbaseTx, 100)
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(10 * time.Second)
-	
+
 	success := false
 	for !success {
 		select {

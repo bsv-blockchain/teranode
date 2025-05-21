@@ -1,5 +1,3 @@
-//go:build test_tnb || debug
-
 package tnb
 
 import (
@@ -77,7 +75,7 @@ func (suite *TNB2TestSuite) TestUTXOValidation() {
 	testEnv := suite.TeranodeTestEnv
 	ctx := testEnv.Context
 	t := suite.T()
-	
+
 	node1 := testEnv.Nodes[0]
 
 	w, err := wif.DecodeWIF(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])

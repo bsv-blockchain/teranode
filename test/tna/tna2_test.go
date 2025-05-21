@@ -1,5 +1,3 @@
-//go:build test_tna || debug
-
 // Package tna implements acceptance tests for Teranode's transaction and block handling.
 //
 // TNA-2 Test Suite
