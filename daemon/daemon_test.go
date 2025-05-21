@@ -129,7 +129,7 @@ func TestDaemon_Stop(t *testing.T) {
 	}()
 
 	// Stop the daemon
-	require.NoError(t, d.Stop(1*time.Second))
+	require.NoError(t, d.Stop())
 
 	// Wait for the done signal or timeout
 	select {

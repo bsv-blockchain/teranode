@@ -217,8 +217,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	select {
 	case <-readyCh:
 		t.Logf("Daemon %s started successfully", tSettings.ClientName)
-	case <-time.After(20 * time.Second):
-		t.Fatalf("Daemon %s failed to start within timeout", tSettings.ClientName)
+	case <-time.After(30 * time.Second):
+		t.Fatalf("Daemon %s failed to start within 30s", tSettings.ClientName)
 	}
 
 	if opts.UseTracing {

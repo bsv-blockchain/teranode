@@ -119,7 +119,7 @@ func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager
 	})
 }
 
-func (d *Daemon) Stop(timeout ...time.Duration) error {
+func (d *Daemon) Stop() error {
 	logger := d.loggerFactory("Daemon")
 
 	if traceCloser != nil {
@@ -130,7 +130,7 @@ func (d *Daemon) Stop(timeout ...time.Duration) error {
 	d.serverMu.Lock()
 	// Gracefully shutdown the HTTP server if it exists
 	if d.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		if err := d.server.Shutdown(ctx); err != nil {
@@ -149,11 +149,8 @@ func (d *Daemon) Stop(timeout ...time.Duration) error {
 		return nil
 	}
 
-	// Default timeout of 10 seconds if not provided
-	shutdownTimeout := 10 * time.Second
-	if len(timeout) > 0 {
-		shutdownTimeout = timeout[0]
-	}
+	// Default timeout of 30 seconds if not provided
+	shutdownTimeout := 30 * time.Second
 
 	// Set up a timeout channel
 	timeoutCh := time.After(shutdownTimeout)
