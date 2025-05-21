@@ -127,6 +127,33 @@ func TestNewSubtreeMetaFromBytes(t *testing.T) {
 		}
 	})
 
+	t.Run("TestNewSubtreeMetaFromReader with large cap", func(t *testing.T) {
+		subtree, _ := NewTreeByLeafCount(32 * 1024)
+		_ = subtree.AddNode(hash1, 1, 1)
+
+		b, err := subtree.Serialize()
+		require.NoError(t, err)
+
+		subtree2, err := NewSubtreeFromBytes(b)
+		require.NoError(t, err)
+
+		subtreeMeta := NewSubtreeMeta(subtree2)
+		_ = subtreeMeta.SetParentTxHash(0, hash1)
+
+		b, err = subtreeMeta.Serialize()
+		require.NoError(t, err)
+
+		buf := bytes.NewReader(b)
+
+		subtreeMeta2, err := NewSubtreeMetaFromReader(subtree, buf)
+		require.NoError(t, err)
+
+		assert.Equal(t, subtreeMeta.rootHash, subtreeMeta2.rootHash)
+		assert.Equal(t, len(subtreeMeta.ParentTxHashes), len(subtreeMeta2.ParentTxHashes))
+
+		assert.Equal(t, subtree2.Size(), cap(subtreeMeta.ParentTxHashes))
+	})
+
 	t.Run("TestNewSubtreeMetaFromBytes with all set", func(t *testing.T) {
 		subtree, _ := NewTreeByLeafCount(4)
 		_ = subtree.AddNode(hash1, 1, 1)

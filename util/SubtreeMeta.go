@@ -33,7 +33,7 @@ func NewSubtreeMetaFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeMeta, 
 	s := &SubtreeMeta{
 		Subtree: subtree,
 	}
-	if err := s.serializeFromReader(bytes.NewReader(dataBytes)); err != nil {
+	if err := s.deserializeFromReader(bytes.NewReader(dataBytes)); err != nil {
 		return nil, errors.NewProcessingError("unable to create subtree meta from bytes", err)
 	}
 
@@ -44,14 +44,14 @@ func NewSubtreeMetaFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeM
 	s := &SubtreeMeta{
 		Subtree: subtree,
 	}
-	if err := s.serializeFromReader(dataReader); err != nil {
+	if err := s.deserializeFromReader(dataReader); err != nil {
 		return nil, errors.NewProcessingError("unable to create subtree meta from reader", err)
 	}
 
 	return s, nil
 }
 
-func (s *SubtreeMeta) serializeFromReader(buf io.Reader) error {
+func (s *SubtreeMeta) deserializeFromReader(buf io.Reader) error {
 	var err error
 
 	var bytesUint64 [8]byte

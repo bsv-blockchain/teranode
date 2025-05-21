@@ -295,7 +295,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
-	utxoHeights, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
+	// get the block heights of all inputs of the transaction
+	// utxoHeights is a slice of block heights for each input
+	// parentTxHashesMap is a map of parent transaction hashes to the input indexes of the current transaction
+	utxoHeights, parentTxHashesMap, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -418,9 +421,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if addToBlockAssembly {
-		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
-		for i, input := range tx.Inputs {
-			parentTxHashes[i] = *input.PreviousTxIDChainHash()
+		// get a slice of unique parent tx hashes from the map
+		parentTxHashes := make([]chainhash.Hash, 0, len(parentTxHashesMap))
+		for parentTxHash := range parentTxHashesMap {
+			parentTxHashes = append(parentTxHashes, parentTxHash)
 		}
 
 		// first we send the tx to the block assembler
@@ -428,6 +432,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			TxIDChainHash: *tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()),
+			Parents:       parentTxHashes,
 		}, spentUtxos); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
 
@@ -466,19 +471,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, map[chainhash.Hash][]int, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getTransactionInputBlockHeights",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer deferFn()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	utxoHeights, parentTxHashes, err := v.getUtxoBlockHeights(ctx, tx, txID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return utxoHeights, nil
+	return utxoHeights, parentTxHashes, nil
 }
 
 // twoPhaseCommitTransaction marks the transaction as spendable
@@ -499,7 +504,7 @@ func (v *Validator) twoPhaseCommitTransaction(setSpan tracing.Span, tx *bt.Tx, t
 }
 
 // getUtxoBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, map[chainhash.Hash][]int, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
@@ -547,10 +552,10 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return utxoHeights, nil
+	return utxoHeights, parentTxHashes, nil
 }
 
 func (v *Validator) TriggerBatcher() {

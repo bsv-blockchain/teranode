@@ -353,8 +353,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 					// store (and announce) new incomplete subtree to other miners
 					send := NewSubtreeRequest{
-						Subtree: incompleteSubtree,
-						ErrChan: make(chan error),
+						Subtree:     incompleteSubtree,
+						ParentTxMap: stp.currentTxMap,
+						ErrChan:     make(chan error),
 					}
 					newSubtreeChan <- send
 
@@ -873,7 +874,7 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, parents []chainhash.
 
 		parents, ok = stp.currentTxMap.Get(node.Hash)
 		if !ok || parents == nil {
-			return errors.NewProcessingError("error adding node to subtree: parents not found in currentTxMap")
+			return errors.NewProcessingError("error adding node to subtree: parents not found in currentTxMap for %s", node.Hash.String())
 		}
 	} else {
 		stp.currentTxMap.Set(node.Hash, parents)
@@ -1353,22 +1354,24 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	stp.logger.Warnf("[moveBackBlock][%s] with %d subtrees: create new subtrees", block.String(), len(block.Subtrees))
 	// run through the nodes of the subtrees in order and add to the new subtrees
 	for idx, subtreeNode := range subtreesNodes {
+		subtreeHash := block.Subtrees[idx]
+
 		if idx == 0 {
 			// process coinbase utxos
 			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
-				return errors.NewServiceError("[moveBackBlock][%s] error deleting utxos for tx %s", block.String(), block.CoinbaseTx.String(), err)
+				return errors.NewServiceError("[moveBackBlock][%s][%s] error deleting utxos for tx %s", block.String(), block.CoinbaseTx.String(), subtreeHash.String(), err)
 			}
 
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtreeNode); i++ {
 				if err = stp.addNode(subtreeNode[i], subtreeMetaParents[idx][i], true); err != nil {
-					return errors.NewProcessingError("[moveBackBlock][%s] error adding node to subtree", block.String(), err)
+					return errors.NewProcessingError("[moveBackBlock][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
 				}
 			}
 		} else {
 			for i, node := range subtreeNode {
 				if err = stp.addNode(node, subtreeMetaParents[idx][i], true); err != nil {
-					return errors.NewProcessingError("[moveBackBlock][%s] error adding node to subtree", block.String(), err)
+					return errors.NewProcessingError("[moveBackBlock][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
 				}
 			}
 		}

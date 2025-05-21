@@ -28,8 +28,7 @@ func TestGetTransactions(t *testing.T) {
 		mockRepo.On("GetTransaction", mock.Anything).Return(test.TX2RawBytes, nil).Once()
 
 		// Create a slice with both transaction hashes
-		transactionHashes := test.TX1Hash.CloneBytes()
-		transactionHashes = append(transactionHashes, test.TX2Hash.CloneBytes()...)
+		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
 
 		// Set up the request
 		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
@@ -55,8 +54,7 @@ func TestGetTransactions(t *testing.T) {
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX2RawBytes, nil).Once()
 		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
 
-		transactionHashes := test.TX1Hash.CloneBytes()
-		transactionHashes = append(transactionHashes, test.TX2Hash.CloneBytes()...)
+		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
 
 		// Set up the request with subtree hash
 		echoContext.SetPath("/:hash/txs")

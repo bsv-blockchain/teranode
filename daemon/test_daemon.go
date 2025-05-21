@@ -626,7 +626,7 @@ func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTx
 	return tx
 }
 
-// CreateTransaction creates a new transaction with configurable options
+// CreateTransactionWithOptions creates a new transaction with configurable options
 // At least one parent transaction must be provided using WithParentTx or WithParentTxs
 func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...transactions.TxOption) *bt.Tx {
 	var opts []transactions.TxOption
@@ -780,6 +780,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 	}
 
 	subtreeData := util.NewSubtreeData(subtree)
+	subtreeMeta := util.NewSubtreeMeta(subtree)
 
 	err = subtree.AddCoinbaseNode()
 	if err != nil {
@@ -792,7 +793,20 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 			return nil, err
 		}
 
+		// add the transaction to the subtree data, with the index of the node, which is i+1, skipping the coinbase node
 		err = subtreeData.AddTx(tx, i+1)
+		if err != nil {
+			return nil, err
+		}
+
+		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
+		for j, input := range tx.Inputs {
+			// get the parent tx hash
+			parentTxHashes[j] = *input.PreviousTxIDChainHash()
+		}
+
+		// add the transaction to the subtree meta, with the index of the node, which is i+1, skipping the coinbase node
+		err = subtreeMeta.SetParentTxHashes(i+1, parentTxHashes)
 		if err != nil {
 			return nil, err
 		}
@@ -825,6 +839,23 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		subtreeData.RootHash()[:],
 		subtreeDataBytes,
 		options.WithFileExtension("subtreeData"),
+		options.WithDeleteAt(100),
+		options.WithAllowOverwrite(true),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	if err != nil {
+		return nil, err
+	}
+
+	err = subtreeStore.Set(
+		ctx,
+		subtree.RootHash()[:],
+		subtreeMetaBytes,
+		options.WithFileExtension("meta"),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)
