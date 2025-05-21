@@ -299,6 +299,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							}
 
 							retries++
+
 							continue
 						}
 
@@ -308,9 +309,17 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
-					// catched up, ready to mine, send RUN event
-					if err = u.blockchainClient.Run(ctx1, "blockvalidation/Server"); err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
+					state, err := u.blockchainClient.GetFSMCurrentState(ctx)
+					if err != nil {
+						u.logger.Errorf("[BlockValidation Init] failed to get FSM current state [%v]", err)
+					}
+
+					if err == nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
+						u.logger.Infof("[BlockValidation Init] catch up complete, ready to mine, sending RUN event")
+
+						if err = u.blockchainClient.Run(ctx1, "blockvalidation/Server"); err != nil {
+							u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
+						}
 					}
 				}
 
