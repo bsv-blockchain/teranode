@@ -10,7 +10,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
-	"sync"
 	"testing"
 	"time"
 
@@ -81,12 +80,13 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	oldBlockIDs := &sync.Map{}
+	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
@@ -208,12 +208,13 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	oldBlockIDs := &sync.Map{}
+	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.Error(t, err)
 	require.False(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
@@ -256,7 +257,8 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
-	oldBlockIDs := &sync.Map{}
+	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
