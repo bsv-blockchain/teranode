@@ -32,33 +32,29 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	)
 	defer deferFn()
 
-	// 1. get the subtree from the subtree store
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtreeData"))
+	// 1. get the subtree data from the subtree store
+	subtreeData, err := u.readSubtreeData(ctx, subtreeHash)
 	if err != nil {
-		return errors.NewStorageError("[BlockPersister] error getting subtree %s from store", subtreeHash.String(), err)
+		return err
 	}
 
-	defer func() {
-		_ = subtreeReader.Close()
-	}()
+	txHashes := make([]chainhash.Hash, len(subtreeData.Txs))
 
-	subtree := util.Subtree{}
+	for i := 0; i < len(subtreeData.Txs); i++ {
+		if subtreeData.Txs[i] != nil {
+			txHashes[i] = *subtreeData.Txs[i].TxIDChainHash()
 
-	err = subtree.DeserializeFromReader(subtreeReader)
-	if err != nil {
-		return errors.NewProcessingError("[BlockPersister] error deserializing subtree", err)
-	}
+			continue
+		}
 
-	txHashes := make([]chainhash.Hash, len(subtree.Nodes))
-
-	for i := 0; i < len(subtree.Nodes); i++ {
-		txHashes[i] = subtree.Nodes[i].Hash
+		if i == 0 {
+			txHashes[i] = util.CoinbasePlaceholderHashValue
+		}
 	}
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	txMetaSlice := make([]*meta.Data, len(txHashes))
 
-	// The first tx is the coinbase tx
 	if txHashes[0].Equal(util.CoinbasePlaceholderHashValue) {
 		txMetaSlice[0] = &meta.Data{Tx: coinbaseTx}
 	}
@@ -68,16 +64,11 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 	missed, err := u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched)
 	if err != nil {
-		u.logger.Errorf("[ValidateSubtreeInternal][%s] failed to get tx meta from store: %s", subtreeHash.String(), err)
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
 
 	if missed > 0 {
 		for i := 0; i < len(txHashes); i++ {
-			if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
-				continue
-			}
-
 			u.logger.Errorf("[ValidateSubtreeInternal][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
 		}
 
@@ -95,6 +86,35 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	}
 
 	return nil
+}
+
+func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*util.SubtreeData, error) {
+	// 1. get the subtree from the subtree store
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+	if err != nil {
+		return nil, errors.NewStorageError("[BlockPersister] failed to get subtree from store", err)
+	}
+	defer subtreeReader.Close()
+
+	subtree := &util.Subtree{}
+	if err := subtree.DeserializeFromReader(subtreeReader); err != nil {
+		return nil, errors.NewProcessingError("[BlockPersister] failed to deserialize subtree", err)
+	}
+
+	// 2 get the subtree data from the subtree store
+	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtreeData"))
+	if err != nil {
+		return nil, errors.NewStorageError("[BlockPersister] error getting subtree data for %s from store", subtreeHash.String(), err)
+	}
+
+	defer subtreeDataReader.Close()
+
+	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
+	if err != nil {
+		return nil, errors.NewProcessingError("[BlockPersister] error deserializing subtree data", err)
+	}
+
+	return subtreeData, nil
 }
 
 // WriteTxs writes a series of transactions to storage and processes their UTXO changes.

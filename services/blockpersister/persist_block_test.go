@@ -83,6 +83,10 @@ func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 
 func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	for _, missing := range hashes {
+		if missing.Idx >= len(m.txs) {
+			continue
+		}
+
 		missing.Data = &meta.Data{
 			Tx: m.txs[missing.Idx],
 		}
@@ -180,6 +184,68 @@ func (m *MockStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Has
 // - Processing and validating its transactions
 // - Ensuring proper storage and retrieval
 func TestBlock(t *testing.T) {
+	block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+
+	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
+
+	err := persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
+	require.NoError(t, err)
+
+	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
+	require.NoError(t, err)
+
+	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes, tSettings)
+	require.NoError(t, err)
+
+	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())
+}
+
+func TestFileStorer(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	url, err := url.Parse("file://./data/blockstore")
+	require.NoError(t, err)
+
+	blockStore, err := blob.NewStore(logger, url)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := []byte("test")
+	ext := "dat"
+
+	// Delete the key if it exists.
+	_ = blockStore.Del(ctx, key, options.WithFileExtension(ext))
+
+	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
+	require.NoError(t, err)
+
+	if _, err = storer.Write([]byte("hello")); err != nil {
+		t.Errorf("error writing block to disk: %v", err)
+	}
+
+	if err = storer.Close(ctx); err != nil {
+		t.Errorf("error closing block file: %v", err)
+	}
+
+	_, err = filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
+	require.ErrorIs(t, err, errors.NewBlobAlreadyExistsError(""))
+}
+
+func TestBlockMissingTxMeta(t *testing.T) {
+	_, blockBytes, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+
+	// use a mock store that has missing txs
+	mockUTXOStoreWithMissingTxs, err := newMockStore(extendedTxs[1:])
+	require.NoError(t, err)
+
+	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStoreWithMissingTxs, blockchainClient)
+
+	err = persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
+	require.Error(t, err)
+}
+
+func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Memory, *memory.Memory, *blockchain.LocalClient, *settings.Settings) {
 	initPrometheusMetrics()
 
 	// Take block 100,000 from mainnet
@@ -219,11 +285,26 @@ func TestBlock(t *testing.T) {
 	mockUTXOStore, err := newMockStore(extendedTxs)
 	require.NoError(t, err)
 
-	subtreeBytes, err := mockUTXOStore.subtrees[0].Serialize()
+	subtreeStore := memory.New()
+	subtree := mockUTXOStore.subtrees[0]
+
+	// Create the .subtree file
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
-	subtreeStore := memory.New()
-	err = subtreeStore.Set(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtreeData"))
+	// Create the .subtreeData file
+	subtreeData := util.NewSubtreeData(subtree)
+	// Add the transactions to the subtree data (skipping coinbase as it's handled specially)
+	for i, tx := range extendedTxs[1:] { // Skip coinbase
+		err = subtreeData.AddTx(tx, i+1) // +1 because index 0 is for coinbase
+		require.NoError(t, err)
+	}
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeDataBytes, options.WithFileExtension("subtreeData"))
 	require.NoError(t, err)
 
 	blockStore := memory.New()
@@ -232,8 +313,6 @@ func TestBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
-
-	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
 	var block model.Block
 
@@ -248,52 +327,5 @@ func TestBlock(t *testing.T) {
 	b, err := block.Bytes()
 	require.NoError(t, err)
 
-	err = persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), b)
-	require.NoError(t, err)
-
-	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
-	require.NoError(t, err)
-
-	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes, tSettings)
-	require.NoError(t, err)
-
-	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())
-}
-
-type mockExister struct{}
-
-func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.FileOption) (bool, error) {
-	return false, nil
-}
-
-func TestFileStorer(t *testing.T) {
-	logger := ulogger.NewVerboseTestLogger(t)
-	settings := test.CreateBaseTestSettings()
-
-	url, err := url.Parse("file://./data/blockstore")
-	require.NoError(t, err)
-
-	blockStore, err := blob.NewStore(logger, url)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	key := []byte("test")
-	ext := "dat"
-
-	// Delete the key if it exists.
-	_ = blockStore.Del(ctx, key, options.WithFileExtension(ext))
-
-	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
-	require.NoError(t, err)
-
-	if _, err = storer.Write([]byte("hello")); err != nil {
-		t.Errorf("error writing block to disk: %v", err)
-	}
-
-	if err = storer.Close(ctx); err != nil {
-		t.Errorf("error closing block file: %v", err)
-	}
-
-	_, err = filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
-	require.ErrorIs(t, err, errors.NewBlobAlreadyExistsError(""))
+	return &block, b, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings
 }
