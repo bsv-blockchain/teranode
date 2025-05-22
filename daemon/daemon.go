@@ -509,8 +509,10 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			return err
 		}
 
+		p2pLogger := createLogger("p2p")
+		p2pLogger.SetLogLevel(tSettings.LogLevel)
 		p2pService, err := p2p.NewServer(ctx,
-			createLogger("p2p"),
+			p2pLogger,
 			tSettings,
 			blockchainClient,
 			rejectedTxKafkaConsumerClient,
