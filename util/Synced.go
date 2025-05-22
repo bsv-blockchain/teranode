@@ -87,6 +87,19 @@ func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.setUnlocked(key, value)
 }
 
+func (m *SyncedMap[K, V]) SetIfNotExists(key K, value V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existingValue, ok := m.m[key]; ok {
+		return existingValue, false
+	}
+
+	m.setUnlocked(key, value)
+
+	return value, true
+}
+
 func (m *SyncedMap[K, V]) setUnlocked(key K, value V) {
 	if m.limit > 0 && len(m.m) >= m.limit {
 		for k := range m.m {

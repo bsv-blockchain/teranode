@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -45,6 +46,11 @@ var (
 type missingParentTx struct {
 	parentTxHash chainhash.Hash
 	txHash       chainhash.Hash
+}
+
+type OutPoint struct {
+	Hash  chainhash.Hash
+	Index uint32
 }
 
 type Block struct {
@@ -306,6 +312,10 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	}
 
 	return block, nil
+}
+
+func (b *Block) SetSettings(tSettings *settings.Settings) {
+	b.settings = tSettings
 }
 
 func (b *Block) Hash() *chainhash.Hash {
@@ -597,6 +607,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, concurrency)
 
+	parentSpendsMap := util.NewSyncedMap[chainhash.Hash, chainhash.Hash]()
+	checkParentOutpoints := make([]chainhash.Hash, 0, 1024)
+
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		sIdx := sIdx
@@ -680,7 +693,20 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
-				// TODO add all the parentTxHashes + idxs to a map to check that they are unique (not duplicates)
+				// add all the parentTxHashes + idxs to a map to check that they are unique (not duplicates)
+				// there should be no spends of the same output in a block, this cannot be detected by the subtree validation
+				for _, parentTxHash := range parentTxHashes {
+					if otherTx, found := parentSpendsMap.Get(parentTxHash); found {
+						// there are 2 transactions spending the same parent tx, we must check whether they are spending the same output
+						checkParentOutpoints = append(checkParentOutpoints, subtreeNode.Hash)
+
+						if !slices.Contains(checkParentOutpoints, otherTx) {
+							checkParentOutpoints = append(checkParentOutpoints, otherTx)
+						}
+					}
+
+					parentSpendsMap.Set(parentTxHash, subtreeNode.Hash)
+				}
 
 				// check whether the transaction has recently been mined in a block on our chain
 				// for all transactions, we go over all bloom filters, we collect the transactions that are in the bloom filter
@@ -773,6 +799,43 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				}
 			}
 
+			if len(checkParentOutpoints) > 0 {
+				parentOutpoints := util.NewSyncedMap[OutPoint, OutPoint]()
+
+				// get all txMeta for all the transactions we need to check in parallel
+				parentG, parentCtx := errgroup.WithContext(ctx)
+				util.SafeSetLimit(parentG, b.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency)
+
+				for _, txHash := range checkParentOutpoints {
+					g.Go(func() error {
+						txMeta, err := txMetaStore.Get(parentCtx, &txHash, fields.Inputs)
+						if err != nil {
+							return errors.NewStorageError("[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), txHash.String(), err)
+						}
+
+						for inputIdx, input := range txMeta.Tx.Inputs {
+							parentOutpoint := OutPoint{
+								Hash:  *input.PreviousTxIDChainHash(),
+								Index: input.PreviousTxOutIndex,
+							}
+
+							if otherTxInput, exists := parentOutpoints.SetIfNotExists(parentOutpoint, OutPoint{
+								Hash:  txHash,
+								Index: uint32(inputIdx), //nolint:gosec
+							}); !exists {
+								return errors.NewBlockInvalidError("[BLOCK][%s] transaction %s:%d spends parent transaction %s:%d in the same block as %s:%d", b.Hash().String(), txHash.String(), inputIdx, parentOutpoint.Hash.String(), parentOutpoint.Index, otherTxInput.Hash.String(), otherTxInput.Index)
+							}
+						}
+
+						return nil
+					})
+				}
+
+				if err = parentG.Wait(); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		})
 	}
@@ -834,7 +897,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 		return oldBlockIDs, err
 	}
 
-	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
+	if parentTxMeta == nil {
 		return oldBlockIDs, nil
 	}
 
